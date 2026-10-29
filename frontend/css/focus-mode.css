@@ -1,0 +1,461 @@
+/* ==========================================================================
+   FOCUS MODE — the "Living Report" view.
+   No cards, no chrome. Typography and an ambient signal do the work that
+   stat cards and boxed widgets do everywhere else in the app.
+   ========================================================================== */
+
+/* Standard app shell fades/scales away while Focus Mode is active,
+   rather than being removed from layout — keeps the transition smooth
+   since nothing has to reflow underneath. */
+body.focus-mode-active #app {
+  opacity: 0;
+  transform: scale(0.98);
+  pointer-events: none;
+  transition: opacity 0.32s cubic-bezier(0.4, 0, 0.2, 1), transform 0.32s cubic-bezier(0.4, 0, 0.2, 1);
+}
+#app {
+  transition: opacity 0.32s cubic-bezier(0.4, 0, 0.2, 1), transform 0.32s cubic-bezier(0.4, 0, 0.2, 1);
+}
+/* The dashboard underneath is only invisible (opacity: 0), not removed
+   from layout — its full height still exists, which was creating a
+   page-level scrollbar even though nothing about it was visible. Locking
+   the page itself while Focus Mode is active is the actual fix; the
+   overlay's own internal scroll (.fm-story) handles scrolling instead. */
+body.focus-mode-active {
+  overflow: hidden;
+  height: 100vh;
+}
+
+.focus-mode-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 200;
+  opacity: 0;
+  pointer-events: none;
+  transform: scale(1.02);
+  transition: opacity 0.4s cubic-bezier(0.4, 0, 0.2, 1), transform 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+  background: #08090D;
+  overflow: hidden;
+}
+.focus-mode-overlay.visible { pointer-events: auto; }
+.focus-mode-overlay.in { opacity: 1; transform: scale(1); }
+
+/* ---------- Ambient background ---------- */
+.fm-ambient {
+  position: absolute;
+  inset: -20%;
+  background:
+    radial-gradient(circle at 30% 20%, rgba(108, 92, 231, 0.10), transparent 45%),
+    radial-gradient(circle at 75% 75%, rgba(45, 212, 191, 0.06), transparent 50%);
+  animation: fmDrift 26s ease-in-out infinite alternate;
+  transition: background 1.2s ease;
+}
+.focus-mode-overlay.fm-alert .fm-ambient {
+  background:
+    radial-gradient(circle at 30% 20%, rgba(245, 166, 35, 0.14), transparent 45%),
+    radial-gradient(circle at 75% 75%, rgba(239, 68, 68, 0.08), transparent 50%);
+}
+@keyframes fmDrift {
+  0%   { transform: translate(0, 0) scale(1); }
+  100% { transform: translate(-3%, 2%) scale(1.05); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .fm-ambient { animation: none; }
+}
+
+/* ---------- The Living Report / story ---------- */
+.fm-story {
+  position: relative;
+  z-index: 2;
+  max-width: min(920px, 88vw);
+  margin: 0 auto;
+  height: calc(100vh - 140px);
+  overflow-y: auto;
+  padding: 90px 70px 40px;
+  scroll-behavior: smooth;
+  scrollbar-width: thin; /* Firefox: thin, not the OS-default wide bar */
+  scrollbar-color: #2E3444 transparent; /* Firefox: dark thumb, matches --border-strong */
+}
+.fm-story::-webkit-scrollbar { width: 6px; }
+.fm-story::-webkit-scrollbar-track { background: transparent; }
+.fm-story::-webkit-scrollbar-thumb { background: #2E3444; border-radius: 3px; }
+.fm-story::-webkit-scrollbar-thumb:hover { background: #3A4152; }
+
+.fm-turn { margin-bottom: 46px; }
+
+.fm-user-line {
+  text-align: right;
+  color: var(--text-muted);
+  font-family: var(--font-body);
+  font-size: 13.5px;
+  font-style: italic;
+  margin-bottom: 18px;
+  opacity: 0.85;
+}
+
+.fm-answer {
+  font-family: var(--font-body);
+  font-size: 19px;
+  line-height: 1.75;
+  color: var(--text-secondary);
+  font-weight: 400;
+}
+.fm-answer p { margin: 0 0 20px; }
+.fm-answer p:last-child { margin-bottom: 0; }
+.fm-answer strong { color: var(--text-primary); font-weight: 600; }
+.fm-answer ul, .fm-answer ol { margin: 4px 0 20px; padding-left: 22px; }
+.fm-answer li { margin-bottom: 8px; }
+
+/* the signature move: numbers that matter are set large, serif, inline —
+   just bigger/bolder/colored, no background chip/box around them */
+.fm-number {
+  font-family: var(--font-display);
+  font-size: 1.3em;
+  font-weight: 700;
+  color: var(--accent-tint);
+  border-bottom: 2px solid rgba(108, 92, 231, 0.35);
+  padding-bottom: 1px;
+}
+
+/* tables — same editorial restraint as the rest of the report: no grid lines,
+   just a header rule and hairline row dividers */
+.fm-answer table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 4px 0 20px;
+  font-size: 0.92em;
+}
+.fm-answer th {
+  text-align: left;
+  padding: 8px 16px 8px 0;
+  color: var(--text-muted);
+  font-weight: 600;
+  font-size: 11px;
+  letter-spacing: 0.4px;
+  text-transform: uppercase;
+  border-bottom: 1px solid var(--border-strong);
+}
+.fm-answer td {
+  padding: 9px 16px 9px 0;
+  border-bottom: 1px solid var(--surface-sunken);
+  color: var(--text-secondary);
+}
+.fm-answer tr:last-child td { border-bottom: none; }
+
+/* inline sparkline chart — a real, readable block-level card (not tiny and
+   floating), with a title and start-to-end values since the axes stay
+   hidden by design; still clickable to open the full interactive chart */
+.fm-sparkline-wrap {
+  display: block;
+  width: 100%;
+  max-width: 480px;
+  background: var(--surface-sunken);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 12px 14px 10px;
+  margin: 14px 0;
+  cursor: pointer;
+  transition: background 0.15s ease, border-color 0.15s ease;
+}
+.fm-sparkline-wrap:hover { background: var(--surface-raised); border-color: var(--border-strong); }
+
+/* multiple charts from one reply sit side by side when they fit, rather
+   than always stacking full-width — each chart shrinks to share the row */
+.fm-chart-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 14px;
+  margin: 14px 0 20px;
+}
+.fm-chart-row .fm-sparkline-wrap {
+  flex: 1 1 260px;
+  margin: 0;
+  max-width: none;
+}
+.fm-sparkline-header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  margin-bottom: 8px;
+  gap: 10px;
+}
+.fm-sparkline-title {
+  font-size: 10.5px;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+  white-space: nowrap;
+}
+.fm-sparkline-values {
+  font-size: 12px;
+  color: var(--text-secondary);
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  white-space: nowrap;
+}
+.fm-sparkline-values i { font-size: 11px; color: var(--text-muted); }
+.fm-spark-up { color: var(--success-text); font-weight: 600; }
+.fm-spark-down { color: var(--danger-text); font-weight: 600; }
+.fm-sparkline-canvas-box { height: 90px; }
+.fm-sparkline-canvas-box canvas { width: 100% !important; height: 100% !important; }
+
+.fm-thinking {
+  display: flex; align-items: center; gap: 8px;
+  color: var(--text-muted); font-size: 14px; font-style: italic;
+}
+.fm-thinking .dot {
+  width: 6px; height: 6px; border-radius: 50%; background: var(--accent);
+  animation: dotPulse 1.2s ease-in-out infinite;
+}
+
+/* ---------- Briefing section labels — quiet, matching the sparkline
+   title treatment, not bold headers, per the report's calm typography ---------- */
+.fm-section-label {
+  font-size: 10.5px;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+  margin-bottom: 8px;
+}
+
+/* the briefing's clickable signal list — plain, no boxes, matching the
+   report's own typographic language rather than the boxed dashboard style */
+.fm-signal-list {
+  margin: 4px 0 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.fm-signal-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  font-size: 17px;
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: color 0.15s ease;
+}
+.fm-signal-item:hover { color: var(--text-primary); }
+.fm-signal-item:hover .fm-signal-action { color: #fff; }
+.fm-signal-dot {
+  width: 8px; height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+.fm-signal-text { flex: 1; }
+.fm-signal-action {
+  flex-shrink: 0;
+  font-size: 0.78em;
+  color: var(--accent-tint);
+  text-decoration: underline;
+  text-decoration-color: var(--accent-dim);
+  white-space: nowrap;
+}
+
+/* suggestions: inline underlined phrases, not chips */
+.fm-suggestions-line {
+  margin-top: 22px;
+  font-size: 14.5px;
+  color: var(--text-muted);
+  font-style: italic;
+}
+.fm-suggestion {
+  color: var(--accent-tint);
+  font-style: normal;
+  text-decoration: underline;
+  text-decoration-color: var(--accent-dim);
+  text-underline-offset: 3px;
+  cursor: pointer;
+  transition: color 0.15s ease, text-decoration-color 0.15s ease;
+}
+.fm-suggestion:hover { color: #fff; text-decoration-color: var(--accent); }
+.fm-suggestion-sep { margin: 0 6px; color: var(--border-strong); }
+
+/* ---------- Composer: minimal, command-palette style ---------- */
+.fm-composer {
+  position: absolute;
+  left: 50%; bottom: 40px;
+  transform: translateX(-50%);
+  z-index: 3;
+  width: min(600px, 80vw);
+  display: flex; align-items: center; gap: 10px;
+  background: rgba(18, 20, 28, 0.75);
+  backdrop-filter: blur(14px);
+  border: 1px solid var(--border-strong);
+  border-radius: 999px;
+  padding: 14px 10px 14px 22px;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.35);
+}
+.fm-composer input {
+  flex: 1; background: transparent; border: none; outline: none;
+  color: var(--text-primary); font-family: var(--font-body); font-size: 15px;
+}
+.fm-composer input::placeholder { color: var(--text-muted); }
+
+/* attach + mic icons — deliberately not the boxy button style used in the
+   floating panel, kept quiet and unobtrusive to match Focus Mode's own
+   look, closer to how .fm-hint reads than a normal UI control */
+.fm-composer-icon {
+  color: var(--text-muted);
+  font-size: 17px;
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: color 0.15s ease;
+}
+.fm-composer-icon:hover { color: var(--accent-tint); }
+.fm-composer-icon.voice-recording {
+  color: var(--danger-text);
+  animation: dotPulse 1s ease-in-out infinite;
+}
+
+.fm-attach-chip-row {
+  position: absolute;
+  left: 50%; bottom: 96px;
+  transform: translateX(-50%);
+  z-index: 3;
+}
+.fm-send-btn {
+  width: 36px; height: 36px; border-radius: 50%; background: var(--accent);
+  border: none; color: #fff; font-size: 15px; cursor: pointer; flex-shrink: 0;
+  display: flex; align-items: center; justify-content: center;
+}
+
+/* ---------- Exit hint — text only, deliberately no button ---------- */
+.fm-hint {
+  position: absolute; top: 20px; left: 50%; transform: translateX(-50%);
+  z-index: 3;
+  font-family: var(--font-mono); font-size: 10.5px; color: var(--text-muted);
+  opacity: 0.55;
+}
+.fm-hint span {
+  border: 1px solid var(--border-strong); border-radius: 4px;
+  padding: 1px 6px; margin-left: 4px;
+}
+
+/* ---------- Pulse Rail: Agent Trail, reimagined as an ambient signal ---------- */
+.fm-pulse-rail {
+  position: absolute;
+  top: 70px; bottom: 100px; right: 26px;
+  width: 2px;
+  background: var(--border);
+  z-index: 3;
+}
+.fm-pulse-dot {
+  position: absolute;
+  right: -4px;
+  width: 10px; height: 10px;
+  border-radius: 50%;
+  border: 2px solid var(--canvas);
+  cursor: pointer;
+  animation: trailSlideIn 0.4s ease;
+}
+.fm-pulse-dot.fm-pulse-signal {
+  border-radius: 2px;
+  transform: rotate(45deg);
+  right: -5px;
+}
+
+/* ---------- Chart detail modal ---------- */
+.fm-chart-modal {
+  position: fixed;
+  inset: 0;
+  z-index: 250;
+  background: rgba(4, 5, 8, 0.72);
+  backdrop-filter: blur(6px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.2s ease;
+}
+.fm-chart-modal.open { opacity: 1; pointer-events: auto; }
+.fm-chart-modal-inner {
+  width: min(640px, 88vw);
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: 16px;
+  padding: 20px 24px 24px;
+  box-shadow: 0 30px 80px rgba(0, 0, 0, 0.5);
+  transform: scale(0.96);
+  transition: transform 0.2s ease;
+}
+.fm-chart-modal.open .fm-chart-modal-inner { transform: scale(1); }
+.fm-chart-modal-header {
+  display: flex; align-items: center; justify-content: space-between;
+  margin-bottom: 16px;
+}
+.fm-chart-modal-header span {
+  font-family: var(--font-display); font-size: 15px;
+  color: var(--text-primary); font-weight: 600;
+}
+.fm-chart-modal-close { cursor: pointer; color: var(--text-muted); font-size: 18px; }
+.fm-chart-modal-close:hover { color: var(--text-primary); }
+.fm-chart-modal-body { height: 320px; }
+
+/* ---------- Clickable entity references (Requisition #13, PO #23, etc.) ---------- */
+.entity-chip {
+  display: inline-block;
+  background: var(--accent-dim);
+  color: var(--accent-tint);
+  padding: 1px 9px;
+  border-radius: 20px;
+  font-size: 0.82em;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+.entity-chip:hover { background: var(--accent); color: #fff; }
+
+/* ---------- Inline progress bar (percentage metrics) ---------- */
+.fm-progress-card {
+  background: var(--surface-sunken);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 12px 14px;
+  margin: 10px 0 20px;
+  max-width: 480px;
+}
+.fm-progress-card-top {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  font-size: 12px;
+  color: var(--text-secondary);
+  margin-bottom: 8px;
+}
+.fm-progress-card-top .value {
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: 15px;
+  color: var(--accent-tint);
+}
+.fm-progress-bar-track {
+  height: 6px;
+  border-radius: 4px;
+  overflow: hidden;
+  display: flex;
+  background: var(--surface);
+}
+.fm-progress-bar-fill { background: var(--accent); height: 100%; }
+.fm-progress-bar-remainder { background: var(--warning); height: 100%; }
+.fm-progress-card-sub { font-size: 10.5px; color: var(--text-muted); margin-top: 6px; }
+
+/* ---------- Expandable inline detail list ---------- */
+.fm-expandable { margin: 6px 0 20px; }
+.fm-expandable-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--accent-tint);
+  font-size: 14px;
+  cursor: pointer;
+  text-decoration: underline;
+  text-decoration-color: var(--accent-dim);
+}
+.fm-expandable-toggle:hover { color: #fff; }
+.fm-expandable-toggle i { font-size: 11px; transition: transform 0.15s ease; }
+.fm-expandable.open .fm-expandable-toggle i { transform: rotate(90deg); }
+.fm-expandable-body { display: none; margin-top: 10px; padding-left: 2px; }
+.fm-expandable.open .fm-expandable-body { display: block; }

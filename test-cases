@@ -1,0 +1,49 @@
+Auction Agent
+
+"Start a reverse auction called Q4 Packaging Deal for cardboard boxes and packing tape, vendors 2 and 7"
+"Submit a bid of 78000 from vendor 2 on auction [id]"
+"Close auction [id]" — tests winner selection logic
+
+RFQ Agent
+
+"Draft an RFQ for 300 office chairs to vendors 3, 8, and 11"
+"Record a quote from vendor 1 on RFQ 1: price 588000, delivery in 45 days" — this one should trigger exception flagging (Acme Supplies + Electronics baseline), watch for the flag mentioned in the reply
+"Compare quotes for RFQ 1"
+
+Requisition Agent
+
+"Create a requisition for a new server, amount 850000, requested by Priya"
+"Approve requisition [id]" / "Reject requisition [id]"
+"Convert requisition [id] to a PO for vendor 6, items: Dell server" — only works once approved, good test of the guardrail
+
+Source-to-Pay Agent
+
+"Onboard a vendor called Northline Freight, email ops@northlinefreight.com, category Facilities"
+"Create a purchase order for vendor 6, items: laptops, amount 700000" — another flagging trigger, this time on the PO path
+"Process payment of 700000 for purchase order [id]"
+"Store a contract for vendor 6 titled Annual Hardware Agreement, terms net-30, value 2000000, start 2026-01-01, end 2026-09-15" — pick an end date within 30 days to test the contract-expiring signal
+
+Insights Agent — the one that shows inline charts
+
+"Why has my spending gone up?" — the strongest demo, tends to trigger both charts at once
+"Show me spend by category"
+"Compare vendor 1 and vendor 6 by spend"
+"What's my spend trend over the last 6 months?"
+
+Routing edge cases
+
+"Hi" — should land in general, not force-route to a domain agent
+Something ambiguous like "vendor stuff" — see how the orchestrator guesses
+
+Proving the proactive layer (needs ~2 min wait after triggering)
+
+Do the flagged-PO prompt above, then leave the app open and watch the bell/ticker without touching anything
+Approve a stale seeded requisition, wait, watch its notification disappear on its own
+
+Focus Mode
+
+Open Focus Mode, ask the spending question again — check the chart renders as an inline sparkline, click it to confirm the interactive modal, and check any suggestion chips render as underlined text, not chips
+
+Suggestion-chip loop
+
+After any reply that generates "Next: ..." suggestions, click one instead of typing — confirms it sends and continues the same conversation correctly

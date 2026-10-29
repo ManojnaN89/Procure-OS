@@ -1,0 +1,11 @@
+.env
+venv/
+__pycache__/
+*.pyc
+*.rar
+*.zip
+backup*
+Thumbs.db
+desktop.ini
+.vscode/
+.idea/
