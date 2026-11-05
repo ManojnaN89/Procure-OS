@@ -13,3 +13,5 @@ zen-engine
 python-multipart
 openai
 anthropic
+langgraph
+langgraph-checkpoint-postgres
