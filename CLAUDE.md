@@ -1,0 +1,46 @@
+# P2P platform: rules for working in this repo
+
+An India-first, domain-neutral, multi-tenant procure-to-pay platform (request, approval, sourcing, PO, receipt, invoice match, payment). Built by one developer with Claude Code. The plan lives in `planning/` (git-ignored); the data model is `docs/data-dictionary.md`.
+
+## Layout
+
+| Folder | What |
+|---|---|
+| `backend/p2p/` | FastAPI app. One package per area: masters, requests, approvals, sourcing, orders, receiving, invoices, payments, agents, ai_steps, rules, formulas, platform |
+| `frontend/` | React + Vite + TypeScript, Biome |
+| `datagen/`, `data/` | Synthetic data generator and reference tables. Generated datasets go to `data/datasets/` (git-ignored) |
+| `tests/` | pytest, named after scenarios (given, when, then in the body) |
+| `scripts/` | `dev.py` starts everything, `check.py` runs every check |
+
+## Commands
+
+- Start everything: `python scripts/dev.py` (Postgres and Mailpit in Docker, backend on 8000, frontend on 5173)
+- All checks: `python scripts/check.py` (ruff, mypy strict, pytest, biome, tsc). Run before saying a task is done.
+- Backend tools use `backend/.venv`. Dependencies: edit `requirements.in` or `requirements-dev.in`, install, then `pip freeze > requirements.txt`.
+- Regenerate data: `python -I datagen/generator/cli.py --size demo --seed 42`, check it with `datagen/generator/validate.py`.
+
+## Rules
+
+1. **Money is always `Decimal`**, quantised to paise. Never float for money, tax or quantity.
+2. **A model never computes a number a decision uses.** Totals, tax, TDS, due dates and match results come from code in `formulas/` or `rules/`. A model may extract, classify, draft or explain.
+3. **Three building blocks.** A *service* is deterministic. An *AI step* is one model call with schema validation and an evidence check. An *agent* is a tool loop. Use the simplest one that works.
+4. **Every write goes through a service that writes the audit log.** No route or agent writes to the database directly.
+5. **Sensitive actions are proposals.** Payment runs, vendor activation, releasing a payment block, accepting a price variance and approvals above a limit create a proposal that a person approves. Agents and services never execute these themselves.
+6. **Tenant safety.** One database per tenant plus a control database. A request without tenant context is refused. A test must prove tenant A cannot read tenant B.
+7. **Segregation of duties:** requester, approver, receiver, invoice approver and payer differ for the same case.
+8. **Rules and rates are data, not code.** Approval matrices, tolerances, GST rates and TDS sections live in versioned tables. A decision stays reproducible against the version it used.
+9. **Dates and time.** Store timestamps with time zone; business logic uses the financial year (April to March) and the business calendar with holidays.
+10. **No secrets in the repo or in chat.** `.env` is git-ignored; the owner enters API keys manually. Development uses synthetic data only.
+11. **Free and open-source tools only** (see the Tech Stack sheet in the plan). Do not add a dependency without checking its licence and that the package is the real one.
+
+## Generated data safety
+
+Generated PANs always carry the digits `0000` (never issued), phones are `+91 00000 …`, emails end in `.example`. Keep it that way.
+
+## Definition of done for a task
+
+Code, tests (including boundary cases for formulas), `python scripts/check.py` green, audit rows written for any write, docs updated if the data model changed.
+
+## Style
+
+Match the surrounding code. Short plain-language comments only where the reason is not obvious. Keep documents simple and short.
