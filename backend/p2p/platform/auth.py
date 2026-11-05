@@ -71,7 +71,7 @@ def _issue(s: Session, user: AppUser, slug: str) -> TokensOut:
 @router.post("/login")
 def login(body: LoginIn) -> TokensOut:
     now = datetime.now(UTC)
-    with Session(tenants.control_engine()) as s:
+    with tenants.control_session() as s:
         user = s.scalar(select(AppUser).where(AppUser.email == body.email.strip().lower()))
         if user is None or not user.active:
             try:  # same work as a real check, so timing does not reveal which emails exist
@@ -101,7 +101,7 @@ def login(body: LoginIn) -> TokensOut:
 @router.post("/refresh")
 def refresh(body: RefreshIn) -> TokensOut:
     now = datetime.now(UTC)
-    with Session(tenants.control_engine()) as s:
+    with tenants.control_session() as s:
         row = s.scalar(select(RefreshToken).where(RefreshToken.token_hash == _hash(body.refresh_token)))
         if row is None or row.expires_at <= now:
             raise HTTPException(401, "Invalid or expired refresh token")
@@ -124,7 +124,7 @@ def refresh(body: RefreshIn) -> TokensOut:
 
 @router.post("/logout", status_code=204)
 def logout(body: RefreshIn) -> None:
-    with Session(tenants.control_engine()) as s:
+    with tenants.control_session() as s:
         s.execute(
             update(RefreshToken)
             .where(RefreshToken.token_hash == _hash(body.refresh_token), RefreshToken.revoked_at.is_(None))
@@ -148,7 +148,7 @@ def me(
         ),
         {"u": ctx.user_id},
     ).scalars()
-    with Session(tenants.control_engine()) as s:
+    with tenants.control_session() as s:
         tenant_name = s.scalar(select(Tenant.name).where(Tenant.slug == ctx.slug)) or ctx.slug
     return MeOut(
         user_id=ctx.user_id,

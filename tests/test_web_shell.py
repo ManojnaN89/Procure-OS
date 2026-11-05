@@ -26,6 +26,9 @@ from p2p.rules import engine as rules
 pytest.importorskip("playwright")
 from playwright.sync_api import Page, expect, sync_playwright  # noqa: E402
 
+# A slow machine (the full suite also loads OCR models) must not turn into a false failure.
+expect.set_options(timeout=20_000)
+
 DIST = REPO_ROOT / "frontend" / "dist" / "index.html"
 PORT = 18080
 URL = f"http://127.0.0.1:{PORT}"
@@ -107,6 +110,7 @@ def browser() -> Iterator[Any]:
 
 def open_page(browser: Any, size: dict[str, int]) -> Page:
     page = browser.new_context(viewport=size).new_page()
+    page.set_default_timeout(30_000)
     page.errors = []  # type: ignore[attr-defined]
     page.on("pageerror", lambda e: page.errors.append(str(e)))  # type: ignore[attr-defined]
     page.console_errors = []  # type: ignore[attr-defined]

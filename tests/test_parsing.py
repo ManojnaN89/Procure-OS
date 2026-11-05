@@ -1,4 +1,5 @@
 import os
+from collections.abc import Iterator
 from datetime import date
 
 import pytest
@@ -9,6 +10,18 @@ import sample_documents as sd  # noqa: E402
 
 from p2p.ai_steps.evidence import check_evidence  # noqa: E402
 from p2p.platform.parsing import UnsupportedDocument, parse_document  # noqa: E402
+
+
+@pytest.fixture(scope="module", autouse=True)
+def release_models() -> Iterator[None]:
+    """The OCR and layout models use gigabytes; let them go when this file is done."""
+    yield
+    import gc
+
+    from p2p.platform import parsing
+
+    parsing._converter = None
+    gc.collect()
 
 
 def test_a_pdf_with_a_text_layer_is_read_with_its_page_number() -> None:

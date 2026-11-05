@@ -39,6 +39,17 @@ def control_engine() -> Engine:
     return create_engine(control_url())
 
 
+@contextmanager
+def control_session() -> Iterator[Session]:
+    """A session on the control database. The engine and its connections are released when the block ends."""
+    engine = control_engine()
+    try:
+        with Session(engine) as session:
+            yield session
+    finally:
+        engine.dispose()
+
+
 def _config(kind: str, url: str, script_dir: Path | None = None) -> Config:
     cfg = Config()
     cfg.set_main_option("script_location", str(script_dir or MIGRATIONS / kind))
