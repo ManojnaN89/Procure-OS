@@ -26,9 +26,7 @@ def main() -> int:
         subprocess.Popen([npm, "run", "dev"], cwd=FRONTEND),  # noqa: S603
     ]
     print(
-        "\nBackend  http://localhost:8000/api/health"
-        "\nFrontend http://localhost:5173"
-        "\nMailpit  http://localhost:8025\n"
+        "\nBackend  http://localhost:8000/api/health\nFrontend http://localhost:5173\nMailpit  http://localhost:8025\n"
     )
     try:
         for p in procs:

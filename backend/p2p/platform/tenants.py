@@ -71,9 +71,7 @@ def tenant_db_name(slug: str) -> str:
 
 def create_tenant(slug: str, name: str | None = None, *, script_dir: Path | None = None) -> MigrateResult:
     if not SLUG.match(slug):
-        raise ValueError(
-            "slug must be lower case letters, digits or underscore, starting with a letter (2-31 chars)"
-        )
+        raise ValueError("slug must be lower case letters, digits or underscore, starting with a letter (2-31 chars)")
     db_name = tenant_db_name(slug)
     engine = control_engine()
     try:
@@ -106,9 +104,7 @@ def migrate_tenant(slug: str, *, script_dir: Path | None = None) -> MigrateResul
     try:
         with Session(engine) as s:
             row = s.execute(
-                select(TenantDatabase)
-                .join(Tenant, Tenant.id == TenantDatabase.tenant_id)
-                .where(Tenant.slug == slug)
+                select(TenantDatabase).join(Tenant, Tenant.id == TenantDatabase.tenant_id).where(Tenant.slug == slug)
             ).scalar_one()
             url = crypto.decrypt(row.connection_encrypted)
             try:
@@ -120,9 +116,7 @@ def migrate_tenant(slug: str, *, script_dir: Path | None = None) -> MigrateResul
                 finally:
                     tenant_engine.dispose()
             except Exception as exc:  # noqa: BLE001 - one tenant failing must not stop the others
-                return MigrateResult(
-                    slug, False, error=f"{type(exc).__name__}: {str(exc).splitlines()[0][:200]}"
-                )
+                return MigrateResult(slug, False, error=f"{type(exc).__name__}: {str(exc).splitlines()[0][:200]}")
             row.schema_revision = rev
             row.migrated_at = datetime.now(UTC)
             s.commit()
@@ -151,9 +145,7 @@ def tenant_engine(slug: str) -> Engine:
     try:
         with Session(engine) as s:
             row = s.execute(
-                select(TenantDatabase)
-                .join(Tenant, Tenant.id == TenantDatabase.tenant_id)
-                .where(Tenant.slug == slug)
+                select(TenantDatabase).join(Tenant, Tenant.id == TenantDatabase.tenant_id).where(Tenant.slug == slug)
             ).scalar_one()
             return create_engine(crypto.decrypt(row.connection_encrypted))
     finally:

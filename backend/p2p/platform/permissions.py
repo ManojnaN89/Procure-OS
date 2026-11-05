@@ -16,9 +16,7 @@ class PermissionDenied(Exception):
     pass
 
 
-def can(
-    db: Session, user_id: int, action: str, *, location: str | None = None, department: str | None = None
-) -> bool:
+def can(db: Session, user_id: int, action: str, *, location: str | None = None, department: str | None = None) -> bool:
     """True if one of the user's roles grants the action for this location and department.
 
     A role limited to a location or department only counts when the caller says which one is meant.

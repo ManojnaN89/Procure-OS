@@ -63,9 +63,7 @@ def _issue(s: Session, user: AppUser, slug: str) -> TokensOut:
     expires = datetime.now(UTC) + timedelta(days=REFRESH_DAYS)
     s.add(RefreshToken(user_id=user.id, token_hash=_hash(raw), expires_at=expires))
     s.commit()
-    return TokensOut(
-        access_token=create_access_token(user.id, slug, _role_of(slug, user.id)), refresh_token=raw
-    )
+    return TokensOut(access_token=create_access_token(user.id, slug, _role_of(slug, user.id)), refresh_token=raw)
 
 
 @router.post("/login")
@@ -115,9 +113,7 @@ def refresh(body: RefreshIn) -> TokensOut:
             s.commit()
             raise HTTPException(401, "Invalid or expired refresh token")
         user = s.get(AppUser, row.user_id)
-        slug = (
-            s.scalar(select(Tenant.slug).where(Tenant.id == user.tenant_id, Tenant.active)) if user else None
-        )
+        slug = s.scalar(select(Tenant.slug).where(Tenant.id == user.tenant_id, Tenant.active)) if user else None
         if user is None or not user.active or slug is None:
             raise HTTPException(401, "Invalid or expired refresh token")
         row.revoked_at = now
@@ -140,9 +136,7 @@ def me(
     ctx: Annotated[routing.TenantContext, Depends(routing.tenant_context)],
     db: Annotated[Session, Depends(routing.tenant_session)],
 ) -> MeOut:
-    name = db.execute(
-        text("select display_name from user_profile where user_id = :i"), {"i": ctx.user_id}
-    ).scalar()
+    name = db.execute(text("select display_name from user_profile where user_id = :i"), {"i": ctx.user_id}).scalar()
     if name is None:
         raise HTTPException(404, "No profile")
     return MeOut(user_id=ctx.user_id, tenant=ctx.slug, role=ctx.role, display_name=str(name))

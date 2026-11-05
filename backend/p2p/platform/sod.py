@@ -36,6 +36,4 @@ def check_segregation(case_actors: Mapping[str, Actor], duty: str, actor: Actor)
         raise ValueError(f"unknown duty '{duty}'")
     for other, held_by in case_actors.items():
         if other != duty and held_by.identity == actor.identity:
-            raise SegregationError(
-                f"{actor.identity} is already the {other} on this case and cannot be the {duty}"
-            )
+            raise SegregationError(f"{actor.identity} is already the {other} on this case and cannot be the {duty}")

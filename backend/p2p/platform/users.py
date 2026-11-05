@@ -6,8 +6,9 @@ from argon2 import PasswordHasher
 from sqlalchemy import select, text
 from sqlalchemy.orm import Session
 
-from p2p.platform import routing, tenants
+from p2p.platform import audit, routing, tenants
 from p2p.platform.control_models import AppUser, Tenant
+from p2p.platform.sod import Actor
 
 hasher = PasswordHasher()
 MIN_PASSWORD_LENGTH = 10
@@ -15,7 +16,13 @@ ROLES = ("Requester", "Approver", "Buyer", "Store", "AP", "Finance", "Admin")
 
 
 def create_user(
-    tenant_slug: str, email: str, password: str, display_name: str, role: str = "Requester"
+    tenant_slug: str,
+    email: str,
+    password: str,
+    display_name: str,
+    role: str = "Requester",
+    *,
+    actor: Actor = audit.SYSTEM,
 ) -> int:
     email = email.strip().lower()
     if "@" not in email:
@@ -41,8 +48,14 @@ def create_user(
                     text("insert into user_profile (user_id, display_name, role) values (:i, :n, :r)"),
                     {"i": user_id, "n": display_name, "r": role},
                 )
-                ts.execute(
-                    text("insert into user_role (user_id, role) values (:i, :r)"), {"i": user_id, "r": role}
+                ts.execute(text("insert into user_role (user_id, role) values (:i, :r)"), {"i": user_id, "r": role})
+                audit.record(
+                    ts,
+                    actor,
+                    "user.create",
+                    "user",
+                    user_id,
+                    after={"email": email, "display_name": display_name, "role": role},
                 )
                 ts.commit()
             s.commit()
@@ -52,18 +65,29 @@ def create_user(
 
 
 def grant_role(
-    tenant_slug: str, user_id: int, role: str, *, location: str | None = None, department: str | None = None
+    tenant_slug: str,
+    user_id: int,
+    role: str,
+    *,
+    location: str | None = None,
+    department: str | None = None,
+    actor: Actor = audit.SYSTEM,
 ) -> None:
     """Give a user another role, optionally limited to one location and department."""
     if role not in ROLES:
         raise ValueError(f"role must be one of {', '.join(ROLES)}")
     with Session(routing.engine_for(tenant_slug)) as ts:
         ts.execute(
-            text(
-                "insert into user_role (user_id, role, scope_location, scope_department) "
-                "values (:i, :r, :l, :d)"
-            ),
+            text("insert into user_role (user_id, role, scope_location, scope_department) values (:i, :r, :l, :d)"),
             {"i": user_id, "r": role, "l": location, "d": department},
+        )
+        audit.record(
+            ts,
+            actor,
+            "role.grant",
+            "user",
+            user_id,
+            after={"role": role, "location": location, "department": department},
         )
         ts.commit()
 
@@ -76,6 +100,7 @@ def set_limit(
     *,
     category: str | None = None,
     location: str | None = None,
+    actor: Actor = audit.SYSTEM,
 ) -> None:
     """Set an approval limit for a user (FR42). Without a limit row the user cannot approve."""
     with Session(routing.engine_for(tenant_slug)) as ts:
@@ -85,5 +110,13 @@ def set_limit(
                 "values (:i, :d, :c, :l, :m)"
             ),
             {"i": user_id, "d": document, "c": category, "l": location, "m": max_value},
+        )
+        audit.record(
+            ts,
+            actor,
+            "limit.set",
+            "user",
+            user_id,
+            after={"document": document, "max_value": max_value, "category": category, "location": location},
         )
         ts.commit()

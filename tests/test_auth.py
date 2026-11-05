@@ -77,10 +77,7 @@ def test_refresh_rotates_and_a_reused_token_ends_the_session(control_db: str) ->
 
     # the old token comes back: refused, and the new one is cancelled too
     assert client.post("/api/auth/refresh", json={"refresh_token": first["refresh_token"]}).status_code == 401
-    assert (
-        client.post("/api/auth/refresh", json={"refresh_token": second.json()["refresh_token"]}).status_code
-        == 401
-    )
+    assert client.post("/api/auth/refresh", json={"refresh_token": second.json()["refresh_token"]}).status_code == 401
 
 
 def test_logout_cancels_the_refresh_token(control_db: str) -> None:
@@ -88,9 +85,7 @@ def test_logout_cancels_the_refresh_token(control_db: str) -> None:
     tokens = _login(email).json()
 
     assert client.post("/api/auth/logout", json={"refresh_token": tokens["refresh_token"]}).status_code == 204
-    assert (
-        client.post("/api/auth/refresh", json={"refresh_token": tokens["refresh_token"]}).status_code == 401
-    )
+    assert client.post("/api/auth/refresh", json={"refresh_token": tokens["refresh_token"]}).status_code == 401
 
 
 def test_weak_password_duplicate_email_and_bad_role_are_refused(control_db: str) -> None:

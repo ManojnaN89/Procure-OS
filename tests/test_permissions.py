@@ -51,9 +51,7 @@ def test_each_role_can_do_its_own_work_and_not_another_roles(control_db: str) ->
         assert permissions.can(db, buyer, "po.create") and not permissions.can(db, buyer, "payment.approve")
         assert permissions.can(db, store, "grn.create") and not permissions.can(db, store, "invoice.book")
         assert permissions.can(db, ap, "invoice.book") and not permissions.can(db, ap, "payment.approve")
-        assert permissions.can(db, finance, "payment.approve") and not permissions.can(
-            db, finance, "po.create"
-        )
+        assert permissions.can(db, finance, "payment.approve") and not permissions.can(db, finance, "po.create")
         assert permissions.can(db, admin, "admin.users") and not permissions.can(db, admin, "request.approve")
 
 
@@ -112,12 +110,8 @@ def test_the_most_specific_limit_wins(control_db: str) -> None:
     with _db(slug) as db:
         assert permissions.approval_limit(db, uid, "po") == Decimal("500000")
         assert permissions.approval_limit(db, uid, "po", category="CAP") == Decimal("50000")
-        assert permissions.approval_limit(db, uid, "po", category="RAW", location="PLT-VAD") == Decimal(
-            "2000000"
-        )
-        assert permissions.approval_limit(db, uid, "po", category="RAW", location="WH-BLR") == Decimal(
-            "500000"
-        )
+        assert permissions.approval_limit(db, uid, "po", category="RAW", location="PLT-VAD") == Decimal("2000000")
+        assert permissions.approval_limit(db, uid, "po", category="RAW", location="WH-BLR") == Decimal("500000")
         assert permissions.approval_limit(db, uid, "payment_run") is None
 
 

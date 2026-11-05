@@ -16,9 +16,7 @@ def _tables(slug: str) -> set[str]:
     engine = tenants.tenant_engine(slug)
     try:
         with engine.connect() as c:
-            return {
-                r[0] for r in c.execute(text("select tablename from pg_tables where schemaname='public'"))
-            }
+            return {r[0] for r in c.execute(text("select tablename from pg_tables where schemaname='public'"))}
     finally:
         engine.dispose()
 
@@ -67,9 +65,7 @@ def test_new_migration_reaches_every_tenant_with_one_command(control_db: str, tm
         assert "probe_one" in _tables(slug)
 
 
-def test_failure_on_one_tenant_is_reported_and_does_not_block_the_other(
-    control_db: str, tmp_path: Path
-) -> None:
+def test_failure_on_one_tenant_is_reported_and_does_not_block_the_other(control_db: str, tmp_path: Path) -> None:
     head = tenants.head_revision() or ""
     good, broken = _slug(), _slug()
     tenants.create_tenant(good)
