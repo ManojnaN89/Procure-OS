@@ -14,6 +14,11 @@ class Settings(BaseSettings):
     jwt_secret: str = ""
     smtp_host: str = "localhost"
     smtp_port: int = 1025
+    groq_api_key: str = ""
+    gemini_api_key: str = ""
+    anthropic_api_key: str = ""
+    openrouter_api_key: str = ""
+    model_routes: str = ""  # JSON: {"step name": [["provider", "model"], ...]}; empty means the defaults in the gateway
     storage_dir: str = ""  # empty means storage/ in the repository (git-ignored)
     reference_dir: str = ""  # empty means data/reference in the repository
 

@@ -11,3 +11,5 @@ httpx
 cryptography
 zen-engine
 python-multipart
+openai
+anthropic
