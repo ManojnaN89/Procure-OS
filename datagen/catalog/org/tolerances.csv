@@ -1,0 +1,12 @@
+key,value,category_code,note
+price_pct,2.00,ANY,Invoice price above PO price by this percent is within tolerance
+price_abs,500.00,ANY,Or by this many rupees per line, whichever is greater
+qty_pct,0.00,ANY,Invoiced quantity above received quantity is not allowed
+small_diff_abs,100.00,ANY,Total invoice difference up to this amount is accepted
+receipt_over_pct,5.00,ANY,Receipt above ordered quantity by this percent is accepted
+supplier_change_pct,5.00,ANY,Supplier quantity or price change accepted by the agent up to this percent
+supplier_date_days,3,ANY,Supplier delivery date slip accepted by the agent up to this many days
+receipt_over_pct,2.00,RAW,Bulk raw material weight variance
+qty_pct,1.00,RAW,Invoice quantity above received allowed for bulk material (weighbridge variance)
+receipt_over_pct,10.00,PKG,Packaging is commonly supplied plus or minus ten percent
+price_pct,1.00,RAW,Tighter price tolerance on high-value raw material

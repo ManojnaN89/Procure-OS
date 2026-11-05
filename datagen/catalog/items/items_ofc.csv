@@ -1,0 +1,33 @@
+category,name,description,brand,base_uom,purchase_uom,pack_qty,moq,hsn_sac,price,abc,lead_days,attrs
+OFC,A4 copier paper 75 GSM,A4 size 75 GSM white copier paper 500 sheets per ream 5 reams per carton,JK Copier,PAC,CTN,5,1,480256,1325.00,B,3,size=A4;gsm=75;sheets=500
+OFC,A4 copier paper 80 GSM,A4 size 80 GSM premium copier paper 500 sheets per ream 5 reams per carton,Navigator,PAC,CTN,5,1,480256,1560.00,B,3,size=A4;gsm=80;sheets=500
+OFC,A3 copier paper 75 GSM,A3 size 75 GSM copier paper 500 sheets per ream 5 reams per carton,JK Copier,PAC,CTN,5,1,480256,2650.00,C,4,size=A3;gsm=75;sheets=500
+OFC,Ball pen blue 0.7 mm,Ball point pen blue ink 0.7 mm tip box of 50,Reynolds,PCS,BOX,50,2,960810,250.00,C,3,colour=blue;tip=0.7mm
+OFC,Ball pen black 0.7 mm,Ball point pen black ink 0.7 mm tip box of 50,Reynolds,PCS,BOX,50,2,960810,250.00,C,3,colour=black;tip=0.7mm
+OFC,Gel pen blue 0.5 mm,Gel ink pen blue 0.5 mm tip box of 12,Pentel,PCS,BOX,12,2,960810,360.00,C,4,colour=blue;tip=0.5mm
+OFC,Permanent marker black,Permanent marker bullet tip black box of 10,Luxor,PCS,BOX,10,1,960820,300.00,C,3,colour=black
+OFC,Whiteboard marker assorted,Whiteboard marker assorted colours pack of 4,Camlin,PCS,PAC,4,5,960820,120.00,C,3,colours=4
+OFC,Highlighter yellow,Highlighter pen yellow chisel tip box of 10,Stabilo,PCS,BOX,10,1,960820,350.00,C,4,colour=yellow
+OFC,HB pencil,HB graphite pencil box of 10,Natraj,PCS,BOX,10,5,960910,60.00,C,3,grade=HB
+OFC,Eraser white,Dust free eraser white box of 20,Apsara,PCS,BOX,20,2,401692,140.00,C,3,pack=20
+OFC,Pencil sharpener metal,Metal body pencil sharpener box of 20,Kangaro,PCS,BOX,20,1,821410,180.00,C,4,pack=20
+OFC,Stapler No. 10,Stapler for No. 10 staples 20 sheet capacity,Kangaro,NOS,NOS,1,5,847290,95.00,C,4,staples=No.10
+OFC,Staple pins No. 10,Staple pins No. 10 box of 1000 pack of 20 boxes,Kangaro,BOX,PAC,20,1,830520,180.00,C,4,size=No.10
+OFC,Paper clips 32 mm,Nickel plated paper clips 32 mm box of 100 pack of 10 boxes,Solo,BOX,PAC,10,1,830590,300.00,C,3,size=32mm
+OFC,Binder clips 25 mm,Black binder clips 25 mm box of 12,Kangaro,BOX,BOX,1,5,830590,60.00,C,3,size=25mm
+OFC,Box file A4 PVC,PVC box file A4 size with lever 75 mm spine,Solo,NOS,NOS,1,10,482030,95.00,C,4,size=A4
+OFC,Lever arch file A4,Lever arch file A4 size 80 mm spine hard board,Solo,NOS,NOS,1,10,482030,110.00,C,4,size=A4
+OFC,Plastic folder A4,Transparent plastic L-folder A4 pack of 100,Solo,NOS,PAC,100,1,392690,1100.00,C,4,size=A4
+OFC,Exercise notebook 200 pages,Ruled exercise notebook A4 size 200 pages hard bound,Classmate,NOS,NOS,1,20,482020,70.00,C,3,pages=200
+OFC,Attendance register 100 pages,Attendance register A4 100 pages hard bound,Navneet,NOS,NOS,1,10,482010,85.00,C,4,pages=100
+OFC,Gate pass book,Gate pass book 50 sets triplicate carbonless printed,Local printer,NOS,NOS,1,10,482010,140.00,C,7,sets=50
+OFC,Sticky notes 3x3 inch,Self adhesive sticky notes 3x3 inch yellow pack of 12 pads,3M Post-it,PAC,PAC,1,5,482010,380.00,C,4,size=3x3in
+OFC,Envelope white 10x4.5 inch,White envelope 10x4.5 inch 80 GSM pack of 500,Local printer,PAC,PAC,1,2,481710,650.00,C,5,size=10x4.5in
+OFC,Brown packing tape 48 mm,Brown adhesive tape 48 mm x 65 m,Wonder,ROL,ROL,1,12,391910,45.00,C,3,width=48mm
+OFC,Gum stick 8 g,Glue stick 8 g box of 24,Fevistick,PCS,BOX,24,1,350610,180.00,C,3,weight=8g
+OFC,Printer toner black,Black toner cartridge compatible with LaserJet M126,HP,NOS,NOS,1,1,844399,3800.00,B,5,yield=1600pages
+OFC,Desktop calculator 12 digit,12 digit desktop calculator solar plus battery,Casio,NOS,NOS,1,1,847010,450.00,C,5,digits=12
+OFC,Whiteboard 3x4 ft,Magnetic whiteboard 3x4 ft with aluminium frame and marker tray,Kores,NOS,NOS,1,1,961000,3200.00,C,7,size=3x4ft
+OFC,Stamp pad ink blue,Stamp pad ink blue medium size,Kangaro,NOS,NOS,1,10,961220,70.00,C,3,colour=blue
+OFC,Scissors 8 inch,Stainless steel scissors 8 inch,Kangaro,NOS,NOS,1,5,821300,85.00,C,4,size=8in
+OFC,Rubber bands 100 g,Natural rubber bands assorted size 100 g pack,Local,PAC,PAC,1,10,401699,60.00,C,3,weight=100g

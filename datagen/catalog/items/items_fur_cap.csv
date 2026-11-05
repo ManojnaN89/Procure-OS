@@ -1,0 +1,24 @@
+category,name,description,brand,base_uom,purchase_uom,pack_qty,moq,hsn_sac,price,abc,lead_days,attrs
+FUR,Executive chair high back,Executive high back chair leatherette with synchro tilt,Godrej Interio,NOS,NOS,1,1,940139,14500.00,B,14,type=executive;material=leatherette
+FUR,Ergonomic mesh chair,Ergonomic mesh back chair with lumbar support,Featherlite,NOS,NOS,1,1,940139,9800.00,B,14,type=ergonomic;material=mesh
+FUR,Visitor chair,Visitor chair upholstered fixed arm metal frame,Godrej Interio,NOS,NOS,1,2,940179,4200.00,C,14,type=visitor
+FUR,Workstation desk 4 seater,Modular workstation 4 seater 1200x600 mm laminate with partition,Godrej Interio,NOS,NOS,1,1,940310,38000.00,A,21,seats=4
+FUR,Manager table 1500x750,Manager table 1500x750 mm laminated with side unit,Godrej Interio,NOS,NOS,1,1,940330,14500.00,B,21,size=1500x750
+FUR,Steel filing cabinet 4 drawer,Steel filing cabinet 4 drawer with lock,Godrej,NOS,NOS,1,1,940310,12500.00,B,14,drawers=4
+FUR,Steel cupboard 2 door,Steel storage cupboard 2 door 4 shelf,Godrej,NOS,NOS,1,1,940310,9800.00,B,14,doors=2
+FUR,Conference table 12 seat,Conference table 12 seat 3600x1200 mm veneer,Godrej Interio,NOS,NOS,1,1,940330,85000.00,A,30,seats=12
+FUR,Meeting chair,Meeting room chair mid back mesh,Featherlite,NOS,NOS,1,4,940139,5800.00,B,14,type=meeting
+FUR,Steel locker 6 door,Steel locker 6 compartment with key lock,Godrej,NOS,NOS,1,1,940310,8500.00,B,14,doors=6
+FUR,Sofa 3 seater,3 seater reception sofa fabric,Durian,NOS,NOS,1,1,940161,28000.00,B,21,seats=3
+FUR,Industrial storage rack 5 tier,Heavy duty MS storage rack 5 tier 2000x900x600 mm,Local,NOS,NOS,1,2,940320,14000.00,B,14,tiers=5
+CAP,CNC vertical machining centre,3 axis CNC vertical machining centre 800x500 mm table,Jyoti CNC,NOS,NOS,1,1,845710,2800000.00,A,90,axes=3;table=800x500
+CAP,Centre lathe 8 feet,Heavy duty centre lathe 8 feet bed 3 jaw chuck,HMT,NOS,NOS,1,1,845811,550000.00,A,45,bed=8ft
+CAP,Screw air compressor 15 kW,Screw air compressor 15 kW 10 bar 100 cfm with dryer,Atlas Copco,NOS,NOS,1,1,841480,395000.00,A,45,power=15kW;pressure=10bar
+CAP,Diesel generator 125 kVA,Silent diesel generator 125 kVA with AMF panel,Kirloskar,NOS,NOS,1,1,850212,950000.00,A,60,rating=125kVA
+CAP,Electric forklift 2 ton,Electric forklift 2 ton 3 m lift with charger,Godrej,NOS,NOS,1,1,842710,1450000.00,A,60,capacity=2t
+CAP,EOT crane 5 ton,Electric overhead travelling crane 5 ton 10 m span,Ace,NOS,NOS,1,1,842611,1250000.00,A,75,capacity=5t
+CAP,Hydraulic press 100 ton,Hydraulic power press 100 ton H frame,Local,NOS,NOS,1,1,846299,680000.00,A,60,capacity=100t
+CAP,Industrial chiller 20 TR,Water cooled industrial chiller 20 TR,Blue Star,NOS,NOS,1,1,841869,620000.00,A,45,capacity=20TR
+CAP,Weighbridge 60 ton,Electronic weighbridge 60 ton 18 m deck with indicator,Essae,NOS,NOS,1,1,842382,750000.00,A,45,capacity=60t
+CAP,Distribution transformer 500 kVA,Oil cooled distribution transformer 500 kVA 11 kV,Voltamp,NOS,NOS,1,1,850421,690000.00,A,60,rating=500kVA
+CAP,Cassette air conditioner 2 TR,Ceiling cassette split air conditioner 2 TR,Voltas,NOS,NOS,1,1,841510,145000.00,A,14,capacity=2TR

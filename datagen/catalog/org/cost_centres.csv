@@ -1,0 +1,13 @@
+code,name,department_code,location_code,owner_user,active
+HO-MGMT,Management Office,MGMT,HO-PUN,U001,true
+HO-FIN,Finance & Accounts,FIN,HO-PUN,U002,true
+HO-PUR,Procurement,PUR,HO-PUN,U006,true
+HO-IT,Information Technology,IT,HO-PUN,U018,true
+HO-ADM,HR & Admin,ADM,HO-PUN,U020,true
+HO-SAL,Sales & Marketing,SAL,HO-PUN,U022,true
+PLT-PRD1,Production Line 1,PRD,PLT-VAD,U011,true
+PLT-PRD2,Production Line 2,PRD,PLT-VAD,U011,true
+PLT-MNT,Plant Maintenance,MNT,PLT-VAD,U014,true
+PLT-UTL,Utilities,MNT,PLT-VAD,U014,true
+PLT-QA,Quality Assurance & Lab,QA,PLT-VAD,U016,true
+WH-LOG,Warehouse & Logistics,LOG,WH-BLR,U023,true

@@ -1,0 +1,11 @@
+code,name,head_user
+MGMT,Management,U001
+FIN,Finance & Accounts,U002
+PUR,Procurement,U006
+IT,Information Technology,U018
+ADM,HR & Admin,U020
+SAL,Sales & Marketing,U022
+PRD,Production,U010
+MNT,Maintenance & Utilities,U014
+QA,Quality,U016
+LOG,Stores & Logistics,U023

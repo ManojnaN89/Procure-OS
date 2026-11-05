@@ -1,0 +1,67 @@
+# Demo company (fictional). Generated PANs carry the digits 0000, so they can never belong to a real taxpayer.
+# GSTINs are built with datagen/generator/ids.py (valid format and check character).
+company:
+  code: CBC
+  legal_name: CBC Private Limited
+  short_name: CBC
+  pan: AXQCC0000M
+  cin: U29299MH2009PTC000001
+  registered_address: "Plot 14, Phase 2, Rajiv Gandhi Infotech Park, Hinjewadi, Pune, Maharashtra 411057"
+  turnover_band: 10-500cr          # above Rs 10 crore: TDS on goods (194Q / s.393) applies to this buyer
+  annual_turnover_inr_crore: 450
+  employees: 1200
+  fy_start_month: 4
+  currency: INR
+  email_domain: cbcpl.example      # .example is a reserved name; no real mailbox can exist
+  letterhead_text: "CBC Private Limited | CIN U29299MH2009PTC000001 | Regd. office: Plot 14, Phase 2, Rajiv Gandhi Infotech Park, Hinjewadi, Pune 411057"
+  business_note: "Generic mid-size manufacturer and distributor of industrial products (demo profile only; the platform is industry-neutral)"
+
+gst_registrations:
+  - { gstin: 27AXQCC0000M1ZG, state_code: "27", legal_address: "Plot 14, Phase 2, Rajiv Gandhi Infotech Park, Hinjewadi, Pune 411057", pincode: "411057", is_default: true }
+  - { gstin: 24AXQCC0000M1ZM, state_code: "24", legal_address: "Plot 212, GIDC Industrial Estate, Makarpura, Vadodara, Gujarat 390016", pincode: "390016", is_default: false }
+  - { gstin: 29AXQCC0000M1ZC, state_code: "29", legal_address: "No. 88, 2nd Stage, Peenya Industrial Area, Bengaluru, Karnataka 560058", pincode: "560058", is_default: false }
+
+locations:
+  - code: HO-PUN
+    name: Head Office, Pune
+    type: office
+    gstin: 27AXQCC0000M1ZG
+    address: "Plot 14, Phase 2, Rajiv Gandhi Infotech Park, Hinjewadi"
+    city: Pune
+    state_code: "27"
+    pincode: "411057"
+    is_stock_location: false
+    working_days: Mon-Fri
+    receiving_hours: "10:00-17:00"
+    holiday_scope: [central, "27"]
+    loc_short: PUN
+  - code: PLT-VAD
+    name: Plant, Vadodara
+    type: plant
+    gstin: 24AXQCC0000M1ZM
+    address: "Plot 212, GIDC Industrial Estate, Makarpura"
+    city: Vadodara
+    state_code: "24"
+    pincode: "390016"
+    is_stock_location: true
+    working_days: Mon-Sat
+    receiving_hours: "08:00-17:30"
+    holiday_scope: [central, "24"]
+    loc_short: VAD
+  - code: WH-BLR
+    name: Warehouse, Bengaluru
+    type: warehouse
+    gstin: 29AXQCC0000M1ZC
+    address: "No. 88, 2nd Stage, Peenya Industrial Area"
+    city: Bengaluru
+    state_code: "29"
+    pincode: "560058"
+    is_stock_location: true
+    working_days: Mon-Sat
+    receiving_hours: "09:00-18:00"
+    holiday_scope: [central, "29"]
+    loc_short: BLR
+
+company_bank_accounts:
+  - { code: CBA-01, bank_code: ICICI, account_no: "000000000101", ifsc: ICIC0009991, purpose: payments, payment_file_format: generic_csv }
+  - { code: CBA-02, bank_code: HDFC,  account_no: "000000000202", ifsc: HDFC0009992, purpose: receipts, payment_file_format: generic_csv }

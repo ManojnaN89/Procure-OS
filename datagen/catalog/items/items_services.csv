@@ -1,0 +1,47 @@
+category,name,description,brand,base_uom,purchase_uom,pack_qty,moq,hsn_sac,price,abc,lead_days,attrs
+FAC,Housekeeping services office,Housekeeping and janitorial services head office per month,Service vendor,OTH,OTH,1,1,998533,185000.00,A,7,billing=monthly;unit=per month;site=HO
+FAC,Housekeeping services plant,Plant housekeeping and industrial cleaning per month,Service vendor,OTH,OTH,1,1,998533,240000.00,A,7,billing=monthly;unit=per month;site=plant
+FAC,Security guard service,Unarmed security guard 12 hour shift per guard per month,Service vendor,OTH,OTH,1,1,998525,24500.00,A,7,billing=monthly;unit=per guard
+FAC,Pest control quarterly,General pest control treatment per quarter for all premises,Service vendor,OTH,OTH,1,1,998531,18000.00,C,7,billing=quarterly
+FAC,Garden maintenance monthly,Garden and landscape maintenance per month,Service vendor,OTH,OTH,1,1,998539,22000.00,C,7,billing=monthly
+FAC,Canteen catering per plate,Canteen meals per plate lunch,Service vendor,OTH,OTH,1,1,996331,85.00,B,7,billing=per plate
+FAC,Contract manpower unskilled,Unskilled contract workers per head per month,Service vendor,OTH,OTH,1,1,998513,21500.00,A,7,billing=monthly;unit=per head
+FAC,Contract manpower skilled,Skilled technician contract manpower per head per month,Service vendor,OTH,OTH,1,1,998513,32500.00,A,7,billing=monthly;unit=per head
+AMC,AMC CNC machine annual,Annual maintenance contract per CNC machine comprehensive,OEM service,OTH,OTH,1,1,998719,180000.00,A,14,billing=annual;unit=per machine
+AMC,AMC air compressor annual,Annual maintenance contract for screw air compressor,OEM service,OTH,OTH,1,1,998719,45000.00,B,14,billing=annual;unit=per machine
+AMC,AMC diesel generator annual,Annual maintenance contract for DG set 125 kVA,OEM service,OTH,OTH,1,1,998719,60000.00,B,14,billing=annual;unit=per set
+AMC,AMC lift annual,Annual maintenance contract per lift,OEM service,OTH,OTH,1,1,998719,55000.00,B,14,billing=annual;unit=per lift
+AMC,AMC air conditioner annual,Annual maintenance contract per split air conditioner,Service vendor,OTH,OTH,1,10,998719,4500.00,B,7,billing=annual;unit=per unit
+AMC,AMC IT hardware annual,Annual maintenance of desktops and laptops per device,Service vendor,OTH,OTH,1,10,998713,3200.00,B,7,billing=annual;unit=per device
+AMC,AMC CCTV and network annual,Annual maintenance of CCTV and network per site,Service vendor,OTH,OTH,1,1,998715,85000.00,B,14,billing=annual;unit=per site
+AMC,AMC fire alarm annual,Annual maintenance of fire alarm and hydrant system,Service vendor,OTH,OTH,1,1,998719,38000.00,B,14,billing=annual
+AMC,Breakdown repair visit,Breakdown repair engineer visit per call,Service vendor,OTH,OTH,1,1,998719,12000.00,B,3,billing=per visit
+AMC,Instrument calibration,Calibration of measuring instrument per instrument with certificate,Accredited lab,OTH,OTH,1,1,998346,1800.00,C,10,billing=per instrument
+AMC,Weighbridge calibration annual,Annual calibration of weighbridge with certificate,Accredited lab,OTH,OTH,1,1,998346,12000.00,C,10,billing=annual
+AMC,Building repair and painting,Building repair and repainting per square foot,Contractor,OTH,OTH,1,500,995469,38.00,B,14,billing=per sqft
+LOG,Full truck load Pune to Vadodara,Full truck load 9 tonne Pune to Vadodara per trip,Transporter,OTH,OTH,1,1,996511,38000.00,A,2,billing=per trip;route=PUN-VAD
+LOG,LTL freight Pune to Bengaluru,Part load freight Pune to Bengaluru per kg,Transporter,OTH,OTH,1,100,996511,7.50,B,3,billing=per kg;route=PUN-BLR
+LOG,Express courier documents,Express courier documents domestic per consignment,Courier,OTH,OTH,1,1,996812,90.00,C,1,billing=per consignment
+LOG,Express courier parcel 5 kg,Express courier parcel up to 5 kg domestic,Courier,OTH,OTH,1,1,996812,380.00,C,2,billing=per parcel
+LOG,Loading and unloading,Loading and unloading labour per metric tonne,Contractor,OTH,OTH,1,1,996719,140.00,C,2,billing=per tonne
+LOG,Warehouse pallet storage,Third party warehouse pallet storage per pallet per month,Warehouse operator,OTH,OTH,1,10,996729,520.00,C,7,billing=monthly
+LOG,Hydra crane hire per day,Hydra crane 12 ton hire per day with operator,Contractor,OTH,OTH,1,1,997319,14000.00,C,2,billing=per day
+LOG,Inter-state container freight,20 ft container Vadodara to Bengaluru per trip,Transporter,OTH,OTH,1,1,996511,62000.00,A,3,billing=per trip;route=VAD-BLR
+PRO,Statutory audit annual,Statutory audit fee per annum,Audit firm,OTH,OTH,1,1,998221,650000.00,A,14,billing=annual
+PRO,Tax audit annual,Tax audit under income tax per annum,Audit firm,OTH,OTH,1,1,998221,120000.00,B,14,billing=annual
+PRO,GST compliance monthly,GST return filing and reconciliation per month,CA firm,OTH,OTH,1,1,998231,25000.00,B,7,billing=monthly
+PRO,Legal retainer monthly,Retainer for legal advice by advocate per month,Law firm,OTH,OTH,1,1,998212,40000.00,B,7,billing=monthly
+PRO,Legal opinion per matter,Written legal opinion by advocate per matter,Law firm,OTH,OTH,1,1,998211,35000.00,C,7,billing=per matter
+PRO,Management consulting per day,Management consulting fee per consultant day,Consulting firm,OTH,OTH,1,1,998311,45000.00,B,14,billing=per day
+PRO,Engineering consultancy per day,Engineering consultancy fee per day,Consulting firm,OTH,OTH,1,1,998331,28000.00,B,14,billing=per day
+PRO,ROC filing per event,Company law filing and compliance per filing,CS firm,OTH,OTH,1,1,998231,6500.00,C,7,billing=per filing
+PRO,Recruitment permanent hire,Permanent placement fee per hire,Recruiter,OTH,OTH,1,1,998512,120000.00,B,30,billing=per hire
+PRO,Training programme per day,Commercial training programme per participant per day,Training provider,OTH,OTH,1,1,999293,6500.00,C,14,billing=per participant
+TRV,Domestic air ticket economy,Domestic air ticket economy class booked via travel agent,Travel agent,OTH,OTH,1,1,996425,7500.00,B,1,billing=per ticket
+TRV,Hotel stay per night,Business hotel stay per night 3 to 4 star metro,Travel agent,OTH,OTH,1,1,996311,4800.00,B,1,billing=per night
+TRV,Local cab hire per day,Local cab hire 8 hours 80 km with driver,Cab operator,OTH,OTH,1,1,996601,2600.00,C,1,billing=per day
+TRV,Outstation cab per km,Outstation cab hire per km,Cab operator,OTH,OTH,1,1,996601,14.00,C,1,billing=per km
+TRV,Train ticket AC 3 tier,Train ticket AC 3 tier,Travel agent,OTH,OTH,1,1,996411,1600.00,C,1,billing=per ticket
+TRV,Conference event management,Corporate conference event management lump sum,Event agency,OTH,OTH,1,1,998596,450000.00,A,21,billing=fixed
+TRV,Exhibition stall,Exhibition stall rental and design per square metre,Event agency,OTH,OTH,1,1,998596,12000.00,B,21,billing=per sqm
+TRV,Print advertisement insertion,Print advertisement per insertion in business daily,Media agency,OTH,OTH,1,1,998361,65000.00,B,7,billing=per insertion

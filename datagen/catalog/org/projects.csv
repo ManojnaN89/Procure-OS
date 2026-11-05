@@ -1,0 +1,6 @@
+code,name,type,cost_centre_code,budget_amount,start_date,end_date,status
+PRJ-2425-01,Line 2 capacity expansion,capex,PLT-PRD2,25000000.00,2024-12-01,2026-03-31,closed
+PRJ-2425-02,Server and network refresh,capex,HO-IT,8000000.00,2025-01-15,2025-09-30,closed
+PRJ-2526-01,Bengaluru warehouse racking and dock,capex,WH-LOG,6000000.00,2025-08-01,2026-06-30,closed
+PRJ-2627-01,Effluent treatment upgrade,capex,PLT-UTL,15000000.00,2026-05-01,2027-03-31,open
+PRJ-2627-02,Head office interior refresh,capex,HO-ADM,4500000.00,2026-07-01,2027-03-31,open

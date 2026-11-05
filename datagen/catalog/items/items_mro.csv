@@ -1,0 +1,44 @@
+category,name,description,brand,base_uom,purchase_uom,pack_qty,moq,hsn_sac,price,abc,lead_days,attrs
+MRO,Ball bearing 6205-2RS,Deep groove ball bearing 25x52x15 mm sealed both sides,SKF,NOS,NOS,1,10,848210,320.00,B,5,size=6205-2RS;make=SKF
+MRO,Ball bearing 6206-2RS,Deep groove ball bearing 30x62x16 mm sealed both sides,SKF,NOS,NOS,1,10,848210,380.00,B,5,size=6206-2RS;make=SKF
+MRO,Ball bearing 6305-2RS,Deep groove ball bearing 25x62x17 mm sealed both sides,FAG,NOS,NOS,1,10,848210,480.00,B,5,size=6305-2RS;make=FAG
+MRO,Ball bearing 6308-2RS,Deep groove ball bearing 40x90x23 mm sealed both sides,SKF,NOS,NOS,1,5,848210,780.00,B,5,size=6308-2RS;make=SKF
+MRO,Taper roller bearing 32008,Tapered roller bearing 40x68x19 mm single row,Timken,NOS,NOS,1,4,848220,1450.00,B,7,size=32008;make=Timken
+MRO,Spherical roller bearing 22212,Spherical roller bearing 60x110x28 mm,SKF,NOS,NOS,1,2,848230,4800.00,A,10,size=22212E;make=SKF
+MRO,Pillow block bearing UCP 205,Pillow block unit UCP 205 for 25 mm shaft,NBC,NOS,NOS,1,4,848320,650.00,B,5,size=UCP205
+MRO,Thrust bearing 51108,Thrust ball bearing 40x60x13 mm,SKF,NOS,NOS,1,4,848210,520.00,B,7,size=51108
+MRO,Oil seal TC 40x62x10,Rubber oil seal TC type 40x62x10 mm nitrile,Garlock,NOS,NOS,1,20,401693,85.00,C,4,size=40x62x10
+MRO,O-ring kit metric 382 pieces,Assorted nitrile O-ring kit metric 382 pieces,Local,SET,SET,1,2,401693,1250.00,C,5,pieces=382
+MRO,Mechanical seal 25 mm,Single spring mechanical seal for 25 mm pump shaft,John Crane,NOS,NOS,1,2,848420,6500.00,A,14,shaft=25mm
+MRO,V-belt B-68,Classical V-belt section B length 68 inch,Gates,NOS,NOS,1,10,401032,420.00,B,5,section=B;length=68in
+MRO,V-belt C-96,Classical V-belt section C length 96 inch,Fenner,NOS,NOS,1,6,401033,980.00,B,5,section=C;length=96in
+MRO,Conveyor belt rubber 600 mm,Rubber conveyor belt 600 mm wide 3 ply per metre,Fenner,MTR,MTR,1,20,401012,650.00,B,10,width=600mm;ply=3
+MRO,Roller chain 12B-1,Simplex roller chain 12B-1 5 metre box,Rexnord,BOX,BOX,1,2,731511,3200.00,B,7,pitch=19.05mm
+MRO,Sprocket 20 teeth,Steel sprocket 20 teeth for 12B chain with taper bush,Local,NOS,NOS,1,4,848390,780.00,C,7,teeth=20
+MRO,Flexible jaw coupling L100,Jaw coupling L100 with spider 28 mm bore,Lovejoy,NOS,NOS,1,2,848360,950.00,B,7,size=L100
+MRO,Hex bolt M12x50 grade 8.8,Hex bolt M12 x 50 mm grade 8.8 zinc plated box of 100,Unbrako,BOX,BOX,1,2,731815,1150.00,C,4,size=M12x50;grade=8.8
+MRO,Hex nut M12,Hex nut M12 grade 8 zinc plated box of 100,Unbrako,BOX,BOX,1,2,731816,380.00,C,4,size=M12
+MRO,Plain washer M12,Plain washer M12 zinc plated box of 200,Local,BOX,BOX,1,2,731822,290.00,C,4,size=M12
+MRO,Socket head cap screw M8x30,Socket head cap screw M8 x 30 mm 12.9 grade box of 100,Unbrako,BOX,BOX,1,2,731815,640.00,C,5,size=M8x30;grade=12.9
+MRO,Self tapping screw 4.8x25,Self tapping screw 4.8 x 25 mm box of 500,Local,BOX,BOX,1,2,731814,420.00,C,4,size=4.8x25
+MRO,Gate valve 2 inch CI,Cast iron gate valve 2 inch flanged PN10,Kirloskar,NOS,NOS,1,2,848180,4200.00,B,10,size=2in;pn=10
+MRO,Ball valve 1 inch SS,Stainless steel ball valve 1 inch BSP female,Audco,NOS,NOS,1,4,848180,780.00,B,7,size=1in;material=SS304
+MRO,Globe valve 2 inch,Cast steel globe valve 2 inch flanged,Leader,NOS,NOS,1,1,848180,5500.00,B,14,size=2in
+MRO,Non-return valve 2 inch,Cast iron swing check valve 2 inch flanged,Kirloskar,NOS,NOS,1,2,848130,2900.00,B,10,size=2in
+MRO,Pressure gauge 0-10 bar,Pressure gauge 100 mm dial 0-10 bar bottom entry,WIKA,NOS,NOS,1,2,902620,1450.00,B,7,range=0-10bar
+MRO,GI pipe 1 inch class B 6 m,Galvanised iron pipe 1 inch class B 6 metre length,Tata,NOS,NOS,1,5,730630,1650.00,B,5,size=1in;class=B
+MRO,MS flange 2 inch,Mild steel slip-on flange 2 inch PN10,Local,NOS,NOS,1,10,730791,520.00,C,7,size=2in
+MRO,Pipe elbow 1 inch GI,Galvanised iron elbow 1 inch,Local,NOS,NOS,1,20,730793,65.00,C,4,size=1in
+MRO,Hydraulic hose 1/2 inch 2SN,Hydraulic hose 1/2 inch 2SN per metre,Gates,MTR,MTR,1,10,400942,380.00,B,7,size=1/2in;type=2SN
+MRO,Servo gear oil 220 drum,Industrial gear oil ISO VG 220 210 litre drum,Servo,DRM,DRM,1,1,271019,21500.00,A,7,grade=VG220;pack=210L
+MRO,Hydraulic oil 68 drum,Hydraulic oil ISO VG 68 210 litre drum,Servo,DRM,DRM,1,1,271019,19800.00,A,7,grade=VG68;pack=210L
+MRO,Lithium grease EP2 18 kg,Lithium complex grease EP2 18 kg pail,Servo,NOS,NOS,1,1,271019,4200.00,B,7,grade=EP2;pack=18kg
+MRO,Welding electrode E6013 3.15 mm,Mild steel welding electrodes E6013 3.15 mm 5 kg pack,Ador,PAC,PAC,1,5,831110,580.00,B,5,size=3.15mm;type=E6013
+MRO,Cutting wheel 4 inch,Abrasive cutting wheel 4 inch 1 mm thickness box of 50,Bosch,BOX,BOX,1,2,680422,1100.00,C,5,size=4in
+MRO,Air filter element,Compressor air intake filter element,Atlas Copco,NOS,NOS,1,2,842199,1800.00,B,10,make=Atlas Copco
+MRO,Oil filter spin-on,Spin-on oil filter for screw compressor,Atlas Copco,NOS,NOS,1,2,842123,650.00,B,10,make=Atlas Copco
+MRO,Hydraulic return filter,Hydraulic return line filter element 10 micron,Pall,NOS,NOS,1,2,842199,2100.00,B,14,rating=10micron
+MRO,Gasket sheet 1.5 mm,Nitrile rubber gasket sheet 1.5 mm 1x1 m,Klinger,NOS,NOS,1,2,400821,1450.00,B,7,thickness=1.5mm
+MRO,Rubber hose 1 inch,Rubber water hose 1 inch reinforced per metre,Local,MTR,MTR,1,20,400910,140.00,C,5,size=1in
+MRO,Hose clamp 25-40 mm,Stainless steel hose clamp 25-40 mm box of 10,Local,BOX,BOX,1,5,732690,120.00,C,4,size=25-40mm
+MRO,Linear guide bearing LM 20,Linear motion bearing LM20UU,THK,NOS,NOS,1,4,848280,780.00,B,10,size=LM20UU

@@ -1,0 +1,23 @@
+sac,service,gst_rate,itc_allowed_to_supplier,reverse_charge,effective_from,effective_to,source,status
+9965 (GTA),Goods transport agency - option without ITC,5,no,yes (recipient pays if supplier has not opted for forward charge),2017-07-01,,Notif 11/2017-CT(R) s.no 9(iii); RCM Notif 13/2017-CT(R),VERIFY
+9965 (GTA),Goods transport agency - forward charge option,12,yes,no,2017-07-01,2025-09-21,Notif 11/2017-CT(R) s.no 9(iii)(b) before amendment,VERIFY
+9965 (GTA),Goods transport agency - forward charge option,18,yes,no,2025-09-22,,Notif 15/2025-CT(R) dt 17.09.2025 item (iv)(A): 6 -> 9 (CGST),CONFIRMED (text read)
+9968,Courier services,18,yes,no,2017-07-01,,Notif 15/2025-CT(R) s.no 12(ii): 9 (CGST),CONFIRMED (text read)
+9963,Hotel accommodation below Rs 7500 per unit per day,12,yes,no,2017-07-01,2025-09-21,Notif 11/2017-CT(R) s.no 7 before amendment,VERIFY
+9963,Hotel accommodation below Rs 7500 per unit per day,5,no,no,2025-09-22,,Notif 15/2025-CT(R) s.no 7(i): 2.5 (CGST) without ITC,CONFIRMED (text read)
+9963,Hotel accommodation Rs 7500 and above per unit per day,18,yes,no,2017-07-01,,Notif 11/2017-CT(R) s.no 7,VERIFY
+9964,Air travel economy class,5,yes,no,2017-07-01,,Notif 11/2017-CT(R) s.no 8,VERIFY
+9966,Renting of goods carriage with fuel (rent-a-truck),5 or 18,5: no / 18: yes,no,2025-09-22,,Notif 15/2025-CT(R) s.no 10(ia): 2.5 or 9 (CGST),CONFIRMED (text read)
+9966,Renting of motor vehicle for passengers with fuel (cab hire),5 or 18,5: no / 18: yes,yes when supplier is not a body corporate and recipient is a body corporate (5% case),2017-07-01,,Notif 11/2017-CT(R) s.no 10; RCM Notif 13/2017-CT(R),VERIFY
+9973,Licensing of software / IT software subscriptions,18,yes,no,2017-07-01,,Notif 11/2017-CT(R) s.no 17,VERIFY
+9973,Leasing or rental of machinery and equipment,18,yes,no,2017-07-01,,Notif 11/2017-CT(R) s.no 17,VERIFY
+9982,Legal services by an advocate or firm of advocates,18,yes,yes (recipient pays),2017-07-01,,RCM Notif 13/2017-CT(R) s.no 2,VERIFY
+9983,Professional / technical / consultancy / audit services,18,yes,no,2017-07-01,,Notif 11/2017-CT(R) s.no 21 (as amended by 15/2025),VERIFY
+9983,Advertising services,18,yes,no,2017-07-01,,Notif 11/2017-CT(R) s.no 21,VERIFY
+9984,Telecommunication and internet services,18,yes,no,2017-07-01,,Notif 11/2017-CT(R) s.no 22,VERIFY
+9985,Security services,18,yes,yes when the supplier is not a body corporate and the recipient is a registered person (secondary sources; official wording not read),2019-01-01,,RCM Notif 13/2017-CT(R) s.no 14 as amended by 29/2018,VERIFY
+9985,Cleaning / housekeeping / pest control / manpower supply,18,yes,no,2017-07-01,,Notif 11/2017-CT(R) s.no 23,VERIFY
+9985,Event management services,18,yes,no,2017-07-01,,Notif 11/2017-CT(R) s.no 23,VERIFY
+9987,Maintenance and repair services including AMC,18,yes,no,2017-07-01,,Notif 11/2017-CT(R) s.no 25,VERIFY
+9992,Commercial training and coaching,18,yes,no,2017-07-01,,Notif 11/2017-CT(R) s.no 30,VERIFY
+9997,Other services not elsewhere classified,18,yes,no,2017-07-01,,Notif 11/2017-CT(R) s.no 35 (as amended by 15/2025),CONFIRMED (text read)

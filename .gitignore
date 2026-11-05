@@ -1,0 +1,28 @@
+# planning material and client documents (not committed)
+planning/
+
+# generated datasets (regenerated from seed)
+data/datasets/
+
+# secrets and local settings
+.env
+*.env
+.claude/settings.local.json
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+
+# Node
+node_modules/
+dist/
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode/
+.claude/scheduled_tasks.lock

@@ -1,0 +1,23 @@
+key,value,description
+budget_policy,warn,Budget check result when a request exceeds the available budget (warn or block)
+duplicate_window_days,14,A request for the same item and location within this many days is flagged as a possible duplicate
+split_order_window_days,7,Requests to the same supplier or category within this window are summed to detect split orders
+default_rfq_response_days,5,Working days suppliers get to respond to an RFQ
+rfq_reminder_after_days,2,Working days after which a silent supplier is reminded
+supplier_ack_due_days,2,Working days within which a PO acknowledgement is expected
+price_band_pct,15,A quote deviating more than this percent from the benchmark price is flagged
+cost_of_capital_pct,12,Used for early-payment discount decisions
+holding_cost_pct,18,Annual inventory holding cost as percent of unit cost (planning)
+ordering_cost_inr,500.00,Cost to place one order (planning)
+default_service_level_pct,95,Target service level for safety stock (planning)
+min_quotes_default,2,Minimum quotes when the category does not say
+working_saturdays,none,Company rule for Saturdays at head office (none or 1st-3rd-5th)
+approval_reminder_hours,24,Hours before an approver is reminded
+approval_escalation_hours,72,Hours before a pending approval escalates to the next level
+auto_approve_requires_budget,true,Auto-approval only when budget is available
+po_send_requires_confirmation,true,A person confirms before a PO is sent to a supplier
+grn_edit_window_days,3,Days a goods receipt can be corrected after posting
+invoice_receipt_mailbox,invoices@cbcpl.example,Mailbox where supplier invoices arrive
+request_mailbox,requests@cbcpl.example,Mailbox where staff email requests
+purchase_mailbox,purchase@cbcpl.example,Mailbox buyers use for supplier correspondence
+tds_applicable_on_goods,true,Buyer turnover is above Rs 10 crore so TDS on purchase of goods applies
