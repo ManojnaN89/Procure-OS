@@ -31,12 +31,10 @@ def test_user_logs_in_and_sees_only_their_tenant(control_db: str) -> None:
     me = client.get("/api/auth/me", headers={"Authorization": f"Bearer {r.json()['access_token']}"})
 
     assert me.status_code == 200
-    assert me.json() == {
-        "user_id": me.json()["user_id"],
-        "tenant": slug,
-        "role": "Approver",
-        "display_name": "Test Person",
-    }
+    body = me.json()
+    assert (body["tenant"], body["role"], body["display_name"]) == (slug, "Approver", "Test Person")
+    assert body["tenant_name"] == slug
+    assert "request.approve" in body["permissions"] and "payment.approve" not in body["permissions"]
 
 
 def test_wrong_email_and_wrong_password_look_the_same(control_db: str) -> None:

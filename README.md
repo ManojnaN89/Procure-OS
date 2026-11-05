@@ -6,7 +6,8 @@ An India-first, domain-neutral, multi-tenant procure-to-pay platform: request, a
 
 1. Copy `.env.example` to `.env` and set the values (API keys are entered by you, never committed).
 2. `cd backend && python -m venv .venv && .venv\Scripts\python -m pip install -r requirements-dev.in`, then `cd ../frontend && npm install`.
-3. `python scripts/dev.py`
+3. `cd backend && .venv\Scripts\python -m p2p.cli control migrate`, then create a company: `python -m p2p.cli tenant create acme --name "Acme Pvt Ltd"` and a first user: `python -m p2p.cli user create acme you@example.com --name "Your Name" --role Admin` (it asks for the password).
+4. `python scripts/dev.py`
 
 Backend http://localhost:8000/api/health, frontend http://localhost:5173, test mailbox http://localhost:8025.
 

@@ -17,6 +17,9 @@ An India-first, domain-neutral, multi-tenant procure-to-pay platform (request, a
 - Start everything: `python scripts/dev.py` (Postgres and Mailpit in Docker, backend on 8000, frontend on 5173)
 - All checks: `python scripts/check.py` (ruff, mypy strict, pytest, biome, tsc). Run before saying a task is done.
 - Backend tools use `backend/.venv`. Dependencies: edit `requirements.in` or `requirements-dev.in`, install, then `pip freeze > requirements.txt`.
+- Browser tests need `cd frontend && npm run build` and `playwright install chromium` once. They skip when the build is missing.
+- Run the job worker (timers, escalations, email, mailbox polling): `python -c "from p2p.platform import worker; worker.run_forever()"` from `backend/`.
+- Never run two pytest runs at once: they share one test database.
 - Regenerate data: `python -I datagen/generator/cli.py --size demo --seed 42`, check it with `datagen/generator/validate.py`.
 
 ## Rules
@@ -44,3 +47,19 @@ Code, tests (including boundary cases for formulas), `python scripts/check.py` g
 ## Style
 
 Match the surrounding code. Short plain-language comments only where the reason is not obvious. Keep documents simple and short.
+
+## Where things are (Phase 0)
+
+| Area | Module in `backend/p2p/` |
+|---|---|
+| Tenants, migrations, routing by token | `platform/tenants.py`, `platform/routing.py`, `platform/migrations/{control,tenant}/` |
+| Login, roles, limits, segregation of duties | `platform/auth.py`, `users.py`, `permissions.py`, `sod.py` |
+| Audit log (insert only) | `platform/audit.py` |
+| Rules (decision tables) and formulas | `rules/engine.py`, `formulas/` |
+| Cases, tasks, notifications, worker | `platform/cases.py`, `tasks.py`, `notifications.py`, `worker.py` |
+| Proposals (human confirmation) | `platform/proposals.py` |
+| Models, AI steps, agents | `ai_steps/gateway.py`, `ai_steps/runner.py`, `agents/runtime.py`, `agents/autonomy.py` |
+| Files, parsing, email | `platform/files.py`, `parsing.py`, `emails.py`, `mailbox.py` |
+| Admin API and run viewer | `platform/admin_api.py`, `logs.py` |
+
+A new tenant-database table is a new file in `platform/migrations/tenant/versions/` (next number). A new agent tool is registered with `ToolRegistry`; modules that register tools or executors are listed in `EXTRA_MODULES` so the API process loads them.

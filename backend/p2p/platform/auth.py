@@ -42,8 +42,10 @@ class TokensOut(BaseModel):
 class MeOut(BaseModel):
     user_id: int
     tenant: str
+    tenant_name: str
     role: str
     display_name: str
+    permissions: list[str]
 
 
 def _hash(token: str) -> str:
@@ -139,4 +141,20 @@ def me(
     name = db.execute(text("select display_name from user_profile where user_id = :i"), {"i": ctx.user_id}).scalar()
     if name is None:
         raise HTTPException(404, "No profile")
-    return MeOut(user_id=ctx.user_id, tenant=ctx.slug, role=ctx.role, display_name=str(name))
+    actions = db.execute(
+        text(
+            "select distinct rp.action from user_role ur join role_permission rp on rp.role = ur.role "
+            "where ur.user_id = :u order by rp.action"
+        ),
+        {"u": ctx.user_id},
+    ).scalars()
+    with Session(tenants.control_engine()) as s:
+        tenant_name = s.scalar(select(Tenant.name).where(Tenant.slug == ctx.slug)) or ctx.slug
+    return MeOut(
+        user_id=ctx.user_id,
+        tenant=ctx.slug,
+        tenant_name=tenant_name,
+        role=ctx.role,
+        display_name=str(name),
+        permissions=list(actions),
+    )

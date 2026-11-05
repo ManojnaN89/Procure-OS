@@ -25,6 +25,7 @@ class Settings(BaseSettings):
     anthropic_api_key: str = ""
     openrouter_api_key: str = ""
     model_routes: str = ""  # JSON: {"step name": [["provider", "model"], ...]}; empty means the defaults in the gateway
+    extra_modules: str = ""  # comma-separated modules imported at startup; they register tools and executors
     storage_dir: str = ""  # empty means storage/ in the repository (git-ignored)
     reference_dir: str = ""  # empty means data/reference in the repository
 
