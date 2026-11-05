@@ -25,7 +25,7 @@ _NUMBER = re.compile(
 )
 _ISO = re.compile(r"\b(\d{4})-(\d{2})-(\d{2})\b")
 _DMY = re.compile(r"\b(\d{1,2})[/.-](\d{1,2})[/.-](\d{4})\b")
-_NAMED = re.compile(r"\b(\d{1,2})(?:st|nd|rd|th)?\s+([A-Za-z]{3,9})\.?,?\s+(\d{4})\b")
+_NAMED = re.compile(r"\b(\d{1,2})(?:st|nd|rd|th)?\s*([A-Za-z]{3,9})\.?,?\s*(\d{4})\b")
 _MONTHS = {
     m: i for i, m in enumerate(["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"], 1)
 }

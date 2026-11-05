@@ -14,6 +14,7 @@ from p2p.platform.routing import clear_engine_cache
 TEST_CONTROL_DB = "p2p_control_test"
 
 # Tests run with their own secrets so they work on a machine without a .env file.
+os.environ.setdefault("HF_HUB_DISABLE_SYMLINKS_WARNING", "1")
 os.environ.setdefault("JWT_SECRET", "test-secret-for-unit-tests-only-0123456789")
 os.environ.setdefault("TENANT_SECRET_KEY", Fernet.generate_key().decode())
 
