@@ -4,6 +4,9 @@ planning/
 # generated datasets (regenerated from seed)
 data/datasets/
 
+# uploaded files (local development)
+storage/
+
 # secrets and local settings
 .env
 *.env

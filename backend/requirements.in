@@ -10,3 +10,4 @@ pyjwt
 httpx
 cryptography
 zen-engine
+python-multipart
