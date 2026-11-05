@@ -1,5 +1,7 @@
 """Creating users: the login row in the control database, the profile in the tenant database."""
 
+from decimal import Decimal
+
 from argon2 import PasswordHasher
 from sqlalchemy import select, text
 from sqlalchemy.orm import Session
@@ -39,8 +41,49 @@ def create_user(
                     text("insert into user_profile (user_id, display_name, role) values (:i, :n, :r)"),
                     {"i": user_id, "n": display_name, "r": role},
                 )
+                ts.execute(
+                    text("insert into user_role (user_id, role) values (:i, :r)"), {"i": user_id, "r": role}
+                )
                 ts.commit()
             s.commit()
             return user_id
     finally:
         engine.dispose()
+
+
+def grant_role(
+    tenant_slug: str, user_id: int, role: str, *, location: str | None = None, department: str | None = None
+) -> None:
+    """Give a user another role, optionally limited to one location and department."""
+    if role not in ROLES:
+        raise ValueError(f"role must be one of {', '.join(ROLES)}")
+    with Session(routing.engine_for(tenant_slug)) as ts:
+        ts.execute(
+            text(
+                "insert into user_role (user_id, role, scope_location, scope_department) "
+                "values (:i, :r, :l, :d)"
+            ),
+            {"i": user_id, "r": role, "l": location, "d": department},
+        )
+        ts.commit()
+
+
+def set_limit(
+    tenant_slug: str,
+    user_id: int,
+    document: str,
+    max_value: Decimal,
+    *,
+    category: str | None = None,
+    location: str | None = None,
+) -> None:
+    """Set an approval limit for a user (FR42). Without a limit row the user cannot approve."""
+    with Session(routing.engine_for(tenant_slug)) as ts:
+        ts.execute(
+            text(
+                "insert into user_limit (user_id, document, category_code, location_code, max_value) "
+                "values (:i, :d, :c, :l, :m)"
+            ),
+            {"i": user_id, "d": document, "c": category, "l": location, "m": max_value},
+        )
+        ts.commit()
