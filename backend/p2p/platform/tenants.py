@@ -69,7 +69,9 @@ def tenant_db_name(slug: str) -> str:
     return f"p2p_t_{slug}"
 
 
-def create_tenant(slug: str, name: str | None = None, *, script_dir: Path | None = None) -> MigrateResult:
+def create_tenant(
+    slug: str, name: str | None = None, *, script_dir: Path | None = None, load_reference: bool = True
+) -> MigrateResult:
     if not SLUG.match(slug):
         raise ValueError("slug must be lower case letters, digits or underscore, starting with a letter (2-31 chars)")
     db_name = tenant_db_name(slug)
@@ -95,7 +97,17 @@ def create_tenant(slug: str, name: str | None = None, *, script_dir: Path | None
             s.commit()
     finally:
         engine.dispose()
-    return migrate_tenant(slug, script_dir=script_dir)
+    result = migrate_tenant(slug, script_dir=script_dir)
+    if result.ok and load_reference:
+        from p2p.platform import reference
+
+        engine_ = tenant_engine(slug)
+        try:
+            with Session(engine_) as ts:
+                reference.load_reference(ts)
+        finally:
+            engine_.dispose()
+    return result
 
 
 def migrate_tenant(slug: str, *, script_dir: Path | None = None) -> MigrateResult:

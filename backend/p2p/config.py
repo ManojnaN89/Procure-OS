@@ -14,6 +14,7 @@ class Settings(BaseSettings):
     jwt_secret: str = ""
     smtp_host: str = "localhost"
     smtp_port: int = 1025
+    reference_dir: str = ""  # empty means data/reference in the repository
 
 
 @lru_cache

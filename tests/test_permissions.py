@@ -25,7 +25,7 @@ def release(
 
 def _tenant() -> str:
     slug = "t" + uuid.uuid4().hex[:8]
-    tenants.create_tenant(slug)
+    tenants.create_tenant(slug, load_reference=False)
     return slug
 
 

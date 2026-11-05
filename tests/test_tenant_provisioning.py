@@ -34,7 +34,7 @@ def _script_dir_with_extra(tmp_path: Path, revision: str, down: str, table: str)
 
 def test_two_tenants_each_get_their_own_database(control_db: str) -> None:
     a, b = _slug(), _slug()
-    ra, rb = tenants.create_tenant(a), tenants.create_tenant(b)
+    ra, rb = tenants.create_tenant(a, load_reference=False), tenants.create_tenant(b, load_reference=False)
     assert ra.ok and rb.ok
     assert ra.revision == rb.revision == tenants.head_revision()
     assert tenants.tenant_db_name(a) != tenants.tenant_db_name(b)
@@ -54,8 +54,8 @@ def test_two_tenants_each_get_their_own_database(control_db: str) -> None:
 def test_new_migration_reaches_every_tenant_with_one_command(control_db: str, tmp_path: Path) -> None:
     head = tenants.head_revision() or ""
     a, b = _slug(), _slug()
-    tenants.create_tenant(a)
-    tenants.create_tenant(b)
+    tenants.create_tenant(a, load_reference=False)
+    tenants.create_tenant(b, load_reference=False)
     script_dir = _script_dir_with_extra(tmp_path, "x001", head, "probe_one")
 
     results = {r.slug: r for r in tenants.migrate_all(script_dir=script_dir)}
@@ -68,8 +68,8 @@ def test_new_migration_reaches_every_tenant_with_one_command(control_db: str, tm
 def test_failure_on_one_tenant_is_reported_and_does_not_block_the_other(control_db: str, tmp_path: Path) -> None:
     head = tenants.head_revision() or ""
     good, broken = _slug(), _slug()
-    tenants.create_tenant(good)
-    tenants.create_tenant(broken)
+    tenants.create_tenant(good, load_reference=False)
+    tenants.create_tenant(broken, load_reference=False)
     # simulate a tenant whose database has gone missing
     admin = create_engine(make_url(control_db).set(database="postgres"), isolation_level="AUTOCOMMIT")
     with admin.connect() as c:

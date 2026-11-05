@@ -13,7 +13,7 @@ PASSWORD = "correct horse battery"
 
 def _user(role: str = "Buyer") -> tuple[str, str]:
     slug = "t" + uuid.uuid4().hex[:8]
-    tenants.create_tenant(slug)
+    tenants.create_tenant(slug, load_reference=False)
     email = f"{uuid.uuid4().hex[:8]}@example.com"
     users.create_user(slug, email, PASSWORD, "Test Person", role)
     return slug, email
