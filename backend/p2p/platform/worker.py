@@ -45,7 +45,7 @@ def register(kind: str) -> Callable[[Handler], Handler]:
 
 def load_handlers() -> None:
     """Import the modules that register handlers."""
-    from p2p.platform import notifications, tasks  # noqa: F401, PLC0415
+    from p2p.platform import emails, notifications, tasks  # noqa: F401, PLC0415
 
 
 def enqueue(tenant: str, kind: str, payload: dict[str, Any], run_at: datetime | None = None) -> int:
@@ -63,6 +63,27 @@ def enqueue(tenant: str, kind: str, payload: dict[str, Any], run_at: datetime | 
             )
     finally:
         engine.dispose()
+
+
+def enqueue_unique(
+    tenant: str, kind: str, payload: dict[str, Any], run_at: datetime, *, exclude_id: int | None = None
+) -> int | None:
+    """Queue a job unless the tenant already has one of this kind waiting (used for self-rescheduling polls)."""
+    engine = tenants.control_engine()
+    try:
+        with engine.begin() as c:
+            waiting = c.execute(
+                text(
+                    "select 1 from job where tenant_slug = :t and kind = :k and status in ('queued', 'running') "
+                    "and id <> coalesce(:x, -1) limit 1"
+                ),
+                {"t": tenant, "k": kind, "x": exclude_id},
+            ).first()
+            if waiting:
+                return None
+    finally:
+        engine.dispose()
+    return enqueue(tenant, kind, payload, run_at)
 
 
 def _claim(now: datetime, limit: int) -> list[tuple[int, str, str, dict[str, Any]]]:

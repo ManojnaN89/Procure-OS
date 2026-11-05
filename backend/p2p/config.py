@@ -14,6 +14,12 @@ class Settings(BaseSettings):
     jwt_secret: str = ""
     smtp_host: str = "localhost"
     smtp_port: int = 1025
+    mail_domain: str = "cbcpl.example"  # replies come back to name+TAG@this domain
+    mailpit_url: str = "http://localhost:8025"
+    imap_host: str = ""  # set these four to read a real mailbox instead of Mailpit
+    imap_user: str = ""
+    imap_password: str = ""
+    imap_folder: str = "INBOX"
     groq_api_key: str = ""
     gemini_api_key: str = ""
     anthropic_api_key: str = ""
