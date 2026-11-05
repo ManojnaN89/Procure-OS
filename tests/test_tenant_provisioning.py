@@ -54,21 +54,23 @@ def test_two_tenants_each_get_their_own_database(control_db: str) -> None:
 
 
 def test_new_migration_reaches_every_tenant_with_one_command(control_db: str, tmp_path: Path) -> None:
+    head = tenants.head_revision() or ""
     a, b = _slug(), _slug()
     tenants.create_tenant(a)
     tenants.create_tenant(b)
-    script_dir = _script_dir_with_extra(tmp_path, "0002", "0001", "probe_one")
+    script_dir = _script_dir_with_extra(tmp_path, "x001", head, "probe_one")
 
     results = {r.slug: r for r in tenants.migrate_all(script_dir=script_dir)}
 
     for slug in (a, b):
-        assert results[slug].ok and results[slug].revision == "0002"
+        assert results[slug].ok and results[slug].revision == "x001"
         assert "probe_one" in _tables(slug)
 
 
 def test_failure_on_one_tenant_is_reported_and_does_not_block_the_other(
     control_db: str, tmp_path: Path
 ) -> None:
+    head = tenants.head_revision() or ""
     good, broken = _slug(), _slug()
     tenants.create_tenant(good)
     tenants.create_tenant(broken)
@@ -77,9 +79,9 @@ def test_failure_on_one_tenant_is_reported_and_does_not_block_the_other(
     with admin.connect() as c:
         c.execute(text(f'drop database "{tenants.tenant_db_name(broken)}" with (force)'))
     admin.dispose()
-    script_dir = _script_dir_with_extra(tmp_path, "0003", "0001", "probe_two")
+    script_dir = _script_dir_with_extra(tmp_path, "x002", head, "probe_two")
 
     results = {r.slug: r for r in tenants.migrate_all(script_dir=script_dir)}
 
-    assert results[good].ok and results[good].revision == "0003"
+    assert results[good].ok and results[good].revision == "x002"
     assert not results[broken].ok and results[broken].error

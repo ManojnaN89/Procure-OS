@@ -40,7 +40,7 @@ def clear_engine_cache() -> None:
         _engines.clear()
 
 
-def _engine_for(slug: str) -> Engine:
+def engine_for(slug: str) -> Engine:
     with _lock:
         if slug in _engines:
             _engines.move_to_end(slug)
@@ -79,7 +79,7 @@ def tenant_context(request: Request) -> TenantContext:
 
 def tenant_session(ctx: Annotated[TenantContext, Depends(tenant_context)]) -> Iterator[Session]:
     """A database session for the caller's own tenant, closed when the request ends."""
-    session = Session(_engine_for(ctx.slug))
+    session = Session(engine_for(ctx.slug))
     try:
         yield session
     finally:

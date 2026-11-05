@@ -3,12 +3,14 @@
 python -m p2p.cli control migrate
 python -m p2p.cli tenant create <slug> [--name "Display name"]
 python -m p2p.cli tenant migrate-all
+python -m p2p.cli user create <tenant> <email> --name NAME --role Admin   (asks for the password)
 """
 
 import argparse
+import getpass
 import sys
 
-from p2p.platform import tenants
+from p2p.platform import tenants, users
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -21,11 +23,22 @@ def main(argv: list[str] | None = None) -> int:
     create.add_argument("slug")
     create.add_argument("--name")
     tenant.add_parser("migrate-all")
+    user = sub.add_parser("user").add_subparsers(dest="cmd", required=True)
+    ucreate = user.add_parser("create")
+    ucreate.add_argument("tenant")
+    ucreate.add_argument("email")
+    ucreate.add_argument("--name", required=True)
+    ucreate.add_argument("--role", default="Requester", choices=users.ROLES)
     args = p.parse_args(argv)
 
     if args.group == "control":
         tenants.migrate_control()
         print("control database is up to date")
+        return 0
+    if args.group == "user":
+        password = getpass.getpass("Password: ")
+        uid = users.create_user(args.tenant, args.email, password, args.name, args.role)
+        print(f"user {uid} created in tenant {args.tenant}")
         return 0
     if args.cmd == "create":
         res = tenants.create_tenant(args.slug, args.name)
