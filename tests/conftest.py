@@ -2,14 +2,20 @@ import os
 from collections.abc import Iterator
 
 import pytest
+from cryptography.fernet import Fernet
 from sqlalchemy import create_engine, text
 from sqlalchemy.engine import make_url
 from sqlalchemy.exc import OperationalError
 
 from p2p.config import get_settings
 from p2p.platform import tenants
+from p2p.platform.routing import clear_engine_cache
 
 TEST_CONTROL_DB = "p2p_control_test"
+
+# Tests run with their own secrets so they work on a machine without a .env file.
+os.environ.setdefault("JWT_SECRET", "test-secret-for-unit-tests-only-0123456789")
+os.environ.setdefault("TENANT_SECRET_KEY", Fernet.generate_key().decode())
 
 
 def _admin(url_text: str):  # type: ignore[no-untyped-def]
@@ -35,6 +41,7 @@ def control_db() -> Iterator[str]:
     try:
         yield test_url
     finally:
+        clear_engine_cache()
         with create_engine(test_url).connect() as c:
             names = [r[0] for r in c.execute(text("select database_name from tenant_database"))]
         with admin.connect() as c:
