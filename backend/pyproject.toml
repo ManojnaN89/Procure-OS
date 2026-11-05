@@ -29,4 +29,5 @@ ignore_missing_imports = true
 [tool.pytest.ini_options]
 testpaths = ["../tests"]
 pythonpath = ["."]
+markers = ["scenario: a written scenario of SAP or Dynamics 365 behaviour we copy"]
 filterwarnings = ["ignore:Using `httpx` with `starlette.testclient`"]
