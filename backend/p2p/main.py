@@ -3,11 +3,15 @@ from sqlalchemy import create_engine, text
 from sqlalchemy.exc import SQLAlchemyError
 
 from p2p.config import get_settings
+from p2p.platform import logs
+from p2p.platform.admin_api import router as admin_router
 from p2p.platform.auth import router as auth_router
 from p2p.platform.files import router as files_router
 
 app = FastAPI(title="P2P platform", version="0.0.1")
+logs.install(app)
 app.include_router(auth_router)
+app.include_router(admin_router)
 app.include_router(files_router)
 
 
