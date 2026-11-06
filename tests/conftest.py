@@ -66,3 +66,16 @@ def _empty_job_queue(request: pytest.FixtureRequest) -> None:
     request.getfixturevalue("control_db")
     with tenants.control_engine().begin() as c:
         c.execute(text("delete from job"))
+
+
+@pytest.fixture(autouse=True)
+def _fixed_business_day() -> Iterator[None]:
+    """The tests are written around Friday 6 November 2026. Pinning the business date keeps them from depending on the day
+    they are run (a quote that was 6 days late yesterday must not be 7 days late today)."""
+    from datetime import date
+
+    from p2p.formulas.calendar import pin_today
+
+    pin_today(date(2026, 11, 6))
+    yield
+    pin_today(None)

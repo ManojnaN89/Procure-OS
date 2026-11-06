@@ -66,14 +66,14 @@ const NotificationHistoryView = {
       list.innerHTML = rows.map((n) => {
         const t = this.TYPE_ICONS[n.type] || { icon: "ti-bell", bg: "var(--surface-sunken)", fg: "var(--text-muted)" };
         return `
-          <div class="attention-row" data-id="${n.id}" style="margin-bottom:8px;${n.resolved ? "opacity:0.5;" : ""}">
+          <div class="attention-row" data-id="${escapeHtml(n.id)}" style="margin-bottom:8px;${n.resolved ? "opacity:0.5;" : ""}">
             <div class="attention-row-icon" style="background:${t.bg}"><i class="ti ${t.icon}" style="color:${t.fg}"></i></div>
             <div class="attention-row-body">
               <div class="attention-row-type" style="color:${t.fg}">
                 ${Notifications.labelFor(n.type)}
                 ${n.resolved ? '<span style="color:var(--text-muted);text-transform:none;font-weight:400;"> \u00b7 resolved</span>' : ""}
               </div>
-              <div class="attention-row-msg">${n.message}</div>
+              <div class="attention-row-msg">${escapeHtml(n.message)}</div>
               <div style="color:var(--text-muted);font-size:10px;margin-top:3px;">${formatDate(n.created_at)}</div>
             </div>
             <i class="ti ti-chevron-right attention-row-chevron"></i>

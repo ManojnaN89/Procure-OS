@@ -1,3 +1,8 @@
+/** Text from the data (names, messages, reasons) goes into the page as text, never as markup. */
+function escapeHtml(value) {
+  return String(value ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#39;");
+}
+
 /** Maps a status string to a badge CSS class + label. Shared across every list/detail view. */
 function statusBadge(status) {
   const cls = `badge-${(status || "").toLowerCase().replace(/\s+/g, "-")}`;

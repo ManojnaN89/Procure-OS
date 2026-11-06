@@ -10,6 +10,20 @@ from p2p.formulas.money import to_decimal
 
 IST = ZoneInfo("Asia/Kolkata")
 
+_pinned_today: date | None = None
+
+
+def business_today() -> date:
+    """Today's date in India. Everything that needs 'today' for a business decision (which approval rule is in force,
+    how many days late a delivery is, a financial year) asks here, so the answer is the same everywhere and is the
+    calendar day people in India see, not the UTC day. Tests pin it with pin_today()."""
+    return _pinned_today or datetime.now(IST).date()
+
+
+def pin_today(day: date | None) -> None:
+    global _pinned_today
+    _pinned_today = day
+
 
 @dataclass(frozen=True)
 class BusinessCalendar:

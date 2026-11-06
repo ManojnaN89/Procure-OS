@@ -36,9 +36,9 @@ const ContractsView = {
             ${rows.map((c) => {
               const endsSoon = c.end_date && (new Date(c.end_date) - now) / 86400000 <= 30;
               return `
-                <tr data-id="${c.id}">
-                  <td class="cell-muted">#${c.id}</td>
-                  <td>${c.title}</td>
+                <tr data-id="${escapeHtml(c.id)}">
+                  <td class="cell-muted">#${escapeHtml(c.id)}</td>
+                  <td>${escapeHtml(c.title)}</td>
                   <td>${c.vendor ? c.vendor.name : "\u2014"}</td>
                   <td>${formatCurrency(c.value)}</td>
                   <td>${c.end_date ? formatDate(c.end_date) : "\u2014"} ${endsSoon ? '<span class="badge badge-pending">expiring soon</span>' : ""}</td>
@@ -58,14 +58,14 @@ const ContractsView = {
   },
 
   async renderDetail(container, id) {
-    container.innerHTML = `<div class="page-header"><h1>Contract #${id}</h1></div><div class="panel">Loading\u2026</div>`;
+    container.innerHTML = `<div class="page-header"><h1>Contract #${escapeHtml(id)}</h1></div><div class="panel">Loading\u2026</div>`;
     try {
       const c = await API.getContract(id);
-      if (c.error) { container.innerHTML = `<div class="empty-state">${c.error}</div>`; return; }
+      if (c.error) { container.innerHTML = `<div class="empty-state">${escapeHtml(c.error)}</div>`; return; }
       container.innerHTML = `
         <div class="page-header">
           <a href="#/contracts" style="color:var(--text-muted);font-size:12px;text-decoration:none;">\u2190 Contracts</a>
-          <h1 style="margin-top:6px;">${c.title}</h1>
+          <h1 style="margin-top:6px;">${escapeHtml(c.title)}</h1>
           <p>${c.vendor ? c.vendor.name : "\u2014"} \u00b7 ${formatCurrency(c.value)}</p>
         </div>
         <div class="panel" style="margin-bottom:14px;">
@@ -77,7 +77,7 @@ const ContractsView = {
         </div>
         <div class="panel">
           <div class="panel-title">Terms</div>
-          <p style="color:var(--text-secondary);font-size:12.5px;margin:0;white-space:pre-wrap;">${c.terms || "No terms recorded."}</p>
+          <p style="color:var(--text-secondary);font-size:12.5px;margin:0;white-space:pre-wrap;">${escapeHtml(c.terms || "No terms recorded.")}</p>
         </div>
       `;
 

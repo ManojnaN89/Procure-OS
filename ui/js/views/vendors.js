@@ -33,10 +33,10 @@ const VendorsView = {
           <thead><tr><th>NAME</th><th>CATEGORY</th><th>RATING</th><th>TOTAL SPEND</th></tr></thead>
           <tbody>
             ${rows.map((v) => `
-              <tr data-id="${v.id}">
-                <td>${v.name}</td>
-                <td class="cell-muted">${v.category || "\u2014"}</td>
-                <td class="cell-muted">${v.rating ?? "\u2014"}</td>
+              <tr data-id="${escapeHtml(v.id)}">
+                <td>${escapeHtml(v.name)}</td>
+                <td class="cell-muted">${escapeHtml(v.category || "\u2014")}</td>
+                <td class="cell-muted">${escapeHtml(v.rating ?? "\u2014")}</td>
                 <td>${formatCurrency(v.total_spend)}</td>
               </tr>
             `).join("")}
@@ -53,10 +53,10 @@ const VendorsView = {
   },
 
   async renderDetail(container, id) {
-    container.innerHTML = `<div class="page-header"><h1>Vendor #${id}</h1></div><div class="panel">Loading\u2026</div>`;
+    container.innerHTML = `<div class="page-header"><h1>Vendor #${escapeHtml(id)}</h1></div><div class="panel">Loading\u2026</div>`;
     try {
       const v = await API.getVendor(id);
-      if (v.error) { container.innerHTML = `<div class="empty-state">${v.error}</div>`; return; }
+      if (v.error) { container.innerHTML = `<div class="empty-state">${escapeHtml(v.error)}</div>`; return; }
 
       const risk = v.risk || {};
       const riskColor = { low: "var(--success-text)", medium: "var(--warning-text)", high: "var(--danger-text)" }[risk.risk_level] || "var(--text-secondary)";
@@ -66,12 +66,12 @@ const VendorsView = {
         <div class="page-header">
           <a href="#/vendors" style="color:var(--text-muted);font-size:12px;text-decoration:none;">\u2190 Vendors</a>
           <h1 style="margin-top:6px;">
-            ${v.name}
+            ${escapeHtml(v.name)}
             ${v.under_review ? '<span class="badge badge-pending" style="font-size:11px;vertical-align:middle;">under review</span>' : ""}
             ${v.active === false ? '<span class="badge badge-rejected" style="font-size:11px;vertical-align:middle;">inactive</span>' : ""}
             ${v.verified ? '<span class="badge badge-approved" style="font-size:11px;vertical-align:middle;">verified</span>' : ""}
           </h1>
-          <p>${v.category || "\u2014"} \u00b7 ${v.email || "no email on file"}</p>
+          <p>${escapeHtml(v.category || "\u2014")} \u00b7 ${escapeHtml(v.email || "no email on file")}</p>
         </div>
         <div class="stat-grid" style="grid-template-columns:repeat(4,1fr);margin-bottom:8px;">
           <div class="stat-card"><div class="stat-label">TOTAL SPEND</div><div class="stat-value" style="font-size:20px;">${formatCurrency(v.total_spend)}</div></div>
@@ -80,7 +80,7 @@ const VendorsView = {
           <div class="stat-card">
             <div class="stat-label">RISK LEVEL</div>
             <div class="stat-value" style="font-size:20px;color:${riskColor};text-transform:capitalize;">
-              <span style="background:${riskBg};color:${riskColor};font-size:12px;padding:2px 10px;border-radius:20px;">${risk.risk_level || "\u2014"}</span>
+              <span style="background:${riskBg};color:${riskColor};font-size:12px;padding:2px 10px;border-radius:20px;">${escapeHtml(risk.risk_level || "\u2014")}</span>
             </div>
           </div>
         </div>
@@ -92,7 +92,7 @@ const VendorsView = {
               <span>Price volatility: <strong style="color:var(--text-primary)">${risk.price_volatility_pct}%</strong></span>
               <span>Flagged incidents: <strong style="color:var(--text-primary)">${risk.flagged_incidents}</strong></span>
             </div>
-            <p style="color:var(--text-muted);font-size:11px;margin:0 0 12px;font-style:italic;">${risk.basis || ""}</p>
+            <p style="color:var(--text-muted);font-size:11px;margin:0 0 12px;font-style:italic;">${escapeHtml(risk.basis || "")}</p>
             <div class="btn btn-secondary" id="reviewToggleBtn" style="font-size:11.5px;padding:6px 12px;display:inline-block;">
               ${v.under_review ? "Remove from review" : "Flag for review"}
             </div>
@@ -100,7 +100,7 @@ const VendorsView = {
         ` : ""}
         <div class="panel" style="margin-bottom:16px;">
           <div class="panel-title">Vendor status</div>
-          ${v.verification_note ? `<p style="color:var(--text-muted);font-size:11px;margin:0 0 10px;">Verification note: ${v.verification_note}</p>` : ""}
+          ${v.verification_note ? `<p style="color:var(--text-muted);font-size:11px;margin:0 0 10px;">Verification note: ${escapeHtml(v.verification_note)}</p>` : ""}
           <div style="display:flex;gap:8px;">
             <div class="btn btn-secondary" id="activeToggleBtn" style="font-size:11.5px;padding:6px 12px;">
               ${v.active === false ? "Reactivate" : "Deactivate"}
@@ -114,8 +114,8 @@ const VendorsView = {
           <div class="panel-title">Purchase order history</div>
           ${v.purchase_orders.length ? v.purchase_orders.map((po) => `
             <div style="display:flex;justify-content:space-between;padding:9px 0;border-bottom:1px solid var(--border);font-size:12.5px;">
-              <a href="#/purchase-orders/${po.id}" style="color:var(--text-secondary);text-decoration:none;">PO #${po.id} \u00b7 ${formatDate(po.created_at)}</a>
-              <span>${formatCurrency(po.amount)} ${statusBadge(po.status)} ${po.flagged ? '<span class="badge badge-rejected" title="' + (po.flag_reason || "") + '">\u26a0 flagged</span>' : ""}</span>
+              <a href="#/purchase-orders/${escapeHtml(po.id)}" style="color:var(--text-secondary);text-decoration:none;">PO #${escapeHtml(po.id)} \u00b7 ${formatDate(po.created_at)}</a>
+              <span>${formatCurrency(po.amount)} ${statusBadge(po.status)} ${po.flagged ? '<span class="badge badge-rejected" title="' + escapeHtml(po.flag_reason || "") + '">\u26a0 flagged</span>' : ""}</span>
             </div>
           `).join("") : `<div class="empty-state">No purchase orders yet.</div>`}
         </div>

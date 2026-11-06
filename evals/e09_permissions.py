@@ -1,0 +1,122 @@
+"""E09: who may do what, as a role-by-action matrix from the plan, against what the API actually allows."""
+
+import lib
+from fastapi.testclient import TestClient
+from lib import Outcome
+
+ID = "E09"
+TITLE = "Every write action is open to exactly the roles the plan names"
+REQUIREMENT = "Rule 7 and the plan: requester, buyer, approver and administrator duties are separate; nobody else can do them; nobody can without logging in"
+
+ROLES = ["Admin", "Requester", "Buyer", "Approver", "Store", "AP", "Finance"]
+
+# (method, path, body, the roles the plan lets do it). Identifiers do not exist: the permission check comes first, so a
+# role that is allowed gets 404, 409 or 422 and a role that is not gets 403.
+MATRIX = [
+    ("POST", "/api/replenishment/run", {}, {"Buyer", "Admin"}),
+    ("POST", "/api/requisitions/NOPE/submit", None, {"Requester", "Buyer"}),
+    ("POST", "/api/requisitions/NOPE/approve", {}, {"Approver"}),
+    ("POST", "/api/requisitions/NOPE/reject", {"reason": "x"}, {"Approver"}),
+    ("POST", "/api/requisitions/NOPE/return", {"reason": "x"}, {"Approver"}),
+    ("POST", "/api/requisitions/NOPE/source", None, {"Buyer"}),
+    ("POST", "/api/rfqs/NOPE/quotes", {"supplier_code": "S", "lines": []}, {"Buyer"}),
+    ("POST", "/api/rfqs/NOPE/award", {"choices": {}}, {"Buyer"}),
+    ("POST", "/api/quote-drafts/1/confirm", {}, {"Buyer"}),
+    ("POST", "/api/quote-drafts/1/dismiss", {}, {"Buyer"}),
+    ("POST", "/api/purchase-orders/NOPE/approve", {}, {"Approver"}),
+    ("POST", "/api/purchase-orders/NOPE/reject", {"reason": "x"}, {"Approver"}),
+    ("POST", "/api/settings", {"stale_requisition_days": "5"}, {"Admin"}),
+    ("GET", "/api/admin/audit", None, {"Admin"}),
+    ("GET", "/api/admin/agent-runs", None, {"Admin"}),
+    ("GET", "/api/admin/users", None, {"Admin"}),
+    ("GET", "/api/admin/rules", None, {"Admin"}),
+    ("POST", "/api/admin/rules/approval/publish", {}, {"Admin"}),
+    (
+        "POST",
+        "/api/admin/users",
+        {
+            "email": "x@y.example",
+            "password": "p",
+            "display_name": "x",
+            "role": "Requester",
+        },
+        {"Admin"},
+    ),
+]
+READS = [
+    "/api/requisitions",
+    "/api/rfqs",
+    "/api/purchase-orders",
+    "/api/inventory",
+    "/api/vendors",
+    "/api/dashboard",
+    "/api/settings",
+    "/api/notifications",
+    "/api/trail",
+]
+
+
+def run(ctx) -> Outcome:
+    from p2p.main import app
+
+    out = Outcome(True)
+    world = lib.build_world("e09", with_stock=False)
+    client = TestClient(app)
+    over: list[str] = []
+    under: list[str] = []
+    cells = 0
+    for method, path, body, allowed in MATRIX:
+        for role in [*ROLES, None]:
+            headers = world.headers(role) if role else {}
+            if method == "GET":
+                resp = client.get(path, headers=headers)
+            else:
+                resp = (
+                    client.post(path, json=body, headers=headers)
+                    if body is not None
+                    else client.post(path, headers=headers)
+                )
+            passed_gate = resp.status_code not in (401, 403)
+            should = role in allowed
+            cells += 1
+            if passed_gate and not should:
+                over.append(
+                    f"{role or 'nobody signed in'} can {method} {path} (status {resp.status_code})"
+                )
+            elif should and not passed_gate:
+                under.append(
+                    f"{role} cannot {method} {path} (status {resp.status_code})"
+                )
+    anon_reads = [p for p in READS if client.get(p).status_code != 401]
+    signed_in_reads = [
+        (r, p)
+        for r in ROLES
+        for p in READS
+        if client.get(p, headers=world.headers(r)).status_code != 200
+    ]
+    out.metrics = {
+        "actions": len(MATRIX),
+        "roles tried": len(ROLES) + 1,
+        "cells checked": cells,
+        "too permissive": len(over),
+        "too strict": len(under),
+        "reads open without login": len(anon_reads),
+    }
+    if over:
+        out.find(
+            "high",
+            f"{len(over)} role(s) can do something the plan does not give them, e.g. {over[0]}; all: {over[:8]}",
+        )
+    if under:
+        out.find(
+            "medium",
+            f"{len(under)} role(s) cannot do something the plan gives them, e.g. {under[0]}",
+        )
+    if anon_reads:
+        out.find("high", f"these read endpoints answer without a login: {anon_reads}")
+    if signed_in_reads:
+        out.find(
+            "low",
+            f"some read endpoints fail for a signed-in role: {signed_in_reads[:4]}",
+        )
+    return out

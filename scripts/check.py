@@ -14,6 +14,9 @@ FRONTEND = ROOT / "frontend"
 PY = str(BACKEND / ".venv" / ("Scripts" if sys.platform == "win32" else "bin") / "python")
 NPX = shutil.which("npx") or "npx"
 
+LIMIT_MINUTES = {"pytest": 40, "pytest browser": 20}  # any other step: 10
+DEFAULT_LIMIT_MINUTES = 10
+
 STEPS = [
     ("ruff lint", [PY, "-m", "ruff", "check", ".", "../tests", "../scripts"], BACKEND),
     ("ruff format", [PY, "-m", "ruff", "format", "--check", ".", "../tests", "../scripts"], BACKEND),
@@ -33,7 +36,14 @@ STEPS = [
 def main() -> int:
     failed = []
     for name, cmd, cwd in STEPS:
-        r = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True)  # noqa: S603, PLW1510
+        limit = LIMIT_MINUTES.get(name, DEFAULT_LIMIT_MINUTES)
+        try:
+            r = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True, timeout=limit * 60)  # noqa: S603, PLW1510
+        except subprocess.TimeoutExpired as exc:
+            print(f"FAIL {name} (no result after {limit} minutes: the step is stuck)")
+            failed.append(name)
+            print((exc.stdout or b"")[-1500:] if isinstance(exc.stdout, bytes) else (exc.stdout or "")[-1500:])
+            continue
         print(f"{'ok  ' if r.returncode == 0 else 'FAIL'} {name}")
         if r.returncode:
             failed.append(name)

@@ -20,10 +20,10 @@ const PaymentsView = {
           <thead><tr><th>ID</th><th>VENDOR</th><th>PURCHASE ORDER</th><th>AMOUNT</th><th>STATUS</th><th>DATE</th></tr></thead>
           <tbody>
             ${rows.map((p) => `
-              <tr data-po="${p.purchase_order_id}">
-                <td class="cell-muted">#${p.id}</td>
+              <tr data-po="${escapeHtml(p.purchase_order_id)}">
+                <td class="cell-muted">#${escapeHtml(p.id)}</td>
                 <td>${p.vendor ? p.vendor.name : "\u2014"}</td>
-                <td class="cell-muted">PO #${p.purchase_order_id}</td>
+                <td class="cell-muted">PO #${escapeHtml(p.purchase_order_id)}</td>
                 <td>${formatCurrency(p.amount)}</td>
                 <td>${statusBadge(p.status)}</td>
                 <td class="cell-muted">${formatDate(p.created_at)}</td>

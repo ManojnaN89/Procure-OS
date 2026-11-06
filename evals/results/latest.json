@@ -1,0 +1,276 @@
+[
+  {
+    "id": "E01",
+    "title": "Replenishment orders the right items in the right quantities",
+    "requirement": "Plan: read stock levels, create requests for items at their reorder point (quantity from the planning data, whole packs, supplier minimum)",
+    "status": "PASS",
+    "seconds": 2.4,
+    "metrics": {
+      "lines expected": 118,
+      "lines planned": 118,
+      "missing": 0,
+      "extra": 0,
+      "quantity exact %": 100.0,
+      "value exact %": 100.0,
+      "grouping exact %": 100.0,
+      "requests": 16,
+      "total value": "15975720.79"
+    },
+    "findings": [],
+    "notes": []
+  },
+  {
+    "id": "E02",
+    "title": "Approval routing follows the rule table and the organisation",
+    "requirement": "Rule 8 and the plan: a rule is chosen by value band, spend type, category, department and the date it is in force; its chain becomes real people",
+    "status": "PASS",
+    "seconds": 15.1,
+    "metrics": {
+      "cases": 2388,
+      "rule agreement %": 100.0,
+      "cases with no rule": 361,
+      "chain cases": 2027,
+      "chain agreement %": 100.0
+    },
+    "findings": [],
+    "notes": []
+  },
+  {
+    "id": "E03",
+    "title": "Sourcing picks the right contract price, or sends the line to quotation",
+    "requirement": "Plan: contract vs RFQ per line; only an active contract in force, for an active supplier, in the right unit, with the quantity break",
+    "status": "PASS",
+    "seconds": 7.3,
+    "metrics": {
+      "items": 172,
+      "cases": 4128,
+      "decided on a contract": 1236,
+      "sent to quotation": 2892,
+      "agreement %": 100.0
+    },
+    "findings": [],
+    "notes": []
+  },
+  {
+    "id": "E04",
+    "title": "GST and order arithmetic is exact, to the paisa",
+    "requirement": "Rule 1: money is Decimal to paise; GST splits into CGST+SGST within the state and IGST across states; composition and unregistered suppliers charge none",
+    "status": "PASS",
+    "seconds": 0.2,
+    "metrics": {
+      "random lines": 5000,
+      "net price errors": 0,
+      "line errors": 0,
+      "identity errors": 0,
+      "total errors": 0
+    },
+    "findings": [],
+    "notes": []
+  },
+  {
+    "id": "E05",
+    "title": "Quote comparison recommends the right supplier and the award rules hold",
+    "requirement": "Plan: collect quotes, compare, award; the recommendation is the lowest compliant offer; an override or too few quotes needs a reason",
+    "status": "PASS",
+    "seconds": 12.3,
+    "metrics": {
+      "scenarios": 160,
+      "lines compared": 323,
+      "recommendation correct %": 100.0,
+      "compliance flags correct %": 100.0,
+      "offer order correct %": 100.0,
+      "award rule correct %": 100.0
+    },
+    "findings": [],
+    "notes": []
+  },
+  {
+    "id": "E06",
+    "title": "The whole flow, stock level to approved purchase order, keeps its promises",
+    "requirement": "Plan: nothing is lost, money reconciles, every change is audited, only eligible suppliers are asked, stock on the way is counted once",
+    "status": "PASS",
+    "seconds": 9.3,
+    "metrics": {
+      "requests": 16,
+      "lines": 118,
+      "lines ordered": 117,
+      "RFQs": 11,
+      "quotes": 30,
+      "purchase orders": 34,
+      "orders approved": 31,
+      "line fates": {
+        "ordered": 117,
+        "quotation open": 1
+      },
+      "stage seconds": {
+        "replenishment and submission": 0.92,
+        "request approvals": 0.55,
+        "sourcing and RFQ emails": 1.24,
+        "quotes and awards": 0.88,
+        "purchase orders and their approval": 3.16
+      },
+      "total seconds": 6.8,
+      "company build seconds": 2.45,
+      "orders lines checked": 117
+    },
+    "findings": [],
+    "notes": []
+  },
+  {
+    "id": "E07",
+    "title": "Repeating or racing any stage makes no duplicates",
+    "requirement": "Plan: no duplicate requests, RFQs, emails or orders; document numbers have no gaps and no repeats",
+    "status": "PASS",
+    "seconds": 0.3,
+    "metrics": {
+      "serial repeats": 3,
+      "concurrent callers": 6,
+      "seconds for the race": 0.2,
+      "tables that grew": "none",
+      "extra emails": 0
+    },
+    "findings": [],
+    "notes": []
+  },
+  {
+    "id": "E08",
+    "title": "Decisions stay reproducible when the rules change",
+    "requirement": "Rule 8: rules and rates are versioned data; a decision stays reproducible against the version it used",
+    "status": "PASS",
+    "seconds": 0.1,
+    "metrics": {
+      "decisions": 16,
+      "band holds before / after the change": "16/0 and 16/0",
+      "old rule rows untouched": true,
+      "past date reproduces the old version %": 100.0,
+      "a new submission uses": [
+        "REQ-02",
+        3
+      ],
+      "approval audit rows without a rule version": 0
+    },
+    "findings": [],
+    "notes": []
+  },
+  {
+    "id": "E09",
+    "title": "Every write action is open to exactly the roles the plan names",
+    "requirement": "Rule 7 and the plan: requester, buyer, approver and administrator duties are separate; nobody else can do them; nobody can without logging in",
+    "status": "PASS",
+    "seconds": 6.9,
+    "metrics": {
+      "actions": 19,
+      "roles tried": 8,
+      "cells checked": 152,
+      "too permissive": 0,
+      "too strict": 0,
+      "reads open without login": 0
+    },
+    "findings": [],
+    "notes": []
+  },
+  {
+    "id": "E10",
+    "title": "One company cannot see another company's data",
+    "requirement": "Rule 6: one database per tenant; a request without tenant context is refused; tenant A cannot read tenant B",
+    "status": "PASS",
+    "seconds": 6.1,
+    "metrics": {
+      "probes": 73,
+      "leaks": 0,
+      "company A sees its own records": true
+    },
+    "findings": [],
+    "notes": []
+  },
+  {
+    "id": "E11",
+    "title": "Hostile text is shown as text and never run",
+    "requirement": "Security: names from imported data and typed identifiers cannot inject script into the screens or SQL into the database",
+    "status": "PASS",
+    "seconds": 27.4,
+    "metrics": {
+      "screens opened": 17,
+      "hostile payloads": 6,
+      "script ran or markup injected": 0,
+      "SQL probes": 12,
+      "server errors": 0,
+      "slow (sleep ran)": 0,
+      "orders on screen": 34,
+      "pipeline note": 9
+    },
+    "findings": [],
+    "notes": []
+  },
+  {
+    "id": "E12",
+    "title": "No floats in money, exact amounts on the wire, India's calendar, no secrets, synthetic data stays synthetic",
+    "requirement": "Rules 1, 9, 10 and the generated-data safety rule",
+    "status": "PASS",
+    "seconds": 0.3,
+    "metrics": {
+      "money modules scanned": 6,
+      "float uses": 0,
+      "money fields as JSON numbers": 0,
+      "UTC dates in business logic": 0,
+      "tracked files scanned for secrets": 443,
+      "secret hits": 0,
+      "unsafe generated values": 0
+    },
+    "findings": [],
+    "notes": [
+      "money fields sent as numbers: []"
+    ]
+  },
+  {
+    "id": "E13",
+    "title": "Supplier emails are read into the right quotes, and when unsure the system asks a person",
+    "requirement": "Plan step 8 and rule 2: the model reads, code checks; a wrong reading must never look clean (silent errors = 0)",
+    "status": "PASS",
+    "seconds": 7.6,
+    "metrics": {
+      "email cases": 39,
+      "perfect reader: exact %": 100.0,
+      "perfect reader: silent errors": 0,
+      "sloppy reader: mistakes that did not slip through": {
+        "invented price": "33/33 not clean-but-wrong",
+        "invented gst": "33/33 not clean-but-wrong",
+        "invented delivery": "33/33 not clean-but-wrong",
+        "swapped prices": "16/16 not clean-but-wrong"
+      }
+    },
+    "findings": [],
+    "notes": [
+      "the real models were not called (run with --live)"
+    ]
+  },
+  {
+    "id": "E14",
+    "title": "Hostile emails, even obeyed by the model, change nothing they should not",
+    "requirement": "Security and rule 5: untrusted text cannot award, decline others, set a nonsense price, or reach a model from a stranger",
+    "status": "PASS",
+    "seconds": 3.7,
+    "metrics": {
+      "attacks": 13,
+      "runs": 26,
+      "defended": 26,
+      "failed": 0
+    },
+    "findings": [],
+    "notes": [
+      "the real models were not called (run with --live)"
+    ]
+  },
+  {
+    "id": "E15",
+    "title": "The assistant tells the truth from the data, adds nothing up on its own, and changes nothing",
+    "requirement": "Plan step 8 and rule 2: read-only tools; every figure it gives comes from a tool; it cannot approve or delete",
+    "status": "SKIP",
+    "seconds": 0.0,
+    "metrics": {},
+    "findings": [],
+    "notes": [
+      "skipped: this eval needs the real models (run with --live)"
+    ]
+  }
+]

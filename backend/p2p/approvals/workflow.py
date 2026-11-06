@@ -13,6 +13,7 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from p2p.approvals import rules
+from p2p.formulas.calendar import business_today
 from p2p.platform import audit, notifications, permissions, tasks, users, worker
 from p2p.platform.sod import Actor
 
@@ -69,7 +70,7 @@ def _sla_hours(db: Session) -> Decimal:
 
 def submit(db: Session, tenant: str, no: str, actor: Actor, *, today: date | None = None) -> Submitted:
     """Send a draft (or a returned request) for approval, or approve it on the spot when the rule says so."""
-    today = today or datetime.now(UTC).date()
+    today = today or business_today()
     req = _locked(db, no)
     if req["status"] not in ("draft", "returned"):
         raise ApprovalError(f"request {no} is {req['status']}; only a draft or a returned request can be submitted")

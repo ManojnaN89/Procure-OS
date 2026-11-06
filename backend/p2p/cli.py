@@ -72,11 +72,9 @@ def main(argv: list[str] | None = None) -> int:
             pass
         return 0
     if args.group == "replenish":
-        from datetime import datetime
-
         from sqlalchemy.orm import Session
 
-        from p2p.formulas.calendar import IST
+        from p2p.formulas.calendar import business_today
         from p2p.requests import jobs, replenishment
 
         if args.schedule:
@@ -85,7 +83,7 @@ def main(argv: list[str] | None = None) -> int:
             return 0
         with Session(routing.engine_for(args.tenant)) as db:
             result = replenishment.run(
-                db, as_of=datetime.now(IST).date(), dry_run=args.dry_run, tenant=args.tenant, submit=not args.no_submit
+                db, as_of=business_today(), dry_run=args.dry_run, tenant=args.tenant, submit=not args.no_submit
             )
         verb = "would create" if args.dry_run else "created"
         print(f"{verb} {len(result.requests)} request(s) with {result.line_count} line(s), total {result.total_value}")
@@ -99,14 +97,11 @@ def main(argv: list[str] | None = None) -> int:
             print(f"  skipped {count}: {reason}")
         return 0
     if args.group == "order":
-        from datetime import datetime
-
         from sqlalchemy.orm import Session
 
-        from p2p.formulas.calendar import IST
         from p2p.orders import service as orders
 
-        today = datetime.now(IST).date()
+        today = business_today()
         with Session(routing.engine_for(args.tenant)) as db:
             if args.request:
                 ordered = [orders.order_request(db, args.tenant, args.request, as_of=today)]
@@ -122,14 +117,11 @@ def main(argv: list[str] | None = None) -> int:
         print(f"{len(ordered)} request(s) ordered")
         return 0
     if args.group == "source":
-        from datetime import datetime
-
         from sqlalchemy.orm import Session
 
-        from p2p.formulas.calendar import IST
         from p2p.sourcing import service
 
-        today = datetime.now(IST).date()
+        today = business_today()
         with Session(routing.engine_for(args.tenant)) as db:
             if args.request:
                 sourced = [

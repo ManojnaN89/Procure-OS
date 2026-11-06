@@ -13,7 +13,7 @@ const ComposerAttachment = {
       const file = fileInput.files[0];
       if (!file) return;
 
-      chipContainer.innerHTML = `<span class="attach-chip attach-chip-loading">Reading ${file.name}\u2026</span>`;
+      chipContainer.innerHTML = `<span class="attach-chip attach-chip-loading">Reading ${escapeHtml(file.name)}\u2026</span>`;
 
       const formData = new FormData();
       formData.append("file", file);
@@ -22,7 +22,7 @@ const ComposerAttachment = {
         const data = await res.json();
 
         if (data.error) {
-          chipContainer.innerHTML = `<span class="attach-chip attach-chip-error">${data.error}</span>`;
+          chipContainer.innerHTML = `<span class="attach-chip attach-chip-error">${escapeHtml(data.error)}</span>`;
           pending = null;
           return;
         }
@@ -32,7 +32,7 @@ const ComposerAttachment = {
 
         chipContainer.innerHTML = `
           <span class="attach-chip">
-            <i class="ti ti-paperclip"></i> ${data.filename}
+            <i class="ti ti-paperclip"></i> ${escapeHtml(data.filename)}
             <i class="ti ti-x attach-chip-remove"></i>
           </span>
         `;
@@ -50,7 +50,7 @@ const ComposerAttachment = {
        *  no separate "parsing skill", the model maps fields itself). */
       buildMessage(userText) {
         if (!pending) return userText;
-        const prefix = `Here is the content of an uploaded file (${pending.filename}):\n\n${pending.content}\n\n`;
+        const prefix = `Here is the content of an uploaded file (${escapeHtml(pending.filename)}):\n\n${pending.content}\n\n`;
         return prefix + (userText && userText.trim() ? userText : "Please process this file.");
       },
       clear: () => this.clear(fileInput, chipContainer, () => { pending = null; }),

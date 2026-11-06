@@ -438,7 +438,7 @@ const FocusMode = {
       item.className = "fm-signal-item";
       item.innerHTML = `
         <span class="fm-signal-dot" style="background:${Notifications.colorFor(n.severity)}"></span>
-        <span class="fm-signal-text">${n.message}</span>
+        <span class="fm-signal-text">${escapeHtml(n.message)}</span>
         <span class="fm-signal-action">${this._signalActionLabel(n.type)}</span>
       `;
       item.addEventListener("click", () => Notifications.handleClick(n));
@@ -497,7 +497,7 @@ const FocusMode = {
       const data = (chart.datasets && chart.datasets[0] && chart.datasets[0].data) || [];
       const breakdown = labels.map((l, i) => `${l} ${fmtVal(data[i])}`).join(" \u00b7 ");
       header.innerHTML = `
-        <span class="fm-sparkline-title">${chart.title || "Breakdown"}</span>
+        <span class="fm-sparkline-title">${escapeHtml(chart.title || "Breakdown")}</span>
         <span class="fm-sparkline-values" style="white-space:normal;">${breakdown}</span>
       `;
     } else {
@@ -508,7 +508,7 @@ const FocusMode = {
       const hasRange = first !== undefined && last !== undefined && nums.length > 1;
       const trendUp = hasRange && last >= first;
       header.innerHTML = `
-        <span class="fm-sparkline-title">${chart.title || "Trend"}</span>
+        <span class="fm-sparkline-title">${escapeHtml(chart.title || "Trend")}</span>
         ${hasRange ? `
           <span class="fm-sparkline-values">
             ${fmtVal(first)}
@@ -674,7 +674,7 @@ const FocusMode = {
     dot.className = "fm-pulse-dot";
     dot.style.top = `${Math.min(4 + this._pulseCount * 7, 94)}%`;
     dot.style.background = Trail.colorFor ? Trail.colorFor(evt.agent) : "#6C5CE7";
-    dot.title = `${evt.agent} \u2192 ${evt.skill}`;
+    dot.title = `${escapeHtml(evt.agent)} \u2192 ${escapeHtml(evt.skill)}`;
     if (!silent) dot.style.animation = "trailSlideIn 0.4s ease";
     this.rail.appendChild(dot);
 
@@ -697,7 +697,7 @@ const FocusMode = {
     dot.className = "fm-pulse-dot fm-pulse-signal";
     dot.style.top = `${Math.min(4 + this._pulseCount * 7, 94)}%`;
     dot.style.background = Notifications.colorFor(evt.severity);
-    dot.title = `${Notifications.labelFor(evt.type)}: ${evt.message}`;
+    dot.title = `${Notifications.labelFor(evt.type)}: ${escapeHtml(evt.message)}`;
     dot.addEventListener("click", () => Notifications.handleClick(evt));
     if (!silent) dot.style.animation = "trailSlideIn 0.4s ease";
     this.rail.appendChild(dot);

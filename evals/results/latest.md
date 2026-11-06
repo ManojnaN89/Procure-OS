@@ -1,0 +1,189 @@
+# Evals report
+
+Run on 2026-11-07 01:06; AI evals used a scripted model.
+
+| ID | What it checks | Result | Seconds | Key figures |
+|---|---|---|---|---|
+| E01 | Replenishment orders the right items in the right quantities | **PASS** | 2.4 | lines expected 118; lines planned 118; missing 0; extra 0 |
+| E02 | Approval routing follows the rule table and the organisation | **PASS** | 15.1 | cases 2388; rule agreement % 100.0; cases with no rule 361; chain cases 2027 |
+| E03 | Sourcing picks the right contract price, or sends the line to quotation | **PASS** | 7.3 | items 172; cases 4128; decided on a contract 1236; sent to quotation 2892 |
+| E04 | GST and order arithmetic is exact, to the paisa | **PASS** | 0.2 | random lines 5000; net price errors 0; line errors 0; identity errors 0 |
+| E05 | Quote comparison recommends the right supplier and the award rules hold | **PASS** | 12.3 | scenarios 160; lines compared 323; recommendation correct % 100.0; compliance flags correct % 100.0 |
+| E06 | The whole flow, stock level to approved purchase order, keeps its promises | **PASS** | 9.3 | requests 16; lines 118; lines ordered 117; RFQs 11 |
+| E07 | Repeating or racing any stage makes no duplicates | **PASS** | 0.3 | serial repeats 3; concurrent callers 6; seconds for the race 0.2; tables that grew none |
+| E08 | Decisions stay reproducible when the rules change | **PASS** | 0.1 | decisions 16; band holds before / after the change 16/0 and 16/0; old rule rows untouched True; past date reproduces the old version % 100.0 |
+| E09 | Every write action is open to exactly the roles the plan names | **PASS** | 6.9 | actions 19; roles tried 8; cells checked 152; too permissive 0 |
+| E10 | One company cannot see another company's data | **PASS** | 6.1 | probes 73; leaks 0; company A sees its own records True |
+| E11 | Hostile text is shown as text and never run | **PASS** | 27.4 | screens opened 17; hostile payloads 6; script ran or markup injected 0; SQL probes 12 |
+| E12 | No floats in money, exact amounts on the wire, India's calendar, no secrets, synthetic data stays synthetic | **PASS** | 0.3 | money modules scanned 6; float uses 0; money fields as JSON numbers 0; UTC dates in business logic 0 |
+| E13 | Supplier emails are read into the right quotes, and when unsure the system asks a person | **PASS** | 7.6 | email cases 39; perfect reader: exact % 100.0; perfect reader: silent errors 0; sloppy reader: mistakes that did not slip through {'invented price': '33/33 not clean-but-wrong', 'invented gst': '33/33 not clean-but-wrong', 'invented delivery': '33/33 not clean-but-wrong', 'swapped prices': '16/16 not clean-but-wrong'} |
+| E14 | Hostile emails, even obeyed by the model, change nothing they should not | **PASS** | 3.7 | attacks 13; runs 26; defended 26; failed 0 |
+| E15 | The assistant tells the truth from the data, adds nothing up on its own, and changes nothing | **SKIP** | 0.0 |  |
+
+**14 of 15 passed.**
+
+## Details
+
+### E01 Replenishment orders the right items in the right quantities
+
+Checks: Plan: read stock levels, create requests for items at their reorder point (quantity from the planning data, whole packs, supplier minimum)
+
+- lines expected: 118
+- lines planned: 118
+- missing: 0
+- extra: 0
+- quantity exact %: 100.0
+- value exact %: 100.0
+- grouping exact %: 100.0
+- requests: 16
+- total value: 15975720.79
+
+### E02 Approval routing follows the rule table and the organisation
+
+Checks: Rule 8 and the plan: a rule is chosen by value band, spend type, category, department and the date it is in force; its chain becomes real people
+
+- cases: 2388
+- rule agreement %: 100.0
+- cases with no rule: 361
+- chain cases: 2027
+- chain agreement %: 100.0
+
+### E03 Sourcing picks the right contract price, or sends the line to quotation
+
+Checks: Plan: contract vs RFQ per line; only an active contract in force, for an active supplier, in the right unit, with the quantity break
+
+- items: 172
+- cases: 4128
+- decided on a contract: 1236
+- sent to quotation: 2892
+- agreement %: 100.0
+
+### E04 GST and order arithmetic is exact, to the paisa
+
+Checks: Rule 1: money is Decimal to paise; GST splits into CGST+SGST within the state and IGST across states; composition and unregistered suppliers charge none
+
+- random lines: 5000
+- net price errors: 0
+- line errors: 0
+- identity errors: 0
+- total errors: 0
+
+### E05 Quote comparison recommends the right supplier and the award rules hold
+
+Checks: Plan: collect quotes, compare, award; the recommendation is the lowest compliant offer; an override or too few quotes needs a reason
+
+- scenarios: 160
+- lines compared: 323
+- recommendation correct %: 100.0
+- compliance flags correct %: 100.0
+- offer order correct %: 100.0
+- award rule correct %: 100.0
+
+### E06 The whole flow, stock level to approved purchase order, keeps its promises
+
+Checks: Plan: nothing is lost, money reconciles, every change is audited, only eligible suppliers are asked, stock on the way is counted once
+
+- requests: 16
+- lines: 118
+- lines ordered: 117
+- RFQs: 11
+- quotes: 30
+- purchase orders: 34
+- orders approved: 31
+- line fates: {'ordered': 117, 'quotation open': 1}
+- stage seconds: {'replenishment and submission': 0.92, 'request approvals': 0.55, 'sourcing and RFQ emails': 1.24, 'quotes and awards': 0.88, 'purchase orders and their approval': 3.16}
+- total seconds: 6.8
+- company build seconds: 2.45
+- orders lines checked: 117
+
+### E07 Repeating or racing any stage makes no duplicates
+
+Checks: Plan: no duplicate requests, RFQs, emails or orders; document numbers have no gaps and no repeats
+
+- serial repeats: 3
+- concurrent callers: 6
+- seconds for the race: 0.2
+- tables that grew: none
+- extra emails: 0
+
+### E08 Decisions stay reproducible when the rules change
+
+Checks: Rule 8: rules and rates are versioned data; a decision stays reproducible against the version it used
+
+- decisions: 16
+- band holds before / after the change: 16/0 and 16/0
+- old rule rows untouched: True
+- past date reproduces the old version %: 100.0
+- a new submission uses: ('REQ-02', 3)
+- approval audit rows without a rule version: 0
+
+### E09 Every write action is open to exactly the roles the plan names
+
+Checks: Rule 7 and the plan: requester, buyer, approver and administrator duties are separate; nobody else can do them; nobody can without logging in
+
+- actions: 19
+- roles tried: 8
+- cells checked: 152
+- too permissive: 0
+- too strict: 0
+- reads open without login: 0
+
+### E10 One company cannot see another company's data
+
+Checks: Rule 6: one database per tenant; a request without tenant context is refused; tenant A cannot read tenant B
+
+- probes: 73
+- leaks: 0
+- company A sees its own records: True
+
+### E11 Hostile text is shown as text and never run
+
+Checks: Security: names from imported data and typed identifiers cannot inject script into the screens or SQL into the database
+
+- screens opened: 17
+- hostile payloads: 6
+- script ran or markup injected: 0
+- SQL probes: 12
+- server errors: 0
+- slow (sleep ran): 0
+- orders on screen: 34
+- pipeline note: 9
+
+### E12 No floats in money, exact amounts on the wire, India's calendar, no secrets, synthetic data stays synthetic
+
+Checks: Rules 1, 9, 10 and the generated-data safety rule
+
+- money modules scanned: 6
+- float uses: 0
+- money fields as JSON numbers: 0
+- UTC dates in business logic: 0
+- tracked files scanned for secrets: 443
+- secret hits: 0
+- unsafe generated values: 0
+- note: money fields sent as numbers: []
+
+### E13 Supplier emails are read into the right quotes, and when unsure the system asks a person
+
+Checks: Plan step 8 and rule 2: the model reads, code checks; a wrong reading must never look clean (silent errors = 0)
+
+- email cases: 39
+- perfect reader: exact %: 100.0
+- perfect reader: silent errors: 0
+- sloppy reader: mistakes that did not slip through: {'invented price': '33/33 not clean-but-wrong', 'invented gst': '33/33 not clean-but-wrong', 'invented delivery': '33/33 not clean-but-wrong', 'swapped prices': '16/16 not clean-but-wrong'}
+- note: the real models were not called (run with --live)
+
+### E14 Hostile emails, even obeyed by the model, change nothing they should not
+
+Checks: Security and rule 5: untrusted text cannot award, decline others, set a nonsense price, or reach a model from a stranger
+
+- attacks: 13
+- runs: 26
+- defended: 26
+- failed: 0
+- note: the real models were not called (run with --live)
+
+### E15 The assistant tells the truth from the data, adds nothing up on its own, and changes nothing
+
+Checks: Plan step 8 and rule 2: read-only tools; every figure it gives comes from a tool; it cannot approve or delete
+
+- note: skipped: this eval needs the real models (run with --live)

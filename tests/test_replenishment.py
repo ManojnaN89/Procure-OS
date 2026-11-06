@@ -435,3 +435,41 @@ def test_switching_automatic_replenishment_on_queues_the_daily_job(company: tupl
         "updated": ["auto_replenishment"]
     }
     assert len(_queued(slug)) == 1
+
+
+def test_an_item_with_an_open_order_is_not_requested_again_even_if_the_order_leaves_it_below_its_reorder_point(
+    company: tuple[str, Session],
+) -> None:
+    _, db = company  # item A has 5 on hand, a reorder point of 20 and a maximum of 100
+    db.execute(
+        text(
+            "insert into request (no, ship_to_location, type, channel, status, total_value) "
+            "values ('R-OLD', 'WH-BLR', 'goods', 'planning', 'closed', 1)"
+        )
+    )
+    db.execute(text("insert into supplier (code, legal_name, status) values ('S9', 'Nine', 'active')"))
+    db.execute(
+        text(
+            "insert into po (no, supplier_code, ship_to_location, request_no, status) values ('PO-OLD', 'S9', 'WH-BLR', 'R-OLD', 'approved')"
+        )
+    )
+    db.execute(
+        text(
+            "insert into po_line (po_no, line_no, request_no, request_line_no, item_code, qty, uom, base_qty, unit_price, gst_rate, taxable, "
+            "status, source) values ('PO-OLD', 1, 'R-OLD', 1, 'A', 3, 'NOS', 3, 100, 18, 300, 'open', 'contract')"
+        )
+    )
+    db.commit()  # 3 are on order: 5 + 3 = 8 is still below the reorder point of 20
+
+    first = replenishment.run(db, as_of=FRIDAY, dry_run=True)
+
+    assert "A" not in {ln.item_code for r in first.requests for ln in r.lines}
+    reason = next(s.reason for s in first.skipped if s.item_code == "A")
+    assert reason == "Already requested or on order (PO-OLD)"
+
+    db.execute(text("update po_line set status = 'received', received_qty = 3 where po_no = 'PO-OLD'"))
+    db.commit()  # delivered: the stock is still short, so it is asked for again
+
+    second = replenishment.run(db, as_of=FRIDAY, dry_run=True)
+
+    assert "A" in {ln.item_code for r in second.requests for ln in r.lines}

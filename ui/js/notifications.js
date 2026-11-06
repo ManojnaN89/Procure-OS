@@ -115,12 +115,12 @@ const Notifications = {
     `;
     const body = rows.length
       ? rows.map((n) => `
-          <div class="notif-row" data-id="${n.id}" style="border-left-color:${this.colorFor(n.severity)}">
+          <div class="notif-row" data-id="${escapeHtml(n.id)}" style="border-left-color:${this.colorFor(n.severity)}">
             <div class="notif-row-top">
               <span class="notif-row-type" style="color:${this.colorFor(n.severity)}">${this.labelFor(n.type)}</span>
               <span class="notif-row-time">${this.timeAgo(n.created_at)}</span>
             </div>
-            <div class="notif-row-msg">${n.message}</div>
+            <div class="notif-row-msg">${escapeHtml(n.message)}</div>
           </div>
         `).join("")
       : `<div style="padding:20px 16px;text-align:center;color:var(--text-muted);font-size:11.5px;">Nothing needs attention right now.</div>`;

@@ -126,6 +126,11 @@ def test_no_page_scrolls_sideways(company: Company, browser: Any, size: dict[str
 
 def test_the_assistant_opens_full_screen_by_default_and_replies(company: Company, browser: Any) -> None:
     company.db.execute(text("update app_setting set value = 'true' where key = 'launch_in_focus_mode'"))
+    company.db.execute(
+        text(
+            "insert into app_setting (key, value) values ('assistant_enabled', 'false') on conflict (key) do update set value = 'false'"
+        )
+    )
     company.db.commit()
     try:
         page = open_app(browser, LAPTOP, focus_mode=True)
@@ -133,11 +138,12 @@ def test_the_assistant_opens_full_screen_by_default_and_replies(company: Company
         expect(page.locator("#focusMode")).to_be_visible()
         page.locator("#fmInput").fill("hello")
         page.locator("#fmSendBtn").click()
-        expect(page.locator("#fmStory")).to_contain_text("not connected yet")
+        expect(page.locator("#fmStory")).to_contain_text("switched off")  # the test does not call a real model
         page.keyboard.press("Escape")
         expect(page.locator("#appContent")).to_be_visible()
     finally:  # the other tests start on the dashboard
         company.db.execute(text("update app_setting set value = 'false' where key = 'launch_in_focus_mode'"))
+        company.db.execute(text("delete from app_setting where key = 'assistant_enabled'"))
         company.db.commit()
 
 
@@ -237,6 +243,7 @@ def test_the_inventory_page_lists_the_worst_stock_first_and_shows_names_as_text(
 
 
 STOCK_TABLES = (
+    "quote_draft",
     "po_approval_step",
     "po_charge",
     "po_line",
@@ -600,3 +607,132 @@ def test_the_buyer_compares_quotes_and_awards_and_the_approver_signs_the_purchas
         assert admin.problems == [] and buyer.problems == []  # type: ignore[attr-defined]
     finally:
         clear_stock_and_approvals(company)
+
+
+def test_the_buyer_checks_a_reply_read_from_email_corrects_one_value_and_confirms_it(
+    company: Company, browser: Any
+) -> None:
+    import json
+    from datetime import datetime
+
+    from p2p.formulas.calendar import IST
+
+    seed_stock_and_approvals(company, price=100)
+    db = company.db
+    later = datetime.now(IST).date().replace(year=datetime.now(IST).date().year + 1)
+    db.execute(text("insert into supplier (code, legal_name, status) values ('S1', 'Alpha <b>Traders</b>', 'active')"))
+    db.execute(
+        text(
+            "insert into request (no, ship_to_location, type, channel, status, total_value) values ('REQ-D', 'WH-BLR', 'goods', 'planning', 'approved', 1000)"
+        )
+    )
+    db.execute(
+        text(
+            "insert into request_line (request_no, line_no, item_code, qty, uom, category_code, status) values ('REQ-D', 1, 'A', 10, 'NOS', 'C1', 'sourcing')"
+        )
+    )
+    db.execute(
+        text(
+            "insert into rfq (no, request_no, category_code, due_date, status) values ('RFQ-D', 'REQ-D', 'C1', :d, 'sent')"
+        ),
+        {"d": later},
+    )
+    db.execute(
+        text(
+            "insert into rfq_line (rfq_no, line_no, request_no, request_line_no, item_code, description, qty, uom, need_by) "
+            "values ('RFQ-D', 1, 'REQ-D', 1, 'A', 'Bearing', 10, 'NOS', :d)"
+        ),
+        {"d": later},
+    )
+    db.execute(
+        text(
+            "insert into rfq_supplier (rfq_no, supplier_code, email, invited_at) values ('RFQ-D', 'S1', 's1@supplier.example', now())"
+        )
+    )
+    email_id = db.execute(
+        text(
+            "insert into email_message (message_id, direction, from_addr, to_addr, subject, body_text, sent_at, linked_type, linked_id) "
+            "values ('<ui-draft@x>', 'in', 's1@supplier.example', 'rfq+RFQ-D@cbcpl.example', 'Re: quote <i>now</i>', 'Bearing Rs 95, GST 18%', now(), 'rfq', 'RFQ-D') returning id"
+        )
+    ).scalar_one()
+    proposal = {
+        "lines": [
+            {
+                "rfq_line_no": 1,
+                "name": "Bearing",
+                "unit_price": "95",
+                "gst_rate": "18",
+                "discount_pct": "0",
+                "delivery_days": 4,
+                "notes": [],
+            }
+        ],
+        "valid_until": None,
+        "freight": "0",
+        "packing_forwarding": "0",
+    }
+    db.execute(
+        text(
+            "insert into quote_draft (rfq_no, supplier_code, email_id, intent, status, reading, proposal, problems, assumptions, confidence) "
+            "values ('RFQ-D', 'S1', :e, 'quote', 'pending', cast(:r as jsonb), cast(:p as jsonb), '[]', cast(:a as jsonb), 0.93)"
+        ),
+        {
+            "e": email_id,
+            "r": json.dumps({"intent": "quote"}),
+            "p": json.dumps(proposal),
+            "a": json.dumps(["Bearing: GST rate not stated; the item's rate 18% was assumed"]),
+        },
+    )
+    db.commit()
+    try:
+        buyer = open_app(browser, LAPTOP)
+        sign_in(buyer, company.emails["Buyer"])
+        buyer.goto(f"{URL}/#/rfqs/RFQ-D")
+        panel = buyer.locator("#appContent .panel", has_text="Replies read from email")
+        expect(panel).to_contain_text("read as quote (93% sure)")
+        expect(panel).to_contain_text("GST rate not stated; the item's rate 18% was assumed")
+        expect(panel).to_contain_text("Re: quote <i>now</i>")  # shown as typed
+        assert buyer.locator("#appContent .panel i:not(.ti)").count() == 0
+        expect(buyer.locator(".dPrice")).to_have_value("95")
+
+        buyer.locator(".dPrice").fill("92.5")  # the buyer corrects the price
+        buyer.locator(".draftConfirm").click()
+        expect(buyer.locator("#appContent")).not_to_contain_text("Replies read from email")  # nothing left to look at
+        expect(buyer.locator("#appContent")).to_contain_text("1 of 1 suppliers have replied")
+        expect(buyer.locator("#appContent tbody tr", has_text="recommended")).to_contain_text("₹92.5")
+        assert db.execute(text("select unit_price from quote_line")).scalar_one() == 92.5
+        assert buyer.problems == []  # type: ignore[attr-defined]
+    finally:
+        db.execute(text("delete from email_message where message_id = '<ui-draft@x>'"))
+        clear_stock_and_approvals(company)
+
+
+def test_hostile_text_in_names_and_in_the_address_bar_is_shown_as_text_and_never_runs(
+    company: Company, browser: Any
+) -> None:
+    hostile = '<img src=x onerror="window.__pwn=1">'
+    db = company.db
+    db.execute(text("insert into item_category (code, name) values ('C1', :n) on conflict do nothing"), {"n": hostile})
+    db.execute(
+        text("insert into supplier (code, legal_name, trade_name, status) values ('S-X', :n, :n, 'active')"),
+        {"n": hostile + " Traders"},
+    )
+    db.execute(text("insert into supplier_category (supplier_code, category_code) values ('S-X', 'C1')"))
+    db.commit()
+    try:
+        page = open_app(browser, LAPTOP)
+        fired: list[str] = []
+        page.on("dialog", lambda d: (fired.append(d.message), d.dismiss()))
+        sign_in(page, company.emails["Admin"])
+        for route in ("vendors", "vendors/S-X", "vendors/" + hostile, "contracts/" + hostile, "rfqs", "inventory"):
+            page.evaluate("window.__pwn = undefined")
+            page.goto(f"{URL}/#/{route}")
+            page.wait_for_timeout(700)
+            assert page.evaluate("window.__pwn") is None, f"script ran on #/{route}"
+            assert page.locator("#appContent img[onerror]").count() == 0, f"markup injected on #/{route}"
+        assert fired == []
+    finally:
+        db.execute(text("delete from supplier_category where supplier_code = 'S-X'"))
+        db.execute(text("delete from supplier where code = 'S-X'"))
+        db.execute(text("delete from item_category where code = 'C1'"))
+        db.commit()

@@ -99,15 +99,24 @@ _ITEMS = """
 
 
 def _open_requests(db: Session) -> dict[tuple[str, str], str]:
-    rows = db.execute(
-        text(
-            "select rl.item_code, rl.delivery_location, min(rl.request_no) from request_line rl "
-            "join request r on r.no = rl.request_no "
-            "where rl.status in ('open', 'sourcing') and r.status in ('draft', 'submitted', 'approved', 'returned') "
-            "group by rl.item_code, rl.delivery_location"
-        )
-    )
-    return {(r[0], r[1]): r[2] for r in rows}
+    """Item-locations that already have something on the way: an open request line, or an order not yet fully received.
+
+    An order that does not bring the position above the reorder point still counts: nothing more is asked for until it
+    has been received or cancelled, so repeating the run never buys the same shortfall twice.
+    """
+    found: dict[tuple[str, str], str] = {}
+    for sql in (
+        "select rl.item_code, rl.delivery_location, min(rl.request_no) from request_line rl "
+        "join request r on r.no = rl.request_no "
+        "where rl.status in ('open', 'sourcing') and r.status in ('draft', 'submitted', 'approved', 'returned') "
+        "group by rl.item_code, rl.delivery_location",
+        "select pl.item_code, po.ship_to_location, min(po.no) from po_line pl join po on po.no = pl.po_no "
+        "where pl.status in ('open', 'part_received') "
+        "and po.status in ('draft', 'submitted', 'approved', 'sent', 'acknowledged', 'part_received') "
+        "group by pl.item_code, po.ship_to_location",
+    ):
+        found.update({(r[0], r[1]): r[2] for r in db.execute(text(sql))})
+    return found
 
 
 def _reason(line: StockLine) -> str:
@@ -163,7 +172,7 @@ def plan(db: Session, as_of: date, *, location: str | None = None) -> tuple[list
         if line.status == NEGATIVE:
             skipped.append(Skipped(*key, "Books show negative stock: check the postings before ordering"))
         elif line.status == COVERED or (line.status in NEEDS_ORDER and key in open_requests):
-            skipped.append(Skipped(*key, f"Already requested ({open_requests.get(key, 'open request')})"))
+            skipped.append(Skipped(*key, f"Already requested or on order ({open_requests.get(key, 'open request')})"))
         elif line.status in NEEDS_ORDER:
             candidates.append(line)
     if not candidates:

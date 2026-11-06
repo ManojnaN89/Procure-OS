@@ -14,6 +14,7 @@ from typing import Any
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
+from p2p.formulas.calendar import business_today
 from p2p.formulas.gst import Registration
 from p2p.formulas.money import format_inr
 from p2p.formulas.orders import (
@@ -380,9 +381,8 @@ def _accept_variance(db: Session, payload: dict[str, Any], actor: Actor) -> dict
     )
     audit.record(db, actor, "po.variance_accepted", "po", po_no)
     db.commit()
-    from datetime import UTC, datetime
 
-    return {"status": workflow.submit(db, tenant, po_no, actor, today=datetime.now(UTC).date())}
+    return {"status": workflow.submit(db, tenant, po_no, actor, today=business_today())}
 
 
 def sweep(db: Session, tenant: str, *, as_of: date, actor: Actor = SERVICE) -> list[OrderResult]:

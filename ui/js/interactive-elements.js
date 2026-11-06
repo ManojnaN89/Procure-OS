@@ -66,14 +66,14 @@ const InteractiveElements = {
     return `
       <div class="${prefix}-progress-card">
         <div class="${prefix}-progress-card-top">
-          <span>${extra.label || "Progress"}</span>
+          <span>${escapeHtml(extra.label || "Progress")}</span>
           <span class="value">${pct}%</span>
         </div>
         <div class="${prefix}-progress-bar-track">
           <div class="${prefix}-progress-bar-fill" style="width:${pct}%"></div>
           <div class="${prefix}-progress-bar-remainder" style="width:${100 - pct}%"></div>
         </div>
-        ${extra.secondary_label ? `<div class="${prefix}-progress-card-sub">${extra.secondary_label}</div>` : ""}
+        ${extra.secondary_label ? `<div class="${prefix}-progress-card-sub">${escapeHtml(extra.secondary_label)}</div>` : ""}
       </div>
     `;
   },
@@ -88,7 +88,7 @@ const InteractiveElements = {
 
     const toggle = document.createElement("div");
     toggle.className = `${prefix}-expandable-toggle`;
-    toggle.innerHTML = `<i class="ti ti-chevron-right"></i><span>Show ${extra.label || "details"}</span>`;
+    toggle.innerHTML = `<i class="ti ti-chevron-right"></i><span>Show ${escapeHtml(extra.label || "details")}</span>`;
     toggle.addEventListener("click", () => wrap.classList.toggle("open"));
     wrap.appendChild(toggle);
 
@@ -99,7 +99,7 @@ const InteractiveElements = {
     (extra.items || []).forEach((item) => {
       const row = document.createElement("div");
       row.className = itemClass;
-      row.innerHTML = `<span class="${dotClass}" style="background:var(--accent)"></span><span>${item.text}</span>`;
+      row.innerHTML = `<span class="${dotClass}" style="background:var(--accent)"></span><span>${escapeHtml(item.text)}</span>`;
       if (item.route) {
         row.addEventListener("click", () => this.navigateTo(item.route));
       }

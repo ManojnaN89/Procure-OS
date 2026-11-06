@@ -62,7 +62,7 @@ const Trail = {
 
   summarize(result) {
     if (!result || typeof result !== "object") return String(result);
-    if (result.error) return `\u26a0 ${result.error}`;
+    if (result.error) return `\u26a0 ${escapeHtml(result.error)}`;
     return Object.entries(result).slice(0, 3)
       .map(([k, v]) => `${k}: ${JSON.stringify(v)}`).join("  \u00b7  ");
   },
@@ -78,10 +78,10 @@ const Trail = {
       : "";
     el.innerHTML = `
       <div class="trail-entry-top">
-        <span class="trail-agent" style="color:${this.colorFor(evt.agent)}">${evt.agent}</span>
+        <span class="trail-agent" style="color:${this.colorFor(evt.agent)}">${escapeHtml(evt.agent)}</span>
         <span class="trail-time">${time}</span>
       </div>
-      <div class="trail-skill">\u2192 ${evt.skill}</div>
+      <div class="trail-skill">\u2192 ${escapeHtml(evt.skill)}</div>
       <div class="trail-meta">${this.summarize(evt.result)}</div>
       <div class="trail-detail">Arguments\n${JSON.stringify(evt.args, null, 2)}\n\nResult\n${JSON.stringify(evt.result, null, 2)}</div>
     `;

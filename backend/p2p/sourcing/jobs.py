@@ -24,6 +24,17 @@ def _run(ctx: worker.JobContext) -> None:
             log.info("sourcing skipped for %s: %s", ctx.payload.get("request_no"), exc)
 
 
+@worker.register("read_supplier_reply")
+def _read_reply(ctx: worker.JobContext) -> None:
+    from p2p.ai_steps.gateway import Gateway
+    from p2p.sourcing import replies
+
+    with Session(routing.engine_for(ctx.tenant)) as db:
+        replies.read_reply(
+            db, ctx.tenant, int(ctx.payload["email_id"]), Gateway(), as_of=ctx.now.astimezone(IST).date()
+        )
+
+
 def queue(tenant: str, request_no: str, *, delay: timedelta | None = None) -> int:
     """Ask the worker to source a request that has just been approved."""
     from datetime import UTC, datetime

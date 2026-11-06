@@ -178,10 +178,22 @@ def test_a_connection_without_a_valid_token_is_refused(env: Env) -> None:
             ws.receive_json()
 
 
-def test_the_assistant_answers_over_server_sent_events_until_it_is_connected(env: Env) -> None:
+def test_the_assistant_streams_its_reply_and_can_be_switched_off_for_a_company(env: Env) -> None:
+    env.db.execute(
+        text(
+            "insert into app_setting (key, value) values ('assistant_enabled', 'false') on conflict (key) do update set value = 'false'"
+        )
+    )
+    env.db.commit()
+
     r = client.post("/api/chat", json={"message": "hello"}, headers=env.h(env.admin, "Admin"))
+
     events = [json.loads(line[5:]) for line in r.text.splitlines() if line.startswith("data:")]
-    assert [e["type"] for e in events] == ["session", "token", "done"]
+    assert [e["type"] for e in events] == ["session", "token", "suggestions", "done"]
+    assert events[1]["content"] == "The assistant is switched off for this company."
+    assert client.post("/api/chat", json={"message": "hello"}).status_code == 401
+    empty = client.post("/api/chat", json={"message": "  "}, headers=env.h(env.admin, "Admin"))
+    assert "Ask me about a request" in empty.text  # nothing asked: a hint, and no model is called
 
 
 def test_the_vendor_pages_show_the_imported_suppliers_and_can_be_searched(env: Env) -> None:

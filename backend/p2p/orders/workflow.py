@@ -5,7 +5,7 @@ people, each step is a person's decision, every change writes an audit row. A re
 go back to being ready, so a buyer can order them again.
 """
 
-from datetime import UTC, date, datetime
+from datetime import date
 from decimal import Decimal
 from typing import Any
 
@@ -14,6 +14,7 @@ from sqlalchemy.orm import Session
 
 from p2p.approvals import rules
 from p2p.approvals.workflow import ApprovalError, name_of, org_code_of
+from p2p.formulas.calendar import business_today
 from p2p.platform import audit, permissions, tasks, users
 from p2p.platform.sod import Actor
 
@@ -34,7 +35,7 @@ def _sla_hours(db: Session) -> Decimal:
 
 def submit(db: Session, tenant: str, po_no: str, actor: Actor, *, today: date | None = None) -> str:
     """Send the order for approval, or approve it on the spot when the rule says so. Returns the order's status."""
-    today = today or datetime.now(UTC).date()
+    today = today or business_today()
     po = _locked(db, po_no)
     if po["status"] != "draft":
         raise ApprovalError(f"{po_no} is {po['status']}; only a draft order can be submitted")

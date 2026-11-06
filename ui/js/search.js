@@ -44,9 +44,9 @@ const Search = {
     rows.forEach((r) => {
       const item = document.createElement("div");
       item.className = "search-result-item";
-      item.innerHTML = `<span>${r.label}</span><span class="type-badge">${r.type.replace("_", " ")}</span>`;
+      item.innerHTML = `<span>${escapeHtml(r.label)}</span><span class="type-badge">${r.type.replace("_", " ")}</span>`;
       item.addEventListener("click", () => {
-        window.location.hash = `#/${routeFor[r.type]}/${r.id}`;
+        window.location.hash = `#/${routeFor[r.type]}/${escapeHtml(r.id)}`;
         this.close();
         this.input.value = "";
       });

@@ -118,8 +118,8 @@ const Dashboard = {
             <div class="stat-icon" style="background:${c.iconBg}"><i class="ti ${c.icon}" style="color:${c.iconFg}"></i></div>
             ${hasChange ? `<span class="trend-pill ${pillClass}">${pillLabel}</span>` : ""}
           </div>
-          <div class="stat-label">${c.label}</div>
-          <div class="stat-value">${c.value}</div>
+          <div class="stat-label">${escapeHtml(c.label)}</div>
+          <div class="stat-value">${escapeHtml(c.value)}</div>
           <div class="stat-card-sparkline"><canvas id="spark-${c.id}"></canvas></div>
         </div>
       `;
@@ -291,11 +291,11 @@ const Dashboard = {
           ${rows.map((n) => {
             const t = this.TYPE_ICONS[n.type] || { icon: "ti-bell", bg: "var(--surface-sunken)", fg: "var(--text-muted)" };
             return `
-              <div class="attention-row" data-id="${n.id}">
+              <div class="attention-row" data-id="${escapeHtml(n.id)}">
                 <div class="attention-row-icon" style="background:${t.bg}"><i class="ti ${t.icon}" style="color:${t.fg}"></i></div>
                 <div class="attention-row-body">
                   <div class="attention-row-type" style="color:${t.fg}">${Notifications.labelFor(n.type)}</div>
-                  <div class="attention-row-msg">${n.message}</div>
+                  <div class="attention-row-msg">${escapeHtml(n.message)}</div>
                 </div>
                 <i class="ti ti-chevron-right attention-row-chevron"></i>
               </div>
