@@ -32,3 +32,4 @@ Thumbs.db
 
 # local demo logins
 .dev-credentials
+.acceptance-run
