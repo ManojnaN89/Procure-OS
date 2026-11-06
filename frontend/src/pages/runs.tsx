@@ -63,7 +63,7 @@ export function RunsPage() {
 								<Td>{r.waiting_for}</Td>
 								<Td>
 									<Link
-										to="/admin/runs/$runId"
+										to="/runs/$runId"
 										params={{ runId: String(r.id) }}
 										className="text-primary underline"
 									>

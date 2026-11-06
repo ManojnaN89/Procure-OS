@@ -52,7 +52,7 @@ export function RulesPage() {
 								</Td>
 								<Td>
 									<Link
-										to="/admin/rules/$key"
+										to="/rules/$key"
 										params={{ key: r.key }}
 										className="text-primary underline"
 									>

@@ -1,0 +1,32 @@
+/* Phone and tablet layout. The desktop look is untouched; below 900 px the menu becomes a slide-in drawer. */
+.menu-btn { display: none; }
+.nav-backdrop { display: none; }
+
+@media (max-width: 900px) {
+  #app { flex-direction: column; }
+  .main { min-width: 0; width: 100%; }
+
+  .menu-btn { display: flex; margin-right: 8px; }
+  .sidebar {
+    position: fixed; left: 0; top: 0; bottom: 0; height: 100%; z-index: 60;
+    transform: translateX(-100%); transition: transform 0.18s ease; box-shadow: 8px 0 24px rgba(0, 0, 0, 0.4);
+  }
+  body.nav-open .sidebar { transform: none; }
+  body.nav-open .nav-backdrop { display: block; position: fixed; inset: 0; z-index: 55; background: rgba(0, 0, 0, 0.55); }
+
+  .topbar { padding: 0 12px; gap: 6px; }
+  .topbar .search-box { width: auto; flex: 1; min-width: 0; }
+  .search-results { width: min(320px, 92vw); }
+  .topbar-actions { gap: 6px; }
+  .user-badge .meta { display: none; }
+  .notif-dropdown { width: min(360px, 94vw); right: 0; }
+
+  .page { padding: 14px 12px; }
+  .stat-grid, .two-col { grid-template-columns: 1fr !important; }
+  #operationalStrip { flex-wrap: wrap; gap: 8px 14px !important; }
+  .page-header-row { flex-wrap: wrap; gap: 8px; }
+
+  .panel { overflow-x: auto; max-width: 100%; }
+  table { min-width: 560px; }
+  .panel table { font-size: 12px; }
+}

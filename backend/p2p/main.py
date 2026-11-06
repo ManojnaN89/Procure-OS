@@ -1,7 +1,7 @@
 import importlib
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy import text
@@ -12,6 +12,8 @@ from p2p.platform import logs, tenants
 from p2p.platform.admin_api import router as admin_router
 from p2p.platform.auth import router as auth_router
 from p2p.platform.files import router as files_router
+from p2p.platform.ui_api import router as ui_router
+from p2p.platform.ui_api import sockets as ui_sockets
 
 app = FastAPI(title="P2P platform", version="0.0.1")
 logs.install(app)
@@ -20,6 +22,8 @@ for _module in filter(None, (m.strip() for m in get_settings().extra_modules.spl
 app.include_router(auth_router)
 app.include_router(admin_router)
 app.include_router(files_router)
+app.include_router(ui_router)
+app.include_router(ui_sockets)
 
 
 @app.get("/api/health")
@@ -34,22 +38,27 @@ def health() -> dict[str, str]:
     return {"status": "ok", "database": db}
 
 
-def mount_frontend(dist: Path | None = None) -> None:
-    """Serve the built web app (frontend/dist) from the same address as the API, with a fallback for page reloads."""
-    dist = dist or REPO_ROOT / "frontend" / "dist"
-    index = dist / "index.html"
-    if not index.is_file():
-        return
-    app.mount("/assets", StaticFiles(directory=dist / "assets"), name="assets")
+def mount_frontend(admin_dist: Path | None = None, ui_dir: Path | None = None) -> None:
+    """Serve the two web front ends from the API's own address.
 
-    @app.get("/{path:path}", include_in_schema=False)
-    def spa(path: str) -> FileResponse:
-        if path.startswith("api/"):
-            raise HTTPException(404)
-        candidate = (dist / path).resolve()
-        if path and candidate.is_file() and candidate.is_relative_to(dist.resolve()):
-            return FileResponse(candidate)
-        return FileResponse(index)
+    /admin  is the React admin app (built into frontend/dist); /  is the main interface (ui/), which is plain files.
+    """
+    admin_dist = admin_dist or REPO_ROOT / "frontend" / "dist"
+    ui_dir = ui_dir or REPO_ROOT / "ui"
+    admin_index = admin_dist / "index.html"
+    if admin_index.is_file():
+        app.mount("/admin/assets", StaticFiles(directory=admin_dist / "assets"), name="admin-assets")
+
+        @app.get("/admin", include_in_schema=False)
+        @app.get("/admin/{path:path}", include_in_schema=False)
+        def admin_app(path: str = "") -> FileResponse:
+            candidate = (admin_dist / path).resolve()
+            if path and candidate.is_file() and candidate.is_relative_to(admin_dist.resolve()):
+                return FileResponse(candidate)
+            return FileResponse(admin_index)
+
+    if (ui_dir / "index.html").is_file():
+        app.mount("/", StaticFiles(directory=ui_dir, html=True), name="ui")
 
 
 mount_frontend()

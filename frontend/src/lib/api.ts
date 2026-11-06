@@ -108,7 +108,7 @@ export async function api<T>(
 	if (res.status === 401 && (await refreshTokens())) res = await send();
 	if (res.status === 401) {
 		clearSession();
-		window.location.assign("/login");
+		window.location.assign("/admin/login");
 	}
 	if (!res.ok) throw new ApiError(res.status, await detail(res));
 	return res.status === 204 ? (undefined as T) : ((await res.json()) as T);

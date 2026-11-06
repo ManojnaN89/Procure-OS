@@ -49,12 +49,12 @@ const approvalsRoute = createRoute({
 });
 const rulesRoute = createRoute({
 	getParentRoute: () => appRoute,
-	path: "/admin/rules",
+	path: "/rules",
 	component: RulesPage,
 });
 const ruleRoute = createRoute({
 	getParentRoute: () => appRoute,
-	path: "/admin/rules/$key",
+	path: "/rules/$key",
 	component: function RuleRoute() {
 		const { key } = ruleRoute.useParams();
 		return (
@@ -70,34 +70,34 @@ const ruleRoute = createRoute({
 });
 const usersRoute = createRoute({
 	getParentRoute: () => appRoute,
-	path: "/admin/users",
+	path: "/users",
 	component: UsersPage,
 });
 const auditRoute = createRoute({
 	getParentRoute: () => appRoute,
-	path: "/admin/audit",
+	path: "/audit",
 	component: AuditPage,
 });
 const runsRoute = createRoute({
 	getParentRoute: () => appRoute,
-	path: "/admin/runs",
+	path: "/runs",
 	component: RunsPage,
 });
 const runRoute = createRoute({
 	getParentRoute: () => appRoute,
-	path: "/admin/runs/$runId",
+	path: "/runs/$runId",
 	component: function RunRoute() {
 		return <RunDetailPage runId={runRoute.useParams().runId} />;
 	},
 });
 const decisionsRoute = createRoute({
 	getParentRoute: () => appRoute,
-	path: "/admin/decisions",
+	path: "/decisions",
 	component: DecisionsPage,
 });
 const callsRoute = createRoute({
 	getParentRoute: () => appRoute,
-	path: "/admin/model-calls",
+	path: "/model-calls",
 	component: ModelCallsPage,
 });
 
@@ -117,7 +117,7 @@ const routeTree = rootRoute.addChildren([
 	]),
 ]);
 
-export const router = createRouter({ routeTree });
+export const router = createRouter({ routeTree, basepath: "/admin" });
 
 declare module "@tanstack/react-router" {
 	interface Register {

@@ -17,7 +17,7 @@ from pathlib import Path
 from playwright.sync_api import Page, sync_playwright
 
 ROOT = Path(__file__).resolve().parents[1]
-URL = "http://localhost:5173"
+URL = "http://127.0.0.1:8000/admin"  # the admin app, served by the API itself
 LAPTOP = {"width": 1366, "height": 768}
 PHONE = {"width": 390, "height": 844}
 

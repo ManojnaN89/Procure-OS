@@ -16,6 +16,7 @@ from typing import Any
 
 import httpx
 import pytest
+from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from p2p.config import REPO_ROOT
@@ -32,6 +33,7 @@ expect.set_options(timeout=20_000)
 DIST = REPO_ROOT / "frontend" / "dist" / "index.html"
 PORT = 18080
 URL = f"http://127.0.0.1:{PORT}"
+ADMIN = f"{URL}/admin"  # the admin app lives under /admin
 PASSWORD = "correct horse battery"
 SHOTS = Path(os.environ["SHOT_DIR"]) if os.environ.get("SHOT_DIR") else None
 LAPTOP = {"width": 1366, "height": 768}
@@ -79,6 +81,8 @@ class Company:
         admin = Actor("user", "1")
         rules.save_draft(self.db, "approval", approval_table(), admin)
         rules.publish(self.db, "approval", admin)
+        self.db.execute(text("insert into app_setting (key, value) values ('launch_in_focus_mode', 'false')"))
+        self.db.commit()
         proposals.propose(
             self.db,
             Actor("agent", "payments"),
@@ -119,11 +123,11 @@ def open_page(browser: Any, size: dict[str, int]) -> Page:
 
 
 def sign_in(page: Page, email: str) -> None:
-    page.goto(f"{URL}/login")
+    page.goto(f"{ADMIN}/login")
     page.get_by_label("Email").fill(email)
     page.get_by_label("Password").fill(PASSWORD)
     page.get_by_role("button", name="Sign in").click()
-    page.wait_for_url(f"{URL}/")
+    page.wait_for_url(f"{ADMIN}/")
 
 
 def no_sideways_scroll(page: Page) -> bool:
@@ -141,7 +145,7 @@ def shot(page: Page, name: str) -> None:
 
 def test_login_rejects_a_wrong_password_and_accepts_the_right_one(company: Company, browser: Any) -> None:
     page = open_page(browser, LAPTOP)
-    page.goto(f"{URL}/login")
+    page.goto(f"{ADMIN}/login")
     page.get_by_label("Email").fill(company.emails["Admin"])
     page.get_by_label("Password").fill("not the password")
     page.get_by_role("button", name="Sign in").click()
@@ -149,7 +153,7 @@ def test_login_rejects_a_wrong_password_and_accepts_the_right_one(company: Compa
 
     page.get_by_label("Password").fill(PASSWORD)
     page.get_by_role("button", name="Sign in").click()
-    page.wait_for_url(f"{URL}/")
+    page.wait_for_url(f"{ADMIN}/")
     expect(page.get_by_text("Welcome, Admin Person")).to_be_visible()
     expect(page.get_by_text("Demo Engineering Pvt Ltd").first).to_be_visible()  # the company name is in the header
     assert page.errors == []  # type: ignore[attr-defined]
@@ -157,8 +161,8 @@ def test_login_rejects_a_wrong_password_and_accepts_the_right_one(company: Compa
 
 def test_a_visitor_without_a_login_is_sent_to_the_login_page(company: Company, browser: Any) -> None:
     page = open_page(browser, LAPTOP)
-    page.goto(f"{URL}/admin/audit")
-    page.wait_for_url(f"{URL}/login")
+    page.goto(f"{ADMIN}/audit")
+    page.wait_for_url(f"{ADMIN}/login")
 
 
 def test_the_menu_follows_the_role(company: Company, browser: Any) -> None:
@@ -226,8 +230,8 @@ def test_no_page_scrolls_sideways(company: Company, browser: Any, size: dict[str
     page = open_page(browser, size)
     sign_in(page, company.emails["Admin"])
     name = "laptop" if size is LAPTOP else "phone"
-    for path in ("/", "/admin/users", "/admin/audit", "/admin/runs", "/admin/model-calls", "/admin/rules"):
-        page.goto(f"{URL}{path}")
+    for path in ("/", "/users", "/audit", "/runs", "/decisions", "/model-calls", "/rules"):
+        page.goto(f"{ADMIN}{path}")
         page.wait_for_load_state("networkidle")
         assert no_sideways_scroll(page), f"{path} scrolls sideways at {size['width']} px"
         shot(page, f"{name}{path.replace('/', '_') or '_home'}")
@@ -239,6 +243,6 @@ def test_on_a_phone_the_menu_opens_from_a_button(company: Company, browser: Any)
     page.get_by_role("button", name="Menu").click()
     page.get_by_role("link", name="Users").last.click()
 
-    page.wait_for_url(f"{URL}/admin/users")
+    page.wait_for_url(f"{ADMIN}/users")
     expect(page.get_by_role("heading", name="Users and roles")).to_be_visible()
     shot(page, "phone_users_after_menu")

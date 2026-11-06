@@ -29,12 +29,12 @@ const NAV: NavItem[] = [
 			"payment.approve",
 		),
 	},
-	{ to: "/admin/rules", label: "Rules", show: any("admin.rules") },
-	{ to: "/admin/users", label: "Users", show: any("admin.users") },
-	{ to: "/admin/audit", label: "Audit", show: any("audit.view") },
-	{ to: "/admin/runs", label: "Agent runs", show: any("audit.view") },
-	{ to: "/admin/decisions", label: "Rule decisions", show: any("audit.view") },
-	{ to: "/admin/model-calls", label: "Model calls", show: any("audit.view") },
+	{ to: "/rules", label: "Rules", show: any("admin.rules") },
+	{ to: "/users", label: "Users", show: any("admin.users") },
+	{ to: "/audit", label: "Audit", show: any("audit.view") },
+	{ to: "/runs", label: "Agent runs", show: any("audit.view") },
+	{ to: "/decisions", label: "Rule decisions", show: any("audit.view") },
+	{ to: "/model-calls", label: "Model calls", show: any("audit.view") },
 ];
 
 export function Shell() {
@@ -92,6 +92,9 @@ export function Shell() {
 					<div className="font-medium">{me.data?.display_name}</div>
 					<div className="text-muted-foreground">{me.data?.role}</div>
 				</div>
+				<a href="/" className="text-sm text-primary underline">
+					Back to the app
+				</a>
 				<Button variant="outline" onClick={signOut}>
 					Sign out
 				</Button>

@@ -1,0 +1,41 @@
+/* ProcureOS design tokens — single source of truth for color/type/spacing */
+:root {
+  /* Surfaces */
+  --canvas: #0B0D12;
+  --surface: #12141C;
+  --surface-raised: #181B25;
+  --surface-sunken: #0F1117;
+  --border: #232733;
+  --border-strong: #2E3444;
+
+  /* Accent + status */
+  --accent: #6C5CE7;
+  --accent-dim: #3C3489;
+  --accent-tint: #EEEDFE;
+  --success: #2ECC71;
+  --success-bg: #173404;
+  --success-text: #97C459;
+  --warning: #F5A623;
+  --warning-bg: #412402;
+  --warning-text: #FAC775;
+  --danger: #EF4444;
+  --danger-bg: #501313;
+  --danger-text: #F09595;
+
+  /* Text */
+  --text-primary: #F3F4F8;
+  --text-secondary: #B8BECC;
+  --text-muted: #8B93A7;
+
+  /* Type */
+  --font-display: 'Sora', 'Calibri', sans-serif;
+  --font-body: 'Inter', 'Calibri', sans-serif;
+  --font-mono: 'JetBrains Mono', 'Consolas', monospace;
+
+  /* Layout */
+  --sidebar-w: 220px;
+  --topbar-h: 60px;
+  --radius: 10px;
+  --radius-lg: 14px;
+  --gap: 12px;
+}
