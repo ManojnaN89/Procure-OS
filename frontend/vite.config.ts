@@ -5,5 +5,5 @@ import { defineConfig } from "vite";
 // The backend runs on 8000; the browser only talks to Vite, which forwards /api.
 export default defineConfig({
 	plugins: [react(), tailwindcss()],
-	server: { port: 5173, proxy: { "/api": "http://127.0.0.1:8000" } },
+	server: { host: "127.0.0.1", port: 5173, proxy: { "/api": "http://127.0.0.1:8000" } },
 });

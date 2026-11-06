@@ -27,7 +27,7 @@ def main() -> int:
         subprocess.Popen([str(PY), "-m", "p2p.cli", "worker"], cwd=BACKEND),  # noqa: S603
     ]
     print(
-        "\nBackend  http://localhost:8000/api/health\nFrontend http://localhost:5173\nMailpit  http://localhost:8025\n"
+        "\nBackend  http://127.0.0.1:8000/api/health\nFrontend http://127.0.0.1:5173\nMailpit  http://127.0.0.1:8025\n"
     )
     try:
         for p in procs:
