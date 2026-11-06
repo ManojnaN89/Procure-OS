@@ -170,6 +170,10 @@ def ingest(db: Session, tenant: str, incoming: IncomingMail) -> int | None:
             {"email_id": email_id, "from": incoming.from_addr, "subject": incoming.subject},
         )
     db.commit()
+    if linked_type == "rfq":
+        worker.enqueue(
+            tenant, "read_supplier_reply", {"email_id": email_id}
+        )  # a supplier's reply: read it into a draft
     return email_id
 
 

@@ -20,9 +20,11 @@ from fastapi.responses import StreamingResponse
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
+from p2p.agents import assistant
+from p2p.ai_steps.gateway import Gateway
 from p2p.approvals import rules as approval_rules
 from p2p.approvals import workflow as approvals
-from p2p.formulas.calendar import IST
+from p2p.formulas.calendar import business_today
 from p2p.formulas.money import format_qty, round_money
 from p2p.orders import quotes
 from p2p.orders import service as orders  # noqa: F401 - registers the price-variance proposal executor
@@ -32,6 +34,7 @@ from p2p.platform.permissions import PermissionDenied, can_anywhere, require
 from p2p.platform.tokens import decode_access_token
 from p2p.receiving.stock import stock_levels
 from p2p.requests import jobs, replenishment
+from p2p.sourcing import replies
 from p2p.sourcing import service as sourcing
 
 router = APIRouter(prefix="/api", tags=["ui"])
@@ -51,8 +54,9 @@ DEFAULT_SETTINGS: dict[str, str] = {
     "auto_replenishment": "false",
     "replenishment_department": "",
     "rfq_supplier_count": "3",
+    "assistant_enabled": "true",
 }
-BOOLEAN_SETTINGS = {"launch_in_focus_mode", "auto_replenishment"}
+BOOLEAN_SETTINGS = {"launch_in_focus_mode", "auto_replenishment", "assistant_enabled"}
 TEXT_SETTINGS = {"replenishment_department"}
 CURRENCIES = {"INR", "USD", "EUR", "GBP"}
 
@@ -215,7 +219,7 @@ def briefing(db: Db, ctx: Ctx) -> dict[str, Any]:
         "top_priority_signal": _notification(ranked[0]) if ranked else None,
         "signal_counts": counts,
         "total_unresolved": len(rows),
-        "total_spend": 0,
+        "total_spend": "0",
         "cost_savings_period": 0,
     }
 
@@ -270,7 +274,7 @@ def empty_dashboard() -> dict[str, Any]:
         "total_po_value": 0,
         "spend_by_category": {},
         "headline": {
-            "total_spend": 0,
+            "total_spend": "0",
             "total_spend_trend": zeros,
             "total_spend_change_pct": None,
             "cost_savings_period": 0,
@@ -315,7 +319,7 @@ def _vendor(r: dict[str, Any]) -> dict[str, Any]:
         "email": r["email"],
         "category": r["category"],
         "rating": None,
-        "total_spend": 0,
+        "total_spend": "0",
         "created_at": None,
         "under_review": r["status"] == "draft",
         "active": r["status"] == "active",
@@ -542,7 +546,7 @@ def source_requisition(
 ) -> dict[str, Any]:
     """Decide how an approved request is bought and ask suppliers for quotes (the same thing the worker does on approval)."""
     try:
-        result = sourcing.source_request(db, ctx.slug, no, sod.user(ctx.user_id), as_of=datetime.now(IST).date())
+        result = sourcing.source_request(db, ctx.slug, no, sod.user(ctx.user_id), as_of=business_today())
     except sourcing.SourcingError as exc:
         raise HTTPException(409, str(exc)) from None
     return sourcing.summary(result)
@@ -636,6 +640,7 @@ def get_rfq(no: str, db: Db, ctx: Ctx) -> dict[str, Any]:
             for s in suppliers
         ],
         "comparison": _comparison_json(db, no, ctx.user_id),
+        "drafts": [_draft_json(d) for d in replies.drafts_of(db, no)],
         "quotes": [],
     }
 
@@ -649,7 +654,7 @@ def run_replenishment(
     """Preview (dry_run) or create the requests for stock at its reorder point, and send them through approval."""
     result = replenishment.run(
         db,
-        as_of=datetime.now(IST).date(),
+        as_of=business_today(),
         actor=sod.user(ctx.user_id),
         dry_run=bool(payload.get("dry_run", True)),
         tenant=ctx.slug,
@@ -666,7 +671,7 @@ def _money(value: Decimal | None) -> str | None:
 
 
 def _comparison_json(db: Session, rfq_no: str, user_id: int) -> dict[str, Any]:
-    comp = quotes.comparison(db, rfq_no, datetime.now(IST).date())
+    comp = quotes.comparison(db, rfq_no, business_today())
     status = db.execute(text("select status from rfq where no = :n"), {"n": rfq_no}).scalar_one()
     return {
         "min_quotes": comp.min_quotes,
@@ -731,12 +736,80 @@ def _decimal(value: Any, field: str, default: Decimal | None = None) -> Decimal:
         raise HTTPException(422, f"{field} is not a number") from None
 
 
+def _draft_json(d: dict[str, Any]) -> dict[str, Any]:
+    reading = d["reading"] or {}
+    proposal = d["proposal"] or {}
+    return {
+        "id": d["id"],
+        "rfq_no": d["rfq_no"],
+        "supplier_code": d["supplier_code"],
+        "supplier_name": d["supplier_name"],
+        "from": d["from_addr"],
+        "subject": d["subject"],
+        "intent": d["intent"],
+        "status": d["status"],
+        "confidence": str(d["confidence"]) if d["confidence"] is not None else None,
+        "problems": d["problems"],
+        "assumptions": d["assumptions"],
+        "decline_reason": reading.get("decline_reason"),
+        "question": reading.get("question"),
+        "valid_until": proposal.get("valid_until"),
+        "freight": proposal.get("freight"),
+        "packing_forwarding": proposal.get("packing_forwarding"),
+        "lines": [
+            {
+                "rfq_line_no": ln["rfq_line_no"],
+                "name": ln["name"],
+                "unit_price": str(ln["unit_price"]),
+                "gst_rate": str(ln["gst_rate"]),
+                "discount_pct": str(ln["discount_pct"]),
+                "delivery_days": ln["delivery_days"],
+                "notes": ln["notes"],
+            }
+            for ln in proposal.get("lines", [])
+        ],
+        "quote_no": d["quote_no"],
+        "created_at": _iso(d["created_at"]),
+    }
+
+
+@router.post("/quote-drafts/{draft_id}/confirm")
+def confirm_quote_draft(
+    draft_id: int,
+    payload: dict[str, Any],
+    db: Db,
+    ctx: Annotated[routing.TenantContext, Depends(require("rfq.create"))],
+) -> dict[str, Any]:
+    """A buyer confirms what was read from a supplier's email (optionally correcting line values first)."""
+    try:
+        edits = {int(k): dict(v) for k, v in dict(payload.get("edits", {})).items()}
+        return replies.confirm_draft(db, ctx.slug, draft_id, sod.user(ctx.user_id), as_of=business_today(), edits=edits)
+    except (ValueError, TypeError) as exc:
+        raise HTTPException(422, f"the correction could not be read: {exc}") from None
+    except replies.ReplyError as exc:
+        raise HTTPException(409, str(exc)) from None
+
+
+@router.post("/quote-drafts/{draft_id}/dismiss")
+def dismiss_quote_draft(
+    draft_id: int,
+    payload: dict[str, Any],
+    db: Db,
+    ctx: Annotated[routing.TenantContext, Depends(require("rfq.create"))],
+) -> dict[str, str]:
+    try:
+        replies.dismiss_draft(db, draft_id, sod.user(ctx.user_id), payload.get("note"))
+    except replies.ReplyError as exc:
+        raise HTTPException(409, str(exc)) from None
+    return {"status": "dismissed"}
+
+
 @router.post("/rfqs/{no}/quotes")
 def enter_rfq_quote(
     no: str, payload: dict[str, Any], db: Db, ctx: Annotated[routing.TenantContext, Depends(require("rfq.create"))]
 ) -> dict[str, Any]:
     """A buyer enters what a supplier offered (it arrived by email or phone, or on paper)."""
-    today = datetime.now(IST).date()
+    today = business_today()
     try:
         data = quotes.QuoteInput(
             supplier_code=str(payload.get("supplier_code", "")),
@@ -784,7 +857,7 @@ def award_rfq(
             choices,
             sod.user(ctx.user_id),
             reason=payload.get("reason"),
-            as_of=datetime.now(IST).date(),
+            as_of=business_today(),
             tenant=ctx.slug,
         )
     except (ValueError, TypeError) as exc:
@@ -956,16 +1029,49 @@ def budget_variance(db: Db, ctx: Ctx) -> dict[str, Any]:
 # ---- the assistant: connected in a later step ------------------------------------------------
 
 
+_GATEWAY: Gateway | None = None
+
+
+def assistant_gateway() -> Gateway:
+    """One model gateway for the whole process, so the providers' rate limits are shared by every conversation."""
+    global _GATEWAY
+    if _GATEWAY is None:
+        _GATEWAY = Gateway()
+    return _GATEWAY
+
+
+def use_gateway(gateway: Gateway | None) -> None:
+    """Replace the gateway (tests give it a scripted model); None goes back to the configured one."""
+    global _GATEWAY
+    _GATEWAY = gateway
+
+
+SUGGESTIONS = ["What is waiting for me?", "Which requests have been approved?", "Show the latest purchase orders"]
+
+
+def _answer(slug: str, user_id: int, message: str) -> str:
+    engine = routing.engine_for(slug)
+    with Session(engine) as db:
+        if all_settings(db).get("assistant_enabled") != "true":
+            return "The assistant is switched off for this company."
+        return assistant.ask(db, slug, user_id, message, assistant_gateway()).text
+
+
 @router.post("/chat")
 async def chat(payload: dict[str, Any], ctx: Ctx) -> StreamingResponse:
     session = str(payload.get("session_id") or uuid.uuid4())
+    message = str(payload.get("message") or "").strip()
 
     async def stream() -> AsyncIterator[str]:
         yield f"data: {json.dumps({'type': 'session', 'session_id': session, 'category': 'assistant'})}\n\n"
         reply = (
-            "The assistant is not connected yet. You can already look around the pages, approvals and the agent trail."
+            await run_in_threadpool(_answer, ctx.slug, ctx.user_id, message)
+            if message
+            else "Ask me about a request, a quotation, a purchase order or an item in stock."
         )
-        yield f"data: {json.dumps({'type': 'token', 'content': reply})}\n\n"
+        for part in reply.splitlines(keepends=True) or [reply]:
+            yield f"data: {json.dumps({'type': 'token', 'content': part})}\n\n"
+        yield f"data: {json.dumps({'type': 'suggestions', 'suggestions': SUGGESTIONS})}\n\n"
         yield f"data: {json.dumps({'type': 'done'})}\n\n"
 
     return StreamingResponse(stream(), media_type="text/event-stream")

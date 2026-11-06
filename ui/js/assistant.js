@@ -148,7 +148,7 @@ const Assistant = {
               item.className = "bubble-signal-item";
               item.innerHTML = `
                 <span class="bubble-signal-dot" style="background:${Notifications.colorFor(n.severity)}"></span>
-                <span class="bubble-signal-text">${n.message}</span>
+                <span class="bubble-signal-text">${escapeHtml(n.message)}</span>
                 <span class="bubble-signal-action">${BUBBLE_SIGNAL_ACTION_LABELS[n.type] || "Review"}</span>
               `;
               item.addEventListener("click", () => { if (typeof Notifications !== "undefined") Notifications.handleClick(n); });

@@ -94,6 +94,60 @@ const RfqsView = {
     return `<div class="panel" style="margin-bottom:12px;">${head}${waiting}${lines}${actions}<div id="awardNote" style="font-size:12px;color:var(--warning-text);margin-top:8px;"></div></div>`;
   },
 
+  draftsPanel(r) {
+    const open = (r.drafts || []).filter((d) => d.status === "pending" || d.status === "needs_person");
+    if (!open.length) return "";
+    const can = r.comparison && r.comparison.can_quote;
+    const input = "background:var(--surface-sunken);border:1px solid var(--border);color:var(--text-primary);border-radius:6px;padding:5px 7px;font-size:12px;width:80px;";
+    const cards = open.map((d) => {
+      const who = `${this.esc(d.supplier_name || d.from || "Unknown sender")}`;
+      const problems = (d.problems || []).map((x) => `<li>${this.esc(x)}</li>`).join("");
+      const notes = (d.assumptions || []).map((x) => `<li>${this.esc(x)}</li>`).join("");
+      let body = "";
+      if (d.status === "needs_person") {
+        body = `<div style="font-size:12px;color:var(--warning-text);">This reply could not be read reliably. Enter the quote by hand if it is one.</div>`;
+      } else if (d.intent === "quote") {
+        body = `
+          <table class="data-table" style="margin:6px 0;">
+            <thead><tr><th>ITEM</th><th>PRICE</th><th>DISCOUNT %</th><th>GST %</th><th>DAYS</th></tr></thead>
+            <tbody>
+              ${d.lines.map((l) => `
+                <tr data-draft="${d.id}" data-line="${l.rfq_line_no}">
+                  <td>${this.esc(l.name)}</td>
+                  <td><input class="dPrice" value="${this.esc(l.unit_price)}" style="${input}"></td>
+                  <td><input class="dDisc" value="${this.esc(l.discount_pct)}" style="${input}width:60px;"></td>
+                  <td><input class="dGst" value="${this.esc(l.gst_rate)}" style="${input}width:60px;"></td>
+                  <td><input class="dDays" value="${this.esc(l.delivery_days ?? "")}" style="${input}width:55px;"></td>
+                </tr>`).join("")}
+            </tbody>
+          </table>
+          <div class="cell-muted" style="font-size:11.5px;">${d.valid_until ? `valid until ${formatDate(d.valid_until)}` : "no validity date stated"}${Number(d.freight) ? ` \u00b7 freight ${formatCurrency(d.freight)}` : ""}${Number(d.packing_forwarding) ? ` \u00b7 packing ${formatCurrency(d.packing_forwarding)}` : ""}</div>`;
+      } else if (d.intent === "decline") {
+        body = `<div style="font-size:12.5px;">${who} says it will not quote${d.decline_reason ? `: \u201c${this.esc(d.decline_reason)}\u201d` : "."}</div>`;
+      } else if (d.intent === "question") {
+        body = `<div style="font-size:12.5px;">${who} asks: \u201c${this.esc(d.question || "")}\u201d <span class="cell-muted">(a task has been made for the buyer)</span></div>`;
+      } else {
+        body = `<div class="cell-muted" style="font-size:12px;">Nothing to enter from this reply.</div>`;
+      }
+      const confirmable = d.status === "pending" && (d.intent === "quote" || d.intent === "decline");
+      return `
+        <div style="padding:10px 0;border-bottom:1px solid var(--border);">
+          <div style="display:flex;justify-content:space-between;gap:10px;font-size:12.5px;margin-bottom:4px;">
+            <div><b>${who}</b> <span class="cell-muted">\u00b7 ${this.esc(d.subject || "")} \u00b7 read as ${this.esc(d.intent || "unclear")}${d.confidence ? ` (${Math.round(Number(d.confidence) * 100)}% sure)` : ""}</span></div>
+          </div>
+          ${body}
+          ${problems ? `<ul style="margin:6px 0;padding-left:18px;font-size:11.5px;color:var(--danger-text);">${problems}</ul>` : ""}
+          ${notes ? `<ul style="margin:6px 0;padding-left:18px;font-size:11.5px;color:var(--warning-text);">${notes}</ul>` : ""}
+          ${can ? `<div style="display:flex;gap:8px;margin-top:8px;">
+            ${confirmable ? `<div class="btn btn-primary btn-sm draftConfirm" data-id="${d.id}">${d.intent === "decline" ? "Confirm the refusal" : "Confirm this quote"}</div>` : ""}
+            <div class="btn btn-sm draftDismiss" data-id="${d.id}">Dismiss</div>
+          </div>` : ""}
+          <div class="draftNote" data-id="${d.id}" style="font-size:12px;color:var(--warning-text);margin-top:6px;"></div>
+        </div>`;
+    }).join("");
+    return `<div class="panel" style="margin-bottom:12px;"><div class="panel-title">Replies read from email \u00b7 ${open.length} to look at</div>${cards}</div>`;
+  },
+
   quoteForm(r) {
     const c = r.comparison;
     if (!c || !c.can_quote) return "";
@@ -151,6 +205,28 @@ const RfqsView = {
       const note = document.getElementById("quoteNote");
       if (note) note.textContent = res.data.detail || "That did not work.";
     });
+    document.querySelectorAll(".draftConfirm").forEach((btn) => btn.addEventListener("click", async () => {
+      const id = btn.dataset.id;
+      const edits = {};
+      document.querySelectorAll(`tr[data-draft="${id}"]`).forEach((tr) => {
+        edits[tr.dataset.line] = {
+          unit_price: tr.querySelector(".dPrice").value,
+          discount_pct: tr.querySelector(".dDisc").value,
+          gst_rate: tr.querySelector(".dGst").value,
+          delivery_days: tr.querySelector(".dDays").value,
+        };
+      });
+      const res = await API.postJSON(`/api/quote-drafts/${id}/confirm`, { edits });
+      if (res.ok) return this.renderDetail(document.getElementById("appContent"), r.id);
+      const note = document.querySelector(`.draftNote[data-id="${id}"]`);
+      if (note) note.textContent = res.data.detail || "That did not work.";
+    }));
+    document.querySelectorAll(".draftDismiss").forEach((btn) => btn.addEventListener("click", async () => {
+      const res = await API.postJSON(`/api/quote-drafts/${btn.dataset.id}/dismiss`, {});
+      if (res.ok) return this.renderDetail(document.getElementById("appContent"), r.id);
+      const note = document.querySelector(`.draftNote[data-id="${btn.dataset.id}"]`);
+      if (note) note.textContent = res.data.detail || "That did not work.";
+    }));
     on("awardBtn", async () => {
       const choices = {};
       document.querySelectorAll('input[type="radio"]:checked').forEach((el) => { choices[el.name.replace("pick-", "")] = el.value; });
@@ -201,6 +277,7 @@ const RfqsView = {
             </tbody>
           </table>
         </div>
+        ${this.draftsPanel(r)}
         ${this.comparisonPanel(r)}
         ${this.quoteForm(r)}
       `;

@@ -38,7 +38,7 @@ const FloatingAssistant = {
 
     Trail.subscribe((evt) => {
       this.fab.classList.add("active");
-      this.showTicker(`${evt.agent} \u2192 ${evt.skill}`, "trail");
+      this.showTicker(`${escapeHtml(evt.agent)} \u2192 ${escapeHtml(evt.skill)}`, "trail");
       clearTimeout(this._pulseTimer);
       this._pulseTimer = setTimeout(() => this.fab.classList.remove("active"), 3000);
     });
@@ -49,7 +49,7 @@ const FloatingAssistant = {
     // so the two are never mistaken for each other.
     Notifications.subscribe((evt) => {
       this.fab.classList.add("active");
-      this.showTicker(`${Notifications.labelFor(evt.type)} \u2014 ${evt.message}`, "notification");
+      this.showTicker(`${Notifications.labelFor(evt.type)} \u2014 ${escapeHtml(evt.message)}`, "notification");
       clearTimeout(this._pulseTimer);
       this._pulseTimer = setTimeout(() => this.fab.classList.remove("active"), 3000);
     });
