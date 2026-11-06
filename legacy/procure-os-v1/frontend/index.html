@@ -1,0 +1,203 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>ProcureOS</title>
+<!-- Boot-time guess to avoid a flash of the dashboard before Focus Mode
+     takes over on launch. Uses the last real setting value cached in
+     localStorage (default: on) so repeat visits never flash; app.js
+     reconciles this against the real setting once it loads and corrects
+     course on the rare occasion the guess was wrong (e.g. changed on
+     another device). Deliberately inline, not in an external file, so it
+     runs before any stylesheet or script has to finish loading. -->
+<script>
+(function () {
+  try {
+    var cached = localStorage.getItem("procureos_launch_focus_mode");
+    if (cached === null || cached === "true") {
+      document.documentElement.classList.add("fm-boot-hide");
+    }
+  } catch (e) { /* localStorage unavailable — just show the dashboard normally */ }
+})();
+</script>
+<style>
+  html.fm-boot-hide #app { opacity: 0; }
+  html.fm-boot-hide .focus-mode-overlay { opacity: 1; transform: scale(1); pointer-events: auto; }
+</style>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Sora:wght@500;600;700&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@2.47.0/tabler-icons.min.css">
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
+<link rel="stylesheet" href="css/tokens.css" />
+<link rel="stylesheet" href="css/layout.css" />
+<link rel="stylesheet" href="css/components.css" />
+<link rel="stylesheet" href="css/motion.css" />
+<link rel="stylesheet" href="css/focus-mode.css" />
+</head>
+<body>
+
+<div id="app">
+
+  <nav class="sidebar">
+    <div class="sidebar-brand">
+      <div class="mark">P</div>
+      <span class="name">ProcureOS</span>
+    </div>
+    <div class="sidebar-label">MENU</div>
+    <div class="nav-list" id="navList">
+      <a class="nav-item" data-route="dashboard" href="#/dashboard"><i class="ti ti-layout-dashboard"></i>Dashboard</a>
+      <a class="nav-item" data-route="auctions" href="#/auctions"><i class="ti ti-gavel"></i>Auctions</a>
+      <a class="nav-item" data-route="rfqs" href="#/rfqs"><i class="ti ti-file-text"></i>RFQs</a>
+      <a class="nav-item" data-route="requisitions" href="#/requisitions"><i class="ti ti-clipboard-check"></i>Requisitions</a>
+      <a class="nav-item" data-route="vendors" href="#/vendors"><i class="ti ti-building-store"></i>Vendors</a>
+      <a class="nav-item" data-route="purchase-orders" href="#/purchase-orders"><i class="ti ti-receipt"></i>Purchase orders</a>
+      <a class="nav-item" data-route="payments" href="#/payments"><i class="ti ti-credit-card"></i>Payments</a>
+      <a class="nav-item" data-route="contracts" href="#/contracts"><i class="ti ti-file-certificate"></i>Contracts</a>
+      <a class="nav-item" data-route="assistant" href="#/assistant"><i class="ti ti-message-circle"></i>Assistant</a>
+      <div class="nav-divider"></div>
+      <a class="nav-item" data-route="help" href="#/help"><i class="ti ti-help"></i>Help</a>
+    </div>
+  </nav>
+
+  <div class="main">
+    <div class="topbar">
+      <div class="search-box" id="searchBox">
+        <i class="ti ti-search"></i>
+        <input type="text" id="searchInput" placeholder="Search anything..." autocomplete="off" />
+        <div class="search-results" id="searchResults"></div>
+      </div>
+      <div class="topbar-actions">
+        <div class="icon-btn" id="focusModeToggle" title="Focus mode">
+          <i class="ti ti-focus-2"></i>
+        </div>
+        <div class="icon-btn" id="settingsBtn" title="Configuration">
+          <i class="ti ti-settings"></i>
+        </div>
+        <div class="icon-btn" id="trailBellBtn" title="Agent trail">
+          <i class="ti ti-history"></i>
+          <div class="dot" id="trailDot" style="display:none;"></div>
+        </div>
+        <div class="notif-anchor">
+          <div class="icon-btn" id="notificationBellBtn" title="Notifications">
+            <i class="ti ti-bell"></i>
+            <div class="dot" id="notificationDot" style="display:none;"></div>
+          </div>
+          <div class="notif-dropdown" id="notifDropdown"></div>
+        </div>
+        <div class="user-badge">
+          <div class="avatar-circle">DK</div>
+          <div class="meta">
+            <span class="who">Dana Keller</span>
+            <span class="role">Administrator</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <main id="appContent" class="page"></main>
+  </div>
+
+</div>
+
+<!-- Focus Mode: full-screen, assistant-only "Living Report" view.
+     Entered via the top-bar toggle, exited ONLY via Escape — no button
+     inside it, deliberately, so there's nothing to look at but the report. -->
+<div class="focus-mode-overlay" id="focusMode">
+  <div class="fm-ambient" id="fmAmbient"></div>
+  <div class="fm-pulse-rail" id="fmPulseRail"></div>
+  <div class="fm-story" id="fmStory"></div>
+  <div class="fm-attach-chip-row" id="fmAttachChip"></div>
+  <div class="fm-composer">
+    <input type="file" id="fmFileInput" accept=".pdf,.xlsx,.xls,.csv" style="display:none;" />
+    <i class="ti ti-paperclip fm-composer-icon" id="fmAttachBtn" title="Attach a quote or CSV"></i>
+    <i class="ti ti-microphone fm-composer-icon" id="fmMicBtn" title="Hold to talk"></i>
+    <input type="text" id="fmInput" placeholder="Ask anything..." autocomplete="off" />
+    <button class="fm-send-btn" id="fmSendBtn"><i class="ti ti-arrow-right"></i></button>
+  </div>
+  <div class="fm-hint">Press <span>Esc</span> for the full dashboard</div>
+
+  <!-- Chart detail modal: click any inline sparkline to open this. Escape
+       closes the modal first, then Focus Mode itself on a second press. -->
+  <div class="fm-chart-modal" id="fmChartModal">
+    <div class="fm-chart-modal-inner">
+      <div class="fm-chart-modal-header">
+        <span id="fmChartModalTitle">Chart</span>
+        <i class="ti ti-x fm-chart-modal-close" id="fmChartModalClose"></i>
+      </div>
+      <div class="fm-chart-modal-body">
+        <canvas id="fmChartModalCanvas"></canvas>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Agent Trail drawer (promoted from thin sidebar strip) -->
+<div class="drawer-overlay" id="drawerOverlay"></div>
+<div class="trail-drawer" id="trailDrawer">
+  <div class="drawer-header">
+    <h3>Agent trail</h3>
+    <i class="ti ti-x drawer-close" id="trailDrawerClose"></i>
+  </div>
+  <p>Every real action, as it happens</p>
+  <div class="trail-list" id="drawerTrailList"></div>
+  <div class="drawer-footer">
+    <div class="btn btn-sm" id="exportTrailBtn">Export log</div>
+    <a class="btn btn-sm btn-primary" href="#/trail" id="fullHistoryBtn" style="text-decoration:none;text-align:center;">Full history</a>
+  </div>
+</div>
+
+<!-- Floating Assistant: present on every page, shares the same conversation as the Assistant page -->
+<div class="floating-assistant">
+  <div class="ticker-pill" id="tickerPill" style="display:none;"><span id="tickerText"></span></div>
+  <div class="fab" id="assistantFab"><i class="ti ti-message-circle"></i></div>
+</div>
+<div class="floating-panel" id="floatingPanel">
+  <div class="floating-panel-header">
+    <div class="floating-panel-title">
+      <div class="mark">P</div>
+      <span class="name">Assistant</span>
+    </div>
+    <i class="ti ti-x drawer-close" id="floatingPanelClose"></i>
+  </div>
+  <div class="floating-panel-body" id="floatingPanelBody"></div>
+  <div class="attach-chip-row" id="floatingAttachChip"></div>
+  <div class="floating-panel-composer">
+    <input type="file" id="floatingFileInput" accept=".pdf,.xlsx,.xls,.csv" style="display:none;" />
+    <i class="ti ti-paperclip composer-attach-btn" id="floatingAttachBtn" title="Attach a quote or CSV"></i>
+    <i class="ti ti-microphone composer-attach-btn" id="floatingMicBtn" title="Hold to talk"></i>
+    <input type="text" id="floatingInput" placeholder="Ask the assistant..." autocomplete="off" />
+    <button class="send-btn" id="floatingSendBtn"><i class="ti ti-arrow-right"></i></button>
+  </div>
+</div>
+
+<script src="js/api.js"></script>
+<script src="js/badges.js"></script>
+<script src="js/interactive-elements.js"></script>
+<script src="js/state.js"></script>
+<script src="js/trail.js"></script>
+<script src="js/trail-drawer.js"></script>
+<script src="js/assistant.js"></script>
+<script src="js/composer-attachments.js"></script>
+<script src="js/voice.js"></script>
+<script src="js/floating-assistant.js"></script>
+<script src="js/focus-mode.js"></script>
+<script src="js/notifications.js"></script>
+<script src="js/search.js"></script>
+<script src="js/views/dashboard.js"></script>
+<script src="js/views/auctions.js"></script>
+<script src="js/views/rfqs.js"></script>
+<script src="js/views/requisitions.js"></script>
+<script src="js/views/vendors.js"></script>
+<script src="js/views/purchase-orders.js"></script>
+<script src="js/views/payments.js"></script>
+<script src="js/views/contracts.js"></script>
+<script src="js/views/assistant-page.js"></script>
+<script src="js/views/trail-page.js"></script>
+<script src="js/views/guide-me.js"></script>
+<script src="js/views/settings-page.js"></script>
+<script src="js/views/notification-history.js"></script>
+<script src="js/router.js"></script>
+<script src="js/app.js"></script>
+</body>
+</html>

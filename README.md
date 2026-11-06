@@ -1,4 +1,4 @@
-# P2P platform
+# ProcureOS: P2P platform
 
 An India-first, domain-neutral, multi-tenant procure-to-pay platform: request, approval, sourcing, purchase order, receipt, invoice match and payment, with agents only where the work is open-ended.
 
@@ -12,3 +12,9 @@ An India-first, domain-neutral, multi-tenant procure-to-pay platform: request, a
 Backend http://localhost:8000/api/health, frontend http://localhost:5173, test mailbox http://localhost:8025.
 
 Run every check with `python scripts/check.py`. Working rules are in `CLAUDE.md`, the data model in `docs/data-dictionary.md`, test data in `datagen/README.md`.
+
+## How this repository is organised
+
+This repository continues Procure-OS. The multi-tenant platform (`backend/`, `frontend/`, `datagen/`, `docs/`, `tests/`) is the product being built. The original Procure-OS code is kept in `legacy/procure-os-v1/` only as a reference while its interface and useful parts are ported; whatever is not ported is removed. Nothing in `legacy/` is run, tested or imported by the platform.
+
+The platform lives on the branch `p2p-platform`. Procure-OS history is part of it, so merging into `main` is a normal pull request.

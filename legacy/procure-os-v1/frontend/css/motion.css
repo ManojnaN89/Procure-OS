@@ -1,0 +1,34 @@
+/* Subtle, purposeful motion only — nothing loops unless it's signaling live state */
+
+@keyframes fabBreathe {
+  0%, 100% { transform: scale(1); border-color: var(--accent); }
+  50% { transform: scale(1.06); border-color: #9B8CFF; }
+}
+
+@keyframes tickerFade {
+  0%, 15% { opacity: 0; transform: translateX(6px); }
+  25%, 85% { opacity: 1; transform: translateX(0); }
+  100% { opacity: 0; transform: translateX(-6px); }
+}
+
+@keyframes panelIn {
+  0% { opacity: 0; transform: translateY(8px) scale(0.98); }
+  100% { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+@keyframes dotPulse {
+  0%, 100% { opacity: 0.3; }
+  50% { opacity: 1; }
+}
+
+@keyframes trailSlideIn {
+  from { opacity: 0; transform: translateX(10px); }
+  to { opacity: 1; transform: translateX(0); }
+}
+.trail-entry.new { animation: trailSlideIn 0.3s ease; }
+
+@media (prefers-reduced-motion: reduce) {
+  .fab.active, .ticker-pill span, .floating-panel.open, .typing-dots span, .trail-entry.new {
+    animation: none !important;
+  }
+}
