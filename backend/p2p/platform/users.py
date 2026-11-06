@@ -61,6 +61,16 @@ def create_user(
         return user_id
 
 
+def user_id_by_email(tenant_slug: str, email: str) -> int | None:
+    """The login of a company's user with this email, if there is one (used to link people in the organisation to logins)."""
+    with Session(tenants.control_engine()) as s:
+        return s.scalar(
+            select(AppUser.id)
+            .join(Tenant, Tenant.id == AppUser.tenant_id)
+            .where(Tenant.slug == tenant_slug, AppUser.email == email.strip().lower())
+        )
+
+
 def grant_role(
     tenant_slug: str,
     user_id: int,

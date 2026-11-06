@@ -236,9 +236,25 @@ def test_the_inventory_page_lists_the_worst_stock_first_and_shows_names_as_text(
         db.commit()
 
 
-def test_a_buyer_checks_stock_creates_the_drafts_and_a_second_check_finds_nothing_new(
-    company: Company, browser: Any
-) -> None:
+STOCK_TABLES = (
+    "approval_step",
+    "request_line",
+    "request",
+    "number_counter",
+    "number_series",
+    "approval_rule",
+    "org_user",
+    "department",
+    "item_location",
+    "stock_opening",
+    "item",
+    "item_category",
+    "location",
+)
+
+
+def seed_stock_and_approvals(company: Company, *, price: int) -> None:
+    """One item that needs ordering (95 to buy), the numbering, a rule table and a stores head who is the Approver login."""
     db = company.db
     db.execute(
         text(
@@ -251,8 +267,9 @@ def test_a_buyer_checks_stock_creates_the_drafts_and_a_second_check_finds_nothin
     db.execute(
         text(
             "insert into item (code, name, category_code, base_uom, purchase_uom, pack_size, moq, standard_price, "
-            "default_lead_days, active, stocked) values ('A', '<i>Bearing</i>', 'C1', 'NOS', 'NOS', 1, 1, 100, 3, true, true)"
-        )
+            "default_lead_days, active, stocked) values ('A', '<i>Bearing</i>', 'C1', 'NOS', 'NOS', 1, 1, :price, 3, true, true)"
+        ),
+        {"price": price},
     )
     db.execute(
         text("insert into stock_opening (item_code, location_code, qty, as_of) values ('A', 'WH-BLR', 5, '2026-01-01')")
@@ -263,7 +280,40 @@ def test_a_buyer_checks_stock_creates_the_drafts_and_a_second_check_finds_nothin
             "values ('A', 'WH-BLR', 'minmax', 20, 2, 100)"
         )
     )
+    db.execute(text("insert into department (code, name, head_user) values ('LOG', 'Stores', 'U3')"))
+    db.execute(
+        text(
+            "insert into org_user (code, name, designation, department_code, email, active) "
+            "values ('U3', 'Prakash Stores', 'Head - Stores', 'LOG', :email, true)"
+        ),
+        {"email": company.emails["Approver"]},
+    )
+    for code, low, high, chain in (("R-LOW", "0", "15000", "auto"), ("R-MID", "15000.01", "999999999", "manager")):
+        db.execute(
+            text(
+                "insert into approval_rule (rule_code, document, min_value, max_value, category_code, department_code, "
+                "spend_type, approver_chain, version, effective_from) values (:c, 'request', :lo, :hi, 'ANY', 'ANY', 'opex', :ch, 1, '2024-11-01')"
+            ),
+            {"c": code, "lo": low, "hi": high, "ch": chain},
+        )
+    db.execute(
+        text(
+            "insert into app_setting (key, value) values ('replenishment_department', 'LOG') "
+            "on conflict (key) do update set value = 'LOG'"
+        )
+    )
     db.commit()
+
+
+def clear_stock_and_approvals(company: Company) -> None:
+    for table in STOCK_TABLES:
+        company.db.execute(text(f"delete from {table}"))
+    company.db.execute(text("delete from app_setting where key = 'replenishment_department'"))
+    company.db.commit()
+
+
+def test_a_buyer_checks_stock_and_a_small_request_approves_itself(company: Company, browser: Any) -> None:
+    seed_stock_and_approvals(company, price=100)  # 95 x 100 = 9,500: inside the automatic band
     try:
         page = open_app(browser, LAPTOP)
         sign_in(page, company.emails["Buyer"])
@@ -271,26 +321,27 @@ def test_a_buyer_checks_stock_creates_the_drafts_and_a_second_check_finds_nothin
         expect(page.locator("#tableWrap")).to_contain_text("No requisitions yet")
 
         page.locator("#replenishBtn").click()
-        expect(page.locator("#replenishPanel")).to_contain_text(
-            "1 item at or below their reorder point would become 1 draft request"
-        )
+        panel = page.locator("#replenishPanel")
+        expect(panel).to_contain_text("1 item at or below their reorder point would become 1 request")
+        expect(panel).to_contain_text("1 approves automatically")
         assert page.locator("#tableWrap tbody tr").count() == 0  # a preview creates nothing
         page.locator("#createDraftsBtn").click()
-        expect(page.locator("#replenishPanel")).to_contain_text("Created 1 draft request")
+        expect(panel).to_contain_text("1 approved automatically, 0 waiting for approval")
 
         row = page.locator("#tableWrap tbody tr")
         expect(row).to_have_count(1)
-        expect(row).to_contain_text("Automatic replenishment")
-        expect(row).to_contain_text("Draft")
+        expect(row).to_contain_text("Approved")
         row.click()
+        expect(page.locator("#appContent")).to_contain_text("Auto-approved under rule R-LOW v1")
         expect(page.locator("#appContent")).to_contain_text("<i>Bearing</i>")  # shown as typed, not as italics
         expect(page.locator("#appContent")).to_contain_text("95")  # 100 less the 5 on hand
         assert page.locator("#appContent i:not(.ti)").count() == 0
+        expect(page.locator("#approveBtn")).to_have_count(0)  # nothing left to decide
 
         page.goto(f"{URL}/#/requisitions")
         page.locator("#replenishBtn").click()
-        expect(page.locator("#replenishPanel")).to_contain_text("Nothing needs ordering right now")
-        expect(page.locator("#replenishPanel")).to_contain_text("Already requested")
+        expect(panel).to_contain_text("Nothing needs ordering right now")
+        expect(panel).to_contain_text("Already requested")
         assert page.problems == []  # type: ignore[attr-defined]
 
         requester = open_app(browser, LAPTOP)
@@ -299,16 +350,43 @@ def test_a_buyer_checks_stock_creates_the_drafts_and_a_second_check_finds_nothin
         expect(requester.locator("#tableWrap")).to_be_visible()
         expect(requester.locator("#replenishBtn")).to_have_count(0)
     finally:
-        for table in (
-            "request_line",
-            "request",
-            "number_counter",
-            "number_series",
-            "item_location",
-            "stock_opening",
-            "item",
-            "item_category",
-            "location",
-        ):
-            db.execute(text(f"delete from {table}"))
-        db.commit()
+        clear_stock_and_approvals(company)
+
+
+def test_a_bigger_request_waits_for_the_right_person_who_must_give_a_reason_to_refuse_and_can_approve(
+    company: Company, browser: Any
+) -> None:
+    seed_stock_and_approvals(company, price=1000)  # 95 x 1,000 = 95,000: needs the stores head
+    try:
+        buyer = open_app(browser, LAPTOP)
+        sign_in(buyer, company.emails["Buyer"])
+        buyer.goto(f"{URL}/#/requisitions")
+        buyer.locator("#replenishBtn").click()
+        expect(buyer.locator("#replenishPanel")).to_contain_text("1 needs a person's approval")
+        buyer.locator("#createDraftsBtn").click()
+        expect(buyer.locator("#replenishPanel")).to_contain_text("0 approved automatically, 1 waiting for approval")
+        row = buyer.locator("#tableWrap tbody tr")
+        expect(row).to_contain_text("Pending")
+        expect(row).to_contain_text("waiting for Prakash Stores")
+        row.click()
+        expect(buyer.locator("#appContent")).to_contain_text("Prakash Stores")
+        expect(buyer.locator("#approveBtn")).to_have_count(0)  # not the buyer's decision
+
+        approver = open_app(browser, LAPTOP)
+        sign_in(approver, company.emails["Approver"])
+        approver.goto(f"{URL}/#/requisitions")
+        approver.locator("#tableWrap tbody tr").click()
+        approver.locator("#rejectBtn").click()
+        approver.locator("#reasonOk").click()  # no reason given
+        expect(approver.locator("#actionNote")).to_contain_text("a reason is required")
+
+        approver.locator("#reasonCancel").click()
+        approver.locator("#approveBtn").click()
+        expect(approver.locator("#appContent")).to_contain_text("Approved by Prakash Stores under rule R-MID v1")
+        expect(approver.locator("#approveBtn")).to_have_count(0)
+        approver.goto(f"{URL}/#/requisitions")
+        expect(approver.locator("#tableWrap tbody tr")).to_contain_text("Approved")
+        # the one refusal allowed is the missing reason above (the browser reports it twice)
+        assert [p for p in approver.problems if "409" not in p] == []  # type: ignore[attr-defined]
+    finally:
+        clear_stock_and_approvals(company)

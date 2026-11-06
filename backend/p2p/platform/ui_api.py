@@ -20,10 +20,12 @@ from fastapi.responses import StreamingResponse
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
+from p2p.approvals import rules as approval_rules
+from p2p.approvals import workflow as approvals
 from p2p.formulas.calendar import IST
 from p2p.formulas.money import format_qty, round_money
 from p2p.platform import routing, sod
-from p2p.platform.permissions import require
+from p2p.platform.permissions import PermissionDenied, can_anywhere, require
 from p2p.platform.tokens import decode_access_token
 from p2p.receiving.stock import stock_levels
 from p2p.requests import jobs, replenishment
@@ -43,8 +45,10 @@ DEFAULT_SETTINGS: dict[str, str] = {
     "currency_preset": "INR",
     "launch_in_focus_mode": "true",
     "auto_replenishment": "false",
+    "replenishment_department": "",
 }
 BOOLEAN_SETTINGS = {"launch_in_focus_mode", "auto_replenishment"}
+TEXT_SETTINGS = {"replenishment_department"}
 CURRENCIES = {"INR", "USD", "EUR", "GBP"}
 
 
@@ -82,7 +86,17 @@ def update_settings(
             return {"error": f"currency_preset must be one of {', '.join(sorted(CURRENCIES))}"}
         if key in BOOLEAN_SETTINGS and value not in ("true", "false"):
             return {"error": f"{key} must be true or false"}
-        if key != "currency_preset" and key not in BOOLEAN_SETTINGS and not value.replace(".", "", 1).isdigit():
+        if (
+            key == "replenishment_department"
+            and value
+            and not db.execute(text("select 1 from department where code = :c"), {"c": value}).first()
+        ):
+            return {"error": f"replenishment_department: there is no department with code {value}"}
+        if (
+            key != "currency_preset"
+            and key not in BOOLEAN_SETTINGS | TEXT_SETTINGS
+            and not value.replace(".", "", 1).isdigit()
+        ):
             return {"error": f"{key} must be a number"}
         db.execute(
             text(
@@ -381,12 +395,20 @@ def _requisition(r: dict[str, Any]) -> dict[str, Any]:
         "status": _REQUISITION_STATUS.get(r["status"], r["status"]),
         "priority": r["priority"],
         "created_at": _iso(r["created_at"]),
+        "waiting_for": r.get("waiting_for"),
     }
+
+
+_WAITING = (
+    "(select a.name from approval_step s join org_user a on a.code = coalesce(s.delegate, s.approver) "
+    "where s.request_no = r.no and s.round = r.approval_round and s.status = 'pending' limit 1)"
+)
 
 
 @router.get("/requisitions")
 def list_requisitions(db: Db, ctx: Ctx) -> list[dict[str, Any]]:
-    return [_requisition(r) for r in _rows(db, "select * from request order by created_at desc, no desc limit 500")]
+    sql = f"select r.*, {_WAITING} as waiting_for from request r order by r.created_at desc, r.no desc limit 500"  # noqa: S608
+    return [_requisition(r) for r in _rows(db, sql)]
 
 
 @router.get("/requisitions/{no}")
@@ -423,7 +445,68 @@ def get_requisition(no: str, db: Db, ctx: Ctx) -> dict[str, Any]:
             for line in lines
         ],
         "purchase_order": None,
+        "approval": {
+            "rule_code": rows[0]["rule_code"],
+            "rule_version": rows[0]["rule_version"],
+            "decision": rows[0]["decision_reason"],
+            "steps": [
+                {
+                    "step": s["step"],
+                    "role": s["role"],
+                    "name": s["approver_name"],
+                    "designation": s["designation"],
+                    "stand_in": s["delegate_name"],
+                    "status": s["status"],
+                    "acted_at": _iso(s["acted_at"]),
+                    "comment": s["comment"],
+                }
+                for s in approvals.steps_of(db, no)
+            ],
+            "can_act": approvals.can_act(db, no, ctx.user_id),
+            "can_submit": rows[0]["status"] in ("draft", "returned")
+            and can_anywhere(db, ctx.user_id, "request.submit"),
+        },
     }
+
+
+def _approval_action(call: Any) -> dict[str, str]:
+    """Run an approval action and turn what can go wrong into a clear answer for the screen."""
+    try:
+        return {"status": call()}
+    except approvals.ApprovalError as exc:
+        raise HTTPException(409, str(exc)) from None
+    except approval_rules.ApprovalRuleError as exc:
+        raise HTTPException(422, str(exc)) from None
+    except PermissionDenied as exc:
+        raise HTTPException(403, str(exc)) from None
+
+
+@router.post("/requisitions/{no}/submit")
+def submit_requisition(
+    no: str, db: Db, ctx: Annotated[routing.TenantContext, Depends(require("request.submit"))]
+) -> dict[str, str]:
+    return _approval_action(lambda: approvals.submit(db, ctx.slug, no, sod.user(ctx.user_id)).status)
+
+
+@router.post("/requisitions/{no}/approve")
+def approve_requisition(
+    no: str, payload: dict[str, Any], db: Db, ctx: Annotated[routing.TenantContext, Depends(require("request.approve"))]
+) -> dict[str, str]:
+    return _approval_action(lambda: approvals.approve(db, ctx.slug, no, ctx.user_id, payload.get("comment")))
+
+
+@router.post("/requisitions/{no}/reject")
+def reject_requisition(
+    no: str, payload: dict[str, Any], db: Db, ctx: Annotated[routing.TenantContext, Depends(require("request.approve"))]
+) -> dict[str, str]:
+    return _approval_action(lambda: approvals.reject(db, no, ctx.user_id, payload.get("reason")))
+
+
+@router.post("/requisitions/{no}/return")
+def return_requisition(
+    no: str, payload: dict[str, Any], db: Db, ctx: Annotated[routing.TenantContext, Depends(require("request.approve"))]
+) -> dict[str, str]:
+    return _approval_action(lambda: approvals.return_for_changes(db, no, ctx.user_id, payload.get("reason")))
 
 
 @router.post("/replenishment/run")
@@ -432,12 +515,14 @@ def run_replenishment(
     db: Db,
     ctx: Annotated[routing.TenantContext, Depends(require("replenishment.run"))],
 ) -> dict[str, Any]:
-    """Preview (dry_run) or create the draft requests for stock at its reorder point."""
+    """Preview (dry_run) or create the requests for stock at its reorder point, and send them through approval."""
     result = replenishment.run(
         db,
         as_of=datetime.now(IST).date(),
         actor=sod.user(ctx.user_id),
         dry_run=bool(payload.get("dry_run", True)),
+        tenant=ctx.slug,
+        submit=bool(payload.get("submit", True)),
     )
     return replenishment.summary(result)
 

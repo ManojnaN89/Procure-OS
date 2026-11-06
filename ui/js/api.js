@@ -50,6 +50,17 @@ const API = {
 
   listRequisitions() { return this.getJSON("/api/requisitions"); },
   getRequisition(id) { return this.getJSON(`/api/requisitions/${id}`); },
+  // For actions that change something. Resolves with { ok, data } so the screen can show the server's reason when refused.
+  async postJSON(path, body = {}) {
+    const res = await Auth.fetch(`${this.base}${path}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    let data = {};
+    try { data = await res.json(); } catch {}
+    return { ok: res.ok, data };
+  },
   async runReplenishment(dryRun) {
     const res = await Auth.fetch(`${this.base}/api/replenishment/run`, {
       method: "POST",

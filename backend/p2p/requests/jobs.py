@@ -31,5 +31,5 @@ def _run(ctx: worker.JobContext) -> None:
     with Session(routing.engine_for(ctx.tenant)) as db:
         on = db.execute(text("select value from app_setting where key = 'auto_replenishment'")).scalar()
         if on == "true":
-            replenishment.run(db, as_of=ctx.now.astimezone(IST).date())
+            replenishment.run(db, as_of=ctx.now.astimezone(IST).date(), tenant=ctx.tenant, submit=True)
     worker.enqueue_unique(ctx.tenant, JOB, {}, next_run(ctx.now), exclude_id=ctx.id)

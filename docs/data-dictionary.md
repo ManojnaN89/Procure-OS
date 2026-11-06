@@ -119,6 +119,8 @@ In the platform, `request_line` also has `base_qty` (the quantity in the stock u
 
 **approval_event** · document, document_no, step, approver, on_behalf_of (delegation), action enum(approved,rejected,returned,delegated,auto_approved,escalated), at, comment, rule_code
 
+In the platform the approval trail is `approval_step` (request_no, round, step, role, approver, delegate, status, acted_by, acted_at, comment, task_id): one row per person who has to act, one round per submission, so a returned request starts a new round. `request` also carries `rule_code`, `rule_version`, `decision_reason`, `submitted_at`, `decided_at` and `approval_round`, so every decision can be repeated against the rule version it used. `approver_role` says how a role named in a chain becomes a person: the requester's manager, the department's head, the head of a named department, or the holder of a designation. Audit rows carry the actions `request.submit`, `request.auto_approve`, `request.approve`, `request.reject` and `request.return`.
+
 ### C2. Sourcing
 
 **rfq** · no, buyer, created_at, due_date, type enum(commercial,combined), weights json, delivery_terms, payment_terms_proposed, terms_version, status enum(draft,sent,closed,awarded,cancelled), sent_at

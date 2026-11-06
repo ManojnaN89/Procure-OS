@@ -121,7 +121,7 @@
   font-family: var(--font-body); font-weight: 500;
 }
 .badge-open, .badge-sent, .badge-approved, .badge-paid { background: var(--success-bg); color: var(--success-text); }
-.badge-draft, .badge-pending, .badge-created, .badge-processing { background: var(--warning-bg); color: var(--warning-text); }
+.badge-draft, .badge-returned, .badge-waiting, .badge-pending, .badge-created, .badge-processing { background: var(--warning-bg); color: var(--warning-text); }
 .badge-closed, .badge-rejected { background: var(--danger-bg); color: var(--danger-text); }
 
 /* ---------- Table ---------- */

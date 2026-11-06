@@ -18,6 +18,8 @@ from typing import Any
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
+from p2p.approvals import rules as approval_rules
+from p2p.approvals import workflow
 from p2p.formulas.money import format_qty, round_money
 from p2p.formulas.replenishment import purchase_quantity, shortfall
 from p2p.formulas.stock import BELOW_SAFETY, COVERED, NEGATIVE, REORDER, STOCKOUT
@@ -51,6 +53,11 @@ class DraftRequest:
     priority: str
     lines: list[DraftLine]
     no: str | None = None  # a dry run does not take a number
+    department: str | None = None
+    route_kind: str = ""  # auto (approves itself), approval (needs people) or blocked (the rules cannot route it)
+    route: str = ""  # in words
+    outcome: str | None = None  # after submitting: approved or submitted
+    submit_error: str | None = None
 
     @property
     def total_value(self) -> Decimal:
@@ -113,6 +120,35 @@ def _reason(line: StockLine) -> str:
         f"On hand {format_qty(line.on_hand)} {line.uom} is at or below the reorder point "
         f"{format_qty(line.reorder_point)}; order {plan}"
     )
+
+
+def _department(db: Session) -> str | None:
+    """The department a planning request is raised for (a company setting): its head is the nearest manager."""
+    value = db.execute(text("select value from app_setting where key = 'replenishment_department'")).scalar()
+    return str(value) if value else None
+
+
+def _route(db: Session, req: DraftRequest, as_of: date) -> None:
+    """Say, without writing anything, what the approval rules will do with this request."""
+    try:
+        rule = approval_rules.find_rule(
+            db,
+            "request",
+            req.total_value,
+            as_of,
+            spend_type="opex",
+            category=req.category_code,
+            department=req.department,
+        )
+        steps = approval_rules.resolve_chain(db, rule.roles, requester=None, department=req.department, on_date=as_of)
+    except approval_rules.ApprovalRuleError as exc:
+        req.route_kind, req.route = "blocked", str(exc)
+        return
+    if rule.is_automatic:
+        req.route_kind, req.route = "auto", f"Approved automatically ({rule.code} v{rule.version})"
+    else:
+        who = " then ".join(workflow.name_of(db, st.approver) for st in steps)
+        req.route_kind, req.route = "approval", f"Approval by {who} ({rule.code} v{rule.version})"
 
 
 def plan(db: Session, as_of: date, *, location: str | None = None) -> tuple[list[DraftRequest], list[Skipped]]:
@@ -178,10 +214,13 @@ def plan(db: Session, as_of: date, *, location: str | None = None) -> tuple[list
                 stock_status=line.status,
             )
         )
+    department = _department(db)
     requests = [
-        DraftRequest(loc, cat, prio, sorted(lines, key=lambda x: x.item_code))
+        DraftRequest(loc, cat, prio, sorted(lines, key=lambda x: x.item_code), department=department)
         for (loc, cat, prio), lines in sorted(groups.items())
     ]
+    for req in requests:
+        _route(db, req, as_of)
     return requests, skipped
 
 
@@ -192,8 +231,16 @@ def run(
     actor: Actor = audit.SYSTEM,
     dry_run: bool = False,
     location: str | None = None,
+    tenant: str | None = None,
+    submit: bool = False,
 ) -> RunResult:
-    """Create the draft requests (or, for a dry run, only report what would be created)."""
+    """Create the draft requests (or, for a dry run, only report what would be created).
+
+    With submit, each new request is then sent through approval: the rules approve small ones on the spot and hand the
+    rest to the people in their chain. A request that cannot be routed stays a draft, with the reason in the result.
+    """
+    if submit and not tenant and not dry_run:
+        raise ValueError("the company is needed to submit requests")
     if not dry_run:
         # one run at a time per company; the lock is released when this transaction ends
         db.execute(text("select pg_advisory_xact_lock(hashtext('replenishment'))"))
@@ -207,7 +254,8 @@ def run(
         db.execute(
             text(
                 "insert into request (no, ship_to_location, type, priority, need_by, channel, source_ref, justification, "
-                "status, total_value) values (:no, :loc, 'goods', :prio, :need, 'planning', :src, :why, 'draft', :total)"
+                "status, total_value, department_code) values (:no, :loc, 'goods', :prio, :need, 'planning', :src, :why, 'draft', "
+                ":total, :dep)"
             ),
             {
                 "no": req.no,
@@ -217,6 +265,7 @@ def run(
                 "src": f"replenishment:{as_of}:{result.run_id}",
                 "why": f"Automatic replenishment: {len(req.lines)} item(s) at or below their reorder point",
                 "total": req.total_value,
+                "dep": req.department,
             },
         )
         for n, line in enumerate(req.lines, start=1):
@@ -278,6 +327,14 @@ def run(
         ),
     )
     db.commit()
+    if submit and tenant:
+        for req in requests:
+            assert req.no is not None
+            try:
+                req.outcome = workflow.submit(db, tenant, req.no, actor, today=as_of).status
+            except (approval_rules.ApprovalRuleError, workflow.ApprovalError) as exc:
+                db.rollback()
+                req.submit_error = str(exc)
     return result
 
 
@@ -298,9 +355,16 @@ def summary(result: RunResult) -> dict[str, Any]:
                 "priority": r.priority,
                 "lines": len(r.lines),
                 "total_value": str(r.total_value),
+                "route": r.route,
+                "route_kind": r.route_kind,
+                "outcome": r.outcome,
+                "submit_error": r.submit_error,
             }
             for r in result.requests
         ],
+        "auto_approved": sum(1 for r in result.requests if r.route_kind == "auto"),
+        "needs_approval": sum(1 for r in result.requests if r.route_kind == "approval"),
+        "blocked": sum(1 for r in result.requests if r.route_kind == "blocked"),
         "line_count": result.line_count,
         "total_value": str(result.total_value),
         "skipped": reasons,
