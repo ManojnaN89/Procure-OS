@@ -129,6 +129,13 @@ const RequisitionsView = {
     }
   },
 
+  sourceCell(s) {
+    if (!s) return `<span class="cell-muted">\u2014</span>`;
+    if (s.method === "contract") return `<span class="badge badge-approved" style="font-size:10px;">contract</span> <span class="cell-muted">${this.esc(s.reason)}</span>`;
+    if (s.method === "rfq") return `<span class="badge badge-pending" style="font-size:10px;">quotes</span> <a href="#/rfqs/${this.esc(s.rfq_no)}" style="color:var(--accent-tint)">${this.esc(s.rfq_no)}</a>`;
+    return `<span class="badge badge-rejected" style="font-size:10px;">buyer</span> <span class="cell-muted">${this.esc(s.reason)}</span>`;
+  },
+
   STEP_LABEL: { pending: "Waiting", waiting: "Later", approved: "Approved", rejected: "Rejected", returned: "Returned", cancelled: "Cancelled" },
 
   approvalPanel(r) {
@@ -164,6 +171,7 @@ const RequisitionsView = {
         <div class="panel-title">Approval</div>
         ${a.decision ? `<p style="margin:0 0 10px;font-size:12.5px;color:var(--text-secondary);">${this.esc(a.decision)}</p>` : `<p style="margin:0 0 10px;font-size:12.5px;color:var(--text-muted);">Not submitted yet.</p>`}
         ${trail}${rule}${actions}
+        ${a.can_source ? `<div class="btn btn-primary btn-sm" id="sourceBtn" style="display:inline-flex;margin-top:6px;"><i class="ti ti-search"></i>Find suppliers</div>` : ""}
         <div id="actionNote" style="font-size:12px;color:var(--warning-text);margin-top:8px;"></div>
         <div id="reasonBox" style="display:none;margin-top:10px;">
           <textarea id="reasonText" rows="2" placeholder="Reason (required)" style="width:100%;background:var(--surface-sunken);border:1px solid var(--border);color:var(--text-primary);border-radius:8px;padding:8px;font-size:12.5px;"></textarea>
@@ -181,6 +189,7 @@ const RequisitionsView = {
     };
     const on = (id, fn) => { const el = document.getElementById(id); if (el) el.addEventListener("click", fn); };
     on("submitBtn", () => act("submit"));
+    on("sourceBtn", () => act("source"));
     on("approveBtn", () => act("approve", {}));
     const ask = (verb) => {
       document.getElementById("reasonBox").style.display = "block";
@@ -210,7 +219,7 @@ const RequisitionsView = {
         ${lines.length ? `
         <div class="table-wrap" style="margin-bottom:12px;">
           <table class="data-table">
-            <thead><tr><th>ITEM</th><th>QTY</th><th>EST. PRICE</th><th>VALUE</th><th>NEEDED BY</th></tr></thead>
+            <thead><tr><th>ITEM</th><th>QTY</th><th>EST. PRICE</th><th>VALUE</th><th>NEEDED BY</th><th>HOW IT IS BOUGHT</th></tr></thead>
             <tbody>
               ${lines.map((l) => `
                 <tr>
@@ -219,6 +228,7 @@ const RequisitionsView = {
                   <td class="cell-muted">${l.est_price === null ? "—" : formatCurrency(l.est_price)}</td>
                   <td>${l.value === null ? "—" : formatCurrency(l.value)}</td>
                   <td class="cell-muted">${formatDate(l.need_by)}</td>
+                  <td style="font-size:12px;">${this.sourceCell(l.source)}</td>
                 </tr>
               `).join("")}
             </tbody>

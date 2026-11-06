@@ -13,7 +13,7 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from p2p.approvals import rules
-from p2p.platform import audit, notifications, permissions, tasks, users
+from p2p.platform import audit, notifications, permissions, tasks, users, worker
 from p2p.platform.sod import Actor
 
 DEFAULT_SLA_HOURS = 24
@@ -130,6 +130,7 @@ def submit(db: Session, tenant: str, no: str, actor: Actor, *, today: date | Non
             rule_version=f"{rule.code}:v{rule.version}",
         )
         db.commit()
+        worker.enqueue(tenant, "source_request", {"request_no": no})
         return Submitted(no, "approved", rule.code, rule.version, reason, [])
 
     for n, step in enumerate(steps, start=1):
@@ -290,6 +291,8 @@ def approve(db: Session, tenant: str, no: str, user_id: int, comment: str | None
     db.commit()
     if step["task_id"]:
         tasks.complete_task(db, int(step["task_id"]), user_id)
+    if following is None:
+        worker.enqueue(tenant, "source_request", {"request_no": no})
     if following is not None:
         _open_step(db, tenant, no, req["total_value"], int(following[0]), int(req["approval_round"]))
     return "submitted" if following is not None else "approved"

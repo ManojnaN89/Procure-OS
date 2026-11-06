@@ -285,6 +285,17 @@ def _row(db: Session, no: str) -> dict:
     return dict(db.execute(text("select * from request where no = :n"), {"n": no}).mappings().one())
 
 
+def _queued_for_sourcing(db: Session) -> list[str]:
+    with tenants.control_engine().connect() as c:
+        rows = c.execute(
+            text(
+                "select payload->>'request_no' from job where tenant_slug = :t and kind = 'source_request' order by id"
+            ),
+            {"t": db.info["slug"]},
+        )
+        return [r[0] for r in rows]
+
+
 def _audit(db: Session, action: str, no: str) -> list[dict]:
     rows = db.execute(
         text("select * from audit_event where action = :a and entity_id = :n order by id"), {"a": action, "n": no}
@@ -307,6 +318,7 @@ def test_a_small_request_approves_itself_and_says_why(db: Session, logins: Login
     assert auto["actor_type"] == "rule" and auto["actor_id"] == "REQ-01" and auto["rule_version"] == "REQ-01:v2"
     assert len(_audit(db, "request.submit", no)) == 1
     assert db.execute(text("select count(*) from approval_step")).scalar_one() == 0
+    assert _queued_for_sourcing(db) == [no]  # an approved request goes on to sourcing
 
 
 def test_a_request_just_over_the_limit_waits_for_the_person_the_rule_names(db: Session, logins: Logins) -> None:
@@ -333,11 +345,13 @@ def test_a_chain_of_two_people_is_worked_through_in_order(db: Session, logins: L
     with pytest.raises(workflow.ApprovalError, match="not your turn"):
         workflow.approve(db, slug, no, logins.director)  # the director has to wait for the stores head
     assert workflow.approve(db, slug, no, logins.stores, "ok for the plant") == "submitted"
+    assert _queued_for_sourcing(db) == []  # not before the whole chain has approved
     assert workflow.can_act(db, no, logins.director) is True
     assert (
         _row(db, no)["decision_reason"] == "Waiting for approval by Dir Rajesh under rule REQ-04 v1"
     )  # names who is next
     assert workflow.approve(db, slug, no, logins.director) == "approved"
+    assert _queued_for_sourcing(db) == [no]
 
     row = _row(db, no)
     assert row["status"] == "approved"

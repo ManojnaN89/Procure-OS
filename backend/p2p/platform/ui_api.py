@@ -29,6 +29,7 @@ from p2p.platform.permissions import PermissionDenied, can_anywhere, require
 from p2p.platform.tokens import decode_access_token
 from p2p.receiving.stock import stock_levels
 from p2p.requests import jobs, replenishment
+from p2p.sourcing import service as sourcing
 
 router = APIRouter(prefix="/api", tags=["ui"])
 sockets = APIRouter(tags=["ui"])
@@ -46,6 +47,7 @@ DEFAULT_SETTINGS: dict[str, str] = {
     "launch_in_focus_mode": "true",
     "auto_replenishment": "false",
     "replenishment_department": "",
+    "rfq_supplier_count": "3",
 }
 BOOLEAN_SETTINGS = {"launch_in_focus_mode", "auto_replenishment"}
 TEXT_SETTINGS = {"replenishment_department"}
@@ -419,8 +421,10 @@ def get_requisition(no: str, db: Db, ctx: Ctx) -> dict[str, Any]:
     lines = _rows(
         db,
         "select rl.line_no, rl.item_code, coalesce(i.name, rl.free_text) as name, rl.qty, rl.uom, rl.est_price, rl.need_by, "
-        "rl.reason, rl.status, rl.delivery_location from request_line rl left join item i on i.code = rl.item_code "
-        "where rl.request_no = :n order by rl.line_no",
+        "rl.reason, rl.status, rl.delivery_location, d.method as source_method, d.reason as source_reason, "
+        "d.rfq_no as source_rfq, d.contract_code as source_contract from request_line rl "
+        "left join item i on i.code = rl.item_code left join sourcing_decision d "
+        "on d.request_no = rl.request_no and d.line_no = rl.line_no where rl.request_no = :n order by rl.line_no",
         n=no,
     )
     return {
@@ -441,6 +445,14 @@ def get_requisition(no: str, db: Db, ctx: Ctx) -> dict[str, Any]:
                 "need_by": line["need_by"].isoformat() if line["need_by"] else None,
                 "reason": line["reason"],
                 "status": line["status"],
+                "source": {
+                    "method": line["source_method"],
+                    "reason": line["source_reason"],
+                    "rfq_no": line["source_rfq"],
+                    "contract": line["source_contract"],
+                }
+                if line["source_method"]
+                else None,
             }
             for line in lines
         ],
@@ -465,6 +477,9 @@ def get_requisition(no: str, db: Db, ctx: Ctx) -> dict[str, Any]:
             "can_act": approvals.can_act(db, no, ctx.user_id),
             "can_submit": rows[0]["status"] in ("draft", "returned")
             and can_anywhere(db, ctx.user_id, "request.submit"),
+            "can_source": rows[0]["status"] == "approved"
+            and any(line["status"] == "open" and not line["source_method"] for line in lines)
+            and can_anywhere(db, ctx.user_id, "rfq.create"),
         },
     }
 
@@ -509,6 +524,107 @@ def return_requisition(
     return _approval_action(lambda: approvals.return_for_changes(db, no, ctx.user_id, payload.get("reason")))
 
 
+@router.post("/requisitions/{no}/source")
+def source_requisition(
+    no: str, db: Db, ctx: Annotated[routing.TenantContext, Depends(require("rfq.create"))]
+) -> dict[str, Any]:
+    """Decide how an approved request is bought and ask suppliers for quotes (the same thing the worker does on approval)."""
+    try:
+        result = sourcing.source_request(db, ctx.slug, no, sod.user(ctx.user_id), as_of=datetime.now(IST).date())
+    except sourcing.SourcingError as exc:
+        raise HTTPException(409, str(exc)) from None
+    return sourcing.summary(result)
+
+
+@router.get("/rfqs")
+def list_rfqs(db: Db, ctx: Ctx) -> list[dict[str, Any]]:
+    rows = _rows(
+        db,
+        "select r.no, r.status, r.due_date, r.request_no, r.created_at, r.proposal_id, c.name as category, "
+        "(select count(*) from rfq_line l where l.rfq_no = r.no) as items, "
+        "(select count(*) from rfq_supplier s where s.rfq_no = r.no) as vendors "
+        "from rfq r left join item_category c on c.code = r.category_code order by r.created_at desc, r.no desc limit 500",
+    )
+    return [
+        {
+            "id": r["no"],
+            "title": f"{r['category'] or 'Quotation request'}: {r['items']} item(s) for {r['request_no']}",
+            "status": r["status"],
+            "vendor_count": r["vendors"],
+            "quote_count": 0,
+            "due_date": r["due_date"].isoformat(),
+            "request_no": r["request_no"],
+            "created_at": _iso(r["created_at"]),
+            "waiting_to_send": r["status"] == "draft" and r["proposal_id"] is not None,
+        }
+        for r in rows
+    ]
+
+
+@router.get("/rfqs/{no}")
+def get_rfq(no: str, db: Db, ctx: Ctx) -> dict[str, Any]:
+    rows = _rows(
+        db,
+        "select r.*, c.name as category from rfq r left join item_category c on c.code = r.category_code where r.no = :n",
+        n=no,
+    )
+    if not rows:
+        raise HTTPException(404, "Not found")
+    r = rows[0]
+    lines = _rows(db, "select * from rfq_line where rfq_no = :n order by line_no", n=no)
+    suppliers = _rows(
+        db,
+        "select s.supplier_code, coalesce(v.trade_name, v.legal_name) as name, s.email, s.invited_at, s.send_error, "
+        "s.responded_at, s.declined from rfq_supplier s join supplier v on v.code = s.supplier_code "
+        "where s.rfq_no = :n order by s.supplier_code",
+        n=no,
+    )
+
+    def state(s: dict[str, Any]) -> str:
+        if s["declined"]:
+            return "declined"
+        if s["responded_at"]:
+            return "replied"
+        if s["invited_at"]:
+            return "invited"
+        return "failed" if s["send_error"] else "not yet sent"
+
+    return {
+        "id": r["no"],
+        "title": f"{r['category'] or 'Quotation request'}: {len(lines)} item(s) for {r['request_no']}",
+        "status": r["status"],
+        "request_no": r["request_no"],
+        "due_date": r["due_date"].isoformat(),
+        "created_at": _iso(r["created_at"]),
+        "sent_at": _iso(r["sent_at"]),
+        "note": r["note"],
+        "proposal_id": r["proposal_id"],
+        "items": [line["description"] for line in lines],
+        "lines": [
+            {
+                "item_code": line["item_code"],
+                "name": line["description"],
+                "qty": _qty(line["qty"]),
+                "uom": line["uom"],
+                "need_by": line["need_by"].isoformat() if line["need_by"] else None,
+            }
+            for line in lines
+        ],
+        "suppliers": [
+            {
+                "code": s["supplier_code"],
+                "name": s["name"],
+                "email": s["email"],
+                "invited_at": _iso(s["invited_at"]),
+                "error": s["send_error"],
+                "state": state(s),
+            }
+            for s in suppliers
+        ],
+        "quotes": [],
+    }
+
+
 @router.post("/replenishment/run")
 def run_replenishment(
     payload: dict[str, Any],
@@ -527,7 +643,7 @@ def run_replenishment(
     return replenishment.summary(result)
 
 
-for _name in ("rfqs", "purchase-orders", "payments", "contracts"):
+for _name in ("purchase-orders", "payments", "contracts"):
 
     def _list(db: Db, ctx: Ctx) -> list[Any]:
         return []

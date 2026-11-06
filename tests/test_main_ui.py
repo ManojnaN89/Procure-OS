@@ -237,6 +237,14 @@ def test_the_inventory_page_lists_the_worst_stock_first_and_shows_names_as_text(
 
 
 STOCK_TABLES = (
+    "sourcing_decision",
+    "rfq_supplier",
+    "rfq_line",
+    "rfq",
+    "supplier_contact",
+    "supplier_category",
+    "supplier",
+    "proposal",
     "approval_step",
     "request_line",
     "request",
@@ -388,5 +396,61 @@ def test_a_bigger_request_waits_for_the_right_person_who_must_give_a_reason_to_r
         expect(approver.locator("#tableWrap tbody tr")).to_contain_text("Approved")
         # the one refusal allowed is the missing reason above (the browser reports it twice)
         assert [p for p in approver.problems if "409" not in p] == []  # type: ignore[attr-defined]
+    finally:
+        clear_stock_and_approvals(company)
+
+
+def test_an_approved_request_is_sourced_and_its_rfq_shows_the_suppliers_waiting_for_sending_to_be_approved(
+    company: Company, browser: Any
+) -> None:
+    seed_stock_and_approvals(company, price=100)  # 9,500: approves itself
+    db = company.db
+    db.execute(
+        text(
+            "insert into number_series (document_type, prefix, scope, format, reset) "
+            "values ('rfq', 'RFQ', 'company', '{prefix}-{fy4}-{seq:05d}', 'fy')"
+        )
+    )
+    for code, name in (("S1", "Alpha <b>Traders</b>"), ("S2", "Bravo Supplies"), ("S3", "Charlie Works")):
+        db.execute(
+            text("insert into supplier (code, legal_name, status) values (:c, :n, 'active')"), {"c": code, "n": name}
+        )
+        db.execute(text("insert into supplier_category (supplier_code, category_code) values (:c, 'C1')"), {"c": code})
+        db.execute(
+            text(
+                "insert into supplier_contact (supplier_code, name, email, is_primary) values (:c, 'Contact', :e, true)"
+            ),
+            {"c": code, "e": f"{code.lower()}@supplier.example"},
+        )
+    db.commit()
+    try:
+        page = open_app(browser, LAPTOP)
+        sign_in(page, company.emails["Buyer"])
+        page.goto(f"{URL}/#/requisitions")
+        page.locator("#replenishBtn").click()
+        page.locator("#createDraftsBtn").click()
+        expect(page.locator("#replenishPanel")).to_contain_text("1 approved automatically")
+
+        page.locator("#tableWrap tbody tr").click()
+        expect(page.locator("#appContent")).to_contain_text("Approved")
+        page.locator("#sourceBtn").click()  # the worker is not running in this test, so the buyer asks for it
+        expect(page.locator("#appContent")).to_contain_text("quotes")
+        expect(page.locator("#sourceBtn")).to_have_count(0)  # nothing left to decide
+        link = page.locator("#appContent a", has_text="RFQ-")
+        expect(link).to_have_count(1)
+
+        page.goto(f"{URL}/#/rfqs")
+        row = page.locator("#tableWrap tbody tr")
+        expect(row).to_have_count(1)
+        expect(row).to_contain_text("3 suppliers")
+        expect(row).to_contain_text("waiting for a buyer to approve sending")
+        row.click()
+        expect(page.locator("#appContent")).to_contain_text("Not sent yet: a buyer has to approve sending")
+        names = page.locator("#appContent table").first.locator("tbody tr")
+        expect(names).to_have_count(3)
+        expect(names.first).to_contain_text("Alpha <b>Traders</b>")  # shown as typed
+        expect(names.first).to_contain_text("not yet sent")
+        assert page.locator("#appContent table b").count() == 0
+        assert page.problems == []  # type: ignore[attr-defined]
     finally:
         clear_stock_and_approvals(company)

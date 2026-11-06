@@ -33,6 +33,7 @@ const SettingsView = {
     { key: "launch_in_focus_mode", label: "Launch in Focus Mode", suffix: "on app open, instead of the dashboard", group: "Display", isBoolean: true },
     { key: "auto_replenishment", label: "Create purchase requests automatically", suffix: "every morning for stock at its reorder point", group: "Automation", isBoolean: true },
     { key: "replenishment_department", label: "Department for automatic requests", suffix: "its head approves them, e.g. LOG", group: "Automation", isText: true },
+    { key: "rfq_supplier_count", label: "Suppliers asked for each quotation", suffix: "at least; a category may ask for more", group: "Automation" },
   ],
 
   async load() {

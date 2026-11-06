@@ -135,6 +135,8 @@ In the platform the approval trail is `approval_step` (request_no, round, step, 
 
 **award** · rfq_no, rfq_line_no, supplier_code, quote_no, qty, price, reason, overridden bool, by_user, at
 
+In the platform an `rfq` is made for one approved request and one category (`request_no`, `category_code`), with `proposal_id` while sending waits for a buyer, and `note` when fewer suppliers are approved than the category asks for. `rfq_supplier` also keeps the address used (`email`) and `send_error`. `sourcing_decision` holds, for each request line, how it is bought: `contract` (supplier, contract, price, the reason in words), `rfq` (the RFQ number) or `manual` (nobody could be asked; a buyer has to act). Only a price record that belongs to an active contract in force on the date, for an active supplier, counts as a contract price; a price record without a contract is a price list. Sending an RFQ is the decision type `rfq.send` of the autonomy gate: a proposal for a buyer unless an administrator has set it to automatic.
+
 ### C3. Purchase orders
 
 **po** · no, po_type enum(standard,service,capex,contract_release), supplier_code, supplier_gstin, buyer_gstin, ship_to_location, buyer, project_code, contract_code, created_at, approved_at, sent_at, payment_terms_code, advance_pct, delivery_terms, freight_terms, terms_version, version int, taxable, cgst, sgst, igst, total, status enum(draft,approved,sent,acknowledged,part_received,received,closed,cancelled), cancel_reason

@@ -180,3 +180,37 @@ def test_every_generated_supplier_gstin_passes_the_formula(dataset: Path) -> Non
     gstins = [r["gstin"] for r in _rows(dataset, "supplier") if r["gstin"]]
     assert gstins
     assert all(is_valid_gstin(g) for g in gstins)
+
+
+def test_the_masters_can_be_loaded_again_while_requests_and_stock_refer_to_them(
+    tenant_db: Session, dataset: Path
+) -> None:
+    import_masters(tenant_db, dataset)
+    item = _rows(dataset, "item")[0]["code"]
+    location = _rows(dataset, "location")[0]["code"]
+    tenant_db.execute(
+        text(
+            "insert into request (no, ship_to_location, type, channel, status, total_value) "
+            "values ('R-KEEP', :l, 'goods', 'planning', 'draft', 100)"
+        ),
+        {"l": location},
+    )
+    tenant_db.execute(
+        text(
+            "insert into request_line (request_no, line_no, item_code, qty, delivery_location, status) "
+            "values ('R-KEEP', 1, :i, 1, :l, 'open')"
+        ),
+        {"i": item, "l": location},
+    )
+    tenant_db.commit()
+    try:
+        report = import_masters(tenant_db, dataset)
+
+        assert report.rejected == []
+        assert (
+            tenant_db.execute(text("select count(*) from request_line where request_no = 'R-KEEP'")).scalar_one() == 1
+        )
+        assert _count(tenant_db, "item") == len(_rows(dataset, "item"))
+    finally:
+        tenant_db.execute(text("delete from request where no = 'R-KEEP'"))
+        tenant_db.commit()

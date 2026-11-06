@@ -11,6 +11,8 @@ python -m p2p.cli import stock <tenant> <dataset folder> [--dry-run]
         reads the stock movement history of a dataset (after the masters are in)
 python -m p2p.cli replenish <tenant> [--dry-run] [--no-submit] [--schedule]
         creates purchase requests for stock at its reorder point and sends them for approval; --schedule queues the daily morning run
+python -m p2p.cli source <tenant> [--request NO] [--no-send]
+        decides how approved requests are bought (contract or quotation request) and sends the quotation requests
 python -m p2p.cli worker      runs the job worker (timers, escalations, email, mailbox polling) until stopped
 """
 
@@ -50,6 +52,10 @@ def main(argv: list[str] | None = None) -> int:
     rep.add_argument("--dry-run", action="store_true")
     rep.add_argument("--schedule", action="store_true")
     rep.add_argument("--no-submit", action="store_true")
+    src = sub.add_parser("source")
+    src.add_argument("tenant")
+    src.add_argument("--request")
+    src.add_argument("--no-send", action="store_true")
     sub.add_parser("worker")
     args = p.parse_args(argv)
 
@@ -86,6 +92,33 @@ def main(argv: list[str] | None = None) -> int:
             )
         for reason, count in replenishment.summary(result)["skipped"].items():
             print(f"  skipped {count}: {reason}")
+        return 0
+    if args.group == "source":
+        from datetime import datetime
+
+        from sqlalchemy.orm import Session
+
+        from p2p.formulas.calendar import IST
+        from p2p.sourcing import service
+
+        today = datetime.now(IST).date()
+        with Session(routing.engine_for(args.tenant)) as db:
+            if args.request:
+                sourced = [
+                    service.source_request(db, args.tenant, args.request, as_of=today, dispatch=not args.no_send)
+                ]
+            else:
+                sourced = service.sweep(db, args.tenant, as_of=today, dispatch=not args.no_send)
+        for done in sourced:
+            info = service.summary(done)
+            print(
+                f"{info['request']}: {info['contract']} on contract, {info['rfq']} to quote, {info['manual']} for a buyer; "
+                f"RFQs {', '.join(info['rfqs']) or '-'}; {info['emails_sent']} emails sent; "
+                f"{len(info['proposals'])} waiting for a buyer to approve sending"
+            )
+            for note in info["notes"]:
+                print(f"  note: {note}")
+        print(f"{len(sourced)} request(s) sourced")
         return 0
     if args.group == "import":
         from sqlalchemy.orm import Session
