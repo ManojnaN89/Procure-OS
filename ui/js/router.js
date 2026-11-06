@@ -9,6 +9,7 @@ const Router = {
     rfqs: RfqsView,
     requisitions: RequisitionsView,
     vendors: VendorsView,
+    inventory: InventoryView,
     "purchase-orders": PurchaseOrdersView,
     payments: PaymentsView,
     contracts: ContractsView,

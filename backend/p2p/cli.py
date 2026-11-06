@@ -7,6 +7,8 @@ python -m p2p.cli user create <tenant> <email> --name NAME --role Admin
         asks for the password; for scripts set P2P_NEW_PASSWORD instead
 python -m p2p.cli import masters <tenant> <dataset folder> [--dry-run]
         reads the master data of a dataset into a company and reports every row it left out and why
+python -m p2p.cli import stock <tenant> <dataset folder> [--dry-run]
+        reads the stock movement history of a dataset (after the masters are in)
 python -m p2p.cli worker      runs the job worker (timers, escalations, email, mailbox polling) until stopped
 """
 
@@ -36,10 +38,11 @@ def main(argv: list[str] | None = None) -> int:
     ucreate.add_argument("--name", required=True)
     ucreate.add_argument("--role", default="Requester", choices=users.ROLES)
     imp = sub.add_parser("import").add_subparsers(dest="cmd", required=True)
-    masters = imp.add_parser("masters")
-    masters.add_argument("tenant")
-    masters.add_argument("dataset")
-    masters.add_argument("--dry-run", action="store_true")
+    for name in ("masters", "stock"):
+        one = imp.add_parser(name)
+        one.add_argument("tenant")
+        one.add_argument("dataset")
+        one.add_argument("--dry-run", action="store_true")
     sub.add_parser("worker")
     args = p.parse_args(argv)
 
@@ -54,9 +57,11 @@ def main(argv: list[str] | None = None) -> int:
         from sqlalchemy.orm import Session
 
         from p2p.masters.importer import import_masters
+        from p2p.receiving.stock import import_movements
 
+        load = import_masters if args.cmd == "masters" else import_movements
         with Session(routing.engine_for(args.tenant)) as db:
-            report = import_masters(db, Path(args.dataset), dry_run=args.dry_run)
+            report = load(db, Path(args.dataset), dry_run=args.dry_run)
         verb = "would load" if args.dry_run else "loaded"
         print(
             f"{verb} {report.rows_loaded} rows in {report.seconds} s; {len(report.rejected)} left out, {len(report.warnings)} warnings"

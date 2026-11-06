@@ -15,6 +15,7 @@ PAGES = [
     "rfqs",
     "requisitions",
     "vendors",
+    "inventory",
     "purchase-orders",
     "payments",
     "contracts",
@@ -84,6 +85,7 @@ def test_the_menu_has_no_auctions_and_the_admin_link_is_only_for_people_who_may_
             "RFQs",
             "Requisitions",
             "Vendors",
+            "Inventory",
             "Purchase orders",
             "Payments",
             "Contracts",
@@ -190,3 +192,45 @@ def test_signing_out_brings_the_login_back(company: Company, browser: Any) -> No
     sign_in(page, company.emails["Finance"])
     page.locator("#signOutBtn").click()
     expect(page.locator("#loginOverlay")).to_be_visible()
+
+
+def test_the_inventory_page_lists_the_worst_stock_first_and_shows_names_as_text(company: Company, browser: Any) -> None:
+    db = company.db
+    db.execute(text("insert into location (code, name, is_stock_location) values ('WH', 'Main store', true)"))
+    db.execute(text("insert into item_category (code, name) values ('C1', 'Spares')"))
+    db.execute(
+        text(
+            "insert into item (code, name, category_code, base_uom) values "
+            "('A', 'Plain bearing', 'C1', 'NOS'), ('B', '<b>Bold</b> seal', 'C1', 'NOS')"
+        )
+    )
+    db.execute(
+        text(
+            "insert into stock_opening (item_code, location_code, qty, as_of) values ('A', 'WH', 500, '2026-01-01'), ('B', 'WH', 0, '2026-01-01')"
+        )
+    )
+    db.execute(
+        text(
+            "insert into item_location (item_code, location_code, reorder_policy, reorder_point, safety_stock, max_qty) "
+            "values ('A', 'WH', 'minmax', 100, 20, 900), ('B', 'WH', 'minmax', 10, 2, 50)"
+        )
+    )
+    db.commit()
+    try:
+        page = open_app(browser, LAPTOP)
+        sign_in(page, company.emails["Admin"])
+        page.goto(f"{URL}/#/inventory")
+        rows = page.locator("#tableWrap tbody tr")
+        expect(rows).to_have_count(2)
+        expect(rows.first).to_contain_text("<b>Bold</b> seal")  # shown as typed, not as bold text
+        expect(rows.first).to_contain_text("Stockout")  # the worst is first
+        expect(rows.last).to_contain_text("OK")
+        assert page.locator("#tableWrap b").count() == 0
+
+        page.locator("#invStatus").select_option("ok")
+        expect(page.locator("#tableWrap tbody tr")).to_have_count(1)
+        assert page.problems == []  # type: ignore[attr-defined]
+    finally:
+        for table in ("item_location", "stock_opening", "item", "item_category", "location"):
+            db.execute(text(f"delete from {table}"))
+        db.commit()

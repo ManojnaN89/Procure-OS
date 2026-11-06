@@ -155,6 +155,8 @@ The single reference for every table the platform stores and the generator produ
 
 **stock_movement** · id, item_code, location_code, date, type enum(receipt,issue,return,adjust,transfer_in,transfer_out), qty, unit_cost, cost_centre_code (issues), ref_doc
 
+In the platform, `stock_movement` also has `source` (`import` for a loaded history, `platform` for movements it records itself; a re-import replaces only `import`). The view `stock_level` gives on hand per item and location: opening balance plus receipts, transfers in and adjustments (signed), less issues, returns to the vendor and transfers out, counting movements from the opening date.
+
 ### C5. Invoices, tax and payments
 
 **invoice** · no, type enum(invoice,credit_note,debit_note), supplier_code, supplier_gstin, buyer_gstin, place_of_supply, supplier_invoice_no, invoice_date, fy, irn, ack_no, ack_date, signed_qr_ref, eway_bill_no, reverse_charge, received_at, received_on (date), channel enum(email,upload,portal), taxable, cgst, sgst, igst, cess, round_off, total, ref_invoice_no, due_date, payment_block enum(none,match,manual,duplicate,tax), status enum(received,matched,blocked,approved,part_paid,paid,cancelled), document_ref, document_hash

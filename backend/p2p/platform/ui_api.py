@@ -10,6 +10,7 @@ import json
 import uuid
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime
+from decimal import Decimal
 from typing import Annotated, Any
 
 import jwt
@@ -22,6 +23,7 @@ from sqlalchemy.orm import Session
 from p2p.platform import routing
 from p2p.platform.permissions import require
 from p2p.platform.tokens import decode_access_token
+from p2p.receiving.stock import stock_levels
 
 router = APIRouter(prefix="/api", tags=["ui"])
 sockets = APIRouter(tags=["ui"])
@@ -320,6 +322,46 @@ def get_vendor(vendor_id: str, db: Db, ctx: Ctx) -> dict[str, Any]:
             "basis": "No orders yet, so there is no history to score.",
         },
         "purchase_orders": [],
+    }
+
+
+def _qty(value: Decimal | None) -> str | None:
+    """A quantity as text, so it never passes through a float on the way to the screen."""
+    if value is None:
+        return None
+    text_value = f"{value:f}"
+    return text_value.rstrip("0").rstrip(".") if "." in text_value else text_value
+
+
+@router.get("/inventory")
+def inventory(db: Db, ctx: Ctx, location: str | None = None, status: str | None = None) -> dict[str, Any]:
+    lines = stock_levels(db, location=location)
+    counts: dict[str, int] = {}
+    for line in lines:
+        counts[line.status] = counts.get(line.status, 0) + 1
+    shown = [line for line in lines if not status or line.status == status]
+    return {
+        "summary": {"total": len(lines), "by_status": counts},
+        "locations": _rows(db, "select code, name from location where is_stock_location order by code"),
+        "lines": [
+            {
+                "item_code": line.item_code,
+                "item_name": line.item_name,
+                "uom": line.uom,
+                "category": line.category,
+                "location_code": line.location_code,
+                "location_name": line.location_name,
+                "on_hand": _qty(line.on_hand),
+                "on_order": _qty(line.on_order),
+                "reorder_point": _qty(line.reorder_point),
+                "safety_stock": _qty(line.safety_stock),
+                "max_qty": _qty(line.max_qty),
+                "policy": line.policy,
+                "last_movement": line.last_movement,
+                "status": line.status,
+            }
+            for line in shown
+        ],
     }
 
 
