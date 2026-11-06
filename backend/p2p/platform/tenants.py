@@ -35,19 +35,29 @@ def control_url() -> URL:
     return make_url(get_settings().control_database_url)
 
 
+_control_engines: dict[str, Engine] = {}
+
+
 def control_engine() -> Engine:
-    return create_engine(control_url())
+    """The one shared engine (with its connection pool) for the control database. Do not dispose it per call."""
+    url = _render(control_url())
+    if url not in _control_engines:
+        _control_engines[url] = create_engine(url, pool_size=10, max_overflow=20, pool_pre_ping=True)
+    return _control_engines[url]
+
+
+def reset_control_engines() -> None:
+    """Close every shared control connection (used when the database is dropped, as in tests)."""
+    for engine in _control_engines.values():
+        engine.dispose()
+    _control_engines.clear()
 
 
 @contextmanager
 def control_session() -> Iterator[Session]:
-    """A session on the control database. The engine and its connections are released when the block ends."""
-    engine = control_engine()
-    try:
-        with Session(engine) as session:
-            yield session
-    finally:
-        engine.dispose()
+    """A session on the shared control engine."""
+    with Session(control_engine()) as session:
+        yield session
 
 
 def _config(kind: str, url: str, script_dir: Path | None = None) -> Config:
@@ -87,27 +97,24 @@ def create_tenant(
         raise ValueError("slug must be lower case letters, digits or underscore, starting with a letter (2-31 chars)")
     db_name = tenant_db_name(slug)
     engine = control_engine()
-    try:
-        with Session(engine) as s:
-            if s.scalar(select(Tenant).where(Tenant.slug == slug)):
-                raise ValueError(f"tenant '{slug}' already exists")
-        with _admin_connection() as conn:
-            conn.execute(text(f'create database "{db_name}"'))  # type: ignore[attr-defined]
-        url = control_url().set(database=db_name)
-        with Session(engine) as s:
-            tenant = Tenant(slug=slug, name=name or slug)
-            s.add(tenant)
-            s.flush()
-            s.add(
-                TenantDatabase(
-                    tenant_id=tenant.id,
-                    database_name=db_name,
-                    connection_encrypted=crypto.encrypt(_render(url)),
-                )
+    with Session(engine) as s:
+        if s.scalar(select(Tenant).where(Tenant.slug == slug)):
+            raise ValueError(f"tenant '{slug}' already exists")
+    with _admin_connection() as conn:
+        conn.execute(text(f'create database "{db_name}"'))  # type: ignore[attr-defined]
+    url = control_url().set(database=db_name)
+    with Session(engine) as s:
+        tenant = Tenant(slug=slug, name=name or slug)
+        s.add(tenant)
+        s.flush()
+        s.add(
+            TenantDatabase(
+                tenant_id=tenant.id,
+                database_name=db_name,
+                connection_encrypted=crypto.encrypt(_render(url)),
             )
-            s.commit()
-    finally:
-        engine.dispose()
+        )
+        s.commit()
     result = migrate_tenant(slug, script_dir=script_dir)
     if result.ok and load_reference:
         from p2p.platform import reference
@@ -124,37 +131,31 @@ def create_tenant(
 def migrate_tenant(slug: str, *, script_dir: Path | None = None) -> MigrateResult:
     """Bring one tenant database to the latest revision. Never raises: failures come back in the result."""
     engine = control_engine()
-    try:
-        with Session(engine) as s:
-            row = s.execute(
-                select(TenantDatabase).join(Tenant, Tenant.id == TenantDatabase.tenant_id).where(Tenant.slug == slug)
-            ).scalar_one()
-            url = crypto.decrypt(row.connection_encrypted)
+    with Session(engine) as s:
+        row = s.execute(
+            select(TenantDatabase).join(Tenant, Tenant.id == TenantDatabase.tenant_id).where(Tenant.slug == slug)
+        ).scalar_one()
+        url = crypto.decrypt(row.connection_encrypted)
+        try:
+            command.upgrade(_config("tenant", url, script_dir), "head")
+            tenant_engine = create_engine(url)
             try:
-                command.upgrade(_config("tenant", url, script_dir), "head")
-                tenant_engine = create_engine(url)
-                try:
-                    with tenant_engine.connect() as c:
-                        rev = MigrationContext.configure(c).get_current_revision()
-                finally:
-                    tenant_engine.dispose()
-            except Exception as exc:  # noqa: BLE001 - one tenant failing must not stop the others
-                return MigrateResult(slug, False, error=f"{type(exc).__name__}: {str(exc).splitlines()[0][:200]}")
-            row.schema_revision = rev
-            row.migrated_at = datetime.now(UTC)
-            s.commit()
-            return MigrateResult(slug, True, revision=rev)
-    finally:
-        engine.dispose()
+                with tenant_engine.connect() as c:
+                    rev = MigrationContext.configure(c).get_current_revision()
+            finally:
+                tenant_engine.dispose()
+        except Exception as exc:  # noqa: BLE001 - one tenant failing must not stop the others
+            return MigrateResult(slug, False, error=f"{type(exc).__name__}: {str(exc).splitlines()[0][:200]}")
+        row.schema_revision = rev
+        row.migrated_at = datetime.now(UTC)
+        s.commit()
+        return MigrateResult(slug, True, revision=rev)
 
 
 def migrate_all(*, script_dir: Path | None = None) -> list[MigrateResult]:
     engine = control_engine()
-    try:
-        with Session(engine) as s:
-            slugs = list(s.scalars(select(Tenant.slug).where(Tenant.active).order_by(Tenant.slug)))
-    finally:
-        engine.dispose()
+    with Session(engine) as s:
+        slugs = list(s.scalars(select(Tenant.slug).where(Tenant.active).order_by(Tenant.slug)))
     return [migrate_tenant(slug, script_dir=script_dir) for slug in slugs]
 
 
@@ -165,11 +166,8 @@ def head_revision(script_dir: Path | None = None) -> str | None:
 def tenant_engine(slug: str) -> Engine:
     """Engine for one tenant's database (the caller disposes it or caches it)."""
     engine = control_engine()
-    try:
-        with Session(engine) as s:
-            row = s.execute(
-                select(TenantDatabase).join(Tenant, Tenant.id == TenantDatabase.tenant_id).where(Tenant.slug == slug)
-            ).scalar_one()
-            return create_engine(crypto.decrypt(row.connection_encrypted))
-    finally:
-        engine.dispose()
+    with Session(engine) as s:
+        row = s.execute(
+            select(TenantDatabase).join(Tenant, Tenant.id == TenantDatabase.tenant_id).where(Tenant.slug == slug)
+        ).scalar_one()
+        return create_engine(crypto.decrypt(row.connection_encrypted))

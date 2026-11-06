@@ -10,6 +10,7 @@ import { Shell } from "./components/shell";
 import { claims } from "./lib/api";
 import { ApprovalsPage } from "./pages/approvals";
 import { AuditPage } from "./pages/audit";
+import { DecisionsPage } from "./pages/decisions";
 import { HomePage } from "./pages/home";
 import { LoginPage } from "./pages/login";
 import { RulesPage } from "./pages/rules";
@@ -89,6 +90,11 @@ const runRoute = createRoute({
 		return <RunDetailPage runId={runRoute.useParams().runId} />;
 	},
 });
+const decisionsRoute = createRoute({
+	getParentRoute: () => appRoute,
+	path: "/admin/decisions",
+	component: DecisionsPage,
+});
 const callsRoute = createRoute({
 	getParentRoute: () => appRoute,
 	path: "/admin/model-calls",
@@ -106,6 +112,7 @@ const routeTree = rootRoute.addChildren([
 		auditRoute,
 		runsRoute,
 		runRoute,
+		decisionsRoute,
 		callsRoute,
 	]),
 ]);

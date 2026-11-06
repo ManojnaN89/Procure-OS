@@ -32,36 +32,33 @@ def create_user(
     if role not in ROLES:
         raise ValueError(f"role must be one of {', '.join(ROLES)}")
     engine = tenants.control_engine()
-    try:
-        with Session(engine) as s:
-            tenant = s.scalar(select(Tenant).where(Tenant.slug == tenant_slug, Tenant.active))
-            if tenant is None:
-                raise ValueError(f"unknown tenant '{tenant_slug}'")
-            if s.scalar(select(AppUser.id).where(AppUser.email == email)):
-                raise ValueError("a user with this email already exists")
-            user = AppUser(tenant_id=tenant.id, email=email, password_hash=hasher.hash(password))
-            s.add(user)
-            s.flush()
-            user_id = user.id
-            with Session(routing.engine_for(tenant_slug)) as ts:
-                ts.execute(
-                    text("insert into user_profile (user_id, display_name, role) values (:i, :n, :r)"),
-                    {"i": user_id, "n": display_name, "r": role},
-                )
-                ts.execute(text("insert into user_role (user_id, role) values (:i, :r)"), {"i": user_id, "r": role})
-                audit.record(
-                    ts,
-                    actor,
-                    "user.create",
-                    "user",
-                    user_id,
-                    after={"email": email, "display_name": display_name, "role": role},
-                )
-                ts.commit()
-            s.commit()
-            return user_id
-    finally:
-        engine.dispose()
+    with Session(engine) as s:
+        tenant = s.scalar(select(Tenant).where(Tenant.slug == tenant_slug, Tenant.active))
+        if tenant is None:
+            raise ValueError(f"unknown tenant '{tenant_slug}'")
+        if s.scalar(select(AppUser.id).where(AppUser.email == email)):
+            raise ValueError("a user with this email already exists")
+        user = AppUser(tenant_id=tenant.id, email=email, password_hash=hasher.hash(password))
+        s.add(user)
+        s.flush()
+        user_id = user.id
+        with Session(routing.engine_for(tenant_slug)) as ts:
+            ts.execute(
+                text("insert into user_profile (user_id, display_name, role) values (:i, :n, :r)"),
+                {"i": user_id, "n": display_name, "r": role},
+            )
+            ts.execute(text("insert into user_role (user_id, role) values (:i, :r)"), {"i": user_id, "r": role})
+            audit.record(
+                ts,
+                actor,
+                "user.create",
+                "user",
+                user_id,
+                after={"email": email, "display_name": display_name, "role": role},
+            )
+            ts.commit()
+        s.commit()
+        return user_id
 
 
 def grant_role(

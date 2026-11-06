@@ -43,6 +43,7 @@ def control_db() -> Iterator[str]:
         yield test_url
     finally:
         clear_engine_cache()
+        tenants.reset_control_engines()  # the shared pool points at a database that is about to be dropped
         with create_engine(test_url).connect() as c:
             names = [r[0] for r in c.execute(text("select database_name from tenant_database"))]
         with admin.connect() as c:

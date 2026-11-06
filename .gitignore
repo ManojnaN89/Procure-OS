@@ -29,3 +29,6 @@ dist/
 Thumbs.db
 .vscode/
 .claude/scheduled_tasks.lock
+
+# local demo logins
+.dev-credentials

@@ -9,13 +9,13 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=REPO_ROOT / ".env", extra="ignore")
 
-    control_database_url: str = "postgresql+psycopg://p2p:change-me@localhost:5440/p2p_control"
+    control_database_url: str = "postgresql+psycopg://p2p:change-me@127.0.0.1:5440/p2p_control"
     tenant_secret_key: str = ""
     jwt_secret: str = ""
-    smtp_host: str = "localhost"
+    smtp_host: str = "127.0.0.1"  # not "localhost": on some machines that name adds 0.2 s to every new connection
     smtp_port: int = 1025
     mail_domain: str = "cbcpl.example"  # replies come back to name+TAG@this domain
-    mailpit_url: str = "http://localhost:8025"
+    mailpit_url: str = "http://127.0.0.1:8025"
     imap_host: str = ""  # set these four to read a real mailbox instead of Mailpit
     imap_user: str = ""
     imap_password: str = ""

@@ -222,7 +222,7 @@ def test_a_failing_job_is_retried_later_and_then_given_up(env: Env) -> None:
 
 def _mailpit_up() -> bool:
     try:
-        return httpx.get("http://localhost:8025/api/v1/info", timeout=2).status_code == 200
+        return httpx.get("http://127.0.0.1:8025/api/v1/info", timeout=2).status_code == 200
     except httpx.HTTPError:
         return False
 
@@ -242,7 +242,7 @@ def test_a_notification_is_stored_and_also_arrives_as_an_email(env: Env) -> None
     deadline = time.time() + 10
     found = []
     while time.time() < deadline and not found:
-        found = httpx.get("http://localhost:8025/api/v1/search", params={"query": f"to:{address}"}, timeout=5).json()[
+        found = httpx.get("http://127.0.0.1:8025/api/v1/search", params={"query": f"to:{address}"}, timeout=5).json()[
             "messages"
         ]
         time.sleep(0.3)

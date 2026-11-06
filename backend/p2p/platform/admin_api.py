@@ -85,6 +85,15 @@ def rule_evaluations(db: Db, key: str | None = None, limit: int = 100) -> Rows:
     )
 
 
+@router.get("/rule-evaluations/{evaluation_id}", dependencies=[Depends(require("audit.view"))])
+def rule_evaluation(evaluation_id: int, db: Db) -> dict[str, Any]:
+    """One evaluation with the trace of which rule row matched, for explaining a decision."""
+    rows = _rows(db, "select * from rule_evaluation where id = :i", i=evaluation_id)
+    if not rows:
+        raise HTTPException(404, "Evaluation not found")
+    return rows[0]
+
+
 @router.get("/audit", dependencies=[Depends(require("audit.view"))])
 def audit_search(
     db: Db,

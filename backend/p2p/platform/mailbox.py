@@ -71,7 +71,7 @@ def parse_rfc822(raw: bytes) -> IncomingMail:
 class MailpitMailbox:
     """Reads every message in Mailpit. Messages already stored are skipped by the caller (by Message-ID)."""
 
-    def __init__(self, base_url: str = "http://localhost:8025", client: httpx2.Client | None = None) -> None:
+    def __init__(self, base_url: str = "http://127.0.0.1:8025", client: httpx2.Client | None = None) -> None:
         self.base = base_url.rstrip("/")
         self.client = client or httpx2.Client(timeout=10)
 

@@ -130,6 +130,10 @@ def test_rule_evaluations_and_audit_can_be_searched(env: Env) -> None:
     ).json()
 
     assert evals[0]["output"] == {"approver": "dept_head"} and evals[0]["case_ref"] == "REQ-5"
+    detail = client.get(f"/api/admin/rule-evaluations/{evals[0]['id']}", headers=env.as_admin).json()
+    assert detail["trace"] and detail["version"] == 1  # the trace says which row of the table matched
+    assert client.get("/api/admin/rule-evaluations/99999", headers=env.as_admin).status_code == 404
+    assert client.get(f"/api/admin/rule-evaluations/{evals[0]['id']}", headers=env.as_buyer).status_code == 403
     assert [a["action"] for a in audit] == ["rule.publish"] and audit[0]["rule_version"] == "approval@1"
 
 

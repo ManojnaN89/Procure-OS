@@ -1,4 +1,4 @@
-"""Start everything for development: Docker services, backend (port 8000), frontend (port 5173).
+"""Start everything for development: Docker services, backend (port 8000), frontend (port 5173) and the job worker.
 
     python scripts/dev.py
 
@@ -24,6 +24,7 @@ def main() -> int:
             [str(PY), "-m", "uvicorn", "p2p.main:app", "--reload", "--port", "8000"], cwd=BACKEND
         ),
         subprocess.Popen([npm, "run", "dev"], cwd=FRONTEND),  # noqa: S603
+        subprocess.Popen([str(PY), "-m", "p2p.cli", "worker"], cwd=BACKEND),  # noqa: S603
     ]
     print(
         "\nBackend  http://localhost:8000/api/health\nFrontend http://localhost:5173\nMailpit  http://localhost:8025\n"

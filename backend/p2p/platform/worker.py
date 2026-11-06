@@ -50,19 +50,16 @@ def load_handlers() -> None:
 
 def enqueue(tenant: str, kind: str, payload: dict[str, Any], run_at: datetime | None = None) -> int:
     engine = tenants.control_engine()
-    try:
-        with engine.begin() as c:
-            return int(
-                c.execute(
-                    text(
-                        "insert into job (tenant_slug, kind, payload, run_at) "
-                        "values (:t, :k, cast(:p as jsonb), coalesce(:r, now())) returning id"
-                    ),
-                    {"t": tenant, "k": kind, "p": json.dumps(payload, default=str), "r": run_at},
-                ).scalar_one()
-            )
-    finally:
-        engine.dispose()
+    with engine.begin() as c:
+        return int(
+            c.execute(
+                text(
+                    "insert into job (tenant_slug, kind, payload, run_at) "
+                    "values (:t, :k, cast(:p as jsonb), coalesce(:r, now())) returning id"
+                ),
+                {"t": tenant, "k": kind, "p": json.dumps(payload, default=str), "r": run_at},
+            ).scalar_one()
+        )
 
 
 def enqueue_unique(
@@ -70,73 +67,61 @@ def enqueue_unique(
 ) -> int | None:
     """Queue a job unless the tenant already has one of this kind waiting (used for self-rescheduling polls)."""
     engine = tenants.control_engine()
-    try:
-        with engine.begin() as c:
-            waiting = c.execute(
-                text(
-                    "select 1 from job where tenant_slug = :t and kind = :k and status in ('queued', 'running') "
-                    "and id <> coalesce(:x, -1) limit 1"
-                ),
-                {"t": tenant, "k": kind, "x": exclude_id},
-            ).first()
-            if waiting:
-                return None
-    finally:
-        engine.dispose()
+    with engine.begin() as c:
+        waiting = c.execute(
+            text(
+                "select 1 from job where tenant_slug = :t and kind = :k and status in ('queued', 'running') "
+                "and id <> coalesce(:x, -1) limit 1"
+            ),
+            {"t": tenant, "k": kind, "x": exclude_id},
+        ).first()
+        if waiting:
+            return None
     return enqueue(tenant, kind, payload, run_at)
 
 
 def _claim(now: datetime, limit: int) -> list[tuple[int, str, str, dict[str, Any]]]:
     engine = tenants.control_engine()
-    try:
-        with engine.begin() as c:
-            rows = c.execute(
+    with engine.begin() as c:
+        rows = c.execute(
+            text(
+                "select id, tenant_slug, kind, payload from job "
+                "where (status = 'queued' and run_at <= :now) or (status = 'running' and locked_at < :stale) "
+                "order by run_at, id limit :n for update skip locked"
+            ),
+            {"now": now, "stale": now - LOCK_TIMEOUT, "n": limit},
+        ).all()
+        ids = [r[0] for r in rows]
+        if ids:
+            c.execute(
                 text(
-                    "select id, tenant_slug, kind, payload from job "
-                    "where (status = 'queued' and run_at <= :now) or (status = 'running' and locked_at < :stale) "
-                    "order by run_at, id limit :n for update skip locked"
+                    "update job set status = 'running', locked_at = :now, attempts = attempts + 1 where id = any(:ids)"
                 ),
-                {"now": now, "stale": now - LOCK_TIMEOUT, "n": limit},
-            ).all()
-            ids = [r[0] for r in rows]
-            if ids:
-                c.execute(
-                    text(
-                        "update job set status = 'running', locked_at = :now, attempts = attempts + 1 "
-                        "where id = any(:ids)"
-                    ),
-                    {"now": now, "ids": ids},
-                )
-            return [(r[0], r[1], r[2], r[3]) for r in rows]
-    finally:
-        engine.dispose()
+                {"now": now, "ids": ids},
+            )
+        return [(r[0], r[1], r[2], r[3]) for r in rows]
 
 
 def _finish(job_id: int, now: datetime, error: str | None) -> None:
     engine = tenants.control_engine()
-    try:
-        with engine.begin() as c:
-            if error is None:
-                c.execute(
-                    text("update job set status = 'done', finished_at = :now, last_error = null where id = :i"),
-                    {"now": now, "i": job_id},
-                )
-                return
-            attempts = c.execute(text("select attempts from job where id = :i"), {"i": job_id}).scalar_one()
-            if attempts >= MAX_ATTEMPTS:
-                c.execute(
-                    text("update job set status = 'failed', finished_at = :now, last_error = :e where id = :i"),
-                    {"now": now, "e": error, "i": job_id},
-                )
-            else:
-                c.execute(
-                    text(
-                        "update job set status = 'queued', locked_at = null, last_error = :e, run_at = :r where id = :i"
-                    ),
-                    {"e": error, "r": now + BACKOFF * attempts, "i": job_id},
-                )
-    finally:
-        engine.dispose()
+    with engine.begin() as c:
+        if error is None:
+            c.execute(
+                text("update job set status = 'done', finished_at = :now, last_error = null where id = :i"),
+                {"now": now, "i": job_id},
+            )
+            return
+        attempts = c.execute(text("select attempts from job where id = :i"), {"i": job_id}).scalar_one()
+        if attempts >= MAX_ATTEMPTS:
+            c.execute(
+                text("update job set status = 'failed', finished_at = :now, last_error = :e where id = :i"),
+                {"now": now, "e": error, "i": job_id},
+            )
+        else:
+            c.execute(
+                text("update job set status = 'queued', locked_at = null, last_error = :e, run_at = :r where id = :i"),
+                {"e": error, "r": now + BACKOFF * attempts, "i": job_id},
+            )
 
 
 def run_once(now: datetime | None = None, limit: int = 10) -> int:

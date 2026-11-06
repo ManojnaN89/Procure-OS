@@ -1,5 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
-import { type FormEvent, useState } from "react";
+import { type FormEvent, Fragment, useState } from "react";
 import { Button } from "../components/ui/button";
 import { Card, CardBody, PageTitle } from "../components/ui/card";
 import { Field, Input } from "../components/ui/input";
@@ -111,8 +111,8 @@ export function AuditPage() {
 					</thead>
 					<tbody>
 						{data?.map((r) => (
-							<>
-								<tr key={r.id}>
+							<Fragment key={r.id}>
+								<tr>
 									<Td className="whitespace-nowrap">{formatDateTime(r.at)}</Td>
 									<Td className="whitespace-nowrap">
 										{r.actor_type} {r.actor_id}
@@ -133,7 +133,7 @@ export function AuditPage() {
 									</Td>
 								</tr>
 								{open === r.id ? (
-									<tr key={`${r.id}-d`}>
+									<tr>
 										<Td colSpan={6}>
 											<pre className="max-w-full overflow-x-auto rounded-md bg-muted p-2 text-xs">
 												{JSON.stringify(
@@ -151,7 +151,7 @@ export function AuditPage() {
 										</Td>
 									</tr>
 								) : null}
-							</>
+							</Fragment>
 						))}
 					</tbody>
 				</Table>

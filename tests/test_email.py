@@ -16,7 +16,7 @@ from p2p.platform.sod import Actor
 
 def _mailpit_up() -> bool:
     try:
-        return httpx.get("http://localhost:8025/api/v1/info", timeout=2).status_code == 200
+        return httpx.get("http://127.0.0.1:8025/api/v1/info", timeout=2).status_code == 200
     except httpx.HTTPError:
         return False
 
@@ -43,7 +43,7 @@ def wait_for(subject: str) -> None:
     deadline = time.time() + 10
     while time.time() < deadline:
         found = httpx.get(
-            "http://localhost:8025/api/v1/search", params={"query": f"subject:{subject}"}, timeout=5
+            "http://127.0.0.1:8025/api/v1/search", params={"query": f"subject:{subject}"}, timeout=5
         ).json()
         if found["messages"]:
             return
@@ -150,7 +150,7 @@ def test_our_outgoing_mail_carries_the_reply_address_and_a_reply_without_a_tag_i
         db, "sales@steel.example", f"Please quote {rfq}", "Details attached.", linked_type="rfq", linked_ref=rfq
     )
     wait_for(f"Please quote {rfq}")
-    sent = httpx.get("http://localhost:8025/api/v1/search", params={"query": f"subject:{rfq}"}, timeout=5).json()[
+    sent = httpx.get("http://127.0.0.1:8025/api/v1/search", params={"query": f"subject:{rfq}"}, timeout=5).json()[
         "messages"
     ][0]
     assert sent["ReplyTo"][0]["Address"] == f"rfq+{rfq}@cbcpl.example"
@@ -166,7 +166,7 @@ def test_our_outgoing_mail_carries_the_reply_address_and_a_reply_without_a_tag_i
     mail_msg.set_content("Quote follows.")
     import smtplib
 
-    with smtplib.SMTP("localhost", 1025) as smtp:
+    with smtplib.SMTP("127.0.0.1", 1025) as smtp:
         smtp.send_message(mail_msg)
     wait_for(reply)
     emails.poll(db, db.info["slug"], MailpitMailbox())

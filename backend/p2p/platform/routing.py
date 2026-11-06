@@ -55,11 +55,8 @@ def engine_for(slug: str) -> Engine:
 
 def _tenant_is_active(slug: str) -> bool:
     engine = tenants.control_engine()
-    try:
-        with Session(engine) as s:
-            return bool(s.scalar(select(Tenant.active).where(Tenant.slug == slug)))
-    finally:
-        engine.dispose()
+    with Session(engine) as s:
+        return bool(s.scalar(select(Tenant.active).where(Tenant.slug == slug)))
 
 
 def tenant_context(request: Request) -> TenantContext:

@@ -9,11 +9,8 @@ from p2p.platform.control_models import AppUser
 
 def email_of(user_id: int) -> str | None:
     engine = tenants.control_engine()
-    try:
-        with Session(engine) as s:
-            return s.scalar(select(AppUser.email).where(AppUser.id == user_id))
-    finally:
-        engine.dispose()
+    with Session(engine) as s:
+        return s.scalar(select(AppUser.email).where(AppUser.id == user_id))
 
 
 def notify(

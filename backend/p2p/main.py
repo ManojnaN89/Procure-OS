@@ -4,11 +4,11 @@ from pathlib import Path
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
-from sqlalchemy import create_engine, text
+from sqlalchemy import text
 from sqlalchemy.exc import SQLAlchemyError
 
 from p2p.config import REPO_ROOT, get_settings
-from p2p.platform import logs
+from p2p.platform import logs, tenants
 from p2p.platform.admin_api import router as admin_router
 from p2p.platform.auth import router as auth_router
 from p2p.platform.files import router as files_router
@@ -27,10 +27,8 @@ def health() -> dict[str, str]:
     """Liveness plus a check that the control database answers."""
     db = "ok"
     try:
-        engine = create_engine(get_settings().control_database_url, connect_args={"connect_timeout": 2})
-        with engine.connect() as conn:
+        with tenants.control_engine().connect() as conn:
             conn.execute(text("select 1"))
-        engine.dispose()
     except SQLAlchemyError:
         db = "unreachable"
     return {"status": "ok", "database": db}
