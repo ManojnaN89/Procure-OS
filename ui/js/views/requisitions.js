@@ -131,8 +131,9 @@ const RequisitionsView = {
 
   sourceCell(s) {
     if (!s) return `<span class="cell-muted">\u2014</span>`;
-    if (s.method === "contract") return `<span class="badge badge-approved" style="font-size:10px;">contract</span> <span class="cell-muted">${this.esc(s.reason)}</span>`;
-    if (s.method === "rfq") return `<span class="badge badge-pending" style="font-size:10px;">quotes</span> <a href="#/rfqs/${this.esc(s.rfq_no)}" style="color:var(--accent-tint)">${this.esc(s.rfq_no)}</a>`;
+    const order = s.po_no ? ` <span class="badge badge-approved" style="font-size:10px;">ordered</span> <a href="#/purchase-orders/${this.esc(s.po_no)}" style="color:var(--accent-tint)">${this.esc(s.po_no)}</a>` : "";
+    if (s.method === "contract") return `<span class="badge badge-approved" style="font-size:10px;">contract</span> <span class="cell-muted">${this.esc(s.reason)}</span>${order}`;
+    if (s.method === "rfq") return `<span class="badge badge-pending" style="font-size:10px;">quotes</span> <a href="#/rfqs/${this.esc(s.rfq_no)}" style="color:var(--accent-tint)">${this.esc(s.rfq_no)}</a>${order}`;
     return `<span class="badge badge-rejected" style="font-size:10px;">buyer</span> <span class="cell-muted">${this.esc(s.reason)}</span>`;
   },
 

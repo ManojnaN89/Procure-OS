@@ -13,6 +13,8 @@ python -m p2p.cli replenish <tenant> [--dry-run] [--no-submit] [--schedule]
         creates purchase requests for stock at its reorder point and sends them for approval; --schedule queues the daily morning run
 python -m p2p.cli source <tenant> [--request NO] [--no-send]
         decides how approved requests are bought (contract or quotation request) and sends the quotation requests
+python -m p2p.cli order <tenant> [--request NO]
+        makes purchase orders from the lines that are ready (contract prices and awarded quotations) and sends them for approval
 python -m p2p.cli worker      runs the job worker (timers, escalations, email, mailbox polling) until stopped
 """
 
@@ -56,6 +58,9 @@ def main(argv: list[str] | None = None) -> int:
     src.add_argument("tenant")
     src.add_argument("--request")
     src.add_argument("--no-send", action="store_true")
+    ordr = sub.add_parser("order")
+    ordr.add_argument("tenant")
+    ordr.add_argument("--request")
     sub.add_parser("worker")
     args = p.parse_args(argv)
 
@@ -92,6 +97,29 @@ def main(argv: list[str] | None = None) -> int:
             )
         for reason, count in replenishment.summary(result)["skipped"].items():
             print(f"  skipped {count}: {reason}")
+        return 0
+    if args.group == "order":
+        from datetime import datetime
+
+        from sqlalchemy.orm import Session
+
+        from p2p.formulas.calendar import IST
+        from p2p.orders import service as orders
+
+        today = datetime.now(IST).date()
+        with Session(routing.engine_for(args.tenant)) as db:
+            if args.request:
+                ordered = [orders.order_request(db, args.tenant, args.request, as_of=today)]
+            else:
+                ordered = orders.sweep(db, args.tenant, as_of=today)
+        for made in ordered:
+            print(
+                f"{made.request_no}: orders {', '.join(made.pos) or '-'}; {len(made.approved)} approved on the spot, "
+                f"{len(made.waiting)} waiting for approvers, {len(made.held)} held for a price variance"
+            )
+            for note in made.skipped:
+                print(f"  note: {note}")
+        print(f"{len(ordered)} request(s) ordered")
         return 0
     if args.group == "source":
         from datetime import datetime

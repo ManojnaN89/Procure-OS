@@ -45,11 +45,17 @@ _LEVELS = """
     join location loc on loc.code = l.location_code
     left join item_location p on p.item_code = l.item_code and p.location_code = l.location_code
     left join (
-        select rl.item_code, rl.delivery_location, sum(rl.base_qty) as qty
-        from request_line rl join request r on r.no = rl.request_no
-        where rl.status in ('open', 'sourcing') and r.status in ('draft', 'submitted', 'approved', 'returned')
-        group by rl.item_code, rl.delivery_location
-    ) o on o.item_code = l.item_code and o.delivery_location = l.location_code
+        select item_code, loc, sum(qty) as qty from (
+            select rl.item_code, rl.delivery_location as loc, rl.base_qty as qty
+            from request_line rl join request r on r.no = rl.request_no
+            where rl.status in ('open', 'sourcing') and r.status in ('draft', 'submitted', 'approved', 'returned')
+            union all
+            select pl.item_code, po.ship_to_location, pl.base_qty * greatest(pl.qty - pl.received_qty, 0) / pl.qty
+            from po_line pl join po on po.no = pl.po_no
+            where pl.status in ('open', 'part_received')
+              and po.status in ('draft', 'submitted', 'approved', 'sent', 'acknowledged', 'part_received')
+        ) u group by item_code, loc
+    ) o on o.item_code = l.item_code and o.loc = l.location_code
 """
 
 

@@ -20,7 +20,7 @@ from sqlalchemy.orm import Session
 from p2p.agents import autonomy
 from p2p.formulas.money import format_inr, format_qty
 from p2p.formulas.sourcing import PriceOption, pick_contract_price
-from p2p.platform import audit, emails, numbering, proposals, reference
+from p2p.platform import audit, emails, numbering, proposals, reference, worker
 from p2p.platform.sod import Actor
 
 DECISION_TYPE = "rfq.send"
@@ -267,6 +267,8 @@ def source_request(
     )
     db.commit()
 
+    if result.count("contract"):
+        worker.enqueue(tenant, "order_request", {"request_no": request_no})  # contract lines can be ordered at once
     if dispatch:
         for rfq_no in result.rfqs:
             _dispatch(db, rfq_no, Decimal(req["total_value"]), actor, result)

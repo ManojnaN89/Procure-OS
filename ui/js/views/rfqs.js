@@ -52,6 +52,115 @@ const RfqsView = {
     }
   },
 
+  FLAG_NOTE: "does not comply",
+
+  comparisonPanel(r) {
+    const c = r.comparison;
+    if (!c) return "";
+    const head = `<div class="panel-title">Quotes \u00b7 ${c.quotes_received} of ${c.invited} suppliers have replied${c.min_quotes > c.quotes_received ? ` (${c.min_quotes} are wanted)` : ""}</div>`;
+    if (!c.quotes_received) {
+      return `<div class="panel" style="margin-bottom:12px;">${head}<div class="empty-state">No quotes received yet.</div>
+        ${c.can_quote ? `<div class="btn btn-primary btn-sm" id="addQuoteBtn" style="display:inline-flex;"><i class="ti ti-plus"></i>Enter a quote</div>` : ""}</div>`;
+    }
+    const waiting = c.waiting_for.length ? `<div class="cell-muted" style="font-size:11.5px;margin-bottom:8px;">Still to reply: ${c.waiting_for.map((s) => this.esc(s)).join(", ")}</div>` : "";
+    const lines = c.lines.map((l) => `
+      <div style="margin-bottom:14px;">
+        <div style="font-size:13px;margin-bottom:6px;">${this.esc(l.name)} <span class="cell-muted">\u00b7 ${this.esc(l.qty)} ${this.esc(l.uom)}${l.need_by ? ` \u00b7 needed by ${formatDate(l.need_by)}` : ""}</span></div>
+        ${l.awarded ? `<div style="font-size:12px;color:var(--success-text);margin-bottom:6px;">Awarded to ${this.esc((c.suppliers.find((s) => s.code === l.awarded) || {}).name || l.awarded)}</div>` : ""}
+        <table class="data-table">
+          <thead><tr>${c.can_award && !l.awarded ? "<th></th>" : ""}<th>SUPPLIER</th><th>PRICE</th><th>VALUE</th><th>GST</th><th>DAYS</th><th>NOTES</th></tr></thead>
+          <tbody>
+            ${l.offers.map((o) => `
+              <tr style="${o.supplier_code === l.recommended ? "background:var(--success-bg);" : ""}">
+                ${c.can_award && !l.awarded ? `<td><input type="radio" name="pick-${l.rfq_line_no}" value="${this.esc(o.supplier_code)}" data-recommended="${o.supplier_code === l.recommended}" ${o.supplier_code === l.recommended ? "checked" : ""}></td>` : ""}
+                <td>${this.esc(o.supplier_name)}${o.supplier_code === l.recommended ? ' <span class="badge badge-approved" style="font-size:10px;">recommended</span>' : ""}</td>
+                <td>${formatCurrency(o.net_price)}${Number(o.discount_pct) > 0 ? `<div class="cell-muted" style="font-size:11px;">${formatCurrency(o.unit_price)} less ${this.esc(o.discount_pct)}%</div>` : ""}</td>
+                <td>${formatCurrency(o.value)}</td>
+                <td class="cell-muted">${this.esc(o.gst_rate)}%</td>
+                <td class="cell-muted">${o.delivery_days ?? "\u2014"}</td>
+                <td style="font-size:11.5px;color:var(--warning-text);">${o.flags.map((f) => this.esc(f)).join("; ")}</td>
+              </tr>`).join("")}
+          </tbody>
+        </table>
+        <div class="cell-muted" style="font-size:11.5px;margin-top:4px;">${this.esc(l.why)}</div>
+      </div>`).join("");
+    const actions = c.can_award && c.lines.some((l) => !l.awarded)
+      ? `<div id="reasonBoxAward" style="margin:8px 0;">
+           <textarea id="awardReason" rows="2" placeholder="Reason (needed when you pick someone other than the recommendation, or when fewer quotes came in than wanted)" style="width:100%;background:var(--surface-sunken);border:1px solid var(--border);color:var(--text-primary);border-radius:8px;padding:8px;font-size:12.5px;"></textarea>
+         </div>
+         <div style="display:flex;gap:8px;"><div class="btn btn-primary btn-sm" id="awardBtn"><i class="ti ti-award"></i>Award the selected suppliers</div>
+         ${c.can_quote ? `<div class="btn btn-sm" id="addQuoteBtn"><i class="ti ti-plus"></i>Enter another quote</div>` : ""}</div>`
+      : (c.can_quote ? `<div class="btn btn-sm" id="addQuoteBtn" style="display:inline-flex;"><i class="ti ti-plus"></i>Enter another quote</div>` : "");
+    return `<div class="panel" style="margin-bottom:12px;">${head}${waiting}${lines}${actions}<div id="awardNote" style="font-size:12px;color:var(--warning-text);margin-top:8px;"></div></div>`;
+  },
+
+  quoteForm(r) {
+    const c = r.comparison;
+    if (!c || !c.can_quote) return "";
+    const input = "background:var(--surface-sunken);border:1px solid var(--border);color:var(--text-primary);border-radius:6px;padding:6px 8px;font-size:12.5px;";
+    return `
+      <div class="panel" id="quoteForm" style="display:none;margin-bottom:12px;">
+        <div class="panel-title">Enter a quote</div>
+        <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:10px;">
+          <select id="qSupplier" style="${input}">${r.suppliers.map((s) => `<option value="${this.esc(s.code)}">${this.esc(s.name)}</option>`).join("")}</select>
+          <label style="font-size:12px;color:var(--text-muted);">Valid until <input type="date" id="qValid" style="${input}"></label>
+          <label style="font-size:12px;color:var(--text-muted);">Freight <input type="number" min="0" step="0.01" id="qFreight" style="${input}width:90px;"></label>
+          <label style="font-size:12px;color:var(--text-muted);">Packing <input type="number" min="0" step="0.01" id="qPacking" style="${input}width:90px;"></label>
+        </div>
+        <table class="data-table">
+          <thead><tr><th>ITEM</th><th>PRICE</th><th>DISCOUNT %</th><th>GST %</th><th>DAYS</th></tr></thead>
+          <tbody>
+            ${c.lines.map((l) => `
+              <tr data-line="${l.rfq_line_no}">
+                <td>${this.esc(l.name)} <span class="cell-muted">${this.esc(l.qty)} ${this.esc(l.uom)}</span></td>
+                <td><input type="number" min="0" step="0.0001" class="qPrice" style="${input}width:100px;"></td>
+                <td><input type="number" min="0" max="100" step="0.01" class="qDisc" style="${input}width:70px;"></td>
+                <td><input type="number" min="0" max="100" step="0.01" class="qGst" style="${input}width:70px;"></td>
+                <td><input type="number" min="0" step="1" class="qDays" style="${input}width:60px;"></td>
+              </tr>`).join("")}
+          </tbody>
+        </table>
+        <div style="display:flex;gap:8px;margin-top:10px;"><div class="btn btn-primary btn-sm" id="saveQuote">Save the quote</div><div class="btn btn-sm" id="cancelQuote">Cancel</div></div>
+        <div id="quoteNote" style="font-size:12px;color:var(--warning-text);margin-top:8px;"></div>
+      </div>`;
+  },
+
+  wire(r) {
+    const on = (id, fn) => { const el = document.getElementById(id); if (el) el.addEventListener("click", fn); };
+    on("addQuoteBtn", () => { const f = document.getElementById("quoteForm"); if (f) { f.style.display = "block"; f.scrollIntoView({ behavior: "smooth", block: "center" }); } });
+    on("cancelQuote", () => { document.getElementById("quoteForm").style.display = "none"; });
+    on("saveQuote", async () => {
+      const rows = [...document.querySelectorAll("#quoteForm tbody tr")]
+        .map((tr) => ({
+          rfq_line_no: Number(tr.dataset.line),
+          unit_price: tr.querySelector(".qPrice").value,
+          discount_pct: tr.querySelector(".qDisc").value,
+          gst_rate: tr.querySelector(".qGst").value,
+          delivery_days: tr.querySelector(".qDays").value,
+        }))
+        .filter((l) => l.unit_price !== "");
+      const body = {
+        supplier_code: document.getElementById("qSupplier").value,
+        valid_until: document.getElementById("qValid").value,
+        freight: document.getElementById("qFreight").value,
+        packing_forwarding: document.getElementById("qPacking").value,
+        lines: rows,
+      };
+      const res = await API.postJSON(`/api/rfqs/${encodeURIComponent(r.id)}/quotes`, body);
+      if (res.ok) return this.renderDetail(document.getElementById("appContent"), r.id);
+      const note = document.getElementById("quoteNote");
+      if (note) note.textContent = res.data.detail || "That did not work.";
+    });
+    on("awardBtn", async () => {
+      const choices = {};
+      document.querySelectorAll('input[type="radio"]:checked').forEach((el) => { choices[el.name.replace("pick-", "")] = el.value; });
+      const res = await API.postJSON(`/api/rfqs/${encodeURIComponent(r.id)}/award`, { choices, reason: document.getElementById("awardReason").value });
+      if (res.ok) return this.renderDetail(document.getElementById("appContent"), r.id);
+      const note = document.getElementById("awardNote");
+      if (note) note.textContent = res.data.detail || "That did not work.";
+    });
+  },
+
   async renderDetail(container, id) {
     container.innerHTML = `<div class="page-header"><h1>${this.esc(id)}</h1></div><div class="panel">Loading…</div>`;
     try {
@@ -92,11 +201,10 @@ const RfqsView = {
             </tbody>
           </table>
         </div>
-        <div class="panel">
-          <div class="panel-title">Quotes</div>
-          <div class="empty-state">${r.quotes.length ? "" : "No quotes received yet."}</div>
-        </div>
+        ${this.comparisonPanel(r)}
+        ${this.quoteForm(r)}
       `;
+      this.wire(r);
     } catch {
       container.innerHTML = `<div class="empty-state">Couldn't load this RFQ.</div>`;
     }

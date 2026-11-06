@@ -237,6 +237,13 @@ def test_the_inventory_page_lists_the_worst_stock_first_and_shows_names_as_text(
 
 
 STOCK_TABLES = (
+    "po_approval_step",
+    "po_charge",
+    "po_line",
+    "po",
+    "award",
+    "quote_line",
+    "quote",
     "sourcing_decision",
     "rfq_supplier",
     "rfq_line",
@@ -452,5 +459,144 @@ def test_an_approved_request_is_sourced_and_its_rfq_shows_the_suppliers_waiting_
         expect(names.first).to_contain_text("not yet sent")
         assert page.locator("#appContent table b").count() == 0
         assert page.problems == []  # type: ignore[attr-defined]
+    finally:
+        clear_stock_and_approvals(company)
+
+
+def test_the_buyer_compares_quotes_and_awards_and_the_approver_signs_the_purchase_order(
+    company: Company, browser: Any
+) -> None:
+    from datetime import datetime
+
+    from p2p.formulas.calendar import IST
+    from p2p.orders import service as orders
+
+    seed_stock_and_approvals(company, price=100)
+    db = company.db
+    today = datetime.now(IST).date()
+    db.execute(text("update location set gstin = '29BBBBB0000B1Z5', state_code = '29' where code = 'WH-BLR'"))
+    db.execute(text("update item set gst_rate_before = 18, gst_rate_after = 18 where code = 'A'"))
+    db.execute(
+        text(
+            "insert into number_series (document_type, prefix, scope, format, reset) values "
+            "('rfq', 'RFQ', 'company', '{prefix}-{fy4}-{seq:05d}', 'fy'), ('po', 'PO', 'location', '{prefix}-{loc}-{fy4}-{seq:05d}', 'fy')"
+        )
+    )
+    # the procurement head is the Approver login (so the stores head's record gets another address)
+    db.execute(text("update org_user set email = 'u3@unused.example' where code = 'U3'"))
+    db.execute(text("insert into department (code, name, head_user) values ('PUR', 'Procurement', 'U5')"))
+    db.execute(
+        text(
+            "insert into org_user (code, name, designation, department_code, email, active) values ('U5', 'Vikram Procure', 'Head - Procurement', 'PUR', :e, true)"
+        ),
+        {"e": company.emails["Approver"]},
+    )
+    db.execute(
+        text(
+            "insert into approval_rule (rule_code, document, min_value, max_value, category_code, department_code, spend_type, "
+            "approver_chain, version, effective_from) values ('PO-01', 'po', 0, 999999999, 'ANY', 'ANY', 'ANY', 'procurement_head', 1, '2024-11-01')"
+        )
+    )
+    for code, name, state in (("S1", "Alpha Traders", "27"), ("S2", "Bravo Supplies", "29")):
+        db.execute(
+            text(
+                "insert into supplier (code, legal_name, status, state_code, gst_reg_type) values (:c, :n, 'active', :s, 'regular')"
+            ),
+            {"c": code, "n": name, "s": state},
+        )
+    # an approved request whose only line is out for quotation to both suppliers
+    db.execute(
+        text(
+            "insert into request (no, ship_to_location, type, channel, status, total_value, department_code) "
+            "values ('REQ-UI-1', 'WH-BLR', 'goods', 'planning', 'approved', 1000, 'LOG')"
+        )
+    )
+    db.execute(
+        text(
+            "insert into request_line (request_no, line_no, item_code, qty, uom, category_code, need_by, status) "
+            "values ('REQ-UI-1', 1, 'A', 10, 'NOS', 'C1', :nb, 'sourcing')"
+        ),
+        {"nb": today.replace(year=today.year + 1)},
+    )
+    db.execute(
+        text(
+            "insert into rfq (no, request_no, category_code, due_date, status) values ('RFQ-UI-1', 'REQ-UI-1', 'C1', :d, 'sent')"
+        ),
+        {"d": today.replace(year=today.year + 1)},
+    )
+    db.execute(
+        text(
+            "insert into rfq_line (rfq_no, line_no, request_no, request_line_no, item_code, description, qty, uom, need_by) "
+            "values ('RFQ-UI-1', 1, 'REQ-UI-1', 1, 'A', '<i>Bearing</i>', 10, 'NOS', :nb)"
+        ),
+        {"nb": today.replace(year=today.year + 1)},
+    )
+    for code in ("S1", "S2"):
+        db.execute(
+            text(
+                "insert into rfq_supplier (rfq_no, supplier_code, email, invited_at) values ('RFQ-UI-1', :c, :e, now())"
+            ),
+            {"c": code, "e": f"{code.lower()}@supplier.example"},
+        )
+    db.execute(
+        text(
+            "insert into sourcing_decision (request_no, line_no, method, rfq_no, reason) values ('REQ-UI-1', 1, 'rfq', 'RFQ-UI-1', 'test')"
+        )
+    )
+    db.commit()
+    try:
+        buyer = open_app(browser, LAPTOP)
+        sign_in(buyer, company.emails["Buyer"])
+        buyer.goto(f"{URL}/#/rfqs/RFQ-UI-1")
+        expect(buyer.locator("#appContent")).to_contain_text("No quotes received yet")
+
+        def enter(supplier: str, price: str, discount: str, days: str) -> None:
+            buyer.locator("#addQuoteBtn").click()
+            buyer.locator("#qSupplier").select_option(supplier)
+            row = buyer.locator("#quoteForm tbody tr").first
+            row.locator(".qPrice").fill(price)
+            row.locator(".qDisc").fill(discount)
+            row.locator(".qGst").fill("18")
+            row.locator(".qDays").fill(days)
+            buyer.locator("#saveQuote").click()
+
+        enter("S1", "120", "10", "5")  # net 108
+        expect(buyer.locator("#appContent")).to_contain_text("1 of 2 suppliers have replied")
+        enter("S2", "110", "0", "3")
+        expect(buyer.locator("#appContent")).to_contain_text("2 of 2 suppliers have replied")
+        recommended = buyer.locator("#appContent tr", has_text="recommended")
+        expect(recommended).to_contain_text("Alpha Traders")  # 108 beats 110
+        expect(recommended).to_contain_text("₹120 less 10%")
+        assert buyer.locator('#appContent input[type="radio"]:checked').get_attribute("value") == "S1"
+        assert buyer.locator("#appContent i:not(.ti)").count() == 0  # the item name is shown as typed
+
+        buyer.locator("#awardBtn").click()
+        expect(buyer.locator("#appContent")).to_contain_text("Awarded to Alpha Traders")
+        assert company.db.execute(text("select status from rfq where no = 'RFQ-UI-1'")).scalar_one() == "awarded"
+
+        made = orders.order_request(db, company.slug, "REQ-UI-1", as_of=today)  # what the worker does after an award
+        assert made.waiting, made.skipped
+        buyer.goto(f"{URL}/#/purchase-orders")
+        row = buyer.locator("#tableWrap tbody tr")
+        expect(row).to_have_count(1)
+        expect(row).to_contain_text("Alpha Traders")
+        expect(row).to_contain_text("Pending")
+        expect(row).to_contain_text("waiting for Vikram Procure")
+
+        admin = open_app(browser, LAPTOP)
+        sign_in(admin, company.emails["Approver"])
+        admin.goto(f"{URL}/#/purchase-orders")
+        admin.locator("#tableWrap tbody tr").click()
+        page_text = admin.locator("#appContent")
+        expect(page_text).to_contain_text("IGST")  # Maharashtra supplier, Karnataka store
+        expect(page_text).not_to_contain_text("CGST")
+        expect(page_text).to_contain_text("1,080")  # 10 x 108.00
+        expect(page_text).to_contain_text("1,274.40")  # plus 18% IGST of 194.40
+        expect(buyer.locator("#poApprove")).to_have_count(0)
+        admin.locator("#poApprove").click()
+        expect(admin.locator("#appContent")).to_contain_text("Approved by Vikram Procure under rule PO-01 v1")
+        admin.goto(f"{URL}/#/requisitions/REQ-UI-1")
+        expect(admin.locator("#appContent")).to_contain_text("ordered")
+        assert admin.problems == [] and buyer.problems == []  # type: ignore[attr-defined]
     finally:
         clear_stock_and_approvals(company)

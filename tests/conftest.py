@@ -56,3 +56,13 @@ def control_db() -> Iterator[str]:
         else:
             os.environ["CONTROL_DATABASE_URL"] = previous
         get_settings.cache_clear()
+
+
+@pytest.fixture(autouse=True)
+def _empty_job_queue(request: pytest.FixtureRequest) -> None:
+    """Nothing runs the jobs that a test queues, so they would pile up and crowd the next test's worker run."""
+    if "control_db" not in request.fixturenames:
+        return
+    request.getfixturevalue("control_db")
+    with tenants.control_engine().begin() as c:
+        c.execute(text("delete from job"))

@@ -9,8 +9,8 @@ import asyncio
 import json
 import uuid
 from collections.abc import AsyncIterator
-from datetime import UTC, datetime
-from decimal import Decimal
+from datetime import UTC, date, datetime
+from decimal import Decimal, InvalidOperation
 from typing import Annotated, Any
 
 import jwt
@@ -24,6 +24,9 @@ from p2p.approvals import rules as approval_rules
 from p2p.approvals import workflow as approvals
 from p2p.formulas.calendar import IST
 from p2p.formulas.money import format_qty, round_money
+from p2p.orders import quotes
+from p2p.orders import service as orders  # noqa: F401 - registers the price-variance proposal executor
+from p2p.orders import workflow as po_workflow
 from p2p.platform import routing, sod
 from p2p.platform.permissions import PermissionDenied, can_anywhere, require
 from p2p.platform.tokens import decode_access_token
@@ -422,7 +425,9 @@ def get_requisition(no: str, db: Db, ctx: Ctx) -> dict[str, Any]:
         db,
         "select rl.line_no, rl.item_code, coalesce(i.name, rl.free_text) as name, rl.qty, rl.uom, rl.est_price, rl.need_by, "
         "rl.reason, rl.status, rl.delivery_location, d.method as source_method, d.reason as source_reason, "
-        "d.rfq_no as source_rfq, d.contract_code as source_contract from request_line rl "
+        "d.rfq_no as source_rfq, d.contract_code as source_contract, (select p.po_no from po_line p "
+        "where p.request_no = rl.request_no and p.request_line_no = rl.line_no and p.status <> 'cancelled' limit 1) as po_no "
+        "from request_line rl "
         "left join item i on i.code = rl.item_code left join sourcing_decision d "
         "on d.request_no = rl.request_no and d.line_no = rl.line_no where rl.request_no = :n order by rl.line_no",
         n=no,
@@ -450,13 +455,20 @@ def get_requisition(no: str, db: Db, ctx: Ctx) -> dict[str, Any]:
                     "reason": line["source_reason"],
                     "rfq_no": line["source_rfq"],
                     "contract": line["source_contract"],
+                    "po_no": line["po_no"],
                 }
                 if line["source_method"]
                 else None,
             }
             for line in lines
         ],
-        "purchase_order": None,
+        "purchase_order": next(
+            (
+                {"id": po["no"], "status": _PO_STATUS.get(po["status"], po["status"])}
+                for po in _rows(db, "select no, status from po where request_no = :n order by no", n=no)
+            ),
+            None,
+        ),
         "approval": {
             "rule_code": rows[0]["rule_code"],
             "rule_version": rows[0]["rule_version"],
@@ -542,7 +554,8 @@ def list_rfqs(db: Db, ctx: Ctx) -> list[dict[str, Any]]:
         db,
         "select r.no, r.status, r.due_date, r.request_no, r.created_at, r.proposal_id, c.name as category, "
         "(select count(*) from rfq_line l where l.rfq_no = r.no) as items, "
-        "(select count(*) from rfq_supplier s where s.rfq_no = r.no) as vendors "
+        "(select count(*) from rfq_supplier s where s.rfq_no = r.no) as vendors, "
+        "(select count(distinct q.supplier_code) from quote q where q.rfq_no = r.no) as quoted "
         "from rfq r left join item_category c on c.code = r.category_code order by r.created_at desc, r.no desc limit 500",
     )
     return [
@@ -551,7 +564,7 @@ def list_rfqs(db: Db, ctx: Ctx) -> list[dict[str, Any]]:
             "title": f"{r['category'] or 'Quotation request'}: {r['items']} item(s) for {r['request_no']}",
             "status": r["status"],
             "vendor_count": r["vendors"],
-            "quote_count": 0,
+            "quote_count": r["quoted"],
             "due_date": r["due_date"].isoformat(),
             "request_no": r["request_no"],
             "created_at": _iso(r["created_at"]),
@@ -602,6 +615,7 @@ def get_rfq(no: str, db: Db, ctx: Ctx) -> dict[str, Any]:
         "items": [line["description"] for line in lines],
         "lines": [
             {
+                "line_no": line["line_no"],
                 "item_code": line["item_code"],
                 "name": line["description"],
                 "qty": _qty(line["qty"]),
@@ -621,6 +635,7 @@ def get_rfq(no: str, db: Db, ctx: Ctx) -> dict[str, Any]:
             }
             for s in suppliers
         ],
+        "comparison": _comparison_json(db, no, ctx.user_id),
         "quotes": [],
     }
 
@@ -643,7 +658,278 @@ def run_replenishment(
     return replenishment.summary(result)
 
 
-for _name in ("purchase-orders", "payments", "contracts"):
+_PO_STATUS = {"submitted": "pending"}
+
+
+def _money(value: Decimal | None) -> str | None:
+    return None if value is None else str(value)
+
+
+def _comparison_json(db: Session, rfq_no: str, user_id: int) -> dict[str, Any]:
+    comp = quotes.comparison(db, rfq_no, datetime.now(IST).date())
+    status = db.execute(text("select status from rfq where no = :n"), {"n": rfq_no}).scalar_one()
+    return {
+        "min_quotes": comp.min_quotes,
+        "quotes_received": comp.quotes_received,
+        "invited": comp.invited,
+        "waiting_for": comp.waiting_for,
+        "can_quote": status == "sent" and can_anywhere(db, user_id, "rfq.create"),
+        "can_award": status == "sent" and comp.quotes_received > 0 and can_anywhere(db, user_id, "rfq.create"),
+        "suppliers": [
+            {
+                "code": s["supplier_code"],
+                "name": s["supplier_name"],
+                "quote_no": s["quote_no"],
+                "revision": s["revision"],
+                "valid_until": s["valid_until"].isoformat() if s["valid_until"] else None,
+                "freight": _money(s["freight"]),
+                "packing_forwarding": _money(s["packing_forwarding"]),
+                "lines_quoted": s["lines_quoted"],
+            }
+            for s in comp.suppliers
+        ],
+        "lines": [
+            {
+                "rfq_line_no": line.rfq_line_no,
+                "name": line.name,
+                "qty": _qty(line.qty),
+                "uom": line.uom,
+                "need_by": line.need_by.isoformat() if line.need_by else None,
+                "recommended": line.recommended,
+                "why": line.why,
+                "awarded": line.awarded,
+                "offers": [
+                    {
+                        "supplier_code": o.supplier_code,
+                        "supplier_name": o.supplier_name,
+                        "quote_no": o.quote_no,
+                        "unit_price": _money(o.unit_price),
+                        "discount_pct": _qty(o.discount_pct),
+                        "net_price": _money(o.net_price),
+                        "value": _money(o.value),
+                        "gst_rate": _qty(o.gst_rate),
+                        "delivery_days": o.delivery_days,
+                        "flags": o.flags,
+                        "compliant": o.compliant,
+                    }
+                    for o in line.offers
+                ],
+            }
+            for line in comp.lines
+        ],
+    }
+
+
+def _decimal(value: Any, field: str, default: Decimal | None = None) -> Decimal:
+    if value in (None, ""):
+        if default is None:
+            raise HTTPException(422, f"{field} is required")
+        return default
+    try:
+        return Decimal(str(value))
+    except InvalidOperation:
+        raise HTTPException(422, f"{field} is not a number") from None
+
+
+@router.post("/rfqs/{no}/quotes")
+def enter_rfq_quote(
+    no: str, payload: dict[str, Any], db: Db, ctx: Annotated[routing.TenantContext, Depends(require("rfq.create"))]
+) -> dict[str, Any]:
+    """A buyer enters what a supplier offered (it arrived by email or phone, or on paper)."""
+    today = datetime.now(IST).date()
+    try:
+        data = quotes.QuoteInput(
+            supplier_code=str(payload.get("supplier_code", "")),
+            valid_until=date.fromisoformat(payload["valid_until"]) if payload.get("valid_until") else None,
+            payment_terms_code=payload.get("payment_terms_code") or None,
+            delivery_terms=payload.get("delivery_terms") or None,
+            packing_forwarding=_decimal(payload.get("packing_forwarding"), "packing_forwarding", Decimal(0)),
+            freight=_decimal(payload.get("freight"), "freight", Decimal(0)),
+            warranty_months=int(payload["warranty_months"]) if payload.get("warranty_months") else None,
+            deviations=payload.get("deviations") or None,
+            lines=[
+                quotes.QuoteLineInput(
+                    rfq_line_no=int(line["rfq_line_no"]),
+                    unit_price=_decimal(line.get("unit_price"), "unit_price"),
+                    gst_rate=_decimal(line.get("gst_rate"), "gst_rate"),
+                    discount_pct=_decimal(line.get("discount_pct"), "discount_pct", Decimal(0)),
+                    delivery_days=int(line["delivery_days"]) if line.get("delivery_days") not in (None, "") else None,
+                    offered_brand=line.get("offered_brand") or None,
+                    moq=_decimal(line["moq"], "moq") if line.get("moq") not in (None, "") else None,
+                    deviation=line.get("deviation") or None,
+                )
+                for line in payload.get("lines", [])
+            ],
+        )
+        quote_no = quotes.enter_quote(db, no, data, sod.user(ctx.user_id))
+    except (ValueError, KeyError, TypeError) as exc:
+        raise HTTPException(422, f"the quote could not be read: {exc}") from None
+    except quotes.QuoteError as exc:
+        raise HTTPException(409, str(exc)) from None
+    auto = quotes.auto_award(
+        db, ctx.slug, no, as_of=today
+    )  # only when the autonomy gate allows it and nothing is in doubt
+    return {"quote_no": quote_no, "auto_awarded": auto is not None}
+
+
+@router.post("/rfqs/{no}/award")
+def award_rfq(
+    no: str, payload: dict[str, Any], db: Db, ctx: Annotated[routing.TenantContext, Depends(require("rfq.create"))]
+) -> dict[str, Any]:
+    try:
+        choices = {int(k): str(v) for k, v in dict(payload.get("choices", {})).items()}
+        done = quotes.award(
+            db,
+            no,
+            choices,
+            sod.user(ctx.user_id),
+            reason=payload.get("reason"),
+            as_of=datetime.now(IST).date(),
+            tenant=ctx.slug,
+        )
+    except (ValueError, TypeError) as exc:
+        raise HTTPException(422, f"the award could not be read: {exc}") from None
+    except quotes.QuoteError as exc:
+        raise HTTPException(409, str(exc)) from None
+    return {
+        "awarded": {str(k): v for k, v in done.awarded.items()},
+        "overridden": done.overridden,
+        "complete": done.complete,
+    }
+
+
+def _po(r: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "id": r["no"],
+        "supplier": r["supplier_name"],
+        "supplier_code": r["supplier_code"],
+        "amount": str(r["total"]),
+        "status": _PO_STATUS.get(r["status"], r["status"]),
+        "request_no": r["request_no"],
+        "created_at": _iso(r["created_at"]),
+        "held": bool(r["hold_reason"]),
+        "po_type": r["po_type"],
+    }
+
+
+_PO_SELECT = (
+    "select p.*, coalesce(s.trade_name, s.legal_name) as supplier_name, "
+    "(select a.name from po_approval_step st join org_user a on a.code = coalesce(st.delegate, st.approver) "
+    "where st.po_no = p.no and st.round = p.approval_round and st.status = 'pending' limit 1) as waiting_for "
+    "from po p join supplier s on s.code = p.supplier_code"
+)
+
+
+@router.get("/purchase-orders")
+def list_purchase_orders(db: Db, ctx: Ctx) -> list[dict[str, Any]]:
+    rows = _rows(db, _PO_SELECT + " order by p.created_at desc, p.no desc limit 500")
+    return [{**_po(r), "waiting_for": r["waiting_for"]} for r in rows]
+
+
+@router.get("/purchase-orders/{no}")
+def get_purchase_order(no: str, db: Db, ctx: Ctx) -> dict[str, Any]:
+    rows = _rows(db, _PO_SELECT + " where p.no = :n", n=no)
+    if not rows:
+        raise HTTPException(404, "Not found")
+    r = rows[0]
+    lines = _rows(db, "select * from po_line where po_no = :n order by line_no", n=no)
+    charges = _rows(db, "select * from po_charge where po_no = :n order by id", n=no)
+    return {
+        **_po(r),
+        "waiting_for": r["waiting_for"],
+        "buyer_gstin": r["buyer_gstin"],
+        "supplier_gstin": r["supplier_gstin"],
+        "ship_to": r["ship_to_location"],
+        "contract_code": r["contract_code"],
+        "rfq_no": r["rfq_no"],
+        "payment_terms": r["payment_terms_code"],
+        "delivery_terms": r["delivery_terms"],
+        "hold_reason": r["hold_reason"],
+        "cancel_reason": r["cancel_reason"],
+        "taxable": _money(r["taxable"]),
+        "cgst": _money(r["cgst"]),
+        "sgst": _money(r["sgst"]),
+        "igst": _money(r["igst"]),
+        "total": _money(r["total"]),
+        "lines": [
+            {
+                "line_no": line["line_no"],
+                "item_code": line["item_code"],
+                "name": line["description"],
+                "qty": _qty(line["qty"]),
+                "uom": line["uom"],
+                "unit_price": _money(line["unit_price"]),
+                "est_price": _money(line["est_price"]),
+                "gst_rate": _qty(line["gst_rate"]),
+                "taxable": _money(line["taxable"]),
+                "cgst": _money(line["cgst"]),
+                "sgst": _money(line["sgst"]),
+                "igst": _money(line["igst"]),
+                "need_by": line["need_by"].isoformat() if line["need_by"] else None,
+                "source": line["source"],
+                "source_ref": line["source_ref"],
+            }
+            for line in lines
+        ],
+        "charges": [
+            {
+                "type": c["type"],
+                "amount": _money(c["amount"]),
+                "gst_rate": _qty(c["gst_rate"]),
+                "cgst": _money(c["cgst"]),
+                "sgst": _money(c["sgst"]),
+                "igst": _money(c["igst"]),
+            }
+            for c in charges
+        ],
+        "approval": {
+            "rule_code": r["rule_code"],
+            "rule_version": r["rule_version"],
+            "decision": r["decision_reason"],
+            "steps": [
+                {
+                    "step": s["step"],
+                    "role": s["role"],
+                    "name": s["approver_name"],
+                    "designation": s["designation"],
+                    "stand_in": s["delegate_name"],
+                    "status": s["status"],
+                    "acted_at": _iso(s["acted_at"]),
+                    "comment": s["comment"],
+                }
+                for s in po_workflow.steps_of(db, no)
+            ],
+            "can_act": po_workflow.can_act(db, no, ctx.user_id),
+        },
+    }
+
+
+def _po_action(call: Any) -> dict[str, str]:
+    try:
+        return {"status": call()}
+    except approvals.ApprovalError as exc:
+        raise HTTPException(409, str(exc)) from None
+    except approval_rules.ApprovalRuleError as exc:
+        raise HTTPException(422, str(exc)) from None
+    except PermissionDenied as exc:
+        raise HTTPException(403, str(exc)) from None
+
+
+@router.post("/purchase-orders/{no}/approve")
+def approve_purchase_order(
+    no: str, payload: dict[str, Any], db: Db, ctx: Annotated[routing.TenantContext, Depends(require("po.approve"))]
+) -> dict[str, str]:
+    return _po_action(lambda: po_workflow.approve(db, ctx.slug, no, ctx.user_id, payload.get("comment")))
+
+
+@router.post("/purchase-orders/{no}/reject")
+def reject_purchase_order(
+    no: str, payload: dict[str, Any], db: Db, ctx: Annotated[routing.TenantContext, Depends(require("po.approve"))]
+) -> dict[str, str]:
+    return _po_action(lambda: po_workflow.reject(db, no, ctx.user_id, payload.get("reason")))
+
+
+for _name in ("payments", "contracts"):
 
     def _list(db: Db, ctx: Ctx) -> list[Any]:
         return []
