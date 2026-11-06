@@ -182,3 +182,35 @@ def test_the_assistant_answers_over_server_sent_events_until_it_is_connected(env
     r = client.post("/api/chat", json={"message": "hello"}, headers=env.h(env.admin, "Admin"))
     events = [json.loads(line[5:]) for line in r.text.splitlines() if line.startswith("data:")]
     assert [e["type"] for e in events] == ["session", "token", "done"]
+
+
+def test_the_vendor_pages_show_the_imported_suppliers_and_can_be_searched(env: Env) -> None:
+    env.db.execute(text("insert into payment_terms (code, name, days) values ('N30', 'Net 30', 30)"))
+    env.db.execute(text("insert into item_category (code, name) values ('PKG', 'Packaging')"))
+    env.db.execute(
+        text(
+            "insert into supplier (code, legal_name, trade_name, status, msme_category, payment_terms_code) "
+            "values ('S-1', 'Shree Packaging Pvt Ltd', 'Shree Pack', 'active', 'Small', 'N30'), "
+            "('S-2', 'Draft Traders', null, 'draft', null, 'N30')"
+        )
+    )
+    env.db.execute(text("insert into supplier_category (supplier_code, category_code) values ('S-1', 'PKG')"))
+    env.db.execute(
+        text(
+            "insert into supplier_contact (supplier_code, name, email, is_primary) values ('S-1', 'Asha', 'asha@shree.example', true)"
+        )
+    )
+    env.db.commit()
+    h = env.h(env.admin, "Admin")
+
+    listed = {v["id"]: v for v in client.get("/api/vendors", headers=h).json()}
+    assert listed["S-1"]["name"] == "Shree Pack" and listed["S-1"]["email"] == "asha@shree.example"
+    assert listed["S-1"]["category"] == "Packaging" and listed["S-1"]["active"] is True
+    assert listed["S-2"]["under_review"] is True and listed["S-2"]["active"] is False
+
+    detail = client.get("/api/vendors/S-1", headers=h).json()
+    assert detail["risk"]["risk_level"] == "low" and "Shree Packaging" in detail["verification_note"]
+    assert client.get("/api/vendors/nope", headers=h).status_code == 404
+
+    found = client.get("/api/search?q=shree", headers=h).json()
+    assert [f["id"] for f in found] == ["S-1"]

@@ -5,6 +5,8 @@ python -m p2p.cli tenant create <slug> [--name "Display name"]
 python -m p2p.cli tenant migrate-all
 python -m p2p.cli user create <tenant> <email> --name NAME --role Admin
         asks for the password; for scripts set P2P_NEW_PASSWORD instead
+python -m p2p.cli import masters <tenant> <dataset folder> [--dry-run]
+        reads the master data of a dataset into a company and reports every row it left out and why
 python -m p2p.cli worker      runs the job worker (timers, escalations, email, mailbox polling) until stopped
 """
 
@@ -12,8 +14,9 @@ import argparse
 import getpass
 import os
 import sys
+from pathlib import Path
 
-from p2p.platform import tenants, users, worker
+from p2p.platform import routing, tenants, users, worker
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -32,6 +35,11 @@ def main(argv: list[str] | None = None) -> int:
     ucreate.add_argument("email")
     ucreate.add_argument("--name", required=True)
     ucreate.add_argument("--role", default="Requester", choices=users.ROLES)
+    imp = sub.add_parser("import").add_subparsers(dest="cmd", required=True)
+    masters = imp.add_parser("masters")
+    masters.add_argument("tenant")
+    masters.add_argument("dataset")
+    masters.add_argument("--dry-run", action="store_true")
     sub.add_parser("worker")
     args = p.parse_args(argv)
 
@@ -42,6 +50,22 @@ def main(argv: list[str] | None = None) -> int:
         except KeyboardInterrupt:
             pass
         return 0
+    if args.group == "import":
+        from sqlalchemy.orm import Session
+
+        from p2p.masters.importer import import_masters
+
+        with Session(routing.engine_for(args.tenant)) as db:
+            report = import_masters(db, Path(args.dataset), dry_run=args.dry_run)
+        verb = "would load" if args.dry_run else "loaded"
+        print(
+            f"{verb} {report.rows_loaded} rows in {report.seconds} s; {len(report.rejected)} left out, {len(report.warnings)} warnings"
+        )
+        for problem in report.rejected[:25]:
+            print(f"  left out  {problem.table} line {problem.line}: {problem.reason}")
+        for problem in report.warnings[:10]:
+            print(f"  warning   {problem.table}: {problem.reason}")
+        return 1 if report.rejected else 0
     if args.group == "control":
         tenants.migrate_control()
         print("control database is up to date")

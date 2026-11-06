@@ -269,7 +269,61 @@ def _empty_list() -> list[Any]:
     return []
 
 
-for _name in ("rfqs", "requisitions", "vendors", "purchase-orders", "payments", "contracts"):
+_VENDOR = """
+    select s.code as id, coalesce(s.trade_name, s.legal_name) as name, s.legal_name, s.gstin, s.pan, s.status,
+           s.msme_category, s.payment_terms_code,
+           (select email from supplier_contact c where c.supplier_code = s.code order by is_primary desc, id limit 1) as email,
+           (select string_agg(distinct ic.name, ', ') from supplier_category sc join item_category ic on ic.code = sc.category_code
+             where sc.supplier_code = s.code) as category,
+           (select count(*) from supplier_document d where d.supplier_code = s.code and not coalesce(d.verified, false)) as unverified_docs
+    from supplier s
+"""
+
+
+def _vendor(r: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "id": r["id"],
+        "name": r["name"],
+        "email": r["email"],
+        "category": r["category"],
+        "rating": None,
+        "total_spend": 0,
+        "created_at": None,
+        "under_review": r["status"] == "draft",
+        "active": r["status"] == "active",
+        "verified": r["status"] == "active" and r["unverified_docs"] == 0,
+    }
+
+
+@router.get("/vendors")
+def list_vendors(db: Db, ctx: Ctx) -> list[dict[str, Any]]:
+    return [_vendor(r) for r in _rows(db, _VENDOR + " order by 2")]
+
+
+@router.get("/vendors/{vendor_id}")
+def get_vendor(vendor_id: str, db: Db, ctx: Ctx) -> dict[str, Any]:
+    rows = _rows(db, _VENDOR + " where s.code = :c", c=vendor_id)
+    if not rows:
+        raise HTTPException(404, "Not found")
+    r = rows[0]
+    note = f"{r['legal_name']} · GSTIN {r['gstin'] or 'none'} · PAN {r['pan'] or 'none'} · MSME {r['msme_category'] or 'no'} · terms {r['payment_terms_code']}"
+    return {
+        **_vendor(r),
+        "verification_note": note,
+        "rfq_count": 0,
+        "risk": {
+            "risk_score": 0,
+            "risk_level": "low",
+            "late_delivery_rate_pct": 0,
+            "price_volatility_pct": 0,
+            "flagged_incidents": 0,
+            "basis": "No orders yet, so there is no history to score.",
+        },
+        "purchase_orders": [],
+    }
+
+
+for _name in ("rfqs", "requisitions", "purchase-orders", "payments", "contracts"):
 
     def _list(db: Db, ctx: Ctx) -> list[Any]:
         return []
@@ -283,7 +337,9 @@ for _name in ("rfqs", "requisitions", "vendors", "purchase-orders", "payments", 
 
 @router.get("/search")
 def search(db: Db, ctx: Ctx, q: str = Query(..., min_length=1)) -> list[dict[str, Any]]:
-    return []
+    like = f"%{q}%"
+    vendors = _rows(db, _VENDOR + " where s.legal_name ilike :q or s.trade_name ilike :q order by 2 limit 5", q=like)
+    return [{"type": "vendor", "id": v["id"], "label": v["name"], "meta": v["category"]} for v in vendors]
 
 
 @router.get("/budgets/variance")
