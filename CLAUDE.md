@@ -19,6 +19,7 @@ An India-first, domain-neutral, multi-tenant procure-to-pay platform (request, a
 - Backend tools use `backend/.venv`. Dependencies: edit `requirements.in` or `requirements-dev.in`, install, then `pip freeze > requirements.txt`.
 - Browser tests need `cd frontend && npm run build` and `playwright install chromium` once. They skip when the build is missing.
 - Run the job worker (timers, escalations, email, mailbox polling): `python -c "from p2p.platform import worker; worker.run_forever()"` from `backend/`.
+- Compare models: `python scripts/model_eval.py --models groq:openai/gpt-oss-20b --out result.json` (live calls, synthetic data only, paced by the gateway).
 - Never run two pytest runs at once: they share one test database.
 - Regenerate data: `python -I datagen/generator/cli.py --size demo --seed 42`, check it with `datagen/generator/validate.py`.
 
@@ -58,7 +59,7 @@ Match the surrounding code. Short plain-language comments only where the reason 
 | Rules (decision tables) and formulas | `rules/engine.py`, `formulas/` |
 | Cases, tasks, notifications, worker | `platform/cases.py`, `tasks.py`, `notifications.py`, `worker.py` |
 | Proposals (human confirmation) | `platform/proposals.py` |
-| Models, AI steps, agents | `ai_steps/gateway.py`, `ai_steps/runner.py`, `agents/runtime.py`, `agents/autonomy.py` |
+| Models (routes and free-tier limits in `docs/model-selection.md`), AI steps, agents | `ai_steps/gateway.py`, `ai_steps/runner.py`, `agents/runtime.py`, `agents/autonomy.py` |
 | Files, parsing, email | `platform/files.py`, `parsing.py`, `emails.py`, `mailbox.py` |
 | Admin API and run viewer | `platform/admin_api.py`, `logs.py` |
 

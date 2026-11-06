@@ -3,7 +3,7 @@
 OpenAI-compatible adapter: Groq, Gemini, OpenRouter, local Ollama. Anthropic adapter: the Claude API.
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Protocol
 
 import anthropic
@@ -44,6 +44,7 @@ class RawResponse:
     tokens_out: int
     finish_reason: str | None = None
     refusal: str | None = None
+    headers: dict[str, str] = field(default_factory=dict)  # response headers, lower case (rate-limit numbers)
 
 
 Messages = list[dict[str, str]]
@@ -52,7 +53,9 @@ Messages = list[dict[str, str]]
 class Adapter(Protocol):
     def chat(
         self, model: str, messages: Messages, *, temperature: float, max_tokens: int, json_output: bool
-    ) -> RawResponse: ...
+    ) -> RawResponse:
+        """Providers that accept provider-specific settings also take an optional `extra` dict."""
+        ...
 
 
 def _retry_after(headers: Any) -> float | None:
@@ -63,19 +66,30 @@ def _retry_after(headers: Any) -> float | None:
 
 
 class OpenAICompatAdapter:
-    def __init__(self, base_url: str, api_key: str, http_client: httpx2.Client | None = None) -> None:
+    def __init__(
+        self, base_url: str, api_key: str, http_client: httpx2.Client | None = None, timeout: float = 120.0
+    ) -> None:
         self.client = openai.OpenAI(
-            base_url=base_url, api_key=api_key or "none", max_retries=0, http_client=http_client
+            base_url=base_url, api_key=api_key or "none", max_retries=0, http_client=http_client, timeout=timeout
         )
 
     def chat(
-        self, model: str, messages: Messages, *, temperature: float, max_tokens: int, json_output: bool
+        self,
+        model: str,
+        messages: Messages,
+        *,
+        temperature: float,
+        max_tokens: int,
+        json_output: bool,
+        extra: dict[str, Any] | None = None,
     ) -> RawResponse:
         kwargs: dict[str, Any] = {}
         if json_output:
             kwargs["response_format"] = {"type": "json_object"}
+        if extra:
+            kwargs["extra_body"] = extra  # provider-specific settings, for example reasoning_effort
         try:
-            r = self.client.chat.completions.create(
+            raw = self.client.chat.completions.with_raw_response.create(
                 model=model,
                 messages=messages,  # type: ignore[arg-type]
                 temperature=temperature,
@@ -90,6 +104,7 @@ class OpenAICompatAdapter:
             raise BadRequest(f"{exc.status_code}: {str(exc)[:200]}") from None
         except (openai.APIConnectionError, openai.APITimeoutError) as exc:
             raise ServerError(f"connection problem: {str(exc)[:200]}") from None
+        r = raw.parse()
         choice = r.choices[0]
         usage = r.usage
         return RawResponse(
@@ -98,6 +113,7 @@ class OpenAICompatAdapter:
             tokens_out=usage.completion_tokens if usage else 0,
             finish_reason=choice.finish_reason,
             refusal=getattr(choice.message, "refusal", None),
+            headers={k.lower(): v for k, v in raw.headers.items()},
         )
 
 
@@ -106,7 +122,14 @@ class AnthropicAdapter:
         self.client = anthropic.Anthropic(api_key=api_key or "none", max_retries=0, http_client=http_client)
 
     def chat(
-        self, model: str, messages: Messages, *, temperature: float, max_tokens: int, json_output: bool
+        self,
+        model: str,
+        messages: Messages,
+        *,
+        temperature: float,
+        max_tokens: int,
+        json_output: bool,
+        extra: dict[str, Any] | None = None,
     ) -> RawResponse:
         system = "\n\n".join(m["content"] for m in messages if m["role"] == "system")
         if json_output:

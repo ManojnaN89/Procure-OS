@@ -24,6 +24,10 @@ class Settings(BaseSettings):
     gemini_api_key: str = ""
     anthropic_api_key: str = ""
     openrouter_api_key: str = ""
+    nvidia_api_key: str = ""
+    model_limits: str = (
+        ""  # JSON: {"provider/model": {"rpm": 30, "tpm": 8000, "rpd": 1000}}; empty means the defaults in the gateway
+    )
     model_routes: str = ""  # JSON: {"step name": [["provider", "model"], ...]}; empty means the defaults in the gateway
     extra_modules: str = ""  # comma-separated modules imported at startup; they register tools and executors
     storage_dir: str = ""  # empty means storage/ in the repository (git-ignored)

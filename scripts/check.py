@@ -18,7 +18,9 @@ STEPS = [
     ("ruff lint", [PY, "-m", "ruff", "check", ".", "../tests", "../scripts"], BACKEND),
     ("ruff format", [PY, "-m", "ruff", "format", "--check", ".", "../tests", "../scripts"], BACKEND),
     ("mypy", [PY, "-m", "mypy"], BACKEND),
-    ("pytest", [PY, "-m", "pytest", "-q"], BACKEND),
+    # The browser tests run in their own process: the OCR models of the main run use gigabytes and make them flaky.
+    ("pytest", [PY, "-m", "pytest", "-q", "--ignore=../tests/test_web_shell.py"], BACKEND),
+    ("pytest browser", [PY, "-m", "pytest", "-q", "../tests/test_web_shell.py"], BACKEND),
     ("biome", [NPX, "biome", "check", "."], FRONTEND),
     ("tsc", [NPX, "tsc", "-b"], FRONTEND),
 ]

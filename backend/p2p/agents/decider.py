@@ -11,13 +11,22 @@ SYSTEM = (
     "You are an assistant that works by calling tools. Each turn reply with JSON: either "
     '{"final": "<answer for the user>"} or {"tool": "<tool name>", "args": {...}, "confidence": <0 to 1>}. '
     "Call one tool at a time and use only the tools listed. Never invent values; if something is missing, "
-    "say so in the final answer."
+    "say so in the final answer. Do not use native function calling: the tool call is written as JSON text in your reply."
 )
 
 
 class GatewayDecider:
-    def __init__(self, gateway: Any, step: str = "agent", db: Session | None = None) -> None:
+    def __init__(
+        self,
+        gateway: Any,
+        step: str = "agent",
+        db: Session | None = None,
+        *,
+        max_tokens: int = 2048,
+        max_wait: float | None = None,
+    ) -> None:
         self.gateway, self.step, self.db = gateway, step, db
+        self.max_tokens, self.max_wait = max_tokens, max_wait
 
     def __call__(self, messages: list[Message], specs: list[dict[str, Any]]) -> Decision:
         tools = "\n".join(
@@ -33,6 +42,14 @@ class GatewayDecider:
             convo.append(
                 {"role": "assistant" if m["role"] == "assistant" else "user", "content": prefix + str(m["content"])}
             )
-        got = self.gateway.extract(self.step, convo, Decision, db=self.db, prompt_version="agent-1")
+        got = self.gateway.extract(
+            self.step,
+            convo,
+            Decision,
+            db=self.db,
+            prompt_version="agent-1",
+            max_tokens=self.max_tokens,
+            max_wait=self.max_wait,
+        )
         decision: Decision = got.value
         return decision

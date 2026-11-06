@@ -13,6 +13,7 @@ import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from decimal import Decimal
+from typing import Any
 
 from pydantic import BaseModel, ValidationError
 from sqlalchemy import text
@@ -31,18 +32,58 @@ from p2p.ai_steps.adapters import (
     RawResponse,
     ServerError,
 )
+from p2p.ai_steps.limits import Limits, QuotaExhausted, RateLimiter, estimate_tokens
 from p2p.config import get_settings
 
 OPENAI_COMPATIBLE = {
     "groq": ("https://api.groq.com/openai/v1", "groq_api_key"),
     "gemini": ("https://generativelanguage.googleapis.com/v1beta/openai/", "gemini_api_key"),
     "openrouter": ("https://openrouter.ai/api/v1", "openrouter_api_key"),
+    "nvidia": ("https://integrate.api.nvidia.com/v1", "nvidia_api_key"),  # free trial: development and testing only
     "ollama": ("http://localhost:11434/v1", ""),
 }
 
-# Model names change often. Defaults only; override with MODEL_ROUTES in .env (see .env.example).
-DEFAULT_ROUTES: dict[str, list[tuple[str, str]]] = {
-    "default": [("groq", "openai/gpt-oss-120b"), ("gemini", "gemini-2.5-flash")],
+# Model names change often. These are the defaults chosen from the evaluation in docs/model-selection.md (6 Nov 2026).
+# A step's own route is looked up by its name; "<name>.strong" is where a failed check is retried (see ai_steps/runner.py).
+# Override any of it with MODEL_ROUTES in .env. The optional third item holds provider settings.
+_LOW = {
+    "reasoning_effort": "low"
+}  # gpt-oss on Groq: short thinking keeps answers fast and inside the minute's token limit
+_MEDIUM = {"reasoning_effort": "medium"}
+_G120 = ("groq", "openai/gpt-oss-120b")
+_G20 = ("groq", "openai/gpt-oss-20b")
+_LAGUNA = ("nvidia", "poolside/laguna-xs-2.1")  # NVIDIA: development and testing only
+_ULTRA = ("nvidia", "nvidia/nemotron-3-ultra-550b-a55b")  # slowest and strongest: second opinion
+
+DEFAULT_ROUTES: dict[str, list[tuple[Any, ...]]] = {
+    # S01 to S05: reading and classifying. Small outputs, so the fast small model first.
+    "quote_reading": [(*_G20, _LOW), (*_G120, _LOW), _LAGUNA],
+    "quote_reading.strong": [(*_G120, _MEDIUM), _ULTRA],
+    "invoice_reading": [(*_G120, _LOW), (*_G20, _LOW), _LAGUNA],
+    "invoice_reading.strong": [(*_G120, _MEDIUM), _ULTRA],
+    "reply_classification": [(*_G20, _LOW), _LAGUNA, (*_G120, _LOW)],
+    "reply_classification.strong": [(*_G120, _MEDIUM), _ULTRA],
+    "item_mapping": [(*_G20, _LOW), _LAGUNA, (*_G120, _LOW)],
+    "item_mapping.strong": [(*_G120, _MEDIUM), _ULTRA],
+    "certificate_reading": [(*_G20, _LOW), (*_G120, _LOW), _LAGUNA],
+    "certificate_reading.strong": [(*_G120, _MEDIUM), _ULTRA],
+    # AG01, AG02, AG04: tool choice each turn.
+    "agent": [(*_G120, _LOW), _LAGUNA, (*_G20, _LOW)],
+    # AG03: the invoice-exception investigator gets the most thinking.
+    "agent_invoice_exceptions": [(*_G120, _MEDIUM), _ULTRA, _LAGUNA],
+    "default": [(*_G120, _LOW), _LAGUNA],
+}
+
+# What each free tier allows, measured on this key on 6 Nov 2026 (see docs/model-selection.md). Override with MODEL_LIMITS.
+DEFAULT_LIMITS: dict[str, Limits] = {
+    # Groq limits each model separately (checked from the response headers of this key)
+    "groq/openai/gpt-oss-120b": Limits(rpm=30, tpm=8000, rpd=1000),
+    "groq/openai/gpt-oss-20b": Limits(rpm=30, tpm=8000, rpd=1000),
+    "groq/qwen/qwen3.8-27b": Limits(rpm=30, tpm=8000, rpd=1000),
+    "groq/allam-2-7b": Limits(rpm=30, tpm=6000, rpd=7000),
+    # NVIDIA publishes nothing and sends no headers; forum reports say 30 to 40 a minute for the whole key,
+    # so every NVIDIA model shares one bucket.
+    "nvidia": Limits(rpm=30),
 }
 
 # US dollars per million tokens (input, output). Free tiers cost nothing; add paid models here.
@@ -80,26 +121,54 @@ def build_adapters() -> dict[str, Adapter]:
     return adapters
 
 
-def load_routes() -> dict[str, list[tuple[str, str]]]:
+def load_routes() -> dict[str, list[tuple[Any, ...]]]:
     raw = get_settings().model_routes
     if not raw:
         return DEFAULT_ROUTES
-    return {step: [(p, m) for p, m in routes] for step, routes in json.loads(raw).items()}
+    return {step: [tuple(entry) for entry in routes] for step, routes in json.loads(raw).items()}
+
+
+def load_limits() -> dict[str, Limits]:
+    """Limits per 'provider' or 'provider/model'; the most specific entry wins."""
+    raw = get_settings().model_limits
+    limits = dict(DEFAULT_LIMITS)
+    if raw:
+        limits.update({key: Limits(**vals) for key, vals in json.loads(raw).items()})
+    return limits
 
 
 class Gateway:
     def __init__(
         self,
         adapters: dict[str, Adapter] | None = None,
-        routes: dict[str, list[tuple[str, str]]] | None = None,
+        routes: dict[str, list[tuple[Any, ...]]] | None = None,
         *,
         sleep: Callable[[float], None] = time.sleep,
         max_retries: int = 3,
+        limits: dict[str, Limits] | None = None,
+        clock: Callable[[], float] = time.monotonic,
+        max_wait: float = 45.0,
     ) -> None:
         self.adapters = adapters if adapters is not None else build_adapters()
         self.routes = routes if routes is not None else load_routes()
         self.sleep = sleep
         self.max_retries = max_retries
+        self.limits = limits if limits is not None else load_limits()
+        self.clock = clock
+        self.max_wait = max_wait  # longest the gateway waits for room under a limit before using another model
+        self._limiters: dict[str, RateLimiter] = {}
+
+    def _limiter(self, provider: str, model: str) -> RateLimiter | None:
+        """A limit named for the exact model is that model's own bucket; a provider-wide limit is shared by its models."""
+        exact = f"{provider}/{model}"
+        key = exact if exact in self.limits else provider
+        if key not in self.limits:
+            return None
+        if key not in self._limiters:
+            self._limiters[key] = RateLimiter(
+                self.limits[key], clock=self.clock, sleep=self.sleep, max_wait=self.max_wait
+            )
+        return self._limiters[key]
 
     # ---- public interface --------------------------------------------------------------------
 
@@ -114,6 +183,7 @@ class Gateway:
         max_tokens: int = 1024,
         json_output: bool = False,
         use_cache: bool = True,
+        max_wait: float | None = None,
     ) -> Completion:
         route = self.routes.get(step) or self.routes["default"]
         started = time.monotonic()
@@ -128,20 +198,41 @@ class Gateway:
                 return done
         last_error: ModelError | None = None
         attempts = 0
-        for provider, model in route:
+        for entry in route:
+            provider, model = entry[0], entry[1]
+            extra = entry[2] if len(entry) > 2 else None
             adapter = self.adapters.get(provider)
             if adapter is None:
                 last_error = BadRequest(f"provider '{provider}' is not configured (no API key)")
                 continue
+            limiter = self._limiter(provider, model)
+            estimate = estimate_tokens(" ".join(m["content"] for m in messages)) + max_tokens
             for attempt in range(self.max_retries + 1):
                 attempts += 1
+                if limiter is not None:
+                    try:
+                        # waits for room under the provider's limits, or gives up on this model
+                        limiter.acquire(estimate, max_wait)
+                    except QuotaExhausted as exc:
+                        last_error = exc
+                        break
+                kwargs: dict[str, Any] = {"extra": extra} if extra else {}
                 try:
                     raw = adapter.chat(
-                        model, messages, temperature=temperature, max_tokens=max_tokens, json_output=json_output
+                        model,
+                        messages,
+                        temperature=temperature,
+                        max_tokens=max_tokens,
+                        json_output=json_output,
+                        **kwargs,
                     )
                 except RateLimited as exc:
                     last_error = exc
-                    self.sleep(exc.retry_after if exc.retry_after is not None else self._backoff(attempt))
+                    pause = exc.retry_after if exc.retry_after is not None else self._backoff(attempt)
+                    if limiter is not None:
+                        limiter.penalise(pause)
+                    else:
+                        self.sleep(pause)
                     continue
                 except ServerError as exc:
                     last_error = exc
@@ -164,6 +255,10 @@ class Gateway:
                         cache_key,
                     )
                     raise ModelRefusal(f"{provider}/{model} declined to answer")
+                if limiter is not None:
+                    limiter.observe(raw.headers)
+                    if raw.tokens_in + raw.tokens_out:
+                        limiter.settle(estimate, raw.tokens_in + raw.tokens_out)
                 return self._success(
                     db, step, prompt_version, provider, model, raw, attempts, started, cache_key, temperature, use_cache
                 )
@@ -179,6 +274,7 @@ class Gateway:
         db: Session | None = None,
         prompt_version: str = "",
         max_tokens: int = 2048,
+        max_wait: float | None = None,
     ) -> Extraction[T]:
         """Ask for JSON matching a Pydantic model. One repair attempt if the answer is not valid."""
         instruction = "Reply with a single JSON object that matches this JSON schema and nothing else:\n" + json.dumps(
@@ -186,7 +282,13 @@ class Gateway:
         )
         convo: Messages = [{"role": "system", "content": instruction}, *messages]
         completion = self.complete(
-            step, convo, db=db, prompt_version=prompt_version, max_tokens=max_tokens, json_output=True
+            step,
+            convo,
+            db=db,
+            prompt_version=prompt_version,
+            max_tokens=max_tokens,
+            json_output=True,
+            max_wait=max_wait,
         )
         try:
             return Extraction(self._parse(completion.text, schema), completion)
@@ -207,6 +309,7 @@ class Gateway:
                 max_tokens=max_tokens,
                 json_output=True,
                 use_cache=False,
+                max_wait=max_wait,
             )
             try:
                 return Extraction(self._parse(second.text, schema), second)
@@ -219,6 +322,7 @@ class Gateway:
 
     @staticmethod
     def _parse[T: BaseModel](raw: str, schema: type[T]) -> T:
+        raw = re.sub(r"<think>.*?</think>", "", raw, flags=re.DOTALL)  # some reasoning models show their thinking
         body = re.sub(r"^```(?:json)?\s*|\s*```$", "", raw.strip())
         return schema.model_validate_json(body)
 
@@ -228,7 +332,7 @@ class Gateway:
 
     @staticmethod
     def _hash(
-        route: list[tuple[str, str]], messages: Messages, temperature: float, max_tokens: int, json_output: bool
+        route: list[tuple[Any, ...]], messages: Messages, temperature: float, max_tokens: int, json_output: bool
     ) -> str:
         blob = json.dumps([route, messages, temperature, max_tokens, json_output], sort_keys=True)
         return hashlib.sha256(blob.encode()).hexdigest()
