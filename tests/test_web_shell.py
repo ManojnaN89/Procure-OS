@@ -71,7 +71,7 @@ class Company:
         tenants.create_tenant(self.slug, "Demo Engineering Pvt Ltd", load_reference=False)
         self.db = Session(routing.engine_for(self.slug))
         self.emails: dict[str, str] = {}
-        for role in ("Admin", "Finance", "Requester"):
+        for role in ("Admin", "Finance", "Requester", "Buyer"):
             self.emails[role] = f"{role.lower()}{uuid.uuid4().hex[:5]}@example.com"
             uid = users.create_user(self.slug, self.emails[role], PASSWORD, f"{role} Person", role)
             if role == "Finance":

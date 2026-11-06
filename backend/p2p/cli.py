@@ -9,6 +9,8 @@ python -m p2p.cli import masters <tenant> <dataset folder> [--dry-run]
         reads the master data of a dataset into a company and reports every row it left out and why
 python -m p2p.cli import stock <tenant> <dataset folder> [--dry-run]
         reads the stock movement history of a dataset (after the masters are in)
+python -m p2p.cli replenish <tenant> [--dry-run] [--schedule]
+        creates draft purchase requests for stock at its reorder point; --schedule queues the daily morning run
 python -m p2p.cli worker      runs the job worker (timers, escalations, email, mailbox polling) until stopped
 """
 
@@ -43,6 +45,10 @@ def main(argv: list[str] | None = None) -> int:
         one.add_argument("tenant")
         one.add_argument("dataset")
         one.add_argument("--dry-run", action="store_true")
+    rep = sub.add_parser("replenish")
+    rep.add_argument("tenant")
+    rep.add_argument("--dry-run", action="store_true")
+    rep.add_argument("--schedule", action="store_true")
     sub.add_parser("worker")
     args = p.parse_args(argv)
 
@@ -52,6 +58,31 @@ def main(argv: list[str] | None = None) -> int:
             worker.run_forever()
         except KeyboardInterrupt:
             pass
+        return 0
+    if args.group == "replenish":
+        from datetime import datetime
+
+        from sqlalchemy.orm import Session
+
+        from p2p.formulas.calendar import IST
+        from p2p.requests import jobs, replenishment
+
+        if args.schedule:
+            jobs.schedule(args.tenant)
+            print(f"daily replenishment queued for {args.tenant}; it runs when the worker is running")
+            return 0
+        with Session(routing.engine_for(args.tenant)) as db:
+            result = replenishment.run(db, as_of=datetime.now(IST).date(), dry_run=args.dry_run)
+        verb = "would create" if args.dry_run else "created"
+        print(
+            f"{verb} {len(result.requests)} draft request(s) with {result.line_count} line(s), total {result.total_value}"
+        )
+        for req in result.requests:
+            print(
+                f"  {req.no or '(no number yet)'}  {req.location_code}  {req.category_code}  {req.priority}  {len(req.lines)} lines  {req.total_value}"
+            )
+        for reason, count in replenishment.summary(result)["skipped"].items():
+            print(f"  skipped {count}: {reason}")
         return 0
     if args.group == "import":
         from sqlalchemy.orm import Session

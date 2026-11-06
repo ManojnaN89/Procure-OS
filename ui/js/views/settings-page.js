@@ -31,6 +31,7 @@ const SettingsView = {
       { value: "GBP", label: "United Kingdom (\u00a3)" },
     ] },
     { key: "launch_in_focus_mode", label: "Launch in Focus Mode", suffix: "on app open, instead of the dashboard", group: "Display", isBoolean: true },
+    { key: "auto_replenishment", label: "Create purchase requests automatically", suffix: "every morning for stock at its reorder point", group: "Automation", isBoolean: true },
   ],
 
   async load() {

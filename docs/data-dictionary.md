@@ -115,6 +115,8 @@ The single reference for every table the platform stores and the generator produ
 
 **request_line** · request_no, line_no, item_code (blank for free text), free_text, attributes json, qty, uom, est_price, need_by, delivery_location, cost_centre_code, gl_code, category_code, project_code, status enum(open,sourcing,ordered,cancelled)
 
+In the platform, `request_line` also has `base_qty` (the quantity in the stock unit, so open requests count as stock on the way) and `reason` (why a planning line was raised). A request raised by replenishment has channel `planning` and no requester. `number_counter` holds the last number used per document type, location and financial year; the format of each series is the `number_series` master.
+
 **approval_event** · document, document_no, step, approver, on_behalf_of (delegation), action enum(approved,rejected,returned,delegated,auto_approved,escalated), at, comment, rule_code
 
 ### C2. Sourcing

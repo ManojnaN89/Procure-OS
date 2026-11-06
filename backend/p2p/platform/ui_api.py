@@ -20,10 +20,13 @@ from fastapi.responses import StreamingResponse
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
-from p2p.platform import routing
+from p2p.formulas.calendar import IST
+from p2p.formulas.money import format_qty, round_money
+from p2p.platform import routing, sod
 from p2p.platform.permissions import require
 from p2p.platform.tokens import decode_access_token
 from p2p.receiving.stock import stock_levels
+from p2p.requests import jobs, replenishment
 
 router = APIRouter(prefix="/api", tags=["ui"])
 sockets = APIRouter(tags=["ui"])
@@ -39,7 +42,9 @@ DEFAULT_SETTINGS: dict[str, str] = {
     "risk_score_high_cutoff": "55",
     "currency_preset": "INR",
     "launch_in_focus_mode": "true",
+    "auto_replenishment": "false",
 }
+BOOLEAN_SETTINGS = {"launch_in_focus_mode", "auto_replenishment"}
 CURRENCIES = {"INR", "USD", "EUR", "GBP"}
 
 
@@ -75,9 +80,9 @@ def update_settings(
         value = str(value)
         if key == "currency_preset" and value not in CURRENCIES:
             return {"error": f"currency_preset must be one of {', '.join(sorted(CURRENCIES))}"}
-        if key == "launch_in_focus_mode" and value not in ("true", "false"):
-            return {"error": "launch_in_focus_mode must be true or false"}
-        if key not in ("currency_preset", "launch_in_focus_mode") and not value.replace(".", "", 1).isdigit():
+        if key in BOOLEAN_SETTINGS and value not in ("true", "false"):
+            return {"error": f"{key} must be true or false"}
+        if key != "currency_preset" and key not in BOOLEAN_SETTINGS and not value.replace(".", "", 1).isdigit():
             return {"error": f"{key} must be a number"}
         db.execute(
             text(
@@ -87,6 +92,8 @@ def update_settings(
             {"k": key, "v": value},
         )
     db.commit()
+    if str(payload.get("auto_replenishment")) == "true":
+        jobs.schedule(ctx.slug)
     return {"updated": list(payload)}
 
 
@@ -327,10 +334,7 @@ def get_vendor(vendor_id: str, db: Db, ctx: Ctx) -> dict[str, Any]:
 
 def _qty(value: Decimal | None) -> str | None:
     """A quantity as text, so it never passes through a float on the way to the screen."""
-    if value is None:
-        return None
-    text_value = f"{value:f}"
-    return text_value.rstrip("0").rstrip(".") if "." in text_value else text_value
+    return None if value is None else format_qty(value)
 
 
 @router.get("/inventory")
@@ -365,7 +369,80 @@ def inventory(db: Db, ctx: Ctx, location: str | None = None, status: str | None 
     }
 
 
-for _name in ("rfqs", "requisitions", "purchase-orders", "payments", "contracts"):
+_REQUISITION_STATUS = {"submitted": "pending"}  # the screen calls a request waiting for approval "pending"
+
+
+def _requisition(r: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "id": r["no"],
+        "title": r["justification"] or f"Request for {r['ship_to_location']}",
+        "amount": str(r["total_value"]),
+        "requested_by": r["requester"] or "Automatic replenishment",
+        "status": _REQUISITION_STATUS.get(r["status"], r["status"]),
+        "priority": r["priority"],
+        "created_at": _iso(r["created_at"]),
+    }
+
+
+@router.get("/requisitions")
+def list_requisitions(db: Db, ctx: Ctx) -> list[dict[str, Any]]:
+    return [_requisition(r) for r in _rows(db, "select * from request order by created_at desc, no desc limit 500")]
+
+
+@router.get("/requisitions/{no}")
+def get_requisition(no: str, db: Db, ctx: Ctx) -> dict[str, Any]:
+    rows = _rows(db, "select * from request where no = :n", n=no)
+    if not rows:
+        raise HTTPException(404, "Not found")
+    lines = _rows(
+        db,
+        "select rl.line_no, rl.item_code, coalesce(i.name, rl.free_text) as name, rl.qty, rl.uom, rl.est_price, rl.need_by, "
+        "rl.reason, rl.status, rl.delivery_location from request_line rl left join item i on i.code = rl.item_code "
+        "where rl.request_no = :n order by rl.line_no",
+        n=no,
+    )
+    return {
+        **_requisition(rows[0]),
+        "description": rows[0]["justification"],
+        "ship_to": rows[0]["ship_to_location"],
+        "need_by": rows[0]["need_by"].isoformat() if rows[0]["need_by"] else None,
+        "channel": rows[0]["channel"],
+        "lines": [
+            {
+                "line_no": line["line_no"],
+                "item_code": line["item_code"],
+                "name": line["name"],
+                "qty": _qty(line["qty"]),
+                "uom": line["uom"],
+                "est_price": str(line["est_price"]) if line["est_price"] is not None else None,
+                "value": str(round_money(line["qty"] * line["est_price"])) if line["est_price"] is not None else None,
+                "need_by": line["need_by"].isoformat() if line["need_by"] else None,
+                "reason": line["reason"],
+                "status": line["status"],
+            }
+            for line in lines
+        ],
+        "purchase_order": None,
+    }
+
+
+@router.post("/replenishment/run")
+def run_replenishment(
+    payload: dict[str, Any],
+    db: Db,
+    ctx: Annotated[routing.TenantContext, Depends(require("replenishment.run"))],
+) -> dict[str, Any]:
+    """Preview (dry_run) or create the draft requests for stock at its reorder point."""
+    result = replenishment.run(
+        db,
+        as_of=datetime.now(IST).date(),
+        actor=sod.user(ctx.user_id),
+        dry_run=bool(payload.get("dry_run", True)),
+    )
+    return replenishment.summary(result)
+
+
+for _name in ("rfqs", "purchase-orders", "payments", "contracts"):
 
     def _list(db: Db, ctx: Ctx) -> list[Any]:
         return []

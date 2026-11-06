@@ -234,3 +234,81 @@ def test_the_inventory_page_lists_the_worst_stock_first_and_shows_names_as_text(
         for table in ("item_location", "stock_opening", "item", "item_category", "location"):
             db.execute(text(f"delete from {table}"))
         db.commit()
+
+
+def test_a_buyer_checks_stock_creates_the_drafts_and_a_second_check_finds_nothing_new(
+    company: Company, browser: Any
+) -> None:
+    db = company.db
+    db.execute(
+        text(
+            "insert into number_series (document_type, prefix, scope, format, reset) "
+            "values ('request', 'REQ', 'location', '{prefix}-{loc}-{fy4}-{seq:05d}', 'fy')"
+        )
+    )
+    db.execute(text("insert into location (code, name, is_stock_location) values ('WH-BLR', 'Bengaluru store', true)"))
+    db.execute(text("insert into item_category (code, name) values ('C1', 'Spares')"))
+    db.execute(
+        text(
+            "insert into item (code, name, category_code, base_uom, purchase_uom, pack_size, moq, standard_price, "
+            "default_lead_days, active, stocked) values ('A', '<i>Bearing</i>', 'C1', 'NOS', 'NOS', 1, 1, 100, 3, true, true)"
+        )
+    )
+    db.execute(
+        text("insert into stock_opening (item_code, location_code, qty, as_of) values ('A', 'WH-BLR', 5, '2026-01-01')")
+    )
+    db.execute(
+        text(
+            "insert into item_location (item_code, location_code, reorder_policy, reorder_point, safety_stock, max_qty) "
+            "values ('A', 'WH-BLR', 'minmax', 20, 2, 100)"
+        )
+    )
+    db.commit()
+    try:
+        page = open_app(browser, LAPTOP)
+        sign_in(page, company.emails["Buyer"])
+        page.goto(f"{URL}/#/requisitions")
+        expect(page.locator("#tableWrap")).to_contain_text("No requisitions yet")
+
+        page.locator("#replenishBtn").click()
+        expect(page.locator("#replenishPanel")).to_contain_text(
+            "1 item at or below their reorder point would become 1 draft request"
+        )
+        assert page.locator("#tableWrap tbody tr").count() == 0  # a preview creates nothing
+        page.locator("#createDraftsBtn").click()
+        expect(page.locator("#replenishPanel")).to_contain_text("Created 1 draft request")
+
+        row = page.locator("#tableWrap tbody tr")
+        expect(row).to_have_count(1)
+        expect(row).to_contain_text("Automatic replenishment")
+        expect(row).to_contain_text("Draft")
+        row.click()
+        expect(page.locator("#appContent")).to_contain_text("<i>Bearing</i>")  # shown as typed, not as italics
+        expect(page.locator("#appContent")).to_contain_text("95")  # 100 less the 5 on hand
+        assert page.locator("#appContent i:not(.ti)").count() == 0
+
+        page.goto(f"{URL}/#/requisitions")
+        page.locator("#replenishBtn").click()
+        expect(page.locator("#replenishPanel")).to_contain_text("Nothing needs ordering right now")
+        expect(page.locator("#replenishPanel")).to_contain_text("Already requested")
+        assert page.problems == []  # type: ignore[attr-defined]
+
+        requester = open_app(browser, LAPTOP)
+        sign_in(requester, company.emails["Requester"])
+        requester.goto(f"{URL}/#/requisitions")
+        expect(requester.locator("#tableWrap")).to_be_visible()
+        expect(requester.locator("#replenishBtn")).to_have_count(0)
+    finally:
+        for table in (
+            "request_line",
+            "request",
+            "number_counter",
+            "number_series",
+            "item_location",
+            "stock_opening",
+            "item",
+            "item_category",
+            "location",
+        ):
+            db.execute(text(f"delete from {table}"))
+        db.commit()

@@ -50,6 +50,15 @@ const API = {
 
   listRequisitions() { return this.getJSON("/api/requisitions"); },
   getRequisition(id) { return this.getJSON(`/api/requisitions/${id}`); },
+  async runReplenishment(dryRun) {
+    const res = await Auth.fetch(`${this.base}/api/replenishment/run`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ dry_run: dryRun }),
+    });
+    if (!res.ok) throw new Error(`Replenishment failed (${res.status})`);
+    return res.json();
+  },
 
   listVendors() { return this.getJSON("/api/vendors"); },
   getVendor(id) { return this.getJSON(`/api/vendors/${id}`); },

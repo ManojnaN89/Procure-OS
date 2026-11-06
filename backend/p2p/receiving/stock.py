@@ -37,13 +37,19 @@ TYPES = {"receipt", "issue", "return", "adjust", "transfer_in", "transfer_out"}
 _LEVELS = """
     select l.item_code, i.name as item_name, i.base_uom as uom, c.name as category,
            l.location_code, loc.name as location_name,
-           l.on_hand, l.last_movement,
+           l.on_hand, coalesce(o.qty, 0) as on_order, l.last_movement,
            p.reorder_policy as policy, p.reorder_point, p.safety_stock, p.min_qty, p.max_qty, p.order_qty
     from stock_level l
     join item i on i.code = l.item_code
     join item_category c on c.code = i.category_code
     join location loc on loc.code = l.location_code
     left join item_location p on p.item_code = l.item_code and p.location_code = l.location_code
+    left join (
+        select rl.item_code, rl.delivery_location, sum(rl.base_qty) as qty
+        from request_line rl join request r on r.no = rl.request_no
+        where rl.status in ('open', 'sourcing') and r.status in ('draft', 'submitted', 'approved', 'returned')
+        group by rl.item_code, rl.delivery_location
+    ) o on o.item_code = l.item_code and o.delivery_location = l.location_code
 """
 
 
@@ -68,7 +74,7 @@ class StockLine:
 
 
 def stock_levels(db: Session, *, location: str | None = None, item: str | None = None) -> list[StockLine]:
-    """Every item-location with its status. Orders are not placed yet, so nothing is on order."""
+    """Every item-location with its status. On order is what open requests still ask for (purchase orders will add to it)."""
     sql = _LEVELS
     params: dict[str, Any] = {}
     clauses = []
@@ -82,7 +88,7 @@ def stock_levels(db: Session, *, location: str | None = None, item: str | None =
         sql += " where " + " and ".join(clauses)
     out = []
     for r in db.execute(text(sql + " order by l.location_code, l.item_code"), params).mappings():
-        on_order = Decimal(0)
+        on_order = r["on_order"]
         out.append(
             StockLine(
                 item_code=r["item_code"],

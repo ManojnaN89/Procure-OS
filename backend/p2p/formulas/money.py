@@ -21,6 +21,12 @@ def round_money(value: Any) -> Decimal:
     return to_decimal(value).quantize(PAISE, rounding=ROUND_HALF_UP)
 
 
+def format_qty(value: Any) -> str:
+    """A quantity as plain text without trailing zeros: 20.0000 becomes '20', 5096.3320 becomes '5096.332'."""
+    text_value = f"{to_decimal(value):f}"
+    return text_value.rstrip("0").rstrip(".") if "." in text_value else text_value
+
+
 def round_qty(value: Any) -> Decimal:
     return to_decimal(value).quantize(QTY_STEP, rounding=ROUND_HALF_UP)
 

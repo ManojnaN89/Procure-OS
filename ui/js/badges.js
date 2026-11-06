@@ -47,7 +47,10 @@ const AppConfig = {
 
 function formatCurrency(n) {
   if (n === null || n === undefined) return "\u2014";
-  return AppConfig.currencySymbol + Number(n).toLocaleString(AppConfig.currencyLocale);
+  const v = Number(n);
+  // whole rupees stay plain; anything with paise always shows both decimals (525.8 would read as 525.08)
+  const digits = Number.isInteger(v) ? 0 : 2;
+  return AppConfig.currencySymbol + v.toLocaleString(AppConfig.currencyLocale, { minimumFractionDigits: digits, maximumFractionDigits: 2 });
 }
 
 function formatDate(iso) {
