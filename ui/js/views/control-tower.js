@@ -11,6 +11,7 @@ const ControlTowerView = {
     on_time_delivery: "Delivered by the promised date",
     first_pass_match: "Invoices matched first time",
     msme_on_time_payment: "Small suppliers paid by the due date",
+    duplicates_avoided: "Duplicates stopped",
   },
 
   async render(container) {
@@ -23,9 +24,10 @@ const ControlTowerView = {
       <div id="ctTower"><div class="empty-state">Loading…</div></div>
       <div id="ctDrill" style="margin-top:14px;"></div>
       <h2 style="font-size:14px;margin:22px 0 8px;">Key figures</h2>
-      <div id="ctKpis"><div class="empty-state">Loading…</div></div>`;
+      <div id="ctKpis"><div class="empty-state">Loading…</div></div>
+      ${Auth.can("budget.view") ? `<h2 style="font-size:14px;margin:22px 0 8px;">Budgets, this financial year so far</h2><div id="ctBudgets"><div class="empty-state">Loading…</div></div>` : ""}`;
     document.getElementById("ctLocation").addEventListener("change", (e) => { this.location = e.target.value; document.getElementById("ctDrill").innerHTML = ""; this.loadTower(); });
-    await Promise.all([this.loadTower(true), this.loadKpis()]);
+    await Promise.all([this.loadTower(true), this.loadKpis(), Auth.can("budget.view") ? this.loadBudgets() : null]);
   },
 
   async loadTower(first) {
@@ -66,6 +68,24 @@ const ControlTowerView = {
 
   pct(v) { return v === null || v === undefined ? "—" : `${this.esc(v)}%`; },
 
+  // Budget against what requests already hold and what was spent, per cost centre and account.
+  async loadBudgets() {
+    const box = document.getElementById("ctBudgets");
+    try {
+      const b = await API.getJSON("/api/budgets/variance");
+      if (!box || !document.body.contains(box)) return;
+      if (!b.rows.length) { box.innerHTML = `<div class="empty-next"><strong>No budgets are set up.</strong><br>Budgets are loaded with the company's master data.</div>`; return; }
+      box.innerHTML = `<div class="table-wrap"><table class="data-table"><thead><tr><th>COST CENTRE</th><th>ACCOUNT</th><th>BUDGET</th><th>HELD BY REQUESTS</th><th>SPENT</th><th>LEFT</th></tr></thead><tbody>
+        ${b.rows.map((r) => `<tr><td>${this.esc(r.cost_centre_name || r.cost_centre)}<div class="cell-muted" style="font-size:11px;">${this.esc(r.cost_centre)}</div></td><td>${this.esc(r.gl_code)}</td>
+          <td>${formatCurrency(r.budget)}</td><td>${formatCurrency(r.committed)}</td><td>${formatCurrency(r.spent)}</td>
+          <td>${r.over ? `<span class="badge badge-rejected">${formatCurrency(r.left)}</span>` : formatCurrency(r.left)}</td></tr>`).join("")}
+      </tbody></table></div>
+      ${b.unassigned.length ? `<p class="cell-muted" style="font-size:12px;margin-top:8px;">Also held against the location, with no cost centre: ${b.unassigned.map((u) => `${this.esc(u.gl_code)} at ${this.esc(u.location)} ${formatCurrency(u.committed)}`).join("; ")}</p>` : ""}`;
+    } catch {
+      if (box) box.innerHTML = `<div class="empty-state">Couldn't load the budgets.</div>`;
+    }
+  },
+
   async loadKpis() {
     const box = document.getElementById("ctKpis");
     try {
@@ -77,6 +97,7 @@ const ControlTowerView = {
         ["on_time_delivery", this.pct(k.on_time_delivery.pct), `${this.esc(k.on_time_delivery.lines)} order lines`],
         ["first_pass_match", this.pct(k.first_pass_match.pct), `${this.esc(k.first_pass_match.invoices)} invoices`],
         ["msme_on_time_payment", this.pct(k.msme_on_time_payment.pct), `${this.esc(k.msme_on_time_payment.invoices)} invoices`],
+        ["duplicates_avoided", this.esc(k.duplicates_avoided.count), `${formatCurrency(k.duplicates_avoided.value)} stopped: ${this.esc(k.duplicates_avoided.requests.count)} requests, ${this.esc(k.duplicates_avoided.invoices.count)} invoices`],
       ];
       box.innerHTML = `
         <div class="stat-grid" style="grid-template-columns:repeat(3,1fr);margin-bottom:14px;">

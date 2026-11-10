@@ -248,3 +248,88 @@ def test_the_request_page_shows_the_budget_check(db: Session) -> None:  # noqa: 
         "100000.00",
         ["CC1"],
     )
+
+
+# ---- budget against what is held and spent (the variance view) ---------------------------------
+
+
+def test_a_request_that_is_cancelled_or_withdrawn_gives_its_budget_back(db: Session) -> None:  # noqa: F811
+    from p2p.requests import lifecycle
+
+    _budgets(db)
+    _ask(db, "R-W", "400000", cc="CC1", status="submitted")
+    (before,) = _check(db, _ask(db, "R-N1", "10000", cc="CC1"))
+    assert before.check.committed == D("400000")
+
+    db.execute(text("update request set requester = 'U4' where no = 'R-W'"))
+    db.commit()
+    lifecycle.cancel(db, db.info["slug"], "R-W", _requester_login(db), "no longer needed")
+
+    (after,) = _check(db, "R-N1")
+    assert after.check.committed == D("0")  # the 400,000 is free again
+
+
+def _requester_login(db: Session) -> int:
+    from p2p.platform import users
+
+    return users.create_user(
+        db.info["slug"], f"keeper{db.info['sfx']}@x.example", "correct horse battery", "Keeper", "Requester"
+    )
+
+
+def test_the_variance_shows_budget_held_and_spent_for_each_cost_centre_and_account(db: Session) -> None:  # noqa: F811
+    _budgets(db)
+    _ask(db, "R-V1", "30000", cc="CC1", status="approved")
+    _ask(db, "R-V2", "20000", cc="CC1", status="submitted")
+    _ask(db, "R-V3", "999999", cc="CC1", status="draft")  # a draft holds nothing
+    _ask(db, "R-V4", "7000", cc="CC2", status="closed")
+    _ask(db, "R-V5", "5000", status="approved")  # no cost centre: listed apart
+    db.execute(
+        text("insert into supplier (code, legal_name, trade_name, status) values ('SV', 'Vendor', null, 'active')")
+    )
+    db.execute(
+        text(
+            "insert into invoice (no, type, supplier_code, supplier_invoice_no, invoice_date, fy, received_on, taxable, total, "
+            "status, dedupe_key) values ('PI-V', 'invoice', 'SV', 'X1', '2026-11-02', '2026-27', '2026-11-02', 12000, 12000, 'paid', 'X1')"
+        )
+    )
+    db.execute(
+        text(
+            "insert into budget_actual (invoice_no, cost_centre_code, gl_code, period, amount) values "
+            "('PI-V', 'CC1', 'G1', '2026-11', 12000), ('PI-V', 'CC1', 'G1', '2027-01', 999)"  # a later month is not counted yet
+        )
+    )
+    db.commit()
+
+    got = budget.variance(db, TODAY)
+
+    assert (got["from"], got["to"]) == ("2026-04", "2026-11")
+    cc1, cc2 = got["rows"]
+    # 8 months (April to November) of 100,000 and 50,000
+    assert (cc1["cost_centre"], cc1["budget"], cc1["committed"], cc1["spent"], cc1["left"], cc1["over"]) == (
+        "CC1", "800000.00", "50000.00", "12000.00", "750000.00", False,
+    )  # fmt: skip
+    assert (cc2["budget"], cc2["committed"], cc2["spent"]) == ("400000.00", "7000.00", "0.00")
+    assert got["unassigned"] == [{"gl_code": "G1", "location": "WH-BLR", "committed": "5000.00"}]
+
+
+def test_only_those_who_may_see_budgets_get_the_variance_over_the_api(db: Session) -> None:  # noqa: F811
+    from fastapi.testclient import TestClient
+
+    from p2p.main import app
+    from p2p.platform import users
+    from p2p.platform.tokens import create_access_token
+
+    _budgets(db)
+    slug, sfx = db.info["slug"], db.info["sfx"]
+    finance = users.create_user(slug, f"f{sfx}@x.example", "correct horse battery", "Finance", "Finance")
+    buyer = users.create_user(slug, f"b{sfx}@x.example", "correct horse battery", "Buyer", "Buyer")
+    client = TestClient(app)
+
+    def get(uid: int, role: str) -> int:
+        return client.get(
+            "/api/budgets/variance", headers={"Authorization": f"Bearer {create_access_token(uid, slug, role)}"}
+        ).status_code
+
+    assert get(finance, "Finance") == 200
+    assert get(buyer, "Buyer") == 403

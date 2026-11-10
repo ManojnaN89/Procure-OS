@@ -11,6 +11,11 @@ You decide requests, orders and the sensitive things that no program may decide 
 1. Click the request in **My work**, or open **Requests**.
 2. Read the lines, the amount and the budget warning if there is one.
 3. Click **Approve**, **Return for changes** or **Reject**. Returning and rejecting need a reason: write it and click **Confirm**.
+4. To approve less than was asked, click **Approve less…**, lower the quantities, write the reason and click **Approve with these quantities**. A quantity can go down, not up, and the value follows it.
+
+Several at once: under **Requests**, open **Needs my decision**, tick the requests and click **Approve selected**. Each is decided on its own, and anything that is not your turn is left alone and listed.
+
+By email: the mail about a request that waits for you has a link. It opens a page that shows the request, with **Approve** and **Reject**. The link works once and expires after a week. Opening it decides nothing.
 
 ## Approve an order
 

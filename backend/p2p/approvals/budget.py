@@ -139,3 +139,72 @@ def summary(checks: list[GroupCheck]) -> str:
         parts = ", ".join(f"GL {c.gl_code} by {c.check.over_by:,.2f}" for c in over)
         return f"Over budget: {parts}."
     return "Within budget."
+
+
+def _money(value: Decimal) -> str:
+    return str(value.quantize(Decimal("0.01")))
+
+
+def variance(db: Session, today: date) -> dict[str, Any]:
+    """Budget against what is committed and what was spent, from the start of the financial year to the month of `today`.
+
+    One row per cost centre and GL account that has a budget: the budget for those months, what requests already hold
+    (waiting, approved or ordered: the same count the budget check makes), what was spent (paid invoices, by the period of
+    the invoice) and what is left to commit. Request lines with no cost centre are held against all the cost centres of their
+    location, so they are listed apart rather than guessed onto one."""
+    start, end = fy_bounds(today)
+    first, last = start.strftime("%Y-%m"), today.strftime("%Y-%m")
+    held = {
+        (r[0], r[1]): Decimal(r[2])
+        for r in db.execute(
+            text(
+                "select l.cost_centre_code, l.gl_code, sum(l.qty * coalesce(l.est_price, 0)) from request_line l "
+                "join request r on r.no = l.request_no where r.status = any(:st) and l.status <> 'cancelled' "
+                "and l.gl_code is not null and l.cost_centre_code is not null and r.created_at::date between :f and :t group by 1, 2"
+            ),
+            {"st": list(COMMITTED_STATUSES), "f": start, "t": end},
+        )
+    }
+    spent = {
+        (r[0], r[1]): Decimal(r[2])
+        for r in db.execute(
+            text(
+                "select cost_centre_code, gl_code, sum(amount) from budget_actual where period between :a and :b group by 1, 2"
+            ),
+            {"a": first, "b": last},
+        )
+    }
+    rows: list[dict[str, Any]] = []
+    for cc, gl, name, amount, blocks in db.execute(
+        text(
+            "select b.cost_centre_code, b.gl_code, c.name, sum(b.amount), bool_or(b.policy = 'block') from budget b "
+            "left join cost_centre c on c.code = b.cost_centre_code where b.period between :a and :b group by 1, 2, 3 order by 1, 2"
+        ),
+        {"a": first, "b": last},
+    ):
+        budget_, committed, used = Decimal(amount), held.get((cc, gl), Decimal(0)), spent.get((cc, gl), Decimal(0))
+        rows.append(
+            {
+                "cost_centre": cc,
+                "cost_centre_name": name,
+                "gl_code": gl,
+                "budget": _money(budget_),
+                "committed": _money(committed),
+                "spent": _money(used),
+                "left": _money(budget_ - committed),
+                "over": committed > budget_,
+                "policy": "block" if blocks else "warn",
+            }
+        )
+    unassigned = [
+        {"gl_code": r[0], "location": r[1], "committed": _money(Decimal(r[2]))}
+        for r in db.execute(
+            text(
+                "select l.gl_code, coalesce(l.delivery_location, r.ship_to_location), sum(l.qty * coalesce(l.est_price, 0)) "
+                "from request_line l join request r on r.no = l.request_no where r.status = any(:st) and l.status <> 'cancelled' "
+                "and l.gl_code is not null and l.cost_centre_code is null and r.created_at::date between :f and :t group by 1, 2 order by 1, 2"
+            ),
+            {"st": list(COMMITTED_STATUSES), "f": start, "t": end},
+        )
+    ]
+    return {"from": first, "to": last, "rows": rows, "unassigned": unassigned}

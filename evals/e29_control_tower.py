@@ -421,6 +421,29 @@ def kpi_oracle(db: Any, world_info: dict[str, Any], holidays: set[date]) -> dict
         and i["supplier_code"] in msme
     ]
     out["msme"] = (len(paid), pct1(sum(1 for i in paid if i["paid_on"] <= i["due_date"]), len(paid)))
+    # duplicates stopped: invoices blocked or set aside as a copy; requests that looked like a repeat and were given up
+    # with nobody going ahead on a reason
+    copies = [
+        i
+        for i in q(db, "select status, payment_block, total from invoice")
+        if i["payment_block"] == "duplicate" and i["status"] in ("blocked", "cancelled")
+    ]
+    flagged = {c["request_no"] for c in q(db, "select request_no from request_check where kind = 'duplicate'")}
+    gone_ahead = {
+        c["request_no"]
+        for c in q(db, "select request_no, override_reason from request_check where kind = 'duplicate'")
+        if c["override_reason"]
+    }
+    given_up = [
+        r
+        for r in q(db, "select no, status, total_value from request")
+        if r["no"] in flagged - gone_ahead and r["status"] in ("cancelled", "rejected")
+    ]
+    out["duplicates"] = {
+        "requests": {"count": len(given_up), "value": str(sum((r["total_value"] for r in given_up), D(0)))},
+        "invoices": {"count": len(copies), "value": str(sum((i["total"] for i in copies), D(0)))},
+    }
+    out["duplicates_in_dataset"] = sum(1 for r in rows("history", "invoice") if r["payment_block"] == "duplicate")
     # touched by nobody
     with_order = {
         p["request_no"]
@@ -495,6 +518,13 @@ def compare_kpis(got: dict[str, Any], want: dict[str, Any], wrong: list[str]) ->
         want["msme"],
     )
     check("touchless", (got["touchless"]["requests"], got["touchless"]["pct"]), want["touchless"])
+    d = got["duplicates_avoided"]
+    check("duplicates avoided", {"requests": d["requests"], "invoices": d["invoices"]}, want["duplicates"])
+    check(
+        "duplicate invoices stopped against the dataset's planted copies",
+        d["invoices"]["count"],
+        want["duplicates_in_dataset"],
+    )
     for name, w in want["cycle"].items():
         g = got["cycle_time"][name]
         check(f"cycle time {name}", {"cases": g["cases"], "median": g["median"], "p90": g["p90"]}, w)
@@ -777,6 +807,7 @@ def run(ctx) -> Outcome:
         "  … by the dataset's answer key %": want["first_pass_truth"],
         "small suppliers paid on time (n, %)": want["msme"],
         "touchless (requests, %)": want["touchless"],
+        "duplicates stopped (requests, invoices)": want["duplicates"],
         "cycle time, request to paid, working days": want["cycle"]["total"],
         "paid invoices set up from the dataset": info["marked_paid"],
     }

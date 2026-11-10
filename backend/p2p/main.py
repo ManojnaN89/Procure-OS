@@ -11,6 +11,7 @@ from p2p.config import REPO_ROOT, get_settings
 from p2p.platform import logs, tenants
 from p2p.platform.admin_api import router as admin_router
 from p2p.platform.agent_api import router as agent_router
+from p2p.platform.approval_link_api import router as approval_link_router
 from p2p.platform.auth import router as auth_router
 from p2p.platform.export_api import router as export_router
 from p2p.platform.files import router as files_router
@@ -43,6 +44,7 @@ app.include_router(invoice_intake_router)
 app.include_router(master_router)
 app.include_router(order_router)
 app.include_router(agent_router)
+app.include_router(approval_link_router)
 app.include_router(payment_router)
 app.include_router(supplier_agent_router)
 app.include_router(ui_sockets)

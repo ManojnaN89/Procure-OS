@@ -240,6 +240,21 @@ def _open_step(db: Session, tenant: str, no: str, value: Decimal, step: int, rou
     user_id = users.user_id_by_email(tenant, str(email)) if email else None
     if user_id is None:
         return  # no login yet: the step waits, and shows on the request page
+    from p2p.approvals import email_links  # noqa: PLC0415 - email_links uses this module
+
+    try:
+        link = email_links.url(tenant, no, round_no, step, user_id)
+        note = f" To decide without signing in, open {link} (works once, expires in {email_links.EXPIRES_DAYS} days)."
+    except email_links.LinkError:
+        note = ""  # no signing secret: the approver decides in the app
+    boss = db.execute(
+        text(
+            "select m.code from org_user a join org_user m on m.code = a.manager_code and m.active "
+            "join request r on r.no = :n where a.code = :c and m.code <> coalesce(r.requester, '')"
+        ),
+        {"n": no, "c": who},
+    ).scalar()  # a request that waits too long goes to the approver's own manager (never the person who asked)
+    boss_login = notifications.login_of(db, tenant, str(boss)) if boss else None
     task_id = tasks.create_task(
         db,
         tenant,
@@ -247,7 +262,9 @@ def _open_step(db: Session, tenant: str, no: str, value: Decimal, step: int, rou
         title=f"Approve request {no} ({value})",
         assignee=user_id,
         sla_hours=_sla_hours(db),
+        escalation_chain=[boss_login] if boss_login else None,
         payload={"request_no": no, "step": step},
+        email_note=note,
     )
     db.execute(
         text("update approval_step set task_id = :t where request_no = :n and round = :r and step = :s"),
@@ -290,10 +307,74 @@ def _acting(db: Session, no: str, user_id: int) -> tuple[dict[str, Any], dict[st
     return req, dict(step), me
 
 
-def approve(db: Session, tenant: str, no: str, user_id: int, comment: str | None = None) -> str:
-    """Approve the current step. Returns the request's status afterwards (submitted if more steps follow, else approved)."""
+def _lower_quantities(
+    db: Session, req: dict[str, Any], quantities: dict[int, Decimal], actor: Actor, reason: str | None
+) -> None:
+    """The approver approves less than was asked: a quantity can only go down (a higher one would need the rules asked again),
+    never to nothing (that is a rejection), and the reason is kept. The request's value follows."""
+    if not (reason or "").strip():
+        raise ApprovalError("a reason is needed when you change a quantity")
+    no = req["no"]
+    changed: list[dict[str, Any]] = []
+    for line_no, wanted in sorted(quantities.items()):
+        line = (
+            db.execute(
+                text(
+                    "select qty, base_qty from request_line where request_no = :n and line_no = :l and status <> 'cancelled' for update"
+                ),
+                {"n": no, "l": line_no},
+            )
+            .mappings()
+            .first()
+        )
+        if line is None:
+            raise ApprovalError(f"{no} has no line {line_no}")
+        old, new = Decimal(line["qty"]), Decimal(wanted).quantize(Decimal("0.0001"))
+        if new <= 0:
+            raise ApprovalError(f"line {line_no}: a quantity must be more than zero (reject the request to refuse it)")
+        if new > old:
+            raise ApprovalError(f"line {line_no}: an approver can lower a quantity, not raise it ({old} asked)")
+        if new == old:
+            continue
+        base = None if line["base_qty"] is None else (Decimal(line["base_qty"]) * new / old).quantize(Decimal("0.0001"))
+        db.execute(
+            text("update request_line set qty = :q, base_qty = :b where request_no = :n and line_no = :l"),
+            {"q": new, "b": base, "n": no, "l": line_no},
+        )
+        changed.append({"line": line_no, "from": str(old), "to": str(new)})
+    if not changed:
+        return
+    total = db.execute(
+        text(
+            "update request set total_value = (select coalesce(round(sum(qty * coalesce(est_price, 0)), 2), 0) from request_line "
+            "where request_no = :n and status <> 'cancelled') where no = :n returning total_value"
+        ),
+        {"n": no},
+    ).scalar_one()
+    audit.record(
+        db, actor, "request.quantity_edit", "request", no,
+        before={"total_value": str(req["total_value"])}, after={"lines": changed, "total_value": str(total)}, reason=reason,
+    )  # fmt: skip
+    req["total_value"] = total
+
+
+def approve(
+    db: Session,
+    tenant: str,
+    no: str,
+    user_id: int,
+    comment: str | None = None,
+    *,
+    quantities: dict[int, Decimal] | None = None,
+    via: str | None = None,
+) -> str:
+    """Approve the current step, optionally with lower quantities (a reason is then needed). `via` says how the decision
+    came in when it was not the screen (an emailed link). Returns the request's status afterwards (submitted if more steps
+    follow, else approved)."""
     req, step, me = _acting(db, no, user_id)
     actor = Actor("user", str(user_id))
+    if quantities:
+        _lower_quantities(db, req, quantities, actor, comment)
     db.execute(
         text(
             "update approval_step set status = 'approved', acted_by = :me, acted_at = now(), comment = :c where id = :i"
@@ -311,6 +392,7 @@ def approve(db: Session, tenant: str, no: str, user_id: int, comment: str | None
             "role": step["role"],
             "approver": me,
             "on_behalf_of": step["approver"] if me != step["approver"] else None,
+            "via": via,
         },
         reason=comment,
         rule_version=f"{req['rule_code']}:v{req['rule_version']}",
@@ -360,8 +442,102 @@ def approve(db: Session, tenant: str, no: str, user_id: int, comment: str | None
     return "submitted" if following is not None else "approved"
 
 
+def on_escalated(db: Session, task_id: int, new_assignee: int) -> None:
+    """An approval task moved to the approver's manager: the manager may decide the step too (on the approver's behalf, and
+    the audit says so). The approver can still decide it. Nothing happens if the step is no longer waiting."""
+    step = (
+        db.execute(
+            text(
+                "select s.id, s.request_no, s.approver, r.requester from approval_step s join request r on r.no = s.request_no "
+                "where s.task_id = :t and s.status = 'pending' and s.delegate is null for update of s"
+            ),
+            {"t": task_id},
+        )
+        .mappings()
+        .first()
+    )
+    me = org_code_of(db, new_assignee)
+    if step is None or me is None or me == step["requester"] or me == step["approver"]:
+        return
+    db.execute(text("update approval_step set delegate = :m where id = :i"), {"m": me, "i": step["id"]})
+    audit.record(
+        db, Actor("service", "escalation"), "request.escalate", "request", step["request_no"],
+        after={"step_approver": step["approver"], "may_also_decide": me}, reason="the approval waited past its time",
+    )  # fmt: skip
+
+
+def bulk_approve(
+    db: Session, tenant: str, nos: list[str], user_id: int, comment: str | None = None
+) -> dict[str, dict[str, str]]:
+    """Approve several requests at once from the inbox. Each is decided on its own: the ones that are not this person's turn
+    (or are otherwise refused) are left alone and come back with the reason."""
+    out: dict[str, dict[str, str]] = {}
+    for no in dict.fromkeys(nos):
+        try:
+            out[no] = {"status": approve(db, tenant, no, user_id, comment)}
+        except (ApprovalError, permissions.PermissionDenied) as exc:
+            db.rollback()
+            out[no] = {"error": str(exc)}
+    return out
+
+
+REMIND_GAP_HOURS = 4
+
+
+def remind_approver(db: Session, tenant: str, no: str, user_id: int) -> str:
+    """The requester nudges whoever has their request. Allowed to the requester (or anyone who may see every request), only
+    while the request waits for approval, and not more than once every few hours. Returns the name that was reminded."""
+    req = _locked(db, no)
+    me = org_code_of(db, user_id)
+    if me != req["requester"] and not permissions.can_anywhere(db, user_id, "request.view"):
+        raise permissions.PermissionDenied("only the requester can remind the approver")
+    if req["status"] != "submitted":
+        raise ApprovalError(f"request {no} is {req['status']}: nobody is deciding it now")
+    step = (
+        db.execute(
+            text(
+                "select approver, delegate from approval_step where request_no = :n and round = :r and status = 'pending' "
+                "order by step limit 1"
+            ),
+            {"n": no, "r": req["approval_round"]},
+        )
+        .mappings()
+        .first()
+    )
+    if step is None:
+        raise ApprovalError(f"request {no} has no step waiting for a decision")
+    recent = db.execute(
+        text(
+            "select 1 from audit_event where action = 'request.remind' and entity_id = :n "
+            "and at > now() - make_interval(hours => :h) limit 1"
+        ),
+        {"n": no, "h": REMIND_GAP_HOURS},
+    ).first()
+    if recent is not None:
+        raise ApprovalError(f"the approver was reminded in the last {REMIND_GAP_HOURS} hours; give it time")
+    whom = step["delegate"] or step["approver"]
+    told = notify_person(
+        db, tenant, whom, "approval", f"Reminder: request {no} is waiting for you",
+        f"{name_of(db, req['requester'])} asks you to look at request {no}.", link=f"#/requisitions/{no}",
+    )  # fmt: skip
+    audit.record(
+        db, Actor("user", str(user_id)), "request.remind", "request", no,
+        after={"approver": whom, "told": told}, reason="reminder from the requester",
+    )  # fmt: skip
+    db.commit()
+    return name_of(db, whom)
+
+
 def _stop(
-    db: Session, no: str, user_id: int, reason: str | None, *, status: str, action: str, tenant: str | None = None
+    db: Session,
+    no: str,
+    user_id: int,
+    reason: str | None,
+    *,
+    status: str,
+    action: str,
+    tenant: str | None = None,
+    via: str | None = None,
 ) -> str:
     if not reason or not reason.strip():
         raise ApprovalError("a reason is required")
@@ -387,7 +563,7 @@ def _stop(
         "request",
         no,
         before={"status": "submitted"},
-        after={"status": status, "step": step["step"], "approver": me},
+        after={"status": status, "step": step["step"], "approver": me, "via": via},
         reason=reason,
         rule_version=f"{req['rule_code']}:v{req['rule_version']}",
     )
@@ -399,9 +575,11 @@ def _stop(
     return status
 
 
-def reject(db: Session, no: str, user_id: int, reason: str | None, *, tenant: str | None = None) -> str:
+def reject(
+    db: Session, no: str, user_id: int, reason: str | None, *, tenant: str | None = None, via: str | None = None
+) -> str:
     """Refuse the request for good. Its lines stop counting as stock on the way. With the company's slug, the requester is told."""
-    return _stop(db, no, user_id, reason, status="rejected", action="request.reject", tenant=tenant)
+    return _stop(db, no, user_id, reason, status="rejected", action="request.reject", tenant=tenant, via=via)
 
 
 def return_for_changes(db: Session, no: str, user_id: int, reason: str | None, *, tenant: str | None = None) -> str:

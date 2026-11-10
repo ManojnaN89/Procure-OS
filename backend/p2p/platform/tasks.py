@@ -35,6 +35,7 @@ def create_task(
     payload: dict[str, Any] | None = None,
     actor: Actor = audit.SYSTEM,
     now: datetime | None = None,
+    email_note: str = "",
 ) -> int:
     now = now or datetime.now(UTC)
     due = sla_due(now, sla_hours, _calendar(db))
@@ -60,7 +61,9 @@ def create_task(
     if case_id:
         cases.log_event(db, case_id, "task_created", actor, {"task_id": task_id, "assignee": assignee})
     db.commit()
-    notifications.notify(db, tenant, assignee, "task", f"New task: {title}", f"Due {due:%d %b %Y %H:%M}.")
+    notifications.notify(
+        db, tenant, assignee, "task", f"New task: {title}", f"Due {due:%d %b %Y %H:%M}.", email_extra=email_note
+    )
     worker.enqueue(tenant, "task_escalate", {"task_id": task_id}, run_at=due)
     return task_id
 
@@ -100,7 +103,7 @@ def _escalate(ctx: worker.JobContext) -> None:
     with Session(routing.engine_for(ctx.tenant)) as db:
         row = db.execute(
             text(
-                "select status, due_at, assignee, escalation_chain, escalation_level, sla_hours, title, case_id "
+                "select status, due_at, assignee, escalation_chain, escalation_level, sla_hours, title, case_id, kind "
                 "from task where id = :i for update"
             ),
             {"i": task_id},
@@ -108,7 +111,7 @@ def _escalate(ctx: worker.JobContext) -> None:
         if row is None or row[0] != "open" or row[1] > ctx.now:
             db.rollback()
             return
-        _status, _due, assignee, chain, level, sla_hours, title, case_id = row
+        _status, _due, assignee, chain, level, sla_hours, title, case_id, kind = row
         system = Actor("service", "escalation")
         if level >= len(chain):
             db.execute(text("update task set status = 'overdue' where id = :i"), {"i": task_id})
@@ -137,6 +140,10 @@ def _escalate(ctx: worker.JobContext) -> None:
             cases.log_event(
                 db, int(case_id), "task_escalated", system, {"task_id": task_id, "from": assignee, "to": new_assignee}
             )
+        if kind == "approval":  # the person it moves to must be able to decide it too
+            from p2p.approvals import workflow  # noqa: PLC0415 - the approvals use this module
+
+            workflow.on_escalated(db, task_id, new_assignee)
         db.commit()
         notifications.notify(
             db, ctx.tenant, new_assignee, "task_escalated", f"Escalated to you: {title}", f"Due {due:%d %b %Y %H:%M}."

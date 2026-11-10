@@ -69,12 +69,17 @@ const RequisitionsView = {
         : `<div class="empty-next"><strong>No requests yet.</strong><br>${Auth.can("request.create") ? `Next: <a href="#/requisitions/new" style="color:var(--accent-tint);">raise a new request</a>${Auth.can("replenishment.run") ? ", or check the stock levels." : "."}` : "Stock that falls to its reorder point creates requests automatically."}</div>`;
       return;
     }
+    const pick = this.tab === "needs_me" && Auth.can("request.approve");  // approve several at once from the inbox
     wrap.innerHTML = `
+      ${pick ? `<div style="display:flex;gap:10px;align-items:center;margin-bottom:8px;">
+        <div class="btn btn-primary btn-sm" id="bulkApprove" style="display:inline-flex;opacity:.5;pointer-events:none;"><i class="ti ti-checks"></i>Approve selected</div>
+        <span class="cell-muted" id="bulkNote" style="font-size:12px;"></span></div>` : ""}
       <table class="data-table">
-        <thead><tr><th>REQUEST</th><th>AMOUNT</th><th>REQUESTED BY</th><th>STATUS</th></tr></thead>
+        <thead><tr>${pick ? `<th style="width:28px;"><input type="checkbox" id="selAll" title="Select all"></th>` : ""}<th>REQUEST</th><th>AMOUNT</th><th>REQUESTED BY</th><th>STATUS</th></tr></thead>
         <tbody>
           ${rows.map((r) => `
             <tr data-id="${this.esc(r.id)}">
+              ${pick ? `<td><input type="checkbox" class="pickReq" value="${this.esc(r.id)}"></td>` : ""}
               <td>${this.esc(r.title)}${r.priority === "urgent" ? ' <span class="badge badge-rejected" style="font-size:10px;">urgent</span>' : ""}
                   <div class="cell-muted" style="margin-top:2px;">${this.esc(r.id)}${r.items > 1 ? ` \u00b7 ${r.items} items` : ""}</div></td>
               <td style="white-space:nowrap;">${formatCurrency(r.amount)}</td>
@@ -85,7 +90,35 @@ const RequisitionsView = {
         </tbody>
       </table>`;
     wrap.querySelectorAll("tr[data-id]").forEach((tr) => {
-      tr.addEventListener("click", () => { window.location.hash = `#/requisitions/${tr.dataset.id}`; });
+      tr.addEventListener("click", (e) => { if (e.target.closest("input")) return; window.location.hash = `#/requisitions/${tr.dataset.id}`; });
+    });
+    if (pick) this.wireBulk(wrap);
+  },
+
+  // Select requests in the inbox and approve them together. Each is decided on its own; what is refused is listed.
+  wireBulk(wrap) {
+    const btn = document.getElementById("bulkApprove");
+    const note = document.getElementById("bulkNote");
+    const boxes = () => [...wrap.querySelectorAll(".pickReq")];
+    const refresh = () => {
+      const n = boxes().filter((b) => b.checked).length;
+      btn.style.opacity = n ? "1" : ".5";
+      btn.style.pointerEvents = n ? "auto" : "none";
+      btn.lastChild.textContent = n ? `Approve selected (${n})` : "Approve selected";
+    };
+    wrap.querySelectorAll(".pickReq").forEach((b) => b.addEventListener("change", refresh));
+    document.getElementById("selAll").addEventListener("change", (e) => { boxes().forEach((b) => { b.checked = e.target.checked; }); refresh(); });
+    btn.addEventListener("click", async () => {
+      const requests = boxes().filter((b) => b.checked).map((b) => b.value);
+      const res = await API.postJSON("/api/requisitions/bulk-approve", { requests });
+      if (!res.ok) { note.textContent = res.data.detail || "That did not work."; return; }
+      const refused = Object.entries(res.data.refused || {});
+      if (refused.length) {
+        note.textContent = `${res.data.approved.length} approved. Left alone: ${refused.map(([no, why]) => `${no} (${why})`).join("; ")}`;
+        setTimeout(() => this.renderList(document.getElementById("appContent")), 4000);
+      } else {
+        this.renderList(document.getElementById("appContent"));
+      }
     });
   },
 
@@ -238,6 +271,7 @@ const RequisitionsView = {
     const actions = a.can_act
       ? `<div style="display:flex;gap:10px;flex-wrap:wrap;" id="decideBtns">
            <div class="btn btn-primary btn-sm" id="approveBtn"><i class="ti ti-check"></i>Approve</div>
+           <div class="btn btn-sm" id="lowerBtn" title="Approve a smaller quantity"><i class="ti ti-adjustments"></i>Approve less…</div>
            <div class="btn btn-sm" id="returnBtn"><i class="ti ti-arrow-back-up"></i>Return for changes</div>
            <div class="btn btn-sm" id="rejectBtn"><i class="ti ti-x"></i>Reject</div>
          </div>`
@@ -248,6 +282,7 @@ const RequisitionsView = {
       a.can_withdraw ? `<div class="btn btn-sm" id="withdrawBtn"><i class="ti ti-arrow-back-up"></i>Withdraw</div>` : "",
       a.can_cancel ? `<div class="btn btn-sm" id="cancelReqBtn"><i class="ti ti-ban"></i>Cancel request</div>` : "",
       a.can_copy ? `<div class="btn btn-sm" id="copyBtn"><i class="ti ti-copy"></i>Copy as a new request</div>` : "",
+      a.can_remind ? `<div class="btn btn-sm" id="remindBtn"><i class="ti ti-bell-ringing"></i>Remind approver</div>` : "",
     ].join("");
     return `
       <div class="panel" style="margin-bottom:12px;">
@@ -257,6 +292,15 @@ const RequisitionsView = {
         ${trail}${rule}${actions}
         ${own ? `<div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:10px;">${own}</div>` : ""}
         ${a.can_source ? `<div class="btn btn-primary btn-sm" id="sourceBtn" style="display:inline-flex;margin-top:6px;"><i class="ti ti-search"></i>Find suppliers</div>` : ""}
+        ${a.can_act ? `<div id="lowerBox" style="display:none;margin-top:10px;">
+          <div class="cell-muted" style="font-size:12px;margin-bottom:6px;">Approve less than was asked. A quantity can go down, not up. A reason is needed.</div>
+          ${(r.lines || []).filter((l) => l.status !== "cancelled").map((l) => `<div style="display:flex;gap:10px;align-items:center;margin-bottom:6px;font-size:12.5px;">
+            <span style="flex:1;">${this.esc(l.name)}</span>
+            <input type="number" class="lowerQty" data-line="${this.esc(l.line_no)}" min="0.0001" max="${this.esc(l.qty)}" step="any" value="${this.esc(l.qty)}" style="width:110px;padding:5px;">
+            <span class="cell-muted">${this.esc(l.uom || "")} of ${this.esc(l.qty)}</span></div>`).join("")}
+          <textarea id="lowerReason" rows="2" placeholder="Reason (required)" style="width:100%;background:var(--surface-sunken);border:1px solid var(--border);color:var(--text-primary);border-radius:8px;padding:8px;font-size:12.5px;"></textarea>
+          <div style="margin-top:8px;"><div class="btn btn-primary btn-sm" id="lowerOk" style="display:inline-flex;">Approve with these quantities</div></div>
+        </div>` : ""}
         <div id="actionNote" style="font-size:12px;color:var(--warning-text);margin-top:8px;"></div>
         <div id="reasonBox" style="display:none;margin-top:10px;">
           <textarea id="reasonText" rows="2" placeholder="Reason (required)" style="width:100%;background:var(--surface-sunken);border:1px solid var(--border);color:var(--text-primary);border-radius:8px;padding:8px;font-size:12.5px;"></textarea>
@@ -300,6 +344,17 @@ const RequisitionsView = {
     on("submitBtn", () => act("submit"));
     on("sourceBtn", () => act("source"));
     on("approveBtn", () => act("approve", {}));
+    on("lowerBtn", () => { const b = document.getElementById("lowerBox"); if (b) b.style.display = b.style.display === "none" ? "block" : "none"; });
+    on("lowerOk", () => {
+      const quantities = {};
+      document.querySelectorAll(".lowerQty").forEach((el) => { if (el.value !== "" && Number(el.value) !== Number(el.max)) quantities[el.dataset.line] = el.value; });
+      act("approve", { quantities, comment: document.getElementById("lowerReason").value });
+    });
+    on("remindBtn", async () => {
+      const res = await API.postJSON(`/api/requisitions/${encodeURIComponent(r.id)}/remind-approver`, {});
+      const note = document.getElementById("actionNote");
+      if (note) { note.style.color = res.ok ? "var(--text-secondary)" : "var(--warning-text)"; note.textContent = res.ok ? `${res.data.reminded} has been reminded.` : (res.data.detail || "The reminder was not sent."); }
+    });
     const ask = (verb) => {
       document.getElementById("reasonBox").style.display = "block";
       document.getElementById("reasonText").focus();

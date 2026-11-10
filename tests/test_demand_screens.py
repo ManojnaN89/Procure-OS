@@ -154,3 +154,75 @@ def test_the_store_issues_stock_and_corrects_it_after_a_count_and_nobody_else_is
         company.db.execute(text("delete from stock_movement"))
         company.db.commit()
         clear_stock_and_approvals(company)
+
+
+def test_the_requester_reminds_the_approver_who_approves_less_and_then_several_at_once(
+    company: Company, browser: Any
+) -> None:  # noqa: F811
+    from p2p.approvals import workflow
+    from p2p.platform import sod
+
+    seed_stock_and_approvals(company, price=100)
+    _person(company)
+    try:
+        # two requests of 20,000 are waiting for the stores head: one raised on the form, one made ready here
+        page = open_app(browser, LAPTOP)
+        sign_in(page, company.emails["Requester"])
+        page.goto(f"{URL}/#/requisitions")
+        page.get_by_role("link", name="New request").click()
+        page.locator(".req-item").select_option("A")
+        page.locator(".req-qty").fill("200")
+        page.locator("#reqSave").click()
+        page.locator("#submitBtn").click()
+        expect(_status(page)).to_contain_text(re.compile("pending", re.I))
+        first = page.url.rsplit("/", 1)[1]
+        company.db.execute(
+            text(
+                "insert into request (no, requester, department_code, ship_to_location, type, channel, status, total_value) "
+                "values ('R-2', 'U4', 'LOG', 'WH-BLR', 'goods', 'form', 'draft', 20000)"
+            )
+        )
+        company.db.execute(
+            text(
+                "insert into request_line (request_no, line_no, free_text, qty, est_price, status) "
+                "values ('R-2', 1, 'Spanner set', 10, 2000, 'open')"
+            )
+        )
+        company.db.commit()
+        assert workflow.submit(company.db, company.slug, "R-2", sod.user(1)).status == "submitted"
+
+        # the requester nudges the approver: once is fine, again straight away is refused kindly
+        expect(page.locator("#remindBtn")).to_have_count(1)
+        page.locator("#remindBtn").click()
+        expect(page.locator("#actionNote")).to_contain_text("has been reminded")
+        page.locator("#remindBtn").click()
+        expect(page.locator("#actionNote")).to_contain_text("reminded in the last")
+
+        # the stores head approves less: a reason is asked for, then the value follows the quantity
+        head = open_app(browser, LAPTOP)
+        sign_in(head, company.emails["Approver"])
+        head.goto(f"{URL}/#/requisitions/{first}")
+        expect(head.locator("#remindBtn")).to_have_count(0)  # the approver is not reminded of their own turn
+        head.locator("#lowerBtn").click()
+        head.locator(".lowerQty").fill("120")
+        head.locator("#lowerOk").click()
+        expect(head.locator("#actionNote")).to_contain_text("reason")
+        head.locator("#lowerReason").fill("We still hold stock")
+        head.locator("#lowerOk").click()
+        expect(_status(head)).to_contain_text(re.compile("approved", re.I))
+        expect(_status(head)).to_contain_text("12,000")
+
+        # the other one is approved from the inbox with its box ticked
+        head.goto(f"{URL}/#/requisitions")
+        head.locator(".pickReq").first.check()
+        expect(head.locator("#bulkApprove")).to_contain_text("Approve selected (1)")
+        head.locator("#bulkApprove").click()
+        expect(head.locator("#reqTabs")).not_to_contain_text("Needs my decision")
+        head.reload()
+        head.locator("#tableWrap tbody tr").first.wait_for()
+        assert company.db.execute(text("select status from request where no = 'R-2'")).scalar_one() == "approved"
+        assert [p for p in page.problems if "409" not in p] == []  # type: ignore[attr-defined]
+        assert [p for p in head.problems if "409" not in p] == []  # type: ignore[attr-defined]
+    finally:
+        company.db.rollback()
+        clear_stock_and_approvals(company)

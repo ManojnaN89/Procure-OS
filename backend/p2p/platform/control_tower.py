@@ -372,4 +372,29 @@ def kpis(db: Session, calendar: BusinessCalendar) -> dict[str, Any]:
         "invoices": int(paid_late[1]),
         "pct": _s(rules.share(int(paid_late[0]), int(paid_late[1]))),
     }
+    out["duplicates_avoided"] = duplicates_avoided(db)
     return out
+
+
+def duplicates_avoided(db: Session) -> dict[str, Any]:
+    """What the duplicate checks stopped: requests that looked like a repeat and were given up (cancelled or rejected) with
+    nobody going ahead on a reason, and invoices blocked as a duplicate of one already on file. Count and value of each."""
+    req_n, req_value = db.execute(
+        text(
+            "select count(*), coalesce(sum(r.total_value), 0) from request r where r.status in ('cancelled', 'rejected') "
+            "and exists (select 1 from request_check c where c.request_no = r.no and c.kind = 'duplicate') "
+            "and not exists (select 1 from request_check c where c.request_no = r.no and c.kind = 'duplicate' and c.override_reason is not null)"
+        )
+    ).one()
+    inv_n, inv_value = db.execute(
+        text(
+            "select count(*), coalesce(sum(total), 0) from invoice where payment_block = 'duplicate' "
+            "and status in ('blocked', 'cancelled')"
+        )
+    ).one()
+    return {
+        "requests": {"count": int(req_n), "value": str(D(req_value))},
+        "invoices": {"count": int(inv_n), "value": str(D(inv_value))},
+        "count": int(req_n) + int(inv_n),
+        "value": str(D(req_value) + D(inv_value)),
+    }

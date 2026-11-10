@@ -78,7 +78,7 @@ Match the surrounding code. Short plain-language comments only where the reason 
 | Sending orders to suppliers, acknowledgement | `orders/dispatch.py` |
 | Budget check on approval, contract ceilings, supplier documents, supplier status proposals, reminders | `approvals/budget.py`, `formulas/budget.py`; `orders/contracts.py`, `formulas/contracts.py`; `sourcing/documents.py`, `formulas/suppliers.py`; `masters/supplier_status.py`; supplier records, onboarding and bank changes `masters/suppliers.py`, `formulas/supplier_master.py`; `sourcing/reminders.py` |
 | Sourcing: contract price or quotation request, suppliers asked, RFQ emails | `sourcing/service.py`, `sourcing/jobs.py`, `formulas/sourcing.py` |
-| Approval of requests by the rule tables (lookup, chain, submit/approve/reject/return) | `approvals/rules.py`, `approvals/workflow.py` |
+| Approval of requests by the rule tables (lookup, chain, submit/approve/reject/return, lower quantities, bulk approve, remind approver); approving from an emailed link (signed, works once); the budget variance view | `approvals/rules.py`, `approvals/workflow.py`; `approvals/email_links.py`, `platform/approval_link_api.py`; `approvals/budget.py` |
 | Replenishment into draft requests, document numbers | `requests/replenishment.py`, `requests/jobs.py`, `formulas/replenishment.py`, `platform/numbering.py` |
 | A request's life outside approval: withdraw, cancel, copy; the requester is told of decisions | `requests/lifecycle.py`, `approvals/workflow.py` (`notify_person`) |
 | Store issues and counts, list export, Excel import of masters | `receiving/stock.py` (`post_issue`, `post_count`), `formulas/stock.py`; `platform/export_api.py`; `masters/importer.py` |

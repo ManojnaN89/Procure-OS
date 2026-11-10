@@ -25,6 +25,7 @@ MATRIX = [
     ),
     ("POST", "/api/requisitions/NOPE/submit", None, {"Requester", "Buyer"}),
     ("POST", "/api/requisitions/NOPE/approve", {}, {"Approver"}),
+    ("POST", "/api/requisitions/bulk-approve", {"requests": ["NOPE"]}, {"Approver"}),
     ("POST", "/api/requisitions/NOPE/reject", {"reason": "x"}, {"Approver"}),
     ("POST", "/api/requisitions/NOPE/return", {"reason": "x"}, {"Approver"}),
     ("POST", "/api/requisitions/NOPE/source", None, {"Buyer"}),

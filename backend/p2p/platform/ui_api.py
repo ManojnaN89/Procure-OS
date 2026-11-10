@@ -22,6 +22,7 @@ from sqlalchemy.orm import Session
 
 from p2p.agents import assistant, intake
 from p2p.ai_steps.gateway import Gateway
+from p2p.approvals import budget
 from p2p.approvals import rules as approval_rules
 from p2p.approvals import workflow as approvals
 from p2p.formulas.calendar import business_today
@@ -738,6 +739,12 @@ def get_requisition(no: str, db: Db, ctx: Ctx) -> dict[str, Any]:
                 for s in approvals.steps_of(db, no)
             ],
             "can_act": approvals.can_act(db, no, ctx.user_id),
+            "can_remind": rows[0]["status"] == "submitted"
+            and not approvals.can_act(db, no, ctx.user_id)
+            and (
+                approvals.org_code_of(db, ctx.user_id) == rows[0]["requester"]
+                or can_anywhere(db, ctx.user_id, "request.view")
+            ),
             **{f"can_{k}": v for k, v in lifecycle.allowed(db, no, ctx.user_id).items()},
             "can_submit": rows[0]["status"] in ("draft", "returned")
             and can_anywhere(db, ctx.user_id, "request.submit"),
@@ -845,7 +852,42 @@ def override_duplicate(
 def approve_requisition(
     no: str, payload: dict[str, Any], db: Db, ctx: Annotated[routing.TenantContext, Depends(require("request.approve"))]
 ) -> dict[str, str]:
-    return _approval_action(lambda: approvals.approve(db, ctx.slug, no, ctx.user_id, payload.get("comment")))
+    quantities: dict[int, Decimal] = {}
+    for line, qty in (payload.get("quantities") or {}).items():
+        try:
+            quantities[int(line)] = Decimal(str(qty))
+        except (ValueError, InvalidOperation):
+            raise HTTPException(422, f"line {line}: the quantity must be a number") from None
+    return _approval_action(
+        lambda: approvals.approve(db, ctx.slug, no, ctx.user_id, payload.get("comment"), quantities=quantities or None)
+    )
+
+
+@router.post("/requisitions/bulk-approve")
+def bulk_approve_requisitions(
+    payload: dict[str, Any], db: Db, ctx: Annotated[routing.TenantContext, Depends(require("request.approve"))]
+) -> dict[str, Any]:
+    """Approve several requests from the inbox. Each is decided on its own; the ones that are not this person's turn are
+    reported with the reason and left alone."""
+    nos = [str(n) for n in (payload.get("requests") or [])]
+    if not nos or len(nos) > 50:
+        raise HTTPException(422, "choose between 1 and 50 requests")
+    results = approvals.bulk_approve(db, ctx.slug, nos, ctx.user_id, payload.get("comment"))
+    return {
+        "approved": [n for n, r in results.items() if "status" in r],
+        "refused": {n: r["error"] for n, r in results.items() if "error" in r},
+    }
+
+
+@router.post("/requisitions/{no}/remind-approver")
+def remind_approver(no: str, db: Db, ctx: Ctx) -> dict[str, str]:
+    """The requester nudges the approver whose turn it is."""
+    try:
+        return {"reminded": approvals.remind_approver(db, ctx.slug, no, ctx.user_id)}
+    except approvals.ApprovalError as exc:
+        raise HTTPException(409, str(exc)) from None
+    except PermissionDenied as exc:
+        raise HTTPException(403, str(exc)) from None
 
 
 @router.post("/requisitions/{no}/reject")
@@ -1697,8 +1739,9 @@ def search(db: Db, ctx: Ctx, q: str = Query(..., min_length=1)) -> list[dict[str
 
 
 @router.get("/budgets/variance")
-def budget_variance(db: Db, ctx: Ctx) -> dict[str, Any]:
-    return {"month": None, "categories": []}
+def budget_variance(db: Db, ctx: Annotated[routing.TenantContext, Depends(require("budget.view"))]) -> dict[str, Any]:
+    """Budget against what is held and spent, financial year to date, per cost centre and GL account."""
+    return budget.variance(db, business_today())
 
 
 # ---- the assistant: connected in a later step ------------------------------------------------

@@ -36,3 +36,7 @@ You cannot approve a run you proposed. You cannot make the bank file before appr
 ## If you are stuck
 
 A small supplier's invoice may have an earlier due date than the terms say (the law caps it). The run page shows each due date.
+
+## Watch the budgets
+
+Open **Control tower**. Under **Budgets, this financial year so far** each cost centre and account shows its budget, what requests already hold, what was spent, and what is left. A figure in red is over budget.

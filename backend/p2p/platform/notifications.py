@@ -31,8 +31,10 @@ def notify(
     *,
     link: str | None = None,
     email: bool = True,
+    email_extra: str = "",
 ) -> int:
-    """Add a notification for a user. The email goes out through a job, so a mail outage never blocks the caller."""
+    """Add a notification for a user. The email goes out through a job, so a mail outage never blocks the caller.
+    `email_extra` is added to the email only, never kept in the app (for a link that works as a key)."""
     nid = int(
         db.execute(
             text(
@@ -43,7 +45,9 @@ def notify(
     )
     db.commit()
     if email and (address := email_of(user_id)):
-        worker.enqueue(tenant, "send_email", {"to": address, "subject": title, "body": body or title})
+        worker.enqueue(
+            tenant, "send_email", {"to": address, "subject": title, "body": ((body or title) + email_extra).strip()}
+        )
     return nid
 
 

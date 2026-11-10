@@ -14,6 +14,7 @@ class Settings(BaseSettings):
     jwt_secret: str = ""
     smtp_host: str = "127.0.0.1"  # not "localhost": on some machines that name adds 0.2 s to every new connection
     smtp_port: int = 1025
+    public_base_url: str = "http://127.0.0.1:8000"  # where the links in emails point (approval links)
     mail_domain: str = "cbcpl.example"  # replies come back to name+TAG@this domain
     mailpit_url: str = "http://127.0.0.1:8025"
     imap_host: str = ""  # set these four to read a real mailbox instead of Mailpit

@@ -18,7 +18,7 @@ The system picks the approvers from the company's rules. You do not choose them.
 
 ## Follow it
 
-**Requests** shows the status, and "waiting for" tells you who has it. If the approver is slow they get a reminder by themselves.
+**Requests** shows the status, and "waiting for" tells you who has it. If the approver is slow they get a reminder by themselves, and you can send one yourself: open the request and click **Remind approver**. You can do it once every few hours.
 
 ## Change your mind
 
