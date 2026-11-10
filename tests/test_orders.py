@@ -432,8 +432,9 @@ def test_the_comparison_says_who_has_not_answered_and_counts_the_quotes(shop: Se
 
 
 def _three_quotes(db: Session, rfq: str) -> None:
+    # S1 is cheaper per unit (180 net) and carries 75.50 of freight and packing; S2 at 200 is still dearer landed
     _quote(db, rfq, "S1", "200", discount="10", freight="50", packing="25.50")
-    _quote(db, rfq, "S2", "190")
+    _quote(db, rfq, "S2", "200")
     _quote(db, rfq, "S3", "150", days=20)
 
 
@@ -656,13 +657,13 @@ def test_a_supplier_in_the_same_state_is_charged_cgst_and_sgst(shop: Session, ou
 
     po = shop.execute(text("select taxable, cgst, sgst, igst, total, supplier_code from po")).one()
     assert made.pos and tuple(po) == (
-        D("950.00"),
-        D("85.50"),
-        D("85.50"),
+        D("1000.00"),
+        D("90.00"),
+        D("90.00"),
         D("0.00"),
-        D("1121.00"),
+        D("1180.00"),
         "S2",
-    )  # 5 x 190, 9% + 9%
+    )  # 5 x 200, 9% + 9%
 
 
 def test_a_composition_supplier_charges_no_gst_at_all(shop: Session, outbox: Outbox) -> None:
@@ -983,6 +984,9 @@ def test_the_rfq_page_data_includes_the_comparison_and_who_may_quote_or_award(sh
         False,
     )
     assert first["flags"] == ["delivers 6 day(s) after it is needed"]
+    s1 = next(o for o in line["offers"] if o["supplier_code"] == "S1")
+    assert (s1["value"], s1["charges"], s1["tax"], s1["landed"]) == ("900.00", "75.50", "175.59", "1151.09")
+    assert s1["questions"] == [] and s1["score"] is None and data["lines"][0]["needs_question"] is False
     assert client.get(f"/api/rfqs/{rfq}", headers=requester).json()["comparison"]["can_award"] is False
     assert client.get("/api/rfqs", headers=buyer).json()[0]["quote_count"] == 3
 

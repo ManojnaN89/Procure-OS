@@ -1029,6 +1029,7 @@ def _comparison_json(db: Session, rfq_no: str, user_id: int) -> dict[str, Any]:
                 "recommended": line.recommended,
                 "why": line.why,
                 "awarded": line.awarded,
+                "needs_question": line.needs_question,
                 "offers": [
                     {
                         "supplier_code": o.supplier_code,
@@ -1042,6 +1043,12 @@ def _comparison_json(db: Session, rfq_no: str, user_id: int) -> dict[str, Any]:
                         "delivery_days": o.delivery_days,
                         "flags": o.flags,
                         "compliant": o.compliant,
+                        "charges": _money(o.charges),
+                        "tax": _money(o.tax),
+                        "landed": _money(o.landed),
+                        "last_price": _money(o.last_price),
+                        "questions": o.questions,
+                        "score": _money(o.score),
                     }
                     for o in line.offers
                 ],

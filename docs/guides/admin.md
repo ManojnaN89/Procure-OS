@@ -12,7 +12,7 @@ The Admin sets the company up. An Admin cannot take part in purchases: no approv
 - **Roles**: tick what each role may do, then press the Save button under that role.
 - **Approvers**: who stands behind each approval role (**Save role** adds one). **Set head** sets a department head.
 - **Approval chains**: which approvers a request or order needs, by amount and category. A change makes a new version. Old decisions stay tied to the version they used. **Save new version**.
-- **Policies**: budget behaviour, quotation days, reminders, payment window, tolerances for price and quantity by item category (**Save tolerance**), and the mailboxes. **Requests mailbox** and **Invoices mailbox** are the addresses the company reads mail from; leave one empty to switch it off.
+- **Policies**: budget behaviour, quotation days, reminders, payment window, tolerances for price and quantity by item category (**Save tolerance**), and the mailboxes. **Requests mailbox** and **Invoices mailbox** are the addresses the company reads mail from; leave one empty to switch it off. Also here: the wording of the quotation request email (fields such as {items} and {reference} are filled in for each supplier), how quotes are compared (price, or weighted by delivery and quality record) and how far below the others a price must be to need a question.
 
 ## Automation controls
 

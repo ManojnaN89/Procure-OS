@@ -1,10 +1,14 @@
 """Quotes: a buyer enters what a supplier offered, the offers are compared, and the buyer awards each line.
 
-All deterministic. The recommendation is the lowest price among offers that comply (still valid, within the minimum
-order, on time, at the expected GST rate); a person confirms it with a click, or overrides it with a reason. Whether a
-recommendation may be awarded without a person is the autonomy gate's decision ('rfq.award'), not this module's.
+All deterministic. Each offer is costed to our door (price, its share of the quote's freight and packing, and GST). The
+recommendation is the cheapest landed cost among offers that comply (still valid, within the minimum order, on time, at
+the expected GST rate), or, when the company chose the weighted comparison, the best score of landed cost, delivery record
+and quality record. A price far below the others or the last price paid is a question, never a bargain taken on trust. A
+person confirms the recommendation with a click, or overrides it with a reason. Whether a recommendation may be awarded
+without a person is the autonomy gate's decision ('rfq.award'), not this module's.
 """
 
+from collections import defaultdict
 from dataclasses import dataclass, field
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
@@ -14,10 +18,12 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from p2p.agents import autonomy
+from p2p.formulas import comparison as rules
 from p2p.formulas.money import format_qty, round_money
 from p2p.formulas.orders import current_gst_rate, net_unit_price
 from p2p.platform import audit, worker
 from p2p.platform.sod import Actor
+from p2p.suppliers import scoring
 
 AWARD_DECISION = "rfq.award"
 SERVICE = Actor("service", "award")
@@ -179,7 +185,14 @@ class Offer:
     value: Decimal  # quantity times the net price, before tax
     gst_rate: Decimal
     delivery_days: int | None
-    flags: list[str] = field(default_factory=list)
+    flags: list[str] = field(default_factory=list)  # reasons the offer does not comply: it cannot be recommended
+    charges: Decimal = Decimal(0)  # this line's share of the quote's freight and packing
+    tax: Decimal = Decimal(0)
+    landed: Decimal = Decimal(0)  # value + charges + tax: what the line costs to get to our door
+    last_price: Decimal | None = None  # what we last paid per unit for this item
+    questions: list[str] = field(default_factory=list)  # reasons to ask the supplier before trusting the price
+    score: Decimal | None = None  # 0 to 100, only in the weighted comparison
+    score_parts: dict[str, Decimal] | None = None  # price, delivery and quality, each 0 to 1
 
     @property
     def compliant(self) -> bool:
@@ -200,6 +213,12 @@ class LineComparison:
     why: str  # in words
     awarded: str | None = None
 
+    @property
+    def needs_question(self) -> bool:
+        """The recommended offer has a price that needs asking about: a person must decide, never the gate."""
+        best = next((o for o in self.offers if o.supplier_code == self.recommended), None)
+        return best is not None and bool(best.questions)
+
 
 @dataclass
 class Comparison:
@@ -219,6 +238,41 @@ def _min_quotes(db: Session, category: str | None) -> int:
             return int(value)
     default = db.execute(text("select value from org_setting where key = 'min_quotes_default'")).scalar()
     return int(default) if default else 2
+
+
+def _org_setting(db: Session, key: str, default: str) -> str:
+    value = db.execute(text("select value from org_setting where key = :k"), {"k": key}).scalar()
+    return str(value) if value not in (None, "") else default
+
+
+def _last_prices(db: Session, item_codes: list[str]) -> dict[str, Decimal]:
+    """What we last paid per unit, net of discount, for each item that has been ordered before."""
+    if not item_codes:
+        return {}
+    rows = db.execute(
+        text(
+            "select distinct on (pl.item_code) pl.item_code, pl.unit_price from po_line pl join po p on p.no = pl.po_no "
+            "where pl.item_code = any(:c) and p.status not in ('draft', 'cancelled') and pl.status <> 'cancelled' "
+            "order by pl.item_code, p.created_at desc"
+        ),
+        {"c": item_codes},
+    )
+    return {r[0]: r[1] for r in rows}
+
+
+def _reason(best: Offer, good: list[Offer], by_price: Offer, weighted: bool, w: Any) -> str:
+    """Why this offer is recommended, in words, from the numbers that decided it (a template, no model)."""
+    if weighted:
+        parts = best.score_parts or {}
+        pct = {k: int((v * 100).to_integral_value()) for k, v in parts.items()}
+        return (
+            f"Best score ({best.score} of 100) among {len(good)} compliant offer(s): price {pct.get('price')}, "
+            f"delivery {pct.get('delivery')}, quality {pct.get('quality')}; "
+            f"weights {format_qty(w.price)}/{format_qty(w.delivery)}/{format_qty(w.quality)}"
+        )
+    if best.supplier_code != by_price.supplier_code:
+        return f"Lowest landed cost (price, freight and tax) among {len(good)} compliant offer(s)"
+    return f"Lowest price among {len(good)} compliant offer(s)"
 
 
 def comparison(db: Session, rfq_no: str, as_of: date) -> Comparison:
@@ -261,7 +315,11 @@ def comparison(db: Session, rfq_no: str, as_of: date) -> Comparison:
         r[0]: r[1]
         for r in db.execute(text("select line_no, request_line_no from rfq_line where rfq_no = :n"), {"n": rfq_no})
     }
-    result_lines: list[LineComparison] = []
+    weighted = _org_setting(db, "comparison_mode", "price") == "weighted"
+    threshold = Decimal(_org_setting(db, "low_price_flag_pct", "40"))
+    last = _last_prices(db, sorted({line["item_code"] for line in lines if line["item_code"]}))
+    per_line: dict[int, list[Offer]] = {}
+    of_quote: dict[str, list[Offer]] = defaultdict(list)  # a quote's offers, in line order
     for line in lines:
         expected = current_gst_rate(
             line["gst_rate_before"], line["gst_rate_after"], line["gst_rate_change_date"], as_of
@@ -283,6 +341,7 @@ def comparison(db: Session, rfq_no: str, as_of: date) -> Comparison:
                 value=round_money(line["qty"] * net),
                 gst_rate=ql["gst_rate"],
                 delivery_days=ql["delivery_days"],
+                last_price=last.get(line["item_code"]),
             )
             if q["valid_until"] is not None and q["valid_until"] < as_of:
                 offer.flags.append(f"expired on {q['valid_until']:%d %b %Y}")
@@ -297,13 +356,42 @@ def comparison(db: Session, rfq_no: str, as_of: date) -> Comparison:
                     f"GST rate {format_qty(ql['gst_rate'])}% differs from the expected {format_qty(expected)}%"
                 )
             offers.append(offer)
+            of_quote[q["no"]].append(offer)
+        per_line[line["line_no"]] = offers
+    # the freight and packing of a quote are one amount for the whole quote: share them over the lines it prices
+    for q in quotes:
+        mine = of_quote.get(q["no"], [])
+        shares = rules.allocate(q["freight"] + q["packing_forwarding"], [o.value for o in mine])
+        for o, share in zip(mine, shares, strict=True):
+            landed = rules.landed_cost(o.value, share, o.gst_rate)
+            o.charges, o.tax, o.landed = landed.charges, landed.tax, landed.total
+    w = scoring.weights(db)
+    result_lines: list[LineComparison] = []
+    for line in lines:
+        offers = per_line[line["line_no"]]
+        for o in offers:
+            others = [x.net_price for x in offers if x is not o]
+            o.questions = rules.price_questions(o.net_price, o.last_price, others, threshold)
         offers.sort(
-            key=lambda o: (o.net_price, o.delivery_days if o.delivery_days is not None else 10_000, o.supplier_code)
+            key=lambda o: (o.landed, o.delivery_days if o.delivery_days is not None else 10_000, o.supplier_code)
         )
         good = [o for o in offers if o.compliant]
+        if good and weighted:
+            ranked = scoring.rank(db, [(o.supplier_code, o.landed) for o in good], as_of)
+            place = {r.supplier_code: i for i, r in enumerate(ranked)}
+            for r in ranked:
+                o = next(x for x in good if x.supplier_code == r.supplier_code)
+                o.score = r.total
+                o.score_parts = {"price": r.price_score, "delivery": r.delivery, "quality": r.quality}
+            good.sort(key=lambda o: place[o.supplier_code])
+            offers.sort(key=lambda o: (0, place[o.supplier_code]) if o.compliant else (1, 0))
         if good:
             best = good[0]
-            recommended, why = best.supplier_code, f"Lowest price among {len(good)} compliant offer(s)"
+            cheapest = min(good, key=lambda o: (o.net_price, o.delivery_days or 10_000, o.supplier_code))
+            why = _reason(best, good, cheapest, weighted, w)
+            if best.questions:
+                why += f"; ask the supplier first: price is {best.questions[0]}"
+            recommended = best.supplier_code
         elif offers:
             recommended, why = None, "No offer complies; a buyer has to decide"
         else:
@@ -465,7 +553,7 @@ def auto_award(db: Session, tenant: str, rfq_no: str, *, as_of: date) -> AwardRe
     comp = comparison(db, rfq_no, as_of)
     if comp.waiting_for or comp.quotes_received < comp.min_quotes:
         return None
-    if any(line.recommended is None or line.awarded for line in comp.lines):
+    if any(line.recommended is None or line.awarded or line.needs_question for line in comp.lines):
         return None
     value = sum(
         (o.value for line in comp.lines for o in line.offers if o.supplier_code == line.recommended), Decimal(0)

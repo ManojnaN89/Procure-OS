@@ -23,6 +23,7 @@ from p2p.platform import audit, routing, tenants, users
 from p2p.platform.permissions import require
 from p2p.platform.sod import Actor
 from p2p.platform.sod import user as user_actor
+from p2p.sourcing import templates
 
 router = APIRouter(prefix="/api/setup", tags=["setup"])
 Db = Annotated[Session, Depends(routing.tenant_session)]
@@ -57,9 +58,9 @@ PERMISSIONS: dict[str, str] = {
     "contract.activate": "Activate a contract",
     "grn.create": "Receive and inspect goods",
     "stock.view": "See stock",
-    "replenishment.run": "Run automatic replenishment",
     "stock.issue": "Issue stock for use",
     "stock.adjust": "Correct stock after a count",
+    "replenishment.run": "Run automatic replenishment",
     "invoice.view": "See invoices",
     "invoice.book": "Enter invoices",
     "invoice.match": "Work on blocked invoices",
@@ -151,6 +152,50 @@ POLICIES: dict[str, tuple[str, str, str, str, str, float | None, float | None, t
         10,
         (),
     ),
+    "rfq_email_template": (
+        "org",
+        "text",
+        "Wording of the quotation request email",
+        "Fields filled in for each supplier: "
+        + ", ".join(f"{{{k}}} ({v})" for k, v in templates.FIELDS.items())
+        + ". {items} and {reference} must be there.",
+        templates.DEFAULT_RFQ_TEMPLATE,
+        None,
+        None,
+        (),
+    ),
+    "comparison_mode": (
+        "org",
+        "choice",
+        "How quotes are compared",
+        "Price: the cheapest landed cost that complies. Weighted: landed cost, delivery record and quality record, by the weights below",
+        "price",
+        None,
+        None,
+        ("price", "weighted"),
+    ),
+    "low_price_flag_pct": (
+        "org",
+        "int",
+        "Price that looks too good (percent below)",
+        "A quote this far below the other quotes or the last price paid needs a question to the supplier first (0 switches it off)",
+        "40",
+        0,
+        95,
+        (),
+    ),
+    "score_weight_price": (
+        "org",
+        "int",
+        "Weight of price in a weighted comparison",
+        "Shares of price, delivery and quality are taken in proportion to these three weights",
+        "40",
+        0,
+        100,
+        (),
+    ),
+    "score_weight_delivery": ("org", "int", "Weight of delivery record", "", "40", 0, 100, ()),
+    "score_weight_quality": ("org", "int", "Weight of quality record", "", "20", 0, 100, ()),
     "supplier_ack_due_days": (
         "org",
         "int",
@@ -962,6 +1007,10 @@ def _validate(
     elif kind == "choice":
         if value not in choices:
             raise _422(f"{label}: must be one of {', '.join(choices)}")
+    elif kind == "text":
+        value = value.replace("\r\n", "\n").strip("\n") + "\n" if value.strip() else ""
+        if value and (bad := templates.problems(value)):
+            raise _422(f"{label}: " + "; ".join(bad))
     elif kind == "email":
         value = value.lower()
         if value and (len(value) > 254 or not EMAIL.fullmatch(value)):

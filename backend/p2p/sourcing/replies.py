@@ -26,6 +26,7 @@ from p2p.formulas.orders import current_gst_rate
 from p2p.orders import quotes
 from p2p.platform import audit, tasks
 from p2p.platform.sod import Actor
+from p2p.sourcing import service
 
 SERVICE = Actor("service", "quote_reading")
 DECISION_TYPE = "quote.read"
@@ -61,6 +62,16 @@ def _supplier_of(db: Session, rfq_no: str, from_addr: str) -> str | None:
         {"r": rfq_no, "a": address},
     ).first()
     return str(row[0]) if row else None
+
+
+def _contact_name(db: Session, supplier: str, from_addr: str) -> str | None:
+    """The name of the person at the supplier who wrote, if we know them."""
+    address = parseaddr(from_addr)[1].lower()
+    name = db.execute(
+        text("select name from supplier_contact where supplier_code = :s and lower(email) = :e limit 1"),
+        {"s": supplier, "e": address},
+    ).scalar()
+    return str(name) if name else None
 
 
 def _attachment_text(db: Session, tenant: str, ids: list[int], notes: list[str]) -> str:
@@ -244,7 +255,14 @@ def read_reply(db: Session, tenant: str, email_id: int, gateway: Gateway, *, as_
             title=f"{supplier} asks about {rfq_no}: {reading.question[:100]}",
             assignee=_buyer_user(db),
             sla_hours=24,
-            payload={"rfq_no": rfq_no, "draft": draft},
+            payload={
+                "rfq_no": rfq_no,
+                "draft": draft,
+                "question": reading.question,
+                "reply_draft": service.question_reply_draft(
+                    db, rfq_no, _contact_name(db, supplier, mail["from_addr"]), reading.question
+                ),
+            },
         )
     _maybe_apply(db, tenant, draft, reading, proposal, as_of)
     return draft

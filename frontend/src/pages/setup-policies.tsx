@@ -2,7 +2,7 @@ import { useQuery } from "@tanstack/react-query";
 import { useState } from "react";
 import { Button } from "../components/ui/button";
 import { Card, CardBody, CardHeader } from "../components/ui/card";
-import { Field, Input } from "../components/ui/input";
+import { Field, Input, Textarea } from "../components/ui/input";
 import { Table, Td, Th } from "../components/ui/table";
 import { api } from "../lib/api";
 import { type Shared, select, useChange } from "./setup-shared";
@@ -100,7 +100,7 @@ export function Policies(shared: Shared) {
 											</div>
 										) : null}
 									</Td>
-									<Td className="w-56">
+									<Td className={p.kind === "text" ? "w-[28rem]" : "w-56"}>
 										{p.kind === "bool" || p.kind === "choice" ? (
 											<select
 												className={select}
@@ -116,6 +116,14 @@ export function Policies(shared: Shared) {
 													<option key={c}>{c}</option>
 												))}
 											</select>
+										) : p.kind === "text" ? (
+											<Textarea
+												rows={12}
+												value={value}
+												onChange={(e) =>
+													setEdits({ ...edits, [p.key]: e.target.value })
+												}
+											/>
 										) : (
 											<Input
 												inputMode={p.kind === "email" ? "email" : "decimal"}

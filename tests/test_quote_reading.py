@@ -469,6 +469,27 @@ def test_a_question_makes_a_task_for_the_buyer_and_nothing_to_confirm(shop: Sess
         replies.dismiss_draft(shop, draft_id, sod.user(7))  # type: ignore[arg-type]
 
 
+def test_a_question_comes_with_a_drafted_reply_that_restates_the_request_and_is_never_sent(
+    shop: Session,
+    outbox: Outbox,  # noqa: F811
+) -> None:
+    _logins(shop)
+    _, rfq = _sent_rfq(shop, outbox)
+    sent_before = len(outbox.sent)
+    gw, _ = _gateway(_as_json(reading(intent="question", question="can you accept delivery in two lots?")))
+
+    _read(shop, _inbox(shop, rfq, SELLER, "Before we quote: can you accept delivery in two lots?"), gw)
+
+    payload = shop.execute(text("select payload from task where kind = 'supplier_question'")).scalar_one()
+    draft = payload["reply_draft"]
+    assert payload["question"] == "can you accept delivery in two lots?"
+    assert draft.startswith("Dear Contact S1,")  # the person who wrote, by name
+    assert "> can you accept delivery in two lots?" in draft
+    assert f"Thank you for your question on {rfq}" in draft and "Deliver to: Bengaluru store" in draft
+    assert "Seal (B) - 5 NOS" in draft  # the items of the request, so most questions are answered by the draft itself
+    assert len(outbox.sent) == sent_before  # a draft for the buyer: nothing went to the supplier
+
+
 def test_a_clean_draft_is_confirmed_by_itself_only_when_the_gate_allows(shop: Session, outbox: Outbox) -> None:  # noqa: F811
     _, rfq = _sent_rfq(shop, outbox)
     first = _read(shop, _inbox(shop, rfq, SELLER, SEAL_EMAIL), _gateway(_as_json(_seal()))[0])

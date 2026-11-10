@@ -68,17 +68,16 @@ const RfqsView = {
         <div style="font-size:13px;margin-bottom:6px;">${this.esc(l.name)} <span class="cell-muted">\u00b7 ${this.esc(l.qty)} ${this.esc(l.uom)}${l.need_by ? ` \u00b7 needed by ${formatDate(l.need_by)}` : ""}</span></div>
         ${l.awarded ? `<div style="font-size:12px;color:var(--success-text);margin-bottom:6px;">Awarded to ${this.esc((c.suppliers.find((s) => s.code === l.awarded) || {}).name || l.awarded)}</div>` : ""}
         <table class="data-table">
-          <thead><tr>${c.can_award && !l.awarded ? "<th></th>" : ""}<th>SUPPLIER</th><th>PRICE</th><th>VALUE</th><th>GST</th><th>DAYS</th><th>NOTES</th></tr></thead>
+          <thead><tr>${c.can_award && !l.awarded ? "<th></th>" : ""}<th>SUPPLIER</th><th>PRICE</th><th>TO OUR DOOR</th><th>DAYS</th><th>NOTES</th></tr></thead>
           <tbody>
             ${l.offers.map((o) => `
               <tr style="${o.supplier_code === l.recommended ? "background:var(--success-bg);" : ""}">
                 ${c.can_award && !l.awarded ? `<td><input type="radio" name="pick-${l.rfq_line_no}" value="${this.esc(o.supplier_code)}" data-recommended="${o.supplier_code === l.recommended}" ${o.supplier_code === l.recommended ? "checked" : ""}></td>` : ""}
                 <td>${this.esc(o.supplier_name)}${o.supplier_code === l.recommended ? ' <span class="badge badge-approved" style="font-size:10px;">recommended</span>' : ""}</td>
                 <td>${formatCurrency(o.net_price)}${Number(o.discount_pct) > 0 ? `<div class="cell-muted" style="font-size:11px;">${formatCurrency(o.unit_price)} less ${this.esc(o.discount_pct)}%</div>` : ""}</td>
-                <td>${formatCurrency(o.value)}</td>
-                <td class="cell-muted">${this.esc(o.gst_rate)}%</td>
+                <td>${formatCurrency(o.landed)}<div class="cell-muted" style="font-size:11px;">${formatCurrency(o.value)}${Number(o.charges) > 0 ? ` + ${formatCurrency(o.charges)} freight and packing` : ""} + ${formatCurrency(o.tax)} GST (${this.esc(o.gst_rate)}%)</div>${o.score !== null ? `<div class="cell-muted" style="font-size:11px;">score ${this.esc(o.score)} of 100</div>` : ""}</td>
                 <td class="cell-muted">${o.delivery_days ?? "\u2014"}</td>
-                <td style="font-size:11.5px;color:var(--warning-text);">${o.flags.map((f) => this.esc(f)).join("; ")}</td>
+                <td style="font-size:11.5px;color:var(--warning-text);">${o.flags.map((f) => this.esc(f)).join("; ")}${o.questions.length ? `<div>Ask the supplier: price is ${o.questions.map((q) => this.esc(q)).join("; ")}</div>` : ""}${o.last_price ? `<div class="cell-muted">last paid ${formatCurrency(o.last_price)}</div>` : ""}</td>
               </tr>`).join("")}
           </tbody>
         </table>

@@ -24,7 +24,7 @@ from p2p.formulas.sourcing import PriceOption, pick_contract_price
 from p2p.orders import contracts as contract_usage
 from p2p.platform import audit, emails, numbering, proposals, reference, worker
 from p2p.platform.sod import Actor
-from p2p.sourcing import documents
+from p2p.sourcing import documents, quote_sheet, templates
 from p2p.suppliers import scoring
 
 D = Decimal
@@ -494,19 +494,63 @@ def item_lines(lines: list[dict[str, Any]]) -> str:
     )
 
 
-def _body(rfq: dict[str, Any], lines: list[dict[str, Any]], contact: str | None, company: str, deliver_to: str) -> str:
-    items = item_lines(lines)
-    return (
-        f"Dear {contact or 'Sir or Madam'},\n\n"
-        f"{company} invites you to quote for the items below.\n\n"
-        f"Reference: {rfq['no']}\n"
-        f"Please reply by: {rfq['due_date']:%d %b %Y}\n"
-        f"Deliver to: {deliver_to}\n\n"
-        f"{items}\n\n"
-        "Please reply to this email, keeping the subject line, with for each item: the unit price, the GST rate, "
-        "the delivery time in days, how long your price is valid, and your payment terms. "
-        "Attach your quotation if you have one.\n\n"
-        f"Regards,\nProcurement, {company}\n"
+def _company(db: Session) -> str:
+    return str(
+        db.execute(text("select coalesce(short_name, legal_name) from company limit 1")).scalar() or "Our company"
+    )
+
+
+def _deliver_to(db: Session, request_no: str) -> str:
+    return str(
+        db.execute(
+            text("select l.name from request r join location l on l.code = r.ship_to_location where r.no = :n"),
+            {"n": request_no},
+        ).scalar()
+        or "as agreed"
+    )
+
+
+def question_reply_draft(db: Session, rfq_no: str, contact: str | None, question: str) -> str:
+    """A reply a buyer can start from when a supplier asks about an RFQ: the question, a promise of an answer and the
+    facts of the request (reply-by date, delivery place, items). It is a draft; nothing is sent."""
+    rfq = db.execute(text("select * from rfq where no = :n"), {"n": rfq_no}).mappings().one()
+    lines = [
+        dict(r)
+        for r in db.execute(text("select * from rfq_line where rfq_no = :n order by line_no"), {"n": rfq_no}).mappings()
+    ]
+    return templates.render(
+        templates.QUESTION_REPLY,
+        {
+            "contact": contact or "Sir or Madam",
+            "company": _company(db),
+            "reference": rfq_no,
+            "due_date": f"{rfq['due_date']:%d %b %Y}",
+            "deliver_to": _deliver_to(db, str(rfq["request_no"])),
+            "items": item_lines(lines),
+            "question": " ".join(question.split()),
+        },
+    )
+
+
+def rfq_template(db: Session) -> str:
+    """The company's own wording for the request, or the standard one when it has none (or the saved text is no good)."""
+    saved = _org_setting(db, "rfq_email_template", "")
+    return saved if saved.strip() and not templates.problems(saved) else templates.DEFAULT_RFQ_TEMPLATE
+
+
+def _body(
+    template: str, rfq: dict[str, Any], lines: list[dict[str, Any]], contact: str | None, company: str, deliver_to: str
+) -> str:
+    return templates.render(
+        template,
+        {
+            "contact": contact or "Sir or Madam",
+            "company": company,
+            "reference": str(rfq["no"]),
+            "due_date": f"{rfq['due_date']:%d %b %Y}",
+            "deliver_to": deliver_to,
+            "items": item_lines(lines),
+        },
     )
 
 
@@ -524,15 +568,9 @@ def send_rfq(db: Session, rfq_no: str, actor: Actor = SERVICE) -> int:
         dict(r)
         for r in db.execute(text("select * from rfq_line where rfq_no = :n order by line_no"), {"n": rfq_no}).mappings()
     ]
-    company = db.execute(text("select coalesce(short_name, legal_name) from company limit 1")).scalar() or "Our company"
+    company = _company(db)
     category = db.execute(text("select name from item_category where code = :c"), {"c": rfq["category_code"]}).scalar()
-    deliver_to = (
-        db.execute(
-            text("select l.name from request r join location l on l.code = r.ship_to_location where r.no = :n"),
-            {"n": rfq["request_no"]},
-        ).scalar()
-        or "as agreed"
-    )
+    deliver_to = _deliver_to(db, str(rfq["request_no"]))
     pending = db.execute(
         text(
             "select rs.supplier_code, rs.email, (select c.name from supplier_contact c where c.supplier_code = rs.supplier_code "
@@ -542,6 +580,8 @@ def send_rfq(db: Session, rfq_no: str, actor: Actor = SERVICE) -> int:
         {"n": rfq_no},
     ).all()
     subject = f"Request for quotation {rfq_no}" + (f": {category}" if category else "")
+    template = rfq_template(db)
+    sheet = quote_sheet.build(dict(rfq), lines, str(company))
     sent = failed = 0
     for code, email, contact in pending:
         try:
@@ -549,9 +589,10 @@ def send_rfq(db: Session, rfq_no: str, actor: Actor = SERVICE) -> int:
                 db,
                 email,
                 subject,
-                _body(dict(rfq), lines, contact, str(company), str(deliver_to)),
+                _body(template, dict(rfq), lines, contact, str(company), str(deliver_to)),
                 linked_type="rfq",
                 linked_ref=rfq_no,
+                attachments=[(f"{rfq_no}-quotation-form.xlsx", quote_sheet.CONTENT_TYPE, sheet)],
             )
         except (OSError, smtplib.SMTPException) as exc:
             db.rollback()

@@ -146,6 +146,11 @@ def run(ctx) -> Outcome:
             good, bad = [("true" if p["value"] == "false" else "false")], ["maybe", "1", ""]
         elif kind == "choice":
             good, bad = [c for c in p["choices"] if c != p["value"]][:1], ["nonsense", "WARN "]
+        elif kind == "text":  # a template: it must use {items} and {reference} and no other field
+            # accepted: a template with its two required fields, and empty (= the standard wording);
+            # refused: no fields, an unknown field, a stray brace, and text over the length limit
+            good = ["Please quote {items} (ref {reference}).\n", ""]
+            bad = ["no fields at all", "{items} {reference} {nope}", "{items} {reference} {", "{items} {reference} " + "y" * 4100]
         elif kind == "email":  # an address, or empty for none; the two mailboxes must differ, so each gets its own
             mine = f"{key.split('_')[0]}@eval-co.example"
             good = [mine if p["value"] != mine else f"other.{mine}"]
@@ -173,7 +178,7 @@ def run(ctx) -> Outcome:
                     for t in ("org_setting", "app_setting")
                 },
             )  # noqa: S608
-            r = client.put(f"{SETUP}/policies/{key}", json={"value": value, "reason": f"edge {value}"}, headers=admin)
+            r = client.put(f"{SETUP}/policies/{key}", json={"value": value, "reason": f"edge {value.strip()}".strip()}, headers=admin)
             db.rollback()
             if r.status_code != 200:
                 refused_wrong += 1
@@ -202,7 +207,7 @@ def run(ctx) -> Outcome:
                 or changes() != n0 + 1
                 or row[1] != value
                 or row[0] != expected_old
-                or row[2] != f"edge {value}"
+                or row[2] != f"edge {value.strip()}".strip()
                 or row[3] != str(world.logins["Admin"])
                 or not audit_ok
             ):

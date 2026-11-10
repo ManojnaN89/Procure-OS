@@ -16,6 +16,8 @@ You turn approved requests into orders.
 
 Suppliers answer by email. Under **Quotations**, open the RFQ: each reply is read into a draft. Check it and click **Confirm this quote**, or **Dismiss**. To type one yourself click **Enter a quote**, then **Save the quote**. When you have enough, click **Award the selected suppliers**. The order is made with GST.
 
+Each offer is compared on what it costs to our door: its price, its share of the supplier's freight and packing, and the GST. The recommended offer is the cheapest of those that comply. A price far below the other quotes or the last price paid shows "Ask the supplier": check it with the supplier before awarding. When a supplier asks a question, the task carries a drafted reply you can start from; nothing is sent until you send it.
+
 ## Orders
 
 **Purchase orders** → open the order. When it is approved click **Send to supplier**. When the supplier confirms click **Record acknowledgement** and enter the promised date. If the supplier writes about the order, the panel **Supplier messages** on the order shows what the system understood, and **Chase suppliers now** sends the reminders that are due.
