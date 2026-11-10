@@ -75,7 +75,7 @@ Match the surrounding code. Short plain-language comments only where the reason 
 | Payment: due dates, tax at source, runs, bank file, closing | `invoices/payment.py`, `formulas/payment.py`, `platform/payment_api.py` |
 | Goods receipt (tolerance, rejection, inspection, stock) | `receiving/goods.py`, `formulas/receiving.py` |
 | Sending orders to suppliers, acknowledgement | `orders/dispatch.py` |
-| Budget check on approval, contract ceilings, supplier documents, supplier status proposals, reminders | `approvals/budget.py`, `formulas/budget.py`; `orders/contracts.py`, `formulas/contracts.py`; `sourcing/documents.py`, `formulas/suppliers.py`; `masters/supplier_status.py`; `sourcing/reminders.py` |
+| Budget check on approval, contract ceilings, supplier documents, supplier status proposals, reminders | `approvals/budget.py`, `formulas/budget.py`; `orders/contracts.py`, `formulas/contracts.py`; `sourcing/documents.py`, `formulas/suppliers.py`; `masters/supplier_status.py`; supplier records, onboarding and bank changes `masters/suppliers.py`, `formulas/supplier_master.py`; `sourcing/reminders.py` |
 | Sourcing: contract price or quotation request, suppliers asked, RFQ emails | `sourcing/service.py`, `sourcing/jobs.py`, `formulas/sourcing.py` |
 | Approval of requests by the rule tables (lookup, chain, submit/approve/reject/return) | `approvals/rules.py`, `approvals/workflow.py` |
 | Replenishment into draft requests, document numbers | `requests/replenishment.py`, `requests/jobs.py`, `formulas/replenishment.py`, `platform/numbering.py` |

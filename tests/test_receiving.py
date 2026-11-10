@@ -182,6 +182,66 @@ def test_a_full_receipt_closes_the_line_the_order_and_puts_the_goods_into_stock(
     assert store.execute(text("select count(*) from audit_event where action = 'grn.post'")).scalar_one() == 1
 
 
+def _told(shop: Session, kind: str = "goods_received") -> list[tuple[int, str, str]]:
+    shop.expire_all()
+    return [
+        (r[0], r[1], r[2])
+        for r in shop.execute(
+            text("select user_id, title, body from notification where kind = :k order by id"), {"k": kind}
+        )
+    ]
+
+
+def test_the_requester_and_the_buyer_are_told_what_arrived_and_what_was_rejected(
+    store: Session, outbox: Outbox
+) -> None:  # noqa: F811
+    slug, sfx = store.info["slug"], store.info["sfx"]
+    po_no, _ = _sent(store)
+    store.execute(text("update request set requester = 'U4'"))  # the keeper asked for it
+    store.execute(text("update po set buyer = 'U5'"))  # the procurement head bought it
+    store.commit()
+
+    done = _receive(store, po_no, "10", rejected="2", reason="Damaged in transit")
+    assert goods.tell_requesters(store, slug, done.no) == 2
+
+    asked = users.user_id_by_email(slug, f"keeper{sfx}@x.example")
+    bought = users.user_id_by_email(slug, f"pur{sfx}@x.example")
+    told = _told(store)
+    assert sorted(t[0] for t in told) == sorted([asked, bought])
+    title, body = told[0][1], told[0][2]
+    assert title == f"Goods arrived for {po_no}" and done.no in body
+    assert "8 accepted, 2 rejected" in body
+
+
+def test_what_is_waiting_for_inspection_is_said_so_and_the_result_is_told_again(store: Session, outbox: Outbox) -> None:  # noqa: F811
+    slug = store.info["slug"]
+    store.execute(text("update item set inspection_required = true where code = 'A'"))
+    store.commit()
+    po_no, _ = _sent(store)
+    store.execute(text("update request set requester = 'U4'"))
+    store.commit()
+
+    done = _receive(store, po_no, "10")
+    goods.tell_requesters(store, slug, done.no)
+    assert "10 received, waiting for inspection" in _told(store)[0][2]
+
+    checked = goods.inspect(store, done.no, [Decision(1, D("10"), D("0"))], 1, as_of=TODAY)
+    goods.tell_requesters(store, slug, checked.no, inspected=True)
+
+    told = _told(store)
+    assert [t[1] for t in told][-1] == f"Inspection done for {po_no}" and "10 accepted" in told[-1][2]
+
+
+def test_a_failure_to_tell_people_never_undoes_the_receipt(store: Session, outbox: Outbox) -> None:  # noqa: F811
+    po_no, _ = _sent(store)
+    done = _receive(store, po_no, "10")
+
+    assert goods.tell_requesters(store, "no-such-company", done.no) == 0  # nobody to tell: no login found
+
+    assert store.execute(text("select count(*) from goods_receipt")).scalar_one() == 1
+    assert goods.tell_requesters(store, store.info["slug"], "GRN-NOPE") == 0
+
+
 def test_a_part_receipt_leaves_the_order_open_for_the_rest(store: Session, outbox: Outbox) -> None:  # noqa: F811
     po_no, _ = _sent(store)
 
@@ -419,6 +479,8 @@ def test_the_api_lets_a_store_person_receive_and_nobody_else(store: Session, out
     keeper = users.create_user(slug, f"store{sfx}@x.example", PASSWORD, "A Store", "Store")
     h_store, h_buyer = _headers(slug, keeper, "Store"), _headers(slug, logins["buyer"], "Buyer")
     body = {"challan": "DC/77", "vehicle": "KA01AB1234", "lines": [{"line_no": 1, "qty_received": "6"}]}
+    store.execute(text("update request set requester = 'U4'"))  # the keeper (a login of the company) asked for it
+    store.commit()
 
     assert client.post(f"/api/purchase-orders/{po_no}/receive", json=body).status_code == 401
     assert client.post(f"/api/purchase-orders/{po_no}/receive", json=body, headers=h_buyer).status_code == 403
@@ -432,6 +494,9 @@ def test_the_api_lets_a_store_person_receive_and_nobody_else(store: Session, out
     done = client.post(f"/api/purchase-orders/{po_no}/receive", json=body, headers=h_store)
     assert done.status_code == 200 and done.json()["receipt"] == "GRN-BLR-2627-00001"
     assert done.json()["po_status"] == "part_received" and done.json()["accepted"] == {"1": "6"}
+    told = _told(store)  # the screen's receipt told the person who asked for the goods
+    assert [t[0] for t in told] == [users.user_id_by_email(slug, f"keeper{sfx}@x.example")]
+    assert "6 accepted" in told[0][2]
 
     detail = client.get("/api/receipts/GRN-BLR-2627-00001", headers=h_store).json()
     assert (detail["challan"], detail["vehicle"], detail["inspection"]) == ("DC/77", "KA01AB1234", "not_required")

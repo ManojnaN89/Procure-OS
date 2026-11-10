@@ -48,6 +48,9 @@ MATRIX = [
     ("POST", "/api/payment-runs", {"run_date": "2026-11-06"}, {"Finance"}),
     ("POST", "/api/payment-runs/NOPE/file", None, {"Finance"}),
     ("POST", "/api/payment-runs/NOPE/paid", {}, {"Finance"}),
+    ("POST", "/api/vendors", {"legal_name": "x"}, {"Buyer", "Approver"}),
+    ("PUT", "/api/vendors/NOPE", {"trade_name": "x"}, {"Buyer", "Approver"}),
+    ("POST", "/api/vendors/NOPE/bank", {"account_no": "1", "ifsc": "x"}, {"Buyer", "Approver"}),
     ("POST", "/api/vendors/NOPE/documents", {"type": "pan"}, {"Buyer", "Approver"}),
     ("POST", "/api/vendors/NOPE/documents/1/verify", {}, {"Approver"}),
     ("POST", "/api/contracts", {"supplier_code": "S", "valid_from": "2026-11-01"}, {"Buyer", "Approver"}),
@@ -94,6 +97,7 @@ READS = [
     "/api/inventory",
     "/api/export/requests",
     "/api/vendors",
+    "/api/payment-terms",
     "/api/dashboard",
     "/api/settings",
     "/api/notifications",
@@ -116,11 +120,7 @@ def run(ctx) -> Outcome:
             if method == "GET":
                 resp = client.get(path, headers=headers)
             else:
-                resp = (
-                    client.post(path, json=body, headers=headers)
-                    if body is not None
-                    else client.post(path, headers=headers)
-                )
+                resp = client.request(method, path, json=body, headers=headers)
             passed_gate = resp.status_code not in (401, 403)
             should = role in allowed
             cells += 1

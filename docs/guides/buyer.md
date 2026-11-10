@@ -24,7 +24,9 @@ Each offer is compared on what it costs to our door: its price, its share of the
 
 ## Suppliers and contracts
 
-**Vendors** → **Onboard vendor**, **Add a document**. **Contracts** → **Store contract**, **Add a price**. A different person verifies the document and activates the contract.
+**Vendors** → **Onboard vendor**: fill in the form and click **Save as draft**. The checks name any wrong PAN, GSTIN, Udyam number or bank detail. On the vendor page click **Add a document** for each paper (PAN, bank proof, GST and Udyam certificates) and **Attach** its scan. A different person verifies each document, and a person with approval rights activates the supplier. The bank account of a supplier already in use can only change with another person's approval.
+
+**Contracts** → **Store contract**, **Add a price**. A different person activates the contract.
 
 ## What you cannot do
 

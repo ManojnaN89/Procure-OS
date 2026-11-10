@@ -10,7 +10,7 @@ You receive the goods and say what is wrong with them.
 
 1. Open **Goods receipt**. The orders waiting for goods are listed.
 2. Click **Receive goods** on the order that arrived.
-3. For each line enter the quantity received, the quantity rejected and why. Add the delivery challan number and the supplier invoice number.
+3. For each line enter the quantity received, the quantity rejected and why. Add the delivery challan number and the supplier invoice number. The person who asked for the goods and the buyer are told what arrived, and what was rejected.
 4. Click **Post receipt**. Stock goes up by the accepted quantity.
 
 More than the tolerance allows over the order is refused. The tolerance is set per item category by the Admin.

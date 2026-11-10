@@ -136,12 +136,12 @@ Only a row with evidence may be `verified` or `fixed`.
 
 | ID | Function | How | Plan step | Status | Evidence (test, eval or screen) | Notes |
 |---|---|---|---|---|---|---|
-| 5.1.1 | Goods receipt: Record a full delivery | Rules | P1-15 | todo |  |  |
-| 5.1.2 | Goods receipt: Part delivery keeps the balance open | Rules | P1-15 | todo |  |  |
-| 5.1.3 | Goods receipt: Over and under delivery tolerance | Rules | P1-15 | todo |  |  |
-| 5.1.4 | Goods receipt: Rejected or damaged quantity | Rules | P1-15 | todo |  |  |
-| 5.1.5 | Goods receipt: Tell the requester what arrived | Platform | P1-15 | todo |  |  |
-| 5.3.1 | Short or bad goods: Chase the supplier for the balance of a part delivery | AI agent | P1-14 | todo |  |  |
+| 5.1.1 | Goods receipt: Record a full delivery | Rules | P1-15 | verified | tests/test_receiving.py::test_a_full_receipt_closes_the_line_the_order_and_puts_the_goods_into_stock; E18; E30 typed run (Goods receipt > Receive goods) |  |
+| 5.1.2 | Goods receipt: Part delivery keeps the balance open | Rules | P1-15 | verified | test_receiving.py::test_a_part_receipt_leaves_the_order_open_for_the_rest, ::test_what_is_received_in_parts_counts_together_against_the_tolerance; E18; E30 part-delivery run | The order closes only when every line is complete. |
+| 5.1.3 | Goods receipt: Over and under delivery tolerance | Rules | P1-15 | verified | test_receiving.py::test_over_delivery_is_accepted_up_to_the_tolerance_of_the_category_and_not_a_unit_more, ::test_a_category_with_its_own_tolerance_uses_it, ::test_two_receipts_at_the_same_moment_cannot_together_take_in_more_than_the_order_allows; formulas tests; E18 | Tolerance is data (receipt_over_pct, by category). |
+| 5.1.4 | Goods receipt: Rejected or damaged quantity | Rules | P1-15 | verified | test_receiving.py::test_rejected_goods_need_a_reason_stay_out_of_stock_and_leave_the_line_open_for_a_replacement, ::test_an_item_that_needs_inspection_waits_and_nothing_counts_until_it_is_inspected; E18 |  |
+| 5.1.5 | Goods receipt: Tell the requester what arrived | Platform | P1-15 | fixed | tests/test_receiving.py::test_the_requester_and_the_buyer_are_told_what_arrived_and_what_was_rejected, ::test_what_is_waiting_for_inspection_is_said_so_and_the_result_is_told_again, ::test_a_failure_to_tell_people_never_undoes_the_receipt, ::test_the_api_lets_a_store_person_receive_and_nobody_else | Nobody was told when goods arrived. Now `goods.tell_requesters` notifies each requester and the buyer (app and email: what was accepted, rejected or waits for inspection), from the receipt and inspection endpoints. `notifications.login_of` is the shared lookup (payment closing uses it too). |
+| 5.3.1 | Short or bad goods: Chase the supplier for the balance of a part delivery | AI agent | P1-14 | verified | tests/test_supplier_agent.py::test_the_open_balance_of_a_late_part_delivery_is_chased_with_the_quantities, ::test_a_part_delivery_not_yet_late_is_not_chased; E28; E30 part-delivery run |  |
 
 ## Sourcing
 
@@ -186,13 +186,13 @@ Only a row with evidence may be `verified` or `fixed`.
 
 | ID | Function | How | Plan step | Status | Evidence (test, eval or screen) | Notes |
 |---|---|---|---|---|---|---|
-| 8.1.1 | Supplier records: Create and maintain supplier records | Platform | P1-01 | todo |  |  |
-| 8.1.2 | Supplier records: GSTIN, PAN, GST registration type, MSME category and bank checks | Rules | P1-01 | todo |  |  |
-| 8.1.3 | Supplier records: Payment terms master | Platform | P1-01 | todo |  |  |
-| 8.1.4 | Supplier records: Activate, block and unblock a supplier | Person decides | P0-13, P1-01 | todo |  |  |
-| 8.2.1 | Onboarding: Onboarding form with document upload | Platform | P1-01 | todo |  |  |
-| 8.3.2 | Qualification & scorecards: Document expiry alerts | Rules | P1-23 | todo |  |  |
-| 8.4.1 | Communication: Every supplier email linked to its RFQ or PO | Platform | P0-19 | todo |  |  |
+| 8.1.1 | Supplier records: Create and maintain supplier records | Platform | P1-01 | fixed | tests/test_supplier_master.py (service and API tests); tests/test_supplier_screens.py (browser: Onboard vendor, details panel) | There was no way to create or edit a supplier except import. Built `masters/suppliers.py`: create (always a draft, with address, contact, bank), edit (PAN/GST/MSME locked once in use), audit rows; API POST/PUT /api/vendors; the Vendors page has a real onboarding form and a Details panel. |
+| 8.1.2 | Supplier records: GSTIN, PAN, GST registration type, MSME category and bank checks | Rules | P1-01 | fixed | tests/test_supplier_master.py (boundary tests for GSTIN check character, PAN inside GSTIN, Udyam format, account 9-18 digits, IFSC, duplicates) | New pure rules in `formulas/supplier_master.py`; a duplicate GSTIN, PAN with the same name, or the same bank account is refused. A bank change on a supplier in use is a proposal another person approves, the bank proof is unverified again, and the audit keeps only the last 4 digits. E09 has the new endpoints. |
+| 8.1.3 | Supplier records: Payment terms master | Platform | P1-01 | verified | payment_terms table drives due dates (tests/test_payments.py, E20); terms are chosen on the onboarding form (GET /api/payment-terms) and validated | Maintained by master import (CSV or Excel, with dry run). There is no screen to edit the terms themselves: the owner may want one. |
+| 8.1.4 | Supplier records: Activate, block and unblock a supplier | Person decides | P0-13, P1-01 | verified | tests/test_supplier_status.py (proposal, another person approves, documents re-checked, block, reactivate); Vendors page status buttons; E16 | Activation, block and unblock are proposals (rule 5). |
+| 8.2.1 | Onboarding: Onboarding form with document upload | Platform | P1-01 | fixed | tests/test_supplier_screens.py::test_a_buyer_onboards_a_vendor_adds_a_document_with_its_scan_and_a_second_person_verifies_it; tests/test_supplier_master.py::test_a_scan_is_kept_with_its_document_and_only_a_scan_is_accepted | The Onboard vendor button used to open the assistant with a placeholder sentence. Now a form saves a draft, documents can be added and a PDF/PNG/JPG scan attached to each (POST /api/vendors/{id}/documents/{doc}/file). Verification by a second person and activation by an approver are unchanged. |
+| 8.3.2 | Qualification & scorecards: Document expiry alerts | Rules | P1-23 | verified | tests/test_workspace.py::test_a_supplier_document_that_is_wrong_or_about_to_expire_alerts_the_buyer; E29; E16 (expired documents block use) |  |
+| 8.4.1 | Communication: Every supplier email linked to its RFQ or PO | Platform | P0-19 | verified | tests/test_email.py::test_a_reply_to_an_rfq_is_stored_linked_to_the_rfq_and_adds_a_case_event, ::test_our_outgoing_mail_carries_the_reply_address_and_a_reply_without_a_tag_is_linked_by_thread; test_supplier_agent.py; E30 document runs; Supplier messages panel on the order and RFQ pages |  |
 
 ## Plan steps (for reference)
 

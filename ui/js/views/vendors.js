@@ -13,19 +13,17 @@ const VendorsView = {
         </div>
         <div class="btn btn-primary" id="newVendorBtn"><i class="ti ti-plus"></i>Onboard vendor</div>
       </div>
+      <div id="vendorForm"></div>
       <div class="table-wrap" id="tableWrap"><div class="empty-state">Loading\u2026</div></div>
     `;
-    document.getElementById("newVendorBtn").addEventListener("click", () => {
-      Prefill.set("Onboard a vendor called [name], email [email], category [category]");
-      window.location.hash = "#/assistant";
-    });
+    document.getElementById("newVendorBtn").addEventListener("click", () => this.showOnboarding(document.getElementById("vendorForm")));
 
     try {
       const rows = await API.listVendors();
       const wrap = document.getElementById("tableWrap");
       if (!wrap) return; // the person has already gone to another page
       if (!rows.length) {
-        wrap.innerHTML = `<div class="empty-next"><strong>No vendors yet.</strong><br>Next: onboard a supplier (the assistant can start it for you).</div>`;
+        wrap.innerHTML = `<div class="empty-next"><strong>No vendors yet.</strong><br>Next: click Onboard vendor and fill in the form. The supplier is saved as a draft until its documents are verified and a person activates it.</div>`;
         return;
       }
       wrap.innerHTML = `
@@ -51,16 +49,127 @@ const VendorsView = {
     }
   },
 
+  // The fields of a supplier record, in the order the form shows them: [key, label, kind, hint]
+  FIELDS: [
+    ["legal_name", "Legal name", "text", ""], ["trade_name", "Trade name", "text", "if different"],
+    ["legal_form", "Legal form", "legal_form", ""], ["pan", "PAN", "text", "ABCDE1234F"],
+    ["gst_reg_type", "GST registration", "gst", ""], ["gstin", "GSTIN", "text", "15 characters"],
+    ["msme_category", "MSME category", "msme", ""], ["udyam_no", "Udyam number", "text", "UDYAM-MH-00-1234567"],
+    ["payment_terms_code", "Payment terms", "terms", ""], ["agreed_payment_days", "Agreed payment days", "number", "MSME written agreement"],
+    ["contact_name", "Contact person", "text", ""], ["email", "Email", "text", "sales@supplier.example"],
+    ["phone", "Phone", "text", "+91 \u2026"], ["address", "Address", "text", ""],
+    ["city", "City", "text", ""], ["pincode", "Pincode", "text", ""],
+  ],
+  CHOICES: {
+    legal_form: [["", "\u2014"], ["proprietorship", "Proprietorship"], ["partnership", "Partnership"], ["llp", "LLP"], ["pvt_ltd", "Private limited"], ["public_ltd", "Public limited"], ["other", "Other"]],
+    gst: [["regular", "Regular"], ["composition", "Composition"], ["unregistered", "Not registered"]],
+    msme: [["none", "Not an MSME"], ["micro", "Micro"], ["small", "Small"], ["medium", "Medium"]],
+  },
+
+  fieldInput(key, kind, hint, value, terms, disabled) {
+    const v = value === null || value === undefined ? "" : String(value);
+    const dis = disabled ? " disabled" : "";
+    if (kind === "terms") {
+      return `<select data-f="${key}"${dis}><option value="">\u2014</option>${terms.map((t) => `<option value="${escapeHtml(t.code)}"${t.code === v ? " selected" : ""}>${escapeHtml(t.name)} (${escapeHtml(t.code)})</option>`).join("")}</select>`;
+    }
+    if (this.CHOICES[kind]) {
+      return `<select data-f="${key}"${dis}>${this.CHOICES[kind].map(([val, label]) => `<option value="${val}"${val === v ? " selected" : ""}>${label}</option>`).join("")}</select>`;
+    }
+    return `<input data-f="${key}" ${kind === "number" ? 'type="number" min="0" max="365"' : ""} value="${escapeHtml(v)}" placeholder="${escapeHtml(hint)}"${dis}>`;
+  },
+
+  collect(box) {
+    const out = {};
+    box.querySelectorAll("[data-f]").forEach((el) => { if (!el.disabled) out[el.dataset.f] = el.value.trim(); });
+    return out;
+  },
+
+  async showOnboarding(box) {
+    if (!box) return;
+    if (box.innerHTML) { box.innerHTML = ""; return; }
+    let terms = [];
+    try { terms = await API.getJSON("/api/payment-terms"); } catch { /* the list stays empty */ }
+    box.innerHTML = `<div class="panel" style="margin-bottom:14px;">
+      <div class="panel-title">Onboard a vendor (saved as a draft)</div>
+      <div id="vendorFormFields" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:10px;">
+        ${this.FIELDS.map(([key, label, kind, hint]) => `<label style="font-size:12px;color:var(--text-secondary);">${label}${this.fieldInput(key, kind, hint, key === "gst_reg_type" ? "regular" : key === "msme_category" ? "none" : "", terms, false)}</label>`).join("")}
+        <label style="font-size:12px;color:var(--text-secondary);">Bank account number<input data-f="account_no" placeholder="9 to 18 digits"></label>
+        <label style="font-size:12px;color:var(--text-secondary);">IFSC<input data-f="ifsc" placeholder="HDFC0001234"></label>
+      </div>
+      <div style="margin-top:12px;display:flex;gap:8px;align-items:center;">
+        <div class="btn btn-primary btn-sm" id="vendorSave">Save as draft</div>
+        <div class="btn btn-secondary btn-sm" id="vendorCancel">Cancel</div>
+        <span id="vendorNote" style="font-size:12.5px;color:var(--warning-text);"></span>
+      </div>
+      <div class="cell-muted" style="font-size:11px;margin-top:6px;">After saving you add the documents (PAN, bank proof, GST and Udyam certificates). A person other than you verifies them, and another person activates the supplier.</div>
+    </div>`;
+    document.getElementById("vendorCancel").addEventListener("click", () => { box.innerHTML = ""; });
+    document.getElementById("vendorSave").addEventListener("click", async () => {
+      const res = await API.postJSON("/api/vendors", this.collect(box));
+      if (res.ok) { window.location.hash = `#/vendors/${res.data.id}`; return; }
+      document.getElementById("vendorNote").textContent = res.data.detail || "The vendor was not saved.";
+    });
+  },
+
+  async showDetails(box, id, p, terms, reload) {
+    const frozen = new Set(p.frozen_fields || []);
+    const f = p.fields;
+    const rows = this.FIELDS.map(([key, label, kind, hint]) => `<label style="font-size:12px;color:var(--text-secondary);">${label}${this.fieldInput(key, kind, hint, f[key], terms, !p.can_edit || frozen.has(key))}</label>`).join("");
+    const bank = p.bank ? `${escapeHtml(p.bank.account)} \u00b7 ${escapeHtml(p.bank.ifsc)} \u00b7 ${p.bank.verified ? "verified" : "not verified yet"}` : "no bank account yet";
+    box.innerHTML = `<div class="panel-title">Details</div>
+      <div id="detailFields" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:10px;">${rows}</div>
+      ${frozen.size ? `<div class="cell-muted" style="font-size:11px;margin-top:6px;">PAN, GST and MSME details are locked while the supplier is in use: put it under review first.</div>` : ""}
+      ${p.can_edit ? `<div style="margin-top:10px;display:flex;gap:8px;align-items:center;"><div class="btn btn-secondary btn-sm" id="detailSave">Save details</div><span id="detailNote" style="font-size:12.5px;color:var(--warning-text);"></span></div>` : ""}
+      <div style="margin-top:14px;font-size:12.5px;"><strong>Bank account:</strong> ${bank}</div>
+      ${p.can_edit ? `<div style="margin-top:8px;display:flex;gap:6px;flex-wrap:wrap;align-items:center;">
+        <input id="bankAccount" placeholder="New account number" style="padding:5px;"><input id="bankIfsc" placeholder="IFSC" style="padding:5px;width:130px;">
+        ${p.status !== "draft" ? '<input id="bankReason" placeholder="Why? (needed)" style="padding:5px;">' : ""}
+        <div class="btn btn-secondary btn-sm" id="bankSave">${p.status === "draft" ? "Set bank account" : "Ask to change the bank account"}</div><span id="bankNote" style="font-size:12.5px;color:var(--warning-text);"></span></div>
+        ${p.status !== "draft" ? '<div class="cell-muted" style="font-size:11px;margin-top:4px;">For a supplier in use a person other than you must approve the change (Admin \u2192 Approvals), and the bank proof is checked again.</div>' : ""}` : ""}`;
+    const save = document.getElementById("detailSave");
+    if (save) save.addEventListener("click", async () => {
+      const res = await API.putJSON(`/api/vendors/${encodeURIComponent(id)}`, this.collect(document.getElementById("detailFields")));
+      document.getElementById("detailNote").textContent = res.ok ? (res.data.changed.length ? "Saved." : "Nothing changed.") : (res.data.detail || "Not saved.");
+    });
+    const bankSave = document.getElementById("bankSave");
+    if (bankSave) bankSave.addEventListener("click", async () => {
+      const reason = document.getElementById("bankReason");
+      const res = await API.postJSON(`/api/vendors/${encodeURIComponent(id)}/bank`, { account_no: document.getElementById("bankAccount").value.trim(), ifsc: document.getElementById("bankIfsc").value.trim(), reason: reason ? reason.value.trim() : "" });
+      const note = document.getElementById("bankNote");
+      if (!res.ok) { note.textContent = res.data.detail || "Not changed."; return; }
+      if (res.data.proposal) { note.textContent = `Sent for approval (proposal ${res.data.proposal}). The account does not change until a person approves it.`; return; }
+      return reload();
+    });
+  },
+
+  async openFile(fileId, name) {
+    const res = await Auth.fetch(`/api/files/${fileId}`);
+    if (!res.ok) return;
+    const url = URL.createObjectURL(await res.blob());
+    const a = document.createElement("a");
+    a.href = url; a.download = name; a.click();
+    setTimeout(() => URL.revokeObjectURL(url), 10000);
+  },
+
   async renderDetail(container, id) {
     container.innerHTML = `<div class="page-header"><h1>Vendor #${escapeHtml(id)}</h1></div><div class="panel">Loading\u2026</div>`;
     try {
       const v = await API.getVendor(id);
       if (v.error) { container.innerHTML = `<div class="empty-state">${escapeHtml(v.error)}</div>`; return; }
+      let profile = null;
+      let terms = [];
+      try { [profile, terms] = await Promise.all([API.getJSON(`/api/vendors/${encodeURIComponent(id)}/profile`), API.getJSON("/api/payment-terms")]); } catch { /* the details panel is left out */ }
 
       const risk = v.risk || {};
       const riskColor = { low: "var(--success-text)", medium: "var(--warning-text)", high: "var(--danger-text)" }[risk.risk_level] || "var(--text-secondary)";
       const riskBg = { low: "var(--success-bg)", medium: "var(--warning-bg)", high: "var(--danger-bg)" }[risk.risk_level] || "var(--surface-sunken)";
 
+      const files = (profile && profile.files) || {};
+      const scanCell = (d) => {
+        const f = files[String(d.id)];
+        if (f) return `<a href="#" class="doc-open" data-file="${f.id}" data-name="${escapeHtml(f.filename)}">${escapeHtml(f.filename)}</a>`;
+        return v.can_add_documents ? `<label class="btn btn-secondary btn-sm" style="padding:2px 8px;font-size:11px;cursor:pointer;">Attach<input type="file" class="doc-attach" data-id="${d.id}" accept=".pdf,.png,.jpg,.jpeg" style="display:none;"></label>` : "—";
+      };
       container.innerHTML = `
         <div class="page-header">
           <a href="#/vendors" style="color:var(--text-muted);font-size:12px;text-decoration:none;">\u2190 Vendors</a>
@@ -103,12 +212,13 @@ const VendorsView = {
               <div>Quality <strong style="color:var(--text-primary)">${escapeHtml(v.score.quality)}</strong> <span class="cell-muted">(weight ${escapeHtml(v.score.weights.quality)})</span><div class="cell-muted" style="font-size:11px;">${v.score.accepted_pct ? `${escapeHtml(v.score.accepted_pct)}% of what was delivered was accepted` : "no deliveries yet"}; ${escapeHtml(v.score.rejected_qty)} rejected of ${escapeHtml(v.score.received_qty)} received</div></div>
             </div>
           </div>` : ""}
+        ${profile ? '<div class="panel" id="detailsPanel" style="margin-bottom:16px;"></div>' : ""}
         ${v.documents ? `
           <div class="panel" style="margin-bottom:16px;">
             <div class="panel-title">Documents ${v.documents.ok ? '<span class="badge badge-approved" style="font-size:10px;">complete</span>' : '<span class="badge badge-rejected" style="font-size:10px;">cannot be used until fixed</span>'}</div>
             ${v.documents.problems.map((p) => `<div style="font-size:12.5px;color:var(--danger-text);margin-bottom:4px;">${escapeHtml(p)}</div>`).join("")}
             ${v.documents.warnings.map((p) => `<div style="font-size:12.5px;color:var(--warning-text);margin-bottom:4px;">${escapeHtml(p)}</div>`).join("")}
-            ${v.documents.on_file.length ? `<table class="data-table" style="margin-top:8px;"><thead><tr><th>DOCUMENT</th><th>NUMBER</th><th>EXPIRES</th><th>CHECKED</th></tr></thead><tbody>${v.documents.on_file.map((d) => `<tr><td>${escapeHtml(d.type)}</td><td class="cell-muted">${escapeHtml(d.number || "—")}</td><td>${d.expires_on ? formatDate(d.expires_on) : "—"}${d.expired ? ' <span class="badge badge-rejected">expired</span>' : ""}</td><td>${d.verified ? "yes" : (v.can_verify_documents ? `<span class="btn btn-secondary btn-sm doc-verify" data-id="${d.id}" style="padding:2px 8px;font-size:11px;">Verify</span>` : "no")}</td></tr>`).join("")}</tbody></table>` : '<p class="cell-muted" style="font-size:12px;margin:0;">No documents on file.</p>'}
+            ${v.documents.on_file.length ? `<table class="data-table" style="margin-top:8px;"><thead><tr><th>DOCUMENT</th><th>NUMBER</th><th>EXPIRES</th><th>SCAN</th><th>CHECKED</th></tr></thead><tbody>${v.documents.on_file.map((d) => `<tr><td>${escapeHtml(d.type)}</td><td class="cell-muted">${escapeHtml(d.number || "—")}</td><td>${d.expires_on ? formatDate(d.expires_on) : "—"}${d.expired ? ' <span class="badge badge-rejected">expired</span>' : ""}</td><td>${scanCell(d)}</td><td>${d.verified ? "yes" : (v.can_verify_documents ? `<span class="btn btn-secondary btn-sm doc-verify" data-id="${d.id}" style="padding:2px 8px;font-size:11px;">Verify</span>` : "no")}</td></tr>`).join("")}</tbody></table>` : '<p class="cell-muted" style="font-size:12px;margin:0;">No documents on file.</p>'}
             ${v.can_add_documents ? `<div style="margin-top:10px;display:flex;gap:6px;flex-wrap:wrap;align-items:center;">
               <select id="docType" style="padding:5px;"><option value="pan">PAN card</option><option value="gst_cert">GST certificate</option><option value="udyam">Udyam certificate</option><option value="cancelled_cheque">Bank proof</option><option value="msme_agreement">MSME agreement</option><option value="iso">ISO certificate</option><option value="licence">Licence</option><option value="insurance">Insurance</option></select>
               <input id="docNumber" placeholder="Number" style="padding:5px;"><input id="docExpires" type="date" title="Expires on" style="padding:5px;">
@@ -143,6 +253,19 @@ const VendorsView = {
         </div>
       `;
 
+      const detailsBox = document.getElementById("detailsPanel");
+      if (detailsBox && profile) this.showDetails(detailsBox, id, profile, terms, () => this.renderDetail(container, id));
+      container.querySelectorAll(".doc-open").forEach((a) => a.addEventListener("click", (e) => { e.preventDefault(); this.openFile(a.dataset.file, a.dataset.name); }));
+      container.querySelectorAll(".doc-attach").forEach((input) => input.addEventListener("change", async () => {
+        if (!input.files.length) return;
+        const form = new FormData();
+        form.append("file", input.files[0]);
+        const res = await Auth.fetch(`/api/vendors/${encodeURIComponent(id)}/documents/${input.dataset.id}/file`, { method: "POST", body: form });
+        if (res.ok) return this.renderDetail(container, id);
+        let detail = "The scan was not attached.";
+        try { detail = (await res.json()).detail || detail; } catch {}
+        const note = document.getElementById("docNote"); if (note) note.textContent = detail;
+      }));
       container.querySelectorAll(".doc-verify").forEach((b) => b.addEventListener("click", async () => {
         const res = await API.postJSON(`/api/vendors/${encodeURIComponent(id)}/documents/${b.dataset.id}/verify`, { verified: true });
         if (res.ok) return this.renderDetail(container, id);

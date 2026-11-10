@@ -3,8 +3,16 @@
 from sqlalchemy import select, text
 from sqlalchemy.orm import Session
 
-from p2p.platform import mail, tenants, worker
+from p2p.platform import mail, tenants, users, worker
 from p2p.platform.control_models import AppUser
+
+
+def login_of(db: Session, tenant: str, org_code: str | None) -> int | None:
+    """The login of a person in the organisation, found by the email on their record."""
+    if not org_code:
+        return None
+    email = db.execute(text("select email from org_user where code = :c and active"), {"c": org_code}).scalar()
+    return users.user_id_by_email(tenant, str(email)) if email else None
 
 
 def email_of(user_id: int) -> str | None:

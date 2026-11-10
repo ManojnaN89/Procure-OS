@@ -1492,6 +1492,7 @@ def receive_goods(
 
     def post() -> dict[str, Any]:
         done = goods.post_receipt(db, no, lines, header, ctx.user_id, as_of=business_today())
+        goods.tell_requesters(db, ctx.slug, done.no)
         return {
             "receipt": done.no,
             "po_status": done.po_status,
@@ -1524,6 +1525,7 @@ def inspect_goods(
 
     def decide() -> dict[str, Any]:
         done = goods.inspect(db, no, decisions, ctx.user_id, as_of=business_today())
+        goods.tell_requesters(db, ctx.slug, done.no, inspected=True)
         return {
             "receipt": done.no,
             "po_status": done.po_status,

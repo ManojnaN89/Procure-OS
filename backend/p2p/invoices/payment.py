@@ -22,7 +22,7 @@ from sqlalchemy.orm import Session
 
 from p2p.formulas import payment as rules
 from p2p.invoices.service import InvoiceError
-from p2p.platform import audit, emails, notifications, numbering, proposals, users
+from p2p.platform import audit, emails, notifications, numbering, proposals
 from p2p.platform.sod import Actor, user
 
 log = logging.getLogger(__name__)
@@ -638,10 +638,7 @@ def close_case(db: Session, invoice_no: str, user_id: int) -> list[str]:
 
 def _login_of(db: Session, tenant: str, org_code: str | None) -> int | None:
     """The login of a person in the organisation, found by the email on their record."""
-    if not org_code:
-        return None
-    email = db.execute(text("select email from org_user where code = :c and active"), {"c": org_code}).scalar()
-    return users.user_id_by_email(tenant, str(email)) if email else None
+    return notifications.login_of(db, tenant, org_code)
 
 
 def _notify_closed(db: Session, tenant: str | None, po_no: str) -> None:

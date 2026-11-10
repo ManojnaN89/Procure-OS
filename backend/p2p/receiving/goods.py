@@ -6,6 +6,7 @@ waits: nothing counts and nothing goes into stock until the inspection says how 
 raises the received quantity of the order line (which the invoice match uses later) and, for stocked items, the stock.
 """
 
+import logging
 from dataclasses import dataclass, field
 from datetime import date
 from decimal import Decimal
@@ -16,9 +17,11 @@ from sqlalchemy.orm import Session
 
 from p2p.approvals.workflow import org_code_of
 from p2p.formulas import receiving as rules
-from p2p.platform import audit, numbering
+from p2p.formulas.money import format_qty
+from p2p.platform import audit, notifications, numbering
 from p2p.platform.sod import user
 
+log = logging.getLogger(__name__)
 RECEIVABLE = ("sent", "acknowledged", "part_received")
 
 
@@ -334,3 +337,69 @@ def inspect(db: Session, gr_no: str, decisions: list[Decision], user_id: int, *,
     )
     db.commit()
     return Posted(gr_no, po["no"], status, [], accepted_by_line)
+
+
+def tell_requesters(db: Session, tenant: str, gr_no: str, *, inspected: bool = False) -> int:
+    """Tell the people who asked for the goods what arrived on a receipt (or what the inspection decided), and the buyer.
+    One notification each, in the app and by email. It never undoes or hides the receipt: a failure is only logged."""
+    try:
+        gr = db.execute(text("select po_no from goods_receipt where no = :n"), {"n": gr_no}).mappings().first()
+        if gr is None:
+            return 0
+        rows = (
+            db.execute(
+                text(
+                    "select g.po_line_no, l.description, l.uom, l.request_no, g.qty_received, g.qty_accepted, g.qty_rejected "
+                    "from gr_line g join po_line l on l.po_no = g.po_no and l.line_no = g.po_line_no "
+                    "where g.gr_no = :n order by g.po_line_no"
+                ),
+                {"n": gr_no},
+            )
+            .mappings()
+            .all()
+        )
+        po = db.execute(text("select buyer, status from po where no = :p"), {"p": gr["po_no"]}).mappings().one()
+        told = 0
+        wanted = {r["request_no"] for r in rows}
+        people: dict[str, list[Any]] = {}
+        for request_no in sorted(wanted):
+            who = db.execute(text("select requester from request where no = :r"), {"r": request_no}).scalar()
+            people.setdefault(str(who) if who else "", []).append(request_no)
+        recipients = [(code, mine) for code, mine in people.items() if code]
+        if po["buyer"] and str(po["buyer"]) not in {c for c, _ in recipients}:
+            recipients.append((str(po["buyer"]), sorted(wanted)))
+        for code, mine in recipients:
+            uid = notifications.login_of(db, tenant, code)
+            if uid is None:
+                continue
+            lines = []
+            for r in rows:
+                if r["request_no"] not in mine:
+                    continue
+                what = f"{r['description'] or 'Item'} ({r['uom'] or 'units'})"
+                if r["qty_accepted"] is None:
+                    lines.append(f"- {what}: {format_qty(r['qty_received'])} received, waiting for inspection")
+                elif Decimal(r["qty_rejected"] or 0) > 0:
+                    lines.append(
+                        f"- {what}: {format_qty(r['qty_accepted'])} accepted, {format_qty(r['qty_rejected'])} rejected"
+                    )
+                else:
+                    lines.append(f"- {what}: {format_qty(r['qty_accepted'])} accepted")
+            if not lines:
+                continue
+            title = f"Inspection done for {gr['po_no']}" if inspected else f"Goods arrived for {gr['po_no']}"
+            notifications.notify(
+                db,
+                tenant,
+                uid,
+                "goods_received",
+                title,
+                f"{title} (receipt {gr_no}):\n" + "\n".join(lines),
+                link=f"#/purchase-orders/{gr['po_no']}",
+            )
+            told += 1
+        return told
+    except Exception:  # noqa: BLE001 - telling people must never undo or hide a receipt
+        db.rollback()
+        log.warning("could not notify about receipt %s", gr_no, exc_info=True)
+        return 0

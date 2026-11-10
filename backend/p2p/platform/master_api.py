@@ -5,13 +5,16 @@ from datetime import date
 from decimal import Decimal, InvalidOperation
 from typing import Annotated, Any
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, UploadFile
+from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from p2p.formulas.calendar import business_today
 from p2p.masters import documents_and_contracts as masters
-from p2p.platform import routing
-from p2p.platform.permissions import require
+from p2p.masters import suppliers
+from p2p.platform import audit, files, ratelimit, routing
+from p2p.platform.permissions import can_anywhere, require
+from p2p.platform.sod import user as user_actor
 
 router = APIRouter(prefix="/api", tags=["masters"])
 Db = Annotated[Session, Depends(routing.tenant_session)]
@@ -146,3 +149,173 @@ def activate_contract(
         return {"id": code, "status": "active"}
 
     return _guard(go)
+
+
+# ---- supplier records: the onboarding form, edits and bank details ---------------------------------
+
+SUPPLIER_FIELDS = (
+    "legal_name", "trade_name", "legal_form", "pan", "gst_reg_type", "gstin", "msme_category", "udyam_no",
+    "agreed_payment_days", "payment_terms_code", "contact_name", "email", "phone", "address", "city", "pincode",
+    "account_no", "ifsc",
+)  # fmt: skip
+FILE_TYPES = (".pdf", ".png", ".jpg", ".jpeg")
+Ctx = Annotated[routing.TenantContext, Depends(routing.tenant_context)]
+
+
+def _supplier_call(call: Callable[[], dict[str, Any]], db: Session) -> dict[str, Any]:
+    try:
+        return call()
+    except suppliers.SupplierError as exc:
+        db.rollback()
+        message = str(exc)
+        if "does not exist" in message:
+            raise HTTPException(404, message) from None
+        raise HTTPException(409 if message.startswith("possible duplicate") else 422, message) from None
+
+
+@router.get("/payment-terms")
+def payment_terms(db: Db, ctx: Ctx) -> list[dict[str, Any]]:
+    rows = db.execute(text("select code, name, days, advance_pct from payment_terms order by days, code")).mappings()
+    return [{"code": r["code"], "name": r["name"], "days": r["days"], "advance_pct": r["advance_pct"]} for r in rows]
+
+
+@router.post("/vendors")
+def create_vendor(
+    payload: dict[str, Any], db: Db, ctx: Annotated[routing.TenantContext, Depends(require("supplier.propose"))]
+) -> dict[str, Any]:
+    """Save a new supplier as a draft. It cannot be used until its documents are verified and a person activates it."""
+    data = {k: payload.get(k) for k in SUPPLIER_FIELDS if payload.get(k) not in (None, "")}
+    return _supplier_call(lambda: {"id": suppliers.create_supplier(db, data, ctx.user_id), "status": "draft"}, db)
+
+
+@router.put("/vendors/{vendor_id}")
+def update_vendor(
+    vendor_id: str,
+    payload: dict[str, Any],
+    db: Db,
+    ctx: Annotated[routing.TenantContext, Depends(require("supplier.propose"))],
+) -> dict[str, Any]:
+    data = {k: payload.get(k) for k in SUPPLIER_FIELDS if k in payload and k not in ("account_no", "ifsc")}
+    return _supplier_call(
+        lambda: {"id": vendor_id, "changed": suppliers.update_supplier(db, vendor_id, data, ctx.user_id)}, db
+    )
+
+
+@router.post("/vendors/{vendor_id}/bank")
+def change_vendor_bank(
+    vendor_id: str,
+    payload: dict[str, Any],
+    db: Db,
+    ctx: Annotated[routing.TenantContext, Depends(require("supplier.propose"))],
+) -> dict[str, Any]:
+    """Set a draft supplier's bank account, or ask for a change on a supplier in use (a person approves it)."""
+    data = {"account_no": payload.get("account_no"), "ifsc": payload.get("ifsc")}
+    reason = str(payload.get("reason") or "")
+    return _supplier_call(lambda: suppliers.change_bank(db, vendor_id, data, user_actor(ctx.user_id), reason), db)
+
+
+@router.get("/vendors/{vendor_id}/profile")
+def vendor_profile(vendor_id: str, db: Db, ctx: Ctx) -> dict[str, Any]:
+    """What the edit form and the documents list need: the record as entered, the bank account (masked) and the files."""
+    row = db.execute(text("select * from supplier where code = :c"), {"c": vendor_id}).mappings().first()
+    if row is None:
+        raise HTTPException(404, "Not found")
+    contact = (
+        db.execute(
+            text(
+                "select name, email, phone from supplier_contact where supplier_code = :c "
+                "order by is_primary desc nulls last, id limit 1"
+            ),
+            {"c": vendor_id},
+        )
+        .mappings()
+        .first()
+    )
+    address = (
+        db.execute(
+            text("select address, city, pincode from supplier_address where supplier_code = :c order by id limit 1"),
+            {"c": vendor_id},
+        )
+        .mappings()
+        .first()
+    )
+    bank = db.execute(
+        text(
+            "select account_no, ifsc, verified from supplier_bank_account where supplier_code = :c order by id limit 1"
+        ),
+        {"c": vendor_id},
+    ).first()
+    attached = db.execute(
+        text(
+            "select linked_id, id, filename from document where linked_type = 'supplier_document' and linked_id in "
+            "(select id::text from supplier_document where supplier_code = :c) order by id"
+        ),
+        {"c": vendor_id},
+    ).all()
+    fields = {
+        k: row[k]
+        for k in (
+            "legal_name", "trade_name", "legal_form", "pan", "gst_reg_type", "gstin", "msme_category", "udyam_no",
+            "agreed_payment_days", "payment_terms_code",
+        )
+    }  # fmt: skip
+    return {
+        "id": vendor_id,
+        "status": row["status"],
+        "fields": {
+            **fields,
+            "contact_name": contact["name"] if contact else None,
+            "email": contact["email"] if contact else None,
+            "phone": contact["phone"] if contact else None,
+            "address": address["address"] if address else None,
+            "city": address["city"] if address else None,
+            "pincode": address["pincode"] if address else None,
+        },
+        "frozen_fields": ["pan", "gstin", "gst_reg_type", "msme_category", "udyam_no"]
+        if row["status"] != "draft"
+        else [],
+        "bank": None
+        if bank is None
+        else {"account": f"****{str(bank[0])[-4:]}", "ifsc": bank[1], "verified": bool(bank[2])},
+        "files": {str(a[0]): {"id": a[1], "filename": a[2]} for a in attached},
+        "can_edit": can_anywhere(db, ctx.user_id, "supplier.propose"),
+        "can_add_documents": can_anywhere(db, ctx.user_id, "supplier.documents"),
+    }
+
+
+@router.post(
+    "/vendors/{vendor_id}/documents/{doc_id}/file", status_code=201, dependencies=[ratelimit.limited("upload")]
+)
+async def attach_document_file(
+    vendor_id: str,
+    doc_id: int,
+    file: UploadFile,
+    db: Db,
+    ctx: Annotated[routing.TenantContext, Depends(require("supplier.documents"))],
+) -> dict[str, Any]:
+    """Keep the scan of a supplier document (PDF or picture) with the document record."""
+    found = db.execute(
+        text("select 1 from supplier_document where id = :i and supplier_code = :s"), {"i": doc_id, "s": vendor_id}
+    ).first()
+    if found is None:
+        raise HTTPException(404, f"document {doc_id} of {vendor_id} does not exist")
+    name = file.filename or "file"
+    if not name.lower().endswith(FILE_TYPES):
+        raise HTTPException(422, "a document scan must be a PDF, PNG or JPG file")
+    data = await file.read(files.MAX_BYTES + 1)
+    if len(data) > files.MAX_BYTES:
+        raise HTTPException(413, "File is too large")
+    saved = files.save_file(
+        db, ctx.slug, data, filename=name, content_type=file.content_type or "application/octet-stream",
+        doc_type="supplier_document", uploaded_by=ctx.user_id, linked_type="supplier_document", linked_id=str(doc_id),
+    )  # fmt: skip
+    audit.record(
+        db,
+        user_actor(ctx.user_id),
+        "supplier.document_file",
+        "supplier",
+        vendor_id,
+        after={"doc": doc_id, "file": saved.id},
+    )
+    db.commit()
+    return {"id": saved.id, "filename": saved.filename}
