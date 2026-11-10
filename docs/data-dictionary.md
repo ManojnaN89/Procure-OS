@@ -217,7 +217,31 @@ Platform additions to the tables above: `invoice.advance_used`, `invoice.advance
 
 ### C7. Produced by the running system only (S, not generated)
 
-approval_task, notification, alert, proposal, audit_event, agent_run, model_call, rule_evaluation, case, case_event, job, correction_label, kpi_snapshot. *Listed so the database design accounts for them; the generator does not create them.*
+task, notification, alert, proposal, audit_event, agent_run, agent_step, model_call, rule_evaluation, purchase_case, case_event, job (control database). *Listed so the database design accounts for them; the generator does not create them.* (An earlier version of this list named `approval_task`, `case`, `correction_label` and `kpi_snapshot`; those were never built under those names: approvals are `approval_step` and `po_approval_step`, cases are `purchase_case`, and the key figures are worked out when asked.)
+
+**The complete list of tables and columns as the migrations make them is `database-schema.md`** (generated, and a test keeps it current). This dictionary explains what the data means; the tables below were not described anywhere else.
+
+### C8. Platform tables, by their database names
+
+| Table | What it holds |
+|---|---|
+| org_user, org_user_role | The people of the organisation (code, department, location, manager, approval limit) and the roles they hold, with the location or department each role is limited to. The generator's `user` and `user_role` become these |
+| user_profile, user_limit | A login's display name and role, and its approval limits by document, category and location |
+| role_permission | Which action each role may take (the permission table behind every screen and endpoint) |
+| rule_table | Versioned decision tables (JDM) for approval rules: key, version, status (draft or published), who and when |
+| setup_change | The history of company-setup changes: who, area, key, old and new value, and the reason |
+| app_setting, org_setting | Settings. `org_setting` holds the organisation's policy values (tolerances, budget policy, reminder days, mailboxes); `app_setting` holds system switches |
+| autonomy_setting, autonomy_global, autonomy_outcome | Per decision type: level, value cap, minimum confidence, tolerated wrong rate; the global kill switch; and each automatic decision's outcome for tracking mistakes |
+| agent_step | One step (a tool call or a thought) inside an agent run |
+| model_cache | Model answers kept by request hash so the same input is not paid for twice |
+| intake_pending | A plain-words request waiting for an answer to one question |
+| request_check | A repeat-request or similarity flag on a request, and who overrode it and why |
+| invoice_diagnosis | The explanation and fix the exceptions agent worked out for a blocked invoice |
+| purchase_case | The case that follows one purchase through its stages (state, title, data) |
+| item_category | Item categories: parent, default account, whether stocked or capex, minimum quotes, buyer, required documents, inspection, default TDS section |
+| ref_gst_state, ref_gst_rate, ref_hsn_sac, ref_uom, ref_holiday, ref_tds_section, ref_load | Reference data loaded into each company's database: states, GST rates with dates, HSN and SAC codes, units, holidays, TDS sections (rate, no-PAN rate, thresholds, validity) and a record of each load. Rates are data (rule 8) |
+| alembic_version | The migration revision of the database |
+| tenant, tenant_database, tenant_setting, feature_flag, app_user, refresh_token | Control database: the companies, where each one's database is (the connection string is encrypted) and its migration revision, per-company settings, feature flags, logins (with failed-attempt lock) and refresh tokens |
 
 ## D. Hidden truth (G, read only by tests)
 
