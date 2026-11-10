@@ -133,6 +133,7 @@ def run(ctx) -> Outcome:
                 f"rfqs/{rfq}",
                 "purchase-orders",
                 f"purchase-orders/{po}",
+                "receiving",
                 "assistant",
                 "trail",
                 "settings",
