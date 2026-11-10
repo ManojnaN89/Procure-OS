@@ -40,3 +40,6 @@ evals/results/demo_runs/*/documents/
 
 # UI audit screenshots (regenerate with the audit script; large)
 evals/results/ui/
+
+# journey screenshots (the step-by-step transcript journey.md is kept)
+evals/results/journeys/**/*.jpg

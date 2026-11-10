@@ -66,7 +66,7 @@ const RequisitionsView = {
     if (!rows.length) {
       wrap.innerHTML = this.rows.length
         ? `<div class="empty-next"><strong>Nothing in this list.</strong><br>Try another tab above.</div>`
-        : `<div class="empty-next"><strong>No requests yet.</strong><br>${Auth.can("request.create") ? `Next: <a href="#/requisitions/new" style="color:var(--accent-tint);">raise a new request</a>${Auth.can("replenishment.run") ? ", or check the stock levels." : "."}` : "Stock that falls to its reorder point creates requests automatically."}</div>`;
+        : `<div class="empty-next"><strong>No requests yet.</strong><br>${Auth.can("request.create") ? `Next: <a href="#/requisitions/new" style="color:var(--accent-tint);">raise a new request</a>${Auth.can("replenishment.run") ? ", or check the stock levels." : "."}` : Auth.can("replenishment.run") ? "Next: click <strong>Check stock levels</strong> to see what has fallen to its reorder point." : "Stock that falls to its reorder point creates requests automatically."}</div>`;
       return;
     }
     const pick = this.tab === "needs_me" && Auth.can("request.approve");  // approve several at once from the inbox
@@ -114,7 +114,7 @@ const RequisitionsView = {
       if (!res.ok) { note.textContent = res.data.detail || "That did not work."; return; }
       const refused = Object.entries(res.data.refused || {});
       if (refused.length) {
-        note.textContent = `${res.data.approved.length} approved. Left alone: ${refused.map(([no, why]) => `${no} (${why})`).join("; ")}`;
+        note.textContent = `${res.data.approved.length} approved. Left alone: ${refused.map(([no, why]) => `${no} (${why})`).join("; ")}`;
         setTimeout(() => this.renderList(document.getElementById("appContent")), 4000);
       } else {
         this.renderList(document.getElementById("appContent"));

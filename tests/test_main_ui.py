@@ -372,6 +372,30 @@ def clear_stock_and_approvals(company: Company) -> None:
     company.db.commit()
 
 
+def test_a_buyer_with_no_requests_yet_is_told_to_check_the_stock_levels(company: Company, browser: Any) -> None:
+    page = open_app(browser, LAPTOP)
+    sign_in(page, company.emails["Buyer"])
+    page.goto(f"{URL}/#/requisitions")
+
+    expect(page.locator("#tableWrap")).to_contain_text("No requests yet")
+    expect(page.locator("#tableWrap")).to_contain_text("Next: click Check stock levels")
+
+
+def test_the_action_buttons_are_real_buttons_to_the_keyboard_and_to_a_screen_reader(
+    company: Company, browser: Any
+) -> None:
+    page = open_app(browser, LAPTOP)
+    sign_in(page, company.emails["Buyer"])
+    page.goto(f"{URL}/#/requisitions")
+
+    button = page.get_by_role("button", name="Check stock levels")  # a div with a button role, not a bare div
+    expect(button).to_be_visible()
+    button.focus()
+    page.keyboard.press("Enter")  # pressed without the mouse
+
+    expect(page.locator("#replenishPanel")).to_contain_text("Stock check")
+
+
 def test_a_buyer_checks_stock_and_a_small_request_approves_itself(company: Company, browser: Any) -> None:
     seed_stock_and_approvals(company, price=100)  # 95 x 100 = 9,500: inside the automatic band
     try:
