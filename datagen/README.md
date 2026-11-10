@@ -19,6 +19,19 @@ Output goes to `data/datasets/cbc-<size>-v1-seed<seed>/` (git-ignored; regenerat
 | `reference/` | Tax and calendar reference tables copied from `data/reference` |
 | `manifest.json`, `splits.json`, `report.md` | Seed and counts, held-out suppliers, quality report |
 
+## The one-plant profile (the demo company)
+
+```
+python -I datagen/generator/profile_plant.py data/datasets/cbc-demo-v1-seed42    # -> plant-demo-v1-seed42
+python -I datagen/generator/profile_plant.py data/datasets/cbc-small-v1-seed42   # -> plant-small-v1-seed42
+```
+
+Cuts a generated dataset down to one plant that buys industrial spares and consumables (mechanical spares, electrical, tools,
+safety gear, packaging): 137 items, 25 suppliers, 11 people in 5 departments, and only the requests, quotations, orders, receipts,
+invoices and payments that are wholly about those items. Every row is a row of the source, or that row with a person's code replaced.
+The approval rules use only roles that exist in the small team (no CFO): the Managing Director is the last approver and approves payment runs.
+The evals use `plant-small` (set `P2P_EVAL_DATASET` to use another).
+
 ## How it is built
 
 | File | Role |

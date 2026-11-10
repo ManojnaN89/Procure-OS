@@ -28,14 +28,20 @@ def run(ctx) -> Outcome:
     from p2p.main import app
 
     out = Outcome(True)
-    state = pipeline.run_pipeline(lib.build_world("e18"))
+    world = lib.build_world("e18")
+    # the plant's catalogue has no item that needs inspection, so some stocked items are marked in this company
+    stocked = sorted(r["code"] for r in rows("master", "item") if r["stocked"] == "true")
+    flagged = set(stocked[::6])
+    world.db.execute(text("update item set inspection_required = true where code = any(:c)"), {"c": sorted(flagged)})
+    world.db.commit()
+    state = pipeline.run_pipeline(world)
     world, db = state.world, state.world.db
     db.commit()  # the API runs in its own session: nothing may stay open here
     client = TestClient(app)
     buyer, store = world.headers("Buyer"), world.headers("Store")
 
     # the oracle's own reading of the dataset
-    items = {r["code"]: r for r in rows("master", "item")}
+    items = {r["code"]: dict(r, inspection_required="true" if r["code"] in flagged else r["inspection_required"]) for r in rows("master", "item")}
     tolerance: dict[str, Fraction] = {}
     for r in rows("master", "tolerance"):
         if r["key"] == "receipt_over_pct":

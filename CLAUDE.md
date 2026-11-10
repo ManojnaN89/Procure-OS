@@ -28,6 +28,7 @@ An India-first, domain-neutral, multi-tenant procure-to-pay platform (request, a
 - Make purchase orders from the lines that are ready (contract prices and awarded quotations): `python -m p2p.cli order <tenant> [--request NO]` (the worker does it when a contract line is sourced or an RFQ is awarded). Quotes are entered by a buyer on the RFQ page.
 - Evals against the plan, with independent oracles (separate from the tests): `python evals/run.py [--live] [--only E04,E09] [--quick]`; see `evals/README.md`. Run them before calling a phase done.
 - Regenerate data: `python -I datagen/generator/cli.py --size demo --seed 42`, check it with `datagen/generator/validate.py`.
+- The demo company is one plant buying industrial spares: `python -I datagen/generator/profile_plant.py data/datasets/cbc-demo-v1-seed42` makes `plant-demo-v1-seed42` (11 people, 25 suppliers, 137 items). Evals use `plant-small-v1-seed42`.
 
 ## Rules
 

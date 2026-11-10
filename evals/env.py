@@ -38,6 +38,14 @@ def environment() -> Iterator[str]:
         make_url(real_url).set(database="postgres"), isolation_level="AUTOCOMMIT"
     )
     with admin.connect() as c:
+        if c.execute(text("select 1 from pg_database where datname = :n"), {"n": CONTROL_DB}).first():
+            # a run that was killed leaves its companies behind: drop them before the list of them is lost
+            try:
+                with create_engine(make_url(real_url).set(database=CONTROL_DB)).connect() as old:
+                    for (name,) in old.execute(text("select database_name from tenant_database")):
+                        c.execute(text(f'drop database if exists "{name}" with (force)'))
+            except Exception:  # noqa: BLE001 - never migrated: nothing to drop
+                pass
         c.execute(text(f'drop database if exists "{CONTROL_DB}" with (force)'))
         c.execute(text(f'create database "{CONTROL_DB}"'))
     url = (

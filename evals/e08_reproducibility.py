@@ -81,7 +81,7 @@ def run(ctx) -> Outcome:
         db.execute(
             text(
                 "insert into approval_rule (rule_code, document, min_value, max_value, category_code, department_code, spend_type, approver_chain, version, effective_from) "
-                "values (:c, 'request', :lo, :hi, 'ANY', 'ANY', :s, 'cfo', :v, :f)"
+                "values (:c, 'request', :lo, :hi, 'ANY', 'ANY', :s, 'director', :v, :f)"
             ),
             {
                 "c": r["rule_code"],

@@ -92,6 +92,31 @@ def test_settings_have_defaults_can_be_changed_by_an_admin_and_are_validated(env
     )
 
 
+def test_a_changed_setting_is_logged_with_who_changed_it_and_the_old_value_and_an_unchanged_one_is_not(
+    env: Env,
+) -> None:
+    admin = env.h(env.admin, "Admin")
+
+    client.post("/api/settings", json={"stale_requisition_days": "9"}, headers=admin)  # default is 3
+    client.post("/api/settings", json={"stale_requisition_days": "9"}, headers=admin)  # the same again: no change
+    client.post("/api/settings", json={"stale_requisition_days": "4", "auto_replenishment": "true"}, headers=admin)
+    client.post("/api/settings", json={"stale_requisition_days": "abc"}, headers=admin)  # refused: no change
+
+    env.db.expire_all()
+    rows = env.db.execute(
+        text(
+            "select entity_id, actor_id, before->>'value', after->>'value' from audit_event "
+            "where action = 'setting.change' order by id"
+        )
+    ).all()
+    who = str(env.admin)
+    assert rows == [
+        ("stale_requisition_days", who, "3", "9"),
+        ("stale_requisition_days", who, "9", "4"),
+        ("auto_replenishment", who, "false", "true"),
+    ]
+
+
 def test_alerts_for_one_person_and_for_everyone_are_listed_read_and_resolved(env: Env) -> None:
     mine = env.alert("Only for the admin", user=env.admin, severity="medium")
     everyone = env.alert("For the whole company", user=None, severity="high")

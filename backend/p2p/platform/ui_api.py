@@ -33,7 +33,7 @@ from p2p.orders import contracts as contract_usage
 from p2p.orders import dispatch, quotes
 from p2p.orders import service as orders  # noqa: F401 - registers the price-variance proposal executor
 from p2p.orders import workflow as po_workflow
-from p2p.platform import routing, sod
+from p2p.platform import audit, routing, sod
 from p2p.platform.permissions import PermissionDenied, can_anywhere, require
 from p2p.platform.tokens import decode_access_token
 from p2p.receiving import goods
@@ -95,6 +95,7 @@ def update_settings(
     unknown = [k for k in payload if k not in DEFAULT_SETTINGS]
     if unknown:
         return {"error": f"Unknown setting(s): {', '.join(unknown)}"}
+    current = all_settings(db)
     for key, value in payload.items():
         value = str(value)
         if key == "currency_preset" and value not in CURRENCIES:
@@ -120,6 +121,16 @@ def update_settings(
             ),
             {"k": key, "v": value},
         )
+        if current.get(key) != value:  # every change says who made it and what it was before
+            audit.record(
+                db,
+                sod.user(ctx.user_id),
+                "setting.change",
+                "app_setting",
+                key,
+                before={"value": current.get(key)},
+                after={"value": value},
+            )
     db.commit()
     if str(payload.get("auto_replenishment")) == "true":
         jobs.schedule(ctx.slug)

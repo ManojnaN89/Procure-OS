@@ -2,6 +2,7 @@
 raw dataset (so the oracles never touch the platform's own code), and a few small helpers."""
 
 import csv
+import os
 import time
 import uuid
 from collections.abc import Callable
@@ -17,7 +18,7 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 ROOT = env.ROOT
-DATASET = ROOT / "data" / "datasets" / "cbc-small-v1-seed42"
+DATASET = ROOT / "data" / "datasets" / os.environ.get("P2P_EVAL_DATASET", "plant-small-v1-seed42")
 PASSWORD = "correct horse battery"
 TODAY = date(2026, 11, 6)  # a Friday inside the small dataset's calendar
 

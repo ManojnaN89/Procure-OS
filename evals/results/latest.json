@@ -1,19 +1,22 @@
 [
   {
-    "id": "E11",
-    "title": "Hostile text is shown as text and never run",
-    "requirement": "Security: names from imported data and typed identifiers cannot inject script into the screens or SQL into the database",
+    "id": "E18",
+    "title": "Goods receipt: tolerance, rejections, inspection, stock and order progress are right",
+    "requirement": "Plan: goods are received against a sent order; over-delivery is accepted up to the category's tolerance; rejected goods stay out of stock; items needing inspection wait; the order line and the stock follow what was accepted",
     "status": "PASS",
-    "seconds": 33.5,
+    "seconds": 18.1,
     "metrics": {
-      "screens opened": 18,
-      "hostile payloads": 6,
-      "script ran or markup injected": 0,
-      "SQL probes": 12,
-      "server errors": 0,
-      "slow (sleep ran)": 0,
-      "orders on screen": 34,
-      "pipeline note": 9
+      "order lines to receive": 94,
+      "scenarios": {
+        "full": 17,
+        "over_limit": 15,
+        "partial_then_rest": 17,
+        "reject": 16,
+        "over_refused": 12,
+        "inspect": 17
+      },
+      "stock positions changed": 94,
+      "receipts posted": 111
     },
     "findings": [],
     "notes": []

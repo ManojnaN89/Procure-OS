@@ -15,12 +15,31 @@ TEST_CONTROL_DB = "p2p_control_test"
 
 # Tests run with their own secrets so they work on a machine without a .env file.
 os.environ.setdefault("HF_HUB_DISABLE_SYMLINKS_WARNING", "1")
+# The document models are already on disk. Without this the model library asks its server whether they are up to date,
+# and a connection that stalls half-open hangs the whole test run (it has, twice).
+os.environ.setdefault("HF_HUB_OFFLINE", "1")
+os.environ.setdefault("HF_HUB_ETAG_TIMEOUT", "10")
+os.environ.setdefault("HF_HUB_DOWNLOAD_TIMEOUT", "30")
 os.environ.setdefault("JWT_SECRET", "test-secret-for-unit-tests-only-0123456789")
 os.environ.setdefault("TENANT_SECRET_KEY", Fernet.generate_key().decode())
 
 
 def _admin(url_text: str):  # type: ignore[no-untyped-def]
     return create_engine(make_url(url_text).set(database="postgres"), isolation_level="AUTOCOMMIT")
+
+
+def _drop_leftover_tenants(admin_conn, real_url: str, control_db: str) -> None:  # type: ignore[no-untyped-def]
+    """Drop the tenant databases a previous run left behind (its control database still lists them)."""
+    exists = admin_conn.execute(text("select 1 from pg_database where datname = :n"), {"n": control_db}).first()
+    if not exists:
+        return
+    with create_engine(make_url(real_url).set(database=control_db)).connect() as c:
+        try:
+            names = [r[0] for r in c.execute(text("select database_name from tenant_database"))]
+        except Exception:  # noqa: BLE001 - the old control database was never migrated: nothing to drop
+            names = []
+    for n in names:
+        admin_conn.execute(text(f'drop database if exists "{n}" with (force)'))
 
 
 @pytest.fixture(scope="session")
@@ -30,6 +49,7 @@ def control_db() -> Iterator[str]:
     admin = _admin(real_url)
     try:
         with admin.connect() as c:
+            _drop_leftover_tenants(c, real_url, TEST_CONTROL_DB)  # from a run that was killed before it could clean up
             c.execute(text(f'drop database if exists "{TEST_CONTROL_DB}" with (force)'))
             c.execute(text(f'create database "{TEST_CONTROL_DB}"'))
     except OperationalError:

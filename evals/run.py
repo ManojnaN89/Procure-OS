@@ -91,6 +91,11 @@ def main() -> int:
                         "the eval itself crashed:\n" + traceback.format_exc(limit=6),
                     )
                 )
+            for shared in list(ctx.cache.values()):  # an eval that failed halfway must not hold locks for the next one
+                world = getattr(shared, "world", shared)
+                db = getattr(world, "db", None)
+                if db is not None:
+                    db.rollback()
             status = "PASS" if outcome.passed else "FAIL"
             if getattr(outcome, "skipped", False):
                 status = "SKIP"
