@@ -5,7 +5,7 @@ import logging
 from sqlalchemy.orm import Session
 
 from p2p.formulas.calendar import IST
-from p2p.orders import service
+from p2p.orders import dispatch, service  # noqa: F401 - dispatch registers the send job
 from p2p.platform import routing, worker
 
 log = logging.getLogger(__name__)

@@ -15,6 +15,7 @@ from sqlalchemy.orm import Session
 from p2p.approvals import rules
 from p2p.approvals.workflow import ApprovalError, name_of, org_code_of
 from p2p.formulas.calendar import business_today
+from p2p.orders import dispatch
 from p2p.platform import audit, permissions, tasks, users
 from p2p.platform.sod import Actor
 
@@ -73,6 +74,7 @@ def submit(db: Session, tenant: str, po_no: str, actor: Actor, *, today: date | 
             rule_version=f"{rule.code}:v{rule.version}",
         )
         db.commit()
+        dispatch.queue_if_automatic(db, tenant, po_no)
         return "approved"
     for n, step in enumerate(steps, start=1):
         db.execute(
@@ -229,6 +231,8 @@ def approve(db: Session, tenant: str, po_no: str, user_id: int, comment: str | N
             db, actor, "po.approved", "po", po_no, before={"status": "submitted"}, after={"status": "approved"}
         )
     db.commit()
+    if following is None:
+        dispatch.queue_if_automatic(db, tenant, po_no)
     if step["task_id"]:
         tasks.complete_task(db, int(step["task_id"]), user_id)
     if following is not None:

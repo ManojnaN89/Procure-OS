@@ -82,6 +82,22 @@ const PurchaseOrdersView = {
       </div>`;
   },
 
+  dispatchPanel(po) {
+    if (!["approved", "sent", "acknowledged", "part_received", "received", "closed"].includes(po.status) && !po.sent_at) return "";
+    const sent = po.sent_at ? `Sent to ${this.esc(po.sent_to)} on ${formatDate(po.sent_at)}.` : "Approved, not sent to the supplier yet.";
+    const ack = po.acknowledged_at
+      ? ` Acknowledged on ${formatDate(po.acknowledged_at)}${po.promised_date ? `, delivery promised by ${formatDate(po.promised_date)}` : ""}.${po.ack_note ? ` “${this.esc(po.ack_note)}”` : ""}`
+      : (po.ack_overdue ? ' <span style="color:var(--warning-text);">The supplier has not acknowledged it yet and is overdue.</span>' : "");
+    return `
+      <div class="panel" style="margin-bottom:12px;">
+        <div class="panel-title">Supplier</div>
+        <p style="margin:0 0 10px;font-size:12.5px;color:var(--text-secondary);">${sent}${ack}</p>
+        ${po.can_send ? `<div class="btn btn-primary btn-sm" id="poSend" style="display:inline-block;"><i class="ti ti-send"></i>Send to supplier</div>` : ""}
+        ${po.can_acknowledge ? `<div id="poAckBox"><input id="poAckDate" type="date" style="padding:6px 8px;font-size:12.5px;"> <input id="poAckNote" placeholder="Note (optional)" style="padding:6px 8px;font-size:12.5px;width:40%;"> <div class="btn btn-primary btn-sm" id="poAck" style="display:inline-block;">Record acknowledgement</div></div>` : ""}
+        <div id="poDispatchNote" style="font-size:12px;color:var(--warning-text);margin-top:8px;"></div>
+      </div>`;
+  },
+
   wire(po) {
     const act = async (verb, body) => {
       const res = await API.postJSON(`/api/purchase-orders/${encodeURIComponent(po.id)}/${verb}`, body);
@@ -91,6 +107,16 @@ const PurchaseOrdersView = {
     };
     const on = (id, fn) => { const el = document.getElementById(id); if (el) el.addEventListener("click", fn); };
     on("poApprove", () => act("approve", {}));
+    on("poSend", () => act("send", {}));
+    on("poAck", async () => {
+      const res = await API.postJSON(`/api/purchase-orders/${encodeURIComponent(po.id)}/acknowledge`, {
+        promised_date: document.getElementById("poAckDate").value || null,
+        note: document.getElementById("poAckNote").value,
+      });
+      if (res.ok && !(res.data.warnings || []).length) return this.renderDetail(document.getElementById("appContent"), po.id);
+      const note = document.getElementById("poDispatchNote");
+      if (note) note.textContent = res.ok ? `Recorded. Later than needed: ${res.data.warnings.join("; ")}` : (res.data.detail || "That did not work.");
+    });
     on("poReject", () => { document.getElementById("poReasonBox").style.display = "block"; document.getElementById("poReason").focus(); });
     on("poReasonCancel", () => { document.getElementById("poReasonBox").style.display = "none"; });
     on("poReasonOk", () => act("reject", { reason: document.getElementById("poReason").value }));
@@ -112,6 +138,7 @@ const PurchaseOrdersView = {
              ${po.contract_code ? ` · contract ${this.esc(po.contract_code)}` : ""}</p>
         </div>
         ${this.approvalPanel(po)}
+        ${this.dispatchPanel(po)}
         <div class="panel" style="margin-bottom:12px;font-size:12.5px;color:var(--text-secondary);">
           Supplier GSTIN ${this.esc(po.supplier_gstin || "none")} · buyer GSTIN ${this.esc(po.buyer_gstin || "none")} · deliver to ${this.esc(po.ship_to)}
           ${po.payment_terms ? ` · payment ${this.esc(po.payment_terms)}` : ""}${po.delivery_terms ? ` · ${this.esc(po.delivery_terms)}` : ""}

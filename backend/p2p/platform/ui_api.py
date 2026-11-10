@@ -8,7 +8,7 @@ data comes from the real services. Pages whose services are not built yet return
 import asyncio
 import json
 import uuid
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 from datetime import UTC, date, datetime
 from decimal import Decimal, InvalidOperation
 from typing import Annotated, Any
@@ -30,7 +30,7 @@ from p2p.formulas.money import format_qty, round_money
 from p2p.formulas.suppliers import LABELS
 from p2p.masters import supplier_status
 from p2p.orders import contracts as contract_usage
-from p2p.orders import quotes
+from p2p.orders import dispatch, quotes
 from p2p.orders import service as orders  # noqa: F401 - registers the price-variance proposal executor
 from p2p.orders import workflow as po_workflow
 from p2p.platform import routing, sod
@@ -964,8 +964,18 @@ def get_purchase_order(no: str, db: Db, ctx: Ctx) -> dict[str, Any]:
     r = rows[0]
     lines = _rows(db, "select * from po_line where po_no = :n order by line_no", n=no)
     charges = _rows(db, "select * from po_charge where po_no = :n order by id", n=no)
+    promised = [line["promised_date"] for line in lines if line["promised_date"]]
+    can_dispatch = can_anywhere(db, ctx.user_id, "po.send")
     return {
         **_po(r),
+        "sent_at": _iso(r["sent_at"]),
+        "sent_to": r["sent_to"],
+        "acknowledged_at": _iso(r["acknowledged_at"]),
+        "ack_note": r["ack_note"],
+        "promised_date": max(promised).isoformat() if promised else None,
+        "ack_overdue": r["status"] == "sent" and dispatch.ack_overdue(db, r["sent_at"], business_today()),
+        "can_send": can_dispatch and r["status"] == "approved" and not r["hold_reason"],
+        "can_acknowledge": can_dispatch and r["status"] == "sent",
         "waiting_for": r["waiting_for"],
         "buyer_gstin": r["buyer_gstin"],
         "supplier_gstin": r["supplier_gstin"],
@@ -996,6 +1006,7 @@ def get_purchase_order(no: str, db: Db, ctx: Ctx) -> dict[str, Any]:
                 "sgst": _money(line["sgst"]),
                 "igst": _money(line["igst"]),
                 "need_by": line["need_by"].isoformat() if line["need_by"] else None,
+                "promised_date": line["promised_date"].isoformat() if line["promised_date"] else None,
                 "source": line["source"],
                 "source_ref": line["source_ref"],
             }
@@ -1043,6 +1054,39 @@ def _po_action(call: Any) -> dict[str, str]:
         raise HTTPException(422, str(exc)) from None
     except PermissionDenied as exc:
         raise HTTPException(403, str(exc)) from None
+
+
+def _dispatch_action(call: Callable[[], dict[str, Any]]) -> dict[str, Any]:
+    try:
+        return call()
+    except dispatch.DispatchError as exc:
+        raise HTTPException(409 if "does not exist" not in str(exc) else 404, str(exc)) from None
+
+
+@router.post("/purchase-orders/{no}/send")
+def send_purchase_order(
+    no: str, db: Db, ctx: Annotated[routing.TenantContext, Depends(require("po.send"))]
+) -> dict[str, Any]:
+    return _dispatch_action(lambda: {"sent_to": dispatch.send_po(db, no, sod.user(ctx.user_id)), "status": "sent"})
+
+
+@router.post("/purchase-orders/{no}/acknowledge")
+def acknowledge_purchase_order(
+    no: str, payload: dict[str, Any], db: Db, ctx: Annotated[routing.TenantContext, Depends(require("po.send"))]
+) -> dict[str, Any]:
+    raw = payload.get("promised_date")
+    try:
+        promised = date.fromisoformat(str(raw)) if raw else None
+    except ValueError:
+        raise HTTPException(422, "promised_date must be a date like 2026-11-20") from None
+    return _dispatch_action(
+        lambda: {
+            "status": "acknowledged",
+            "warnings": dispatch.acknowledge(
+                db, no, sod.user(ctx.user_id), promised=promised, note=payload.get("note")
+            ),
+        }
+    )
 
 
 @router.post("/purchase-orders/{no}/approve")

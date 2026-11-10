@@ -23,6 +23,8 @@ MATRIX = [
     ("POST", "/api/rfqs/NOPE/award", {"choices": {}}, {"Buyer"}),
     ("POST", "/api/quote-drafts/1/confirm", {}, {"Buyer"}),
     ("POST", "/api/quote-drafts/1/dismiss", {}, {"Buyer"}),
+    ("POST", "/api/purchase-orders/NOPE/send", None, {"Buyer"}),
+    ("POST", "/api/purchase-orders/NOPE/acknowledge", {}, {"Buyer"}),
     ("POST", "/api/purchase-orders/NOPE/approve", {}, {"Approver"}),
     ("POST", "/api/purchase-orders/NOPE/reject", {"reason": "x"}, {"Approver"}),
     ("POST", "/api/vendors/NOPE/status", {"to": "active", "reason": "x"}, {"Buyer", "Approver"}),

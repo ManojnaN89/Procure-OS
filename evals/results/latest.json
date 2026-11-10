@@ -4,7 +4,7 @@
     "title": "Replenishment orders the right items in the right quantities",
     "requirement": "Plan: read stock levels, create requests for items at their reorder point (quantity from the planning data, whole packs, supplier minimum)",
     "status": "PASS",
-    "seconds": 3.0,
+    "seconds": 2.6,
     "metrics": {
       "lines expected": 118,
       "lines planned": 118,
@@ -24,7 +24,7 @@
     "title": "Approval routing follows the rule table and the organisation",
     "requirement": "Rule 8 and the plan: a rule is chosen by value band, spend type, category, department and the date it is in force; its chain becomes real people",
     "status": "PASS",
-    "seconds": 13.5,
+    "seconds": 13.1,
     "metrics": {
       "cases": 2388,
       "rule agreement %": 100.0,
@@ -40,7 +40,7 @@
     "title": "Sourcing picks the right contract price, or sends the line to quotation",
     "requirement": "Plan: contract vs RFQ per line; only an active contract in force, for an active supplier, in the right unit, with the quantity break",
     "status": "PASS",
-    "seconds": 7.2,
+    "seconds": 7.0,
     "metrics": {
       "items": 172,
       "cases": 4128,
@@ -72,7 +72,7 @@
     "title": "Quote comparison recommends the right supplier and the award rules hold",
     "requirement": "Plan: collect quotes, compare, award; the recommendation is the lowest compliant offer; an override or too few quotes needs a reason",
     "status": "PASS",
-    "seconds": 13.1,
+    "seconds": 12.5,
     "metrics": {
       "scenarios": 160,
       "lines compared": 323,
@@ -89,7 +89,7 @@
     "title": "The whole flow, stock level to approved purchase order, keeps its promises",
     "requirement": "Plan: nothing is lost, money reconciles, every change is audited, only eligible suppliers are asked, stock on the way is counted once",
     "status": "PASS",
-    "seconds": 10.5,
+    "seconds": 10.7,
     "metrics": {
       "requests": 16,
       "lines": 118,
@@ -103,14 +103,14 @@
         "quotation open": 1
       },
       "stage seconds": {
-        "replenishment and submission": 1.23,
-        "request approvals": 0.62,
-        "sourcing and RFQ emails": 1.81,
-        "quotes and awards": 0.86,
-        "purchase orders and their approval": 3.16
+        "replenishment and submission": 1.2,
+        "request approvals": 0.66,
+        "sourcing and RFQ emails": 1.69,
+        "quotes and awards": 0.88,
+        "purchase orders and their approval": 3.33
       },
-      "total seconds": 7.7,
-      "company build seconds": 2.64,
+      "total seconds": 7.8,
+      "company build seconds": 2.73,
       "orders lines checked": 117
     },
     "findings": [],
@@ -159,9 +159,9 @@
     "status": "PASS",
     "seconds": 7.2,
     "metrics": {
-      "actions": 20,
+      "actions": 22,
       "roles tried": 8,
-      "cells checked": 160,
+      "cells checked": 176,
       "too permissive": 0,
       "too strict": 0,
       "reads open without login": 0
@@ -174,7 +174,7 @@
     "title": "One company cannot see another company's data",
     "requirement": "Rule 6: one database per tenant; a request without tenant context is refused; tenant A cannot read tenant B",
     "status": "PASS",
-    "seconds": 6.2,
+    "seconds": 6.6,
     "metrics": {
       "probes": 73,
       "leaks": 0,
@@ -188,7 +188,7 @@
     "title": "Hostile text is shown as text and never run",
     "requirement": "Security: names from imported data and typed identifiers cannot inject script into the screens or SQL into the database",
     "status": "PASS",
-    "seconds": 31.0,
+    "seconds": 30.4,
     "metrics": {
       "screens opened": 17,
       "hostile payloads": 6,
@@ -207,13 +207,13 @@
     "title": "No floats in money, exact amounts on the wire, India's calendar, no secrets, synthetic data stays synthetic",
     "requirement": "Rules 1, 9, 10 and the generated-data safety rule",
     "status": "PASS",
-    "seconds": 0.6,
+    "seconds": 0.4,
     "metrics": {
       "money modules scanned": 6,
       "float uses": 0,
       "money fields as JSON numbers": 0,
       "UTC dates in business logic": 0,
-      "tracked files scanned for secrets": 475,
+      "tracked files scanned for secrets": 490,
       "secret hits": 0,
       "unsafe generated values": 0
     },
@@ -227,7 +227,7 @@
     "title": "Supplier emails are read into the right quotes, and when unsure the system asks a person",
     "requirement": "Plan step 8 and rule 2: the model reads, code checks; a wrong reading must never look clean (silent errors = 0)",
     "status": "PASS",
-    "seconds": 8.4,
+    "seconds": 8.0,
     "metrics": {
       "email cases": 39,
       "perfect reader: exact %": 100.0,
@@ -249,7 +249,7 @@
     "title": "Hostile emails, even obeyed by the model, change nothing they should not",
     "requirement": "Security and rule 5: untrusted text cannot award, decline others, set a nonsense price, or reach a model from a stranger",
     "status": "PASS",
-    "seconds": 4.1,
+    "seconds": 4.2,
     "metrics": {
       "attacks": 13,
       "runs": 26,
@@ -278,7 +278,7 @@
     "title": "Documents, budget, contract ceilings and reminders do what the plan says",
     "requirement": "Plan, phase 1 controls: a supplier needs good documents, a request must fit its budget, a contract has a ceiling, and a silent supplier is reminded a limited number of times",
     "status": "PASS",
-    "seconds": 7.4,
+    "seconds": 6.8,
     "metrics": {
       "documents: suppliers checked": 60,
       "documents: spoiled cases": "50 (50 right)",
@@ -292,6 +292,25 @@
       "reminders: expected days": "Tue 10 Nov, Thu 12 Nov",
       "reminders: silent suppliers on schedule": "2 of 2",
       "reminders: reminded though replied or declined": 0
+    },
+    "findings": [],
+    "notes": []
+  },
+  {
+    "id": "E17",
+    "title": "Orders are sent to the right supplier with the right amounts, only when approved, and acknowledged on time",
+    "requirement": "Plan: an approved order goes to the supplier by email; nothing else does; the supplier's promised date is checked against the date the goods are needed; an order with no acknowledgement in two working days is overdue",
+    "status": "PASS",
+    "seconds": 13.8,
+    "metrics": {
+      "orders by status before sending": {
+        "approved": 31,
+        "submitted": 3
+      },
+      "orders sent": 31,
+      "acknowledged": 25,
+      "late promises flagged": 6,
+      "overdue day-checks": 48
     },
     "findings": [],
     "notes": []
