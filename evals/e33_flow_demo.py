@@ -490,6 +490,25 @@ def run(ctx: Any) -> Outcome:
         "payment and invoice steps left no audit rows",
     )
 
+    # ---- every document the flow made has a history: no write without an audit row (CLAUDE.md rule 4) --------
+    unaudited: dict[str, list[str]] = {}
+    # (a payment is a line of its payment run: its history is the run's, found through run_no)
+    for table, key in (
+        ("request", "no"), ("rfq", "no"), ("quote", "no"), ("po", "no"), ("goods_receipt", "no"),
+        ("invoice", "no"), ("payment_run", "no"), ("payment", "run_no"),
+    ):  # fmt: skip
+        missing = [
+            str(r[0])
+            for r in q(
+                f"select t.{key} from {table} t where not exists "  # noqa: S608 - fixed table and column names
+                f"(select 1 from audit_event a where a.entity_id = t.{key}) order by t.{key}"
+            )
+        ]
+        if missing:
+            unaudited[table] = missing[:3]
+    out.metrics["documents with no audit row at all"] = unaudited or "none"
+    check(not unaudited, f"documents the flow created have no audit row: {unaudited}")
+
     out.metrics["steps checked (one assertion each)"] = checks
     out.metrics["emails sent (quotation requests, orders, payment advice, ...)"] = len(box.sent)
     pin_today(TODAY)

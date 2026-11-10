@@ -47,7 +47,7 @@ SECRET_PATTERNS = [
 ]
 
 
-NOT_MONEY = {"calendar.py", "duplicates.py"}  # hours and days; how alike two wordings are (a ratio, not an amount)
+NOT_MONEY = {"calendar.py", "duplicates.py", "document.py"}  # hours and days; a ratio of two wordings; page layout (line widths in points)
 
 
 def float_uses() -> list[str]:

@@ -65,6 +65,23 @@ def test_a_role_limited_to_one_location_only_works_there(control_db: str) -> Non
         assert not permissions.can(db, uid, "grn.create")  # a scoped role needs the location stated
 
 
+def test_a_role_limited_to_one_department_only_works_there_and_location_and_department_both_count(
+    control_db: str,
+) -> None:
+    slug = _tenant()
+    uid = _user(slug, "Requester")
+    users.grant_role(slug, uid, "Approver", department="MAINT")
+    both = _user(slug, "Requester")
+    users.grant_role(slug, both, "Approver", location="PLT-VAD", department="MAINT")
+    with _db(slug) as db:
+        assert permissions.can(db, uid, "request.approve", department="MAINT")
+        assert not permissions.can(db, uid, "request.approve", department="STORES")
+        assert not permissions.can(db, uid, "request.approve")  # a scoped role needs the department stated
+        assert permissions.can(db, both, "request.approve", location="PLT-VAD", department="MAINT")
+        assert not permissions.can(db, both, "request.approve", location="WH-BLR", department="MAINT")
+        assert not permissions.can(db, both, "request.approve", location="PLT-VAD", department="STORES")
+
+
 def test_a_screen_can_be_gated_by_permission(control_db: str) -> None:
     slug = _tenant()
     finance, buyer = _user(slug, "Finance"), _user(slug, "Buyer")

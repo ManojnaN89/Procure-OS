@@ -119,6 +119,25 @@ def test_every_look_and_every_kind_of_reply_is_made(made: tuple[Path, dict[str, 
 
 
 @needs_dataset
+def test_two_layouts_of_each_kind_and_the_held_out_suppliers_are_kept_back_as_a_hold_out_slice(
+    made: tuple[Path, dict[str, Any]],
+) -> None:
+    _, manifest = made
+    docs = manifest["documents"]
+    rule = manifest["hold_out_rule"]
+    held_suppliers = set(rule["suppliers"])
+
+    assert held_suppliers, "the dataset's splits.json names no held-out supplier"
+    assert {k: len(v) for k, v in rule["layouts"].items()} == {"invoice": 2, "quote_reply": 2}
+    assert {d["split"] for d in docs} == {"dev", "hold_out"}
+    for d in docs:
+        held = (d.get("supplier_code") or d["expected"]["supplier_code"]) in held_suppliers or d["variant"] in rule[
+            "layouts"
+        ][d["kind"]]
+        assert d["split"] == ("hold_out" if held else "dev"), d["file"]
+    assert manifest["splits"] == {k: sum(1 for d in docs if d["split"] == k) for k in ("dev", "hold_out")}
+
+
 def test_the_same_seed_gives_the_same_files_and_another_seed_another_order(
     made: tuple[Path, dict[str, Any]], tmp_path: Path
 ) -> None:

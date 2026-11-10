@@ -49,10 +49,32 @@ DIFFICULTY = {
     "photo_png": "hard", "skewed_jpg": "hard", "low_contrast_pdf": "hard",
 }  # fmt: skip
 QUOTE_FORMATS = ["pdf_attachment", "body_text", "body_table"]
-QUOTE_QUIRKS = ["none", "none", "partial", "none", "unit_differs", "none", "incl_gst", "none", "relative_validity", "none"]
+# Kept back to measure on: two layouts of each kind of document, and every document of the suppliers that the dataset's
+# splits.json holds out. Tune on the 'dev' documents, report on the 'hold_out' ones.
+HELD_OUT_LAYOUTS = {"invoice": ("skewed_jpg", "low_contrast_pdf"), "quote_reply": ("body_table", "decline")}
+QUOTE_QUIRKS = [
+    "none",
+    "none",
+    "partial",
+    "none",
+    "unit_differs",
+    "none",
+    "incl_gst",
+    "none",
+    "relative_validity",
+    "none",
+]
 
 
 # ---- reading the dataset ------------------------------------------------------------------------
+
+
+def split_of(entry: dict[str, Any], hold_out_suppliers: set[str]) -> str:
+    """'hold_out' for a held-out layout or a held-out supplier, else 'dev'."""
+    supplier = entry.get("supplier_code") or entry["expected"]["supplier_code"]  # an invoice keeps it in its key
+    if supplier in hold_out_suppliers or entry["variant"] in HELD_OUT_LAYOUTS[entry["kind"]]:
+        return "hold_out"
+    return "dev"
 
 
 def table(ds: Path, folder: str, name: str) -> list[dict[str, str]]:
@@ -171,9 +193,13 @@ class Ctx:
         for r in table(ds, "history", "invoice_charge"):
             self.charges[r["invoice_no"]].append(r)
         self.supplier = {r["code"]: r for r in table(ds, "master", "supplier")}
-        self.address = {r["supplier_code"]: r for r in table(ds, "master", "supplier_address") if r["type"] == "registered"}
+        self.address = {
+            r["supplier_code"]: r for r in table(ds, "master", "supplier_address") if r["type"] == "registered"
+        }
         self.bank = {r["supplier_code"]: r for r in table(ds, "master", "supplier_bank_account")}
-        self.contact = {r["supplier_code"]: r for r in table(ds, "master", "supplier_contact") if r["is_primary"] == "true"}
+        self.contact = {
+            r["supplier_code"]: r for r in table(ds, "master", "supplier_contact") if r["is_primary"] == "true"
+        }
         self.terms = {r["code"]: r for r in table(ds, "master", "payment_terms")}
         self.items = {r["code"]: r for r in table(ds, "master", "item")}
         companies = table(ds, "master", "company")
@@ -183,6 +209,12 @@ class Ctx:
         for r in table(ds, "truth", "truth_case"):
             for doc in r["documents"].split(";"):
                 self.planted[doc.strip()].append(r["type"])
+        splits = ds / "splits.json"
+        self.hold_out_suppliers: set[str] = (
+            set(json.loads(splits.read_text(encoding="utf-8")).get("hold_out_suppliers", []))
+            if splits.is_file()
+            else set()
+        )
         self.supplier_no = {r["no"]: r["supplier_invoice_no"] for r in self.invoices}
         self.quotes = table(ds, "history", "quote")
         self.quote_lines: dict[str, list[dict[str, str]]] = defaultdict(list)
@@ -203,7 +235,9 @@ def _table_header(y: float) -> list[Text | Rule]:
     return ops
 
 
-def _row(y: float, sl: str, desc: str, hsn: str, qty: str, uom: str, rate: str, amt: str, gst: str) -> tuple[list[Text], float]:
+def _row(
+    y: float, sl: str, desc: str, hsn: str, qty: str, uom: str, rate: str, amt: str, gst: str
+) -> tuple[list[Text], float]:
     """One table row, and the y where the next one starts. A description too long for its cell is set smaller, and
     then, if still too long, continues on a line below."""
     size, rest = 8.0, ""
@@ -238,7 +272,9 @@ def invoice_pages(
     reg = ctx.registration.get(inv["buyer_gstin"], {})
     credit = inv["type"] == "credit_note"
     pos = list(dict.fromkeys(ln["po_no"] for ln in lines))
-    chunks = [lines] if not rows_per_page else [lines[i : i + rows_per_page] for i in range(0, len(lines), rows_per_page)]
+    chunks = (
+        [lines] if not rows_per_page else [lines[i : i + rows_per_page] for i in range(0, len(lines), rows_per_page)]
+    )
     total_pages = len(chunks) + (1 if terms_page else 0)
     pages: list[Page] = []
 
@@ -246,9 +282,20 @@ def invoice_pages(
         p: Page = []
         if pno == 1:
             p += [Text(LM, 50, sup["legal_name"], 14, True)]
-            p += [Text(LM, 64, addr.get("address", ""), 8), Text(LM, 74, f"{addr.get('city', '')} {addr.get('pincode', '')}, state code {addr.get('state_code', '')}".strip(), 8)]
+            p += [
+                Text(LM, 64, addr.get("address", ""), 8),
+                Text(
+                    LM,
+                    74,
+                    f"{addr.get('city', '')} {addr.get('pincode', '')}, state code {addr.get('state_code', '')}".strip(),
+                    8,
+                ),
+            ]
             p += [Text(LM, 88, f"GSTIN: {inv['supplier_gstin']}    PAN: {sup['pan']}", 8.5)]
-            p += [Text(RM, 50, "CREDIT NOTE" if credit else "TAX INVOICE", 15, True, "r"), Text(RM, 62, "Original for recipient", 7.5, False, "r", 0.4)]
+            p += [
+                Text(RM, 50, "CREDIT NOTE" if credit else "TAX INVOICE", 15, True, "r"),
+                Text(RM, 62, "Original for recipient", 7.5, False, "r", 0.4),
+            ]
             p.append(Rule(LM, 100, RM, 100, 1.0))
             label = "Credit note No" if credit else "Invoice No"
             y = 118.0
@@ -260,7 +307,14 @@ def invoice_pages(
                 p += [Text(LM, y, f"Purchase order: {', '.join(pos)}", 9)]
                 y += 13
             if inv["ref_invoice_no"]:
-                p += [Text(LM, y, f"Against invoice: {ctx.supplier_no.get(inv['ref_invoice_no'], inv['ref_invoice_no'])}", 9)]
+                p += [
+                    Text(
+                        LM,
+                        y,
+                        f"Against invoice: {ctx.supplier_no.get(inv['ref_invoice_no'], inv['ref_invoice_no'])}",
+                        9,
+                    )
+                ]
                 y += 13
             y += 8
             p += [Text(LM, y, "Bill to:", 8.5, True), Text(LM, y + 12, ctx.company["legal_name"], 9)]
@@ -273,12 +327,25 @@ def invoice_pages(
             y += 62
             if qr is not None:
                 p.append(Picture(RM - 130, 108, 130, 130, qr))
-                p += [Text(LM, y, f"IRN: {inv['irn']}", 7.5), Text(LM, y + 11, f"Ack No: {inv['ack_no']}    Ack Date: {inv['ack_date']}", 7.5)]
+                p += [
+                    Text(LM, y, f"IRN: {inv['irn']}", 7.5),
+                    Text(LM, y + 11, f"Ack No: {inv['ack_no']}    Ack Date: {inv['ack_date']}", 7.5),
+                ]
                 y += 22
             top = max(y, 250.0) + 14
         else:
-            p += [Text(LM, 50, sup["legal_name"], 12, True), Text(RM, 50, f"Page {pno} of {total_pages}", 9, False, "r")]
-            p += [Text(LM, 64, f"{'Credit note' if credit else 'Invoice'} No: {inv['supplier_invoice_no']}    Date: {date.fromisoformat(inv['invoice_date']):%d/%m/%Y}", 9)]
+            p += [
+                Text(LM, 50, sup["legal_name"], 12, True),
+                Text(RM, 50, f"Page {pno} of {total_pages}", 9, False, "r"),
+            ]
+            p += [
+                Text(
+                    LM,
+                    64,
+                    f"{'Credit note' if credit else 'Invoice'} No: {inv['supplier_invoice_no']}    Date: {date.fromisoformat(inv['invoice_date']):%d/%m/%Y}",
+                    9,
+                )
+            ]
             p.append(Rule(LM, 74, RM, 74, 1.0))
             top = 100.0
         p += _table_header(top)
@@ -291,7 +358,17 @@ def invoice_pages(
                 desc = f"{ref} {desc}"
             elif po_style == "sub":
                 sub = f"PO {ln['po_no']} line {ln['po_line_no']}"
-            ops, y = _row(y, str(idx), desc, ln["hsn_sac"], qty_text(ln["qty"]), ln["uom"], money(D(ln["unit_price"])), money(D(ln["taxable"])), ln["gst_rate"])
+            ops, y = _row(
+                y,
+                str(idx),
+                desc,
+                ln["hsn_sac"],
+                qty_text(ln["qty"]),
+                ln["uom"],
+                money(D(ln["unit_price"])),
+                money(D(ln["taxable"])),
+                ln["gst_rate"],
+            )
             p += ops
             if sub:
                 p.append(Text(COL["desc"], y - 4, sub, 6.5, False, "l", 0.35))
@@ -301,7 +378,11 @@ def invoice_pages(
         else:
             for c in charges:
                 name = "Freight" if c["type"] == "freight" else "Packing and forwarding"
-                p += [Text(COL["desc"], y, name, 8), Text(COL["amt"], y, money(D(c["amount"])), 8, align="r"), Text(COL["gst"], y, c["gst_rate"], 8, align="r")]
+                p += [
+                    Text(COL["desc"], y, name, 8),
+                    Text(COL["amt"], y, money(D(c["amount"])), 8, align="r"),
+                    Text(COL["gst"], y, c["gst_rate"], 8, align="r"),
+                ]
                 y += 14
             p.append(Rule(LM, y, RM, y, 0.8))
             y += 16
@@ -313,21 +394,34 @@ def invoice_pages(
                 tots.append(("Round off", money(D(inv["round_off"])), False))
             tots.append(("Total", money(D(inv["total"])), True))
             for label, value, bold in tots:
-                p += [Text(410, y, label, 10 if bold else 8.5, bold), Text(RM, y, value, 10 if bold else 8.5, bold, "r")]
+                p += [
+                    Text(410, y, label, 10 if bold else 8.5, bold),
+                    Text(RM, y, value, 10 if bold else 8.5, bold, "r"),
+                ]
                 y += 14
-            p += [Text(LM, y - 14 * len(tots) + 4, "Amount in words:", 8, True), Text(LM, y - 14 * len(tots) + 15, amount_in_words(D(inv["total"])), 8)]
+            p += [
+                Text(LM, y - 14 * len(tots) + 4, "Amount in words:", 8, True),
+                Text(LM, y - 14 * len(tots) + 15, amount_in_words(D(inv["total"])), 8),
+            ]
             y += 14
             terms = ctx.terms.get(inv.get("payment_terms_code", ""), {}) or ctx.terms.get(sup["payment_terms_code"], {})
             p += [Text(LM, y, f"Payment terms: {terms.get('name', sup['payment_terms_code'])}", 8)]
             if bank and not terms_page:
                 p += [Text(LM, y + 12, f"Bank: {bank['bank_code']}  A/c {bank['account_no']}  IFSC {bank['ifsc']}", 8)]
-            p += [Text(RM, y + 60, f"For {sup['legal_name']}", 8.5, True, "r"), Text(RM, y + 100, "Authorised signatory", 8, False, "r")]
+            p += [
+                Text(RM, y + 60, f"For {sup['legal_name']}", 8.5, True, "r"),
+                Text(RM, y + 100, "Authorised signatory", 8, False, "r"),
+            ]
             p += [Text(LM, y + 100, "This is a computer generated document. E&OE.", 7, False, "l", 0.4)]
         p.append(Text(PAGE_CENTER, 820, f"Page {pno} of {total_pages}", 7.5, False, "c", 0.4))
         pages.append(p)
 
     if terms_page:
-        p = [Text(LM, 50, sup["legal_name"], 12, True), Text(RM, 50, f"Page {total_pages} of {total_pages}", 9, False, "r"), Rule(LM, 62, RM, 62, 1.0)]
+        p = [
+            Text(LM, 50, sup["legal_name"], 12, True),
+            Text(RM, 50, f"Page {total_pages} of {total_pages}", 9, False, "r"),
+            Rule(LM, 62, RM, 62, 1.0),
+        ]
         p += [Text(LM, 84, "Terms and conditions of sale", 11, True)]
         clauses = [
             "1. Goods once sold will not be taken back or exchanged except for manufacturing defects.",
@@ -339,7 +433,12 @@ def invoice_pages(
         for i, c in enumerate(clauses):
             p.append(Text(LM, 108 + i * 15, c, 8.5))
         if bank:
-            p += [Text(LM, 215, "Our bank details", 10, True), Text(LM, 232, f"Bank: {bank['bank_code']}", 8.5), Text(LM, 245, f"Account number: {bank['account_no']}", 8.5), Text(LM, 258, f"IFSC: {bank['ifsc']}", 8.5)]
+            p += [
+                Text(LM, 215, "Our bank details", 10, True),
+                Text(LM, 232, f"Bank: {bank['bank_code']}", 8.5),
+                Text(LM, 245, f"Account number: {bank['account_no']}", 8.5),
+                Text(LM, 258, f"IFSC: {bank['ifsc']}", 8.5),
+            ]
         p.append(Text(PAGE_CENTER, 820, f"Page {total_pages} of {total_pages}", 7.5, False, "c", 0.4))
         pages.append(p)
     return pages
@@ -380,7 +479,9 @@ def make_invoice(ctx: Ctx, inv: dict[str, str], look: str, seed: int) -> tuple[b
     qr = pk.qr_pixels(qr_payload(inv, lines)) if has_qr else None
     po_style = rng.choice(["inline", "sub", "header"])
     multi = look == "multipage_pdf"
-    pages = invoice_pages(ctx, inv, qr=qr, rows_per_page=2 if multi and len(lines) >= 3 else None, terms_page=multi, po_style=po_style)
+    pages = invoice_pages(
+        ctx, inv, qr=qr, rows_per_page=2 if multi and len(lines) >= 3 else None, terms_page=multi, po_style=po_style
+    )
     printed = [op.s for page in pages for op in page if isinstance(op, Text)]
     if look in ("text_pdf", "multipage_pdf"):
         data, ext = pk.pdf_from_pages(pages), "pdf"
@@ -426,7 +527,13 @@ def _date_text(d: date, rng: Random) -> str:
 
 
 def quote_expected(
-    ctx: Ctx, quote: dict[str, str], rfq: str, quirk: str, kept: list[dict[str, str]], missing: list[dict[str, str]], written: dict[str, str]
+    ctx: Ctx,
+    quote: dict[str, str],
+    rfq: str,
+    quirk: str,
+    kept: list[dict[str, str]],
+    missing: list[dict[str, str]],
+    written: dict[str, str],
 ) -> dict[str, Any]:
     out_lines = []
     for ql in kept:
@@ -439,7 +546,12 @@ def quote_expected(
             "price_includes_gst": None,
         }  # fmt: skip
         if quirk == "unit_differs" and ql is kept[0]:
-            item.update(unit_price=None, printed_price=str(D(price) * 10), printed_per="box of 10", derivable_unit_price=ql["unit_price"])
+            item.update(
+                unit_price=None,
+                printed_price=str(D(price) * 10),
+                printed_per="box of 10",
+                derivable_unit_price=ql["unit_price"],
+            )
         elif quirk == "incl_gst":
             inclusive = (D(price) * (100 + D(ql["gst_rate"])) / 100).quantize(D("0.01"), ROUND_HALF_UP)
             item.update(unit_price=str(inclusive), price_includes_gst=True, unit_price_ex_gst=ql["unit_price"])
@@ -470,7 +582,15 @@ def _line_text(ql: dict[str, str], name: str, quirk: str, first: bool, uom: str,
     return f"{name} - {qty_text(ql['qty'])} {uom} @ {shown}{gst}{disc}{days}"
 
 
-def quote_page(ctx: Ctx, quote: dict[str, str], rfq: str, kept: list[dict[str, str]], rows: list[dict[str, Any]], inclusive: bool, valid_text: str) -> Page:
+def quote_page(
+    ctx: Ctx,
+    quote: dict[str, str],
+    rfq: str,
+    kept: list[dict[str, str]],
+    rows: list[dict[str, Any]],
+    inclusive: bool,
+    valid_text: str,
+) -> Page:
     sup = ctx.supplier[quote["supplier_code"]]
     addr = ctx.address.get(quote["supplier_code"], {})
     p: Page = [Text(LM, 50, sup["legal_name"], 14, True), Text(LM, 64, addr.get("address", ""), 8),
@@ -483,7 +603,14 @@ def quote_page(ctx: Ctx, quote: dict[str, str], rfq: str, kept: list[dict[str, s
     cols = {"sl": 42.0, "item": 56.0, "qty": 330.0, "rate": 410.0, "gst": 460.0, "days": 553.0}
     y = 190.0
     p += [Rule(LM, y - 11, RM, y - 11, 0.8), Rule(LM, y + 4, RM, y + 4, 0.8)]
-    for key, label in (("sl", "Sl"), ("item", "Item"), ("qty", "Qty"), ("rate", "Rate (Rs)"), ("gst", "GST %"), ("days", "Delivery days")):
+    for key, label in (
+        ("sl", "Sl"),
+        ("item", "Item"),
+        ("qty", "Qty"),
+        ("rate", "Rate (Rs)"),
+        ("gst", "GST %"),
+        ("days", "Delivery days"),
+    ):
         p.append(Text(cols[key], y, label, 8, True, "l" if key in ("sl", "item") else "r"))
     y += 20
     for i, (ql, row) in enumerate(zip(kept, rows, strict=True), 1):
@@ -502,20 +629,33 @@ def quote_page(ctx: Ctx, quote: dict[str, str], rfq: str, kept: list[dict[str, s
         f"Payment terms: {terms.get('name', quote['payment_terms_code'])}",
         f"Delivery terms: {quote['delivery_terms'].replace('_', ' ')}",
         *([f"Freight: Rs {money(D(quote['freight']))} extra"] if D(quote["freight"]) else []),
-        *([f"Packing and forwarding: Rs {money(D(quote['packing_forwarding']))} extra"] if D(quote["packing_forwarding"]) else []),
+        *(
+            [f"Packing and forwarding: Rs {money(D(quote['packing_forwarding']))} extra"]
+            if D(quote["packing_forwarding"])
+            else []
+        ),
     ):
         p.append(Text(LM, y, line, 8.5))
         y += 13
     return p
 
 
-def make_quote_mail(ctx: Ctx, mail: dict[str, str], position: int, seed: int) -> tuple[bytes, dict[str, Any], list[str]]:
+def make_quote_mail(
+    ctx: Ctx, mail: dict[str, str], position: int, seed: int
+) -> tuple[bytes, dict[str, Any], list[str]]:
     """A supplier's reply to an RFQ as an .eml, with its manifest entry and every text in it."""
     rfq, sup_code = mail["linked_doc_no"], mail["supplier_code"]
     rng = Random(f"{seed}|quote|{mail['id']}")
     style = mail["style"]
     sup, contact = ctx.supplier[sup_code], ctx.contact.get(sup_code, {})
-    out_mail = next((m for m in ctx.emails if m["kind"] == "rfq_send" and m["linked_doc_no"] == rfq and m["supplier_code"] == sup_code), None)
+    out_mail = next(
+        (
+            m
+            for m in ctx.emails
+            if m["kind"] == "rfq_send" and m["linked_doc_no"] == rfq and m["supplier_code"] == sup_code
+        ),
+        None,
+    )
     msg = EmailMessage(policy=policy.SMTP)
     msg["Message-ID"] = mail["message_id"]
     msg["From"] = f"{contact.get('name', sup['legal_name'])} <{mail['from_addr']}>"
@@ -539,10 +679,19 @@ def make_quote_mail(ctx: Ctx, mail: dict[str, str], position: int, seed: int) ->
                 "chatty": f"Thanks for thinking of us for {rfq}! Unfortunately we have to pass this time. {reason}."}[style]  # fmt: skip
         body = f"{greet}\n\n{text}\n\n{bye}\n{sign}\n"
         msg.set_content(body)
-        entry.update(variant="decline", file=f"quotes/{name}.eml", attachment=None, expected={"intent": "decline", "decline_reason": reason})
+        entry.update(
+            variant="decline",
+            file=f"quotes/{name}.eml",
+            attachment=None,
+            expected={"intent": "decline", "decline_reason": reason},
+        )
         return msg.as_bytes(), entry, [body]
 
-    quote = next(q for q in ctx.quotes if q["rfq_no"] == rfq and q["supplier_code"] == sup_code and q["received_at"] == mail["at"])
+    quote = next(
+        q
+        for q in ctx.quotes
+        if q["rfq_no"] == rfq and q["supplier_code"] == sup_code and q["received_at"] == mail["at"]
+    )
     ql_all = ctx.quote_lines[quote["no"]]
     fmt = QUOTE_FORMATS[position % len(QUOTE_FORMATS)]
     quirk = QUOTE_QUIRKS[position % len(QUOTE_QUIRKS)]
@@ -553,12 +702,19 @@ def make_quote_mail(ctx: Ctx, mail: dict[str, str], position: int, seed: int) ->
     written = {}
     for q in ql_all:
         rl = next(r for r in ctx.rfq_lines[rfq] if r["line_no"] == q["rfq_line_no"])
-        written[q["rfq_line_no"]] = rng.choice([rl["description"], ctx.items[q["item_code"]]["name"], q["item_code"]]) if style != "terse" else rl["description"]
+        written[q["rfq_line_no"]] = (
+            rng.choice([rl["description"], ctx.items[q["item_code"]]["name"], q["item_code"]])
+            if style != "terse"
+            else rl["description"]
+        )
     expected = quote_expected(ctx, quote, rfq, quirk, kept, missing, written)
     valid = quote["valid_until"]
     valid_text = (
         f"Valid for {expected['relative_validity_days']} days from the date of this quotation."
-        if quirk == "relative_validity" and valid else f"Valid till: {_date_text(date.fromisoformat(valid), rng)}" if valid else ""
+        if quirk == "relative_validity" and valid
+        else f"Valid till: {_date_text(date.fromisoformat(valid), rng)}"
+        if valid
+        else ""
     )
     uoms = {r["line_no"]: r["uom"] for r in ctx.rfq_lines[rfq]}
     extras = []
@@ -574,7 +730,11 @@ def make_quote_mail(ctx: Ctx, mail: dict[str, str], position: int, seed: int) ->
         page = quote_page(ctx, quote, rfq, kept, expected["lines"], quirk == "incl_gst", valid_text)
         attachment = pk.pdf_from_pages([page])
         printed += [op.s for op in page if isinstance(op, Text)]
-        intro = {"formal": f"With reference to your enquiry {rfq}, please find our quotation attached.", "terse": "Quote attached.", "chatty": "Please find our best prices in the attached quotation."}[style]
+        intro = {
+            "formal": f"With reference to your enquiry {rfq}, please find our quotation attached.",
+            "terse": "Quote attached.",
+            "chatty": "Please find our best prices in the attached quotation.",
+        }[style]
         parts = [greet, "", intro]
         if valid_text and rng.random() < 0.5:
             parts += ["", valid_text]
@@ -584,19 +744,35 @@ def make_quote_mail(ctx: Ctx, mail: dict[str, str], position: int, seed: int) ->
         entry["attachment"] = f"{quote['no']}.pdf"
     else:
         if fmt == "body_text":
-            item_lines = [_line_text(q, written[q["rfq_line_no"]], quirk, i == 0, uoms[q["rfq_line_no"]], row) for i, (q, row) in enumerate(zip(kept, expected["lines"], strict=True))]
+            item_lines = [
+                _line_text(q, written[q["rfq_line_no"]], quirk, i == 0, uoms[q["rfq_line_no"]], row)
+                for i, (q, row) in enumerate(zip(kept, expected["lines"], strict=True))
+            ]
             listing = "\n".join(f"{i}. {t}" for i, t in enumerate(item_lines, 1))
         else:
             rows = ["Item | Qty | Rate (Rs) | GST % | Delivery days"]
             for q, row in zip(kept, expected["lines"], strict=True):
                 shown = row["unit_price"] if row["unit_price"] is not None else row["printed_price"]
-                rows.append(f"{row['item_written']} | {qty_text(q['qty'])} | {money(D(shown))} | {q['gst_rate']} | {q['delivery_days']}")
+                rows.append(
+                    f"{row['item_written']} | {qty_text(q['qty'])} | {money(D(shown))} | {q['gst_rate']} | {q['delivery_days']}"
+                )
             if quirk == "unit_differs":
                 rows.append("Note: the first rate is per box of 10.")
             if quirk == "incl_gst":
                 rows.append("All rates include GST.")
             listing = "\n".join(rows)
-        parts = [greet, "", {"formal": f"With reference to your enquiry {rfq}, our offer is as follows.", "terse": f"{rfq} rates:", "chatty": f"Here are our prices for {rfq}."}[style], "", listing, ""]
+        parts = [
+            greet,
+            "",
+            {
+                "formal": f"With reference to your enquiry {rfq}, our offer is as follows.",
+                "terse": f"{rfq} rates:",
+                "chatty": f"Here are our prices for {rfq}.",
+            }[style],
+            "",
+            listing,
+            "",
+        ]
         parts += [*extras, f"Payment terms: {terms}", f"Delivery terms: {quote['delivery_terms'].replace('_', ' ')}"]
         if valid_text:
             parts.append(valid_text)
@@ -610,7 +786,13 @@ def make_quote_mail(ctx: Ctx, mail: dict[str, str], position: int, seed: int) ->
     if attachment is not None:
         msg.add_attachment(attachment, maintype="application", subtype="pdf", filename=f"{quote['no']}.pdf")
         msg.set_boundary(f"=_boundary_{mail['id']}")
-    entry.update(variant=fmt, file=f"quotes/{name}.eml", quirks=[] if quirk == "none" else [quirk], quote_no=quote["no"], expected=expected)
+    entry.update(
+        variant=fmt,
+        file=f"quotes/{name}.eml",
+        quirks=[] if quirk == "none" else [quirk],
+        quote_no=quote["no"],
+        expected=expected,
+    )
     return msg.as_bytes(), entry, printed
 
 
@@ -626,7 +808,10 @@ def generate(dataset: Path, seed: int = 42, limit: int | None = None, out: Path 
     rng = Random(f"{seed}|order")
     invoices = sorted((i for i in ctx.invoices if ctx.lines[i["no"]]), key=lambda r: r["no"])
     rng.shuffle(invoices)
-    mails = sorted((m for m in ctx.emails if m["kind"] in ("quote_cover", "decline_rfq") and m["direction"] == "in"), key=lambda m: m["id"])
+    mails = sorted(
+        (m for m in ctx.emails if m["kind"] in ("quote_cover", "decline_rfq") and m["direction"] == "in"),
+        key=lambda m: m["id"],
+    )
     rng.shuffle(mails)
     if limit is not None:
         invoices, mails = invoices[:limit], mails[:limit]
@@ -634,11 +819,13 @@ def generate(dataset: Path, seed: int = 42, limit: int | None = None, out: Path 
     unsafe: list[str] = []
     for i, inv in enumerate(invoices):
         data, _, entry, printed = make_invoice(ctx, inv, INVOICE_LOOKS[i % len(INVOICE_LOOKS)], seed)
+        entry["split"] = split_of(entry, ctx.hold_out_suppliers)
         (out / entry["file"]).write_bytes(data)
         unsafe += [f"{entry['file']}: {b}" for b in unsafe_text("\n".join(printed))]
         documents.append(entry)
     for i, mail in enumerate(mails):
         data, entry, printed = make_quote_mail(ctx, mail, i, seed)
+        entry["split"] = split_of(entry, ctx.hold_out_suppliers)
         (out / entry["file"]).write_bytes(data)
         unsafe += [f"{entry['file']}: {b}" for b in unsafe_text("\n".join(printed))]
         documents.append(entry)
@@ -650,7 +837,10 @@ def generate(dataset: Path, seed: int = 42, limit: int | None = None, out: Path 
     manifest = {
         "generator": GENERATOR_VERSION, "dataset": dataset.name, "seed": seed, "limit": limit,
         "note": "Everything is made up. The 'expected' of each document comes from the dataset's tables, not from the document.",
-        "counts": dict(sorted(counts.items())), "documents": documents,
+        "counts": dict(sorted(counts.items())),
+        "splits": {k: sum(1 for d in documents if d["split"] == k) for k in ("dev", "hold_out")},
+        "hold_out_rule": {"layouts": {k: list(v) for k, v in HELD_OUT_LAYOUTS.items()}, "suppliers": sorted(ctx.hold_out_suppliers)},
+        "documents": documents,
     }  # fmt: skip
     (out / "manifest.json").write_text(json.dumps(manifest, indent=1, ensure_ascii=False), encoding="utf-8")
     return manifest

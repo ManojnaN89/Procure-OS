@@ -183,6 +183,18 @@ def run(ctx) -> Outcome:
         f"{k.split(':', 1)[1]} {v}" for k, v in manifest["counts"].items() if k.startswith("invoice:")
     )
 
+    # the hold-out slice: layouts and suppliers kept back to measure on (plan P1-03)
+    held = [d for d in documents if d["split"] == "hold_out"]
+    out.metrics["dev / hold-out documents"] = f"{manifest['splits']['dev']} / {manifest['splits']['hold_out']}"
+    held_layouts = {k: sorted({d["variant"] for d in held if d["kind"] == k}) for k in ("invoice", "quote_reply")}
+    out.metrics["hold-out layouts seen"] = held_layouts
+    if not limit and (not held or any(len(v) < 2 for v in held_layouts.values())):
+        out.find(
+            "high", f"the hold-out slice is missing or has fewer than two layouts of a document kind: {held_layouts}"
+        )
+    if any(d["split"] == "dev" and d["variant"] in manifest["hold_out_rule"]["layouts"][d["kind"]] for d in documents):
+        out.find("high", "a held-out layout appears in the dev slice")
+
     # 1. the key is the dataset's, and nothing is missing -------------------------------------------------------
     csv_inv = {r["no"]: r for r in rows("history", "invoice")}
     csv_lines: dict[str, list[dict[str, str]]] = defaultdict(list)
@@ -232,6 +244,10 @@ def run(ctx) -> Outcome:
     out.metrics["QR read, all looks"] = f"{total_ok}/{total_try} ({pct(total_ok, total_try)}%)"
     for variant in sorted(qr_try):
         out.notes.append(f"QR {variant}: {qr_ok[variant]}/{qr_try[variant]}")
+    for name in ("dev", "hold_out"):
+        tried = [d for d in invoices if d["has_qr"] and d["split"] == name]
+        done = sum(1 for d in tried if qr_docs.get(d["file"]) is not None)
+        out.metrics[f"QR read, {name} slice"] = f"{done}/{len(tried)} ({pct(done, len(tried))}%)"
     clean_bad = [v for v in ("text_pdf", "multipage_pdf") if qr_ok[v] != qr_try[v]]
     if clean_bad or pct(total_ok, total_try) < 95:
         out.find("high", f"QR codes read: {total_ok}/{total_try}; clean looks with a failure: {clean_bad or 'none'}")
