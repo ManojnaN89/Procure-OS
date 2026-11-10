@@ -79,6 +79,20 @@ def complete_task(db: Session, task_id: int, user_id: int, *, now: datetime | No
     db.commit()
 
 
+def cancel_task(db: Session, task_id: int, user_id: int | None = None, *, reason: str = "") -> None:
+    """A task that is no longer needed (the request it was about was taken back or cancelled)."""
+    updated = db.execute(
+        text("update task set status = 'cancelled' where id = :i and status in ('open', 'overdue') returning id"),
+        {"i": task_id},
+    ).first()
+    if updated:
+        audit.record(
+            db, Actor("user", str(user_id)) if user_id is not None else audit.SYSTEM, "task.cancel", "task", task_id,
+            reason=reason or None,
+        )  # fmt: skip
+    db.commit()
+
+
 @worker.register("task_escalate")
 def _escalate(ctx: worker.JobContext) -> None:
     """Runs at the task's due time. Safe to run twice: it does nothing unless the task is open and really overdue."""

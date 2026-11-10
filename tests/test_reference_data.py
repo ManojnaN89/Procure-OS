@@ -43,6 +43,7 @@ def _count(db: Session, table: str) -> int:
 
 def test_a_new_tenant_comes_with_the_reference_data_loaded(tenant_db: Session) -> None:
     assert _count(tenant_db, "ref_gst_state") >= 37
+    assert _count(tenant_db, "ref_uom") >= 45  # the GST unit codes (NOS, KGS, MTR, ...)
     assert _count(tenant_db, "ref_hsn_sac") > 20000
     assert _count(tenant_db, "ref_gst_rate") > 1000
     assert _count(tenant_db, "ref_tds_section") >= 20

@@ -38,6 +38,7 @@ const InventoryView = {
         <select id="invLocation" style="background:var(--surface-sunken);border:1px solid var(--border);color:var(--text-primary);border-radius:8px;padding:7px 10px;font-size:12px;" aria-label="Location"><option value="">All locations</option></select>
         <select id="invStatus" style="background:var(--surface-sunken);border:1px solid var(--border);color:var(--text-primary);border-radius:8px;padding:7px 10px;font-size:12px;" aria-label="Status"><option value="">All statuses</option></select>
       </div>
+      <div id="stockAction"></div>
       <div class="table-wrap" id="tableWrap"><div class="empty-state">Loading…</div></div>
     `;
     await this.load();
@@ -62,11 +63,13 @@ const InventoryView = {
         wrap.innerHTML = `<div class="empty-state">Nothing matches this filter.</div>`;
         return;
       }
+      const acts = data.can_issue || data.can_adjust;
+      this.lines = lines;
       wrap.innerHTML = `
         <table class="data-table">
-          <thead><tr><th>ITEM</th><th>LOCATION</th><th>ON HAND</th><th>REORDER AT</th><th>MAX</th><th>STATUS</th></tr></thead>
+          <thead><tr><th>ITEM</th><th>LOCATION</th><th>ON HAND</th><th>REORDER AT</th><th>MAX</th><th>STATUS</th>${acts ? "<th></th>" : ""}</tr></thead>
           <tbody>
-            ${lines.map((l) => `
+            ${lines.map((l, i) => `
               <tr>
                 <td>${this.esc(l.item_name)}<div class="cell-muted" style="font-size:11px;">${this.esc(l.item_code)} · ${this.esc(l.category)}</div></td>
                 <td class="cell-muted">${this.esc(l.location_code)}</td>
@@ -74,15 +77,58 @@ const InventoryView = {
                 <td class="cell-muted">${this.esc(l.reorder_point ?? "—")}</td>
                 <td class="cell-muted">${this.esc(l.max_qty ?? "—")}</td>
                 <td><span class="badge ${this.BADGE[l.status] || ""}">${this.esc(this.LABELS[l.status] || l.status)}</span></td>
+                ${acts ? `<td style="white-space:nowrap;text-align:right;">
+                  ${data.can_issue ? `<span class="btn btn-sm" data-stock="issue" data-i="${i}">Issue</span>` : ""}
+                  ${data.can_adjust ? `<span class="btn btn-sm" data-stock="count" data-i="${i}">Count</span>` : ""}
+                </td>` : ""}
               </tr>
             `).join("")}
           </tbody>
         </table>
       `;
+      wrap.querySelectorAll("[data-stock]").forEach((b) => {
+        b.addEventListener("click", () => this.openAction(b.dataset.stock, this.lines[Number(b.dataset.i)]));
+      });
     } catch {
       const gone = document.getElementById("tableWrap");
       if (gone) gone.innerHTML = `<div class="empty-state">Couldn't load inventory.</div>`;
     }
+  },
+
+  /** The small form above the table for issuing stock or correcting it after a count. The server works out every number. */
+  openAction(kind, line) {
+    const box = document.getElementById("stockAction");
+    if (!box) return;
+    const field = 'style="background:var(--surface-sunken);border:1px solid var(--border);color:var(--text-primary);border-radius:8px;padding:7px 10px;font-size:12.5px;"';
+    const issue = kind === "issue";
+    box.innerHTML = `
+      <div class="panel" style="margin-bottom:12px;">
+        <div class="panel-title">${issue ? "Issue stock" : "Correct the books after a count"}: ${this.esc(line.item_name)} at ${this.esc(line.location_code)}</div>
+        <p class="cell-muted" style="margin:0 0 10px;font-size:12.5px;">The books say ${this.esc(line.on_hand)} ${this.esc(line.uom)}.${issue ? " You cannot issue more than that." : " Enter what you counted on the shelf; the difference is worked out for you."}</p>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
+          <input id="stockQty" type="number" min="0" step="any" placeholder="${issue ? "Quantity to issue" : "Quantity counted"}" ${field}>
+          <input id="stockWhy" placeholder="${issue ? "Issued to (department, machine or job)" : "Why they differ (required)"}" style="min-width:260px;" ${field}>
+          <span class="btn btn-primary btn-sm" id="stockSave">${issue ? "Issue stock" : "Save the count"}</span>
+          <span class="btn btn-sm" id="stockCancel">Cancel</span>
+        </div>
+        <div id="stockNote" style="font-size:12.5px;color:var(--warning-text);margin-top:8px;"></div>
+      </div>`;
+    document.getElementById("stockQty").focus();
+    document.getElementById("stockCancel").addEventListener("click", () => { box.innerHTML = ""; });
+    document.getElementById("stockSave").addEventListener("click", async () => {
+      const qty = document.getElementById("stockQty").value;
+      const why = document.getElementById("stockWhy").value;
+      const body = issue
+        ? { item_code: line.item_code, location: line.location_code, qty, reference: why }
+        : { item_code: line.item_code, location: line.location_code, counted_qty: qty, reason: why };
+      const res = await API.postJSON(issue ? "/api/inventory/issue" : "/api/inventory/count", body);
+      if (!res.ok) {
+        document.getElementById("stockNote").textContent = res.data.detail || "That did not work.";
+        return;
+      }
+      box.innerHTML = `<div class="panel" style="margin-bottom:12px;font-size:12.5px;">${issue ? "Stock issued." : res.data.movement ? "The books now match the count." : "The books already matched the count."}</div>`;
+      await this.load();
+    });
   },
 
   fillControls(data) {

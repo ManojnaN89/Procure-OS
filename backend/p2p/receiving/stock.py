@@ -1,7 +1,9 @@
 """Stock: how much of every item is at every location, and the load of movement history from a dataset."""
 
 import time
+import uuid
 from dataclasses import dataclass
+from datetime import date
 from decimal import Decimal
 from pathlib import Path
 from typing import Any
@@ -10,10 +12,11 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from p2p.formulas import stock as rules
+from p2p.formulas.calendar import business_today
 from p2p.masters.importer import ImportReport, Problem, read_table
 from p2p.masters.schema import Table
 from p2p.platform import audit
-from p2p.platform.sod import Actor
+from p2p.platform.sod import Actor, user
 
 MOVEMENT = Table(
     "stock_movement",
@@ -175,3 +178,116 @@ def import_movements(db: Session, dataset: Path, *, actor: Actor = audit.SYSTEM,
         db.commit()
     report.seconds = round(time.monotonic() - started, 2)
     return report
+
+
+# ---- posting from the store: issues and counts ---------------------------------------------------
+
+
+class StockError(Exception):
+    """The posting makes no sense (unknown item, more than is on the shelf, nothing to change)."""
+
+
+def _on_hand(db: Session, item: str, location: str) -> Decimal:
+    value = db.execute(
+        text("select on_hand from stock_level where item_code = :i and location_code = :l"), {"i": item, "l": location}
+    ).scalar()
+    return Decimal(value) if value is not None else Decimal(0)
+
+
+def _last_cost(db: Session, item: str, location: str) -> Decimal | None:
+    value = db.execute(
+        text(
+            "select unit_cost from stock_movement where item_code = :i and location_code = :l and unit_cost is not null "
+            "order by date desc, id desc limit 1"
+        ),
+        {"i": item, "l": location},
+    ).scalar()
+    return Decimal(value) if value is not None else None
+
+
+def _check_place(db: Session, item: str, location: str) -> None:
+    if db.execute(text("select 1 from item where code = :c"), {"c": item}).first() is None:
+        raise StockError(f"there is no item {item}")
+    if (
+        db.execute(text("select 1 from location where code = :c and is_stock_location"), {"c": location}).first()
+        is None
+    ):
+        raise StockError(f"{location} is not a stock location")
+    db.execute(text("select pg_advisory_xact_lock(hashtext(:k))"), {"k": f"stock:{item}:{location}"})
+
+
+def _post(db: Session, kind: str, item: str, location: str, qty: Decimal, on: date, ref: str | None) -> str:
+    movement = f"SM-{kind[:3].upper()}-{on:%Y%m%d}-{uuid.uuid4().hex[:6]}"
+    db.execute(
+        text(
+            "insert into stock_movement (id, item_code, location_code, date, type, qty, unit_cost, ref_doc, source) "
+            "values (:id, :i, :l, :d, :t, :q, :c, :r, 'platform')"
+        ),
+        {
+            "id": movement,
+            "i": item,
+            "l": location,
+            "d": on,
+            "t": kind,
+            "q": qty,
+            "c": _last_cost(db, item, location),
+            "r": ref,
+        },
+    )
+    return movement
+
+
+def post_issue(
+    db: Session,
+    user_id: int,
+    item: str,
+    location: str,
+    qty: Decimal,
+    *,
+    reference: str | None = None,
+    today: date | None = None,
+) -> str:
+    """Take stock out for use (to a department, a machine, a job). It may not take more than is on the shelf."""
+    today = today or business_today()
+    qty = Decimal(qty).quantize(rules.QTY)
+    if qty <= 0:
+        raise StockError("the quantity must be more than zero")
+    _check_place(db, item, location)
+    have = _on_hand(db, item, location)
+    if qty > have:
+        db.rollback()
+        raise StockError(f"only {have.normalize():f} is on the shelf, so {qty.normalize():f} cannot be issued")
+    movement = _post(db, "issue", item, location, qty, today, (reference or "").strip() or None)
+    audit.record(
+        db, user(user_id), "stock.issue", "stock", f"{item}@{location}",
+        after={"movement": movement, "qty": str(qty), "on_hand": str(have - qty), "reference": (reference or "").strip() or None},
+    )  # fmt: skip
+    db.commit()
+    return movement
+
+
+def post_count(
+    db: Session, user_id: int, item: str, location: str, counted: Decimal, reason: str, *, today: date | None = None
+) -> str | None:
+    """After a stock count: make the books say what is on the shelf. The difference is worked out here, never typed.
+    Returns the movement, or None when the books already agree."""
+    today = today or business_today()
+    counted = Decimal(counted).quantize(rules.QTY)
+    if counted < 0:
+        raise StockError("a count cannot be below zero")
+    if not reason or not reason.strip():
+        raise StockError("say why the books are being corrected")
+    _check_place(db, item, location)
+    have = _on_hand(db, item, location)
+    delta = rules.count_difference(counted, have)
+    if delta == 0:
+        db.rollback()
+        return None
+    movement = _post(db, "adjust", item, location, delta, today, "stock count")
+    audit.record(
+        db, user(user_id), "stock.adjust", "stock", f"{item}@{location}",
+        before={"on_hand": str(have)}, after={"movement": movement, "counted": str(counted), "difference": str(delta)},
+        reason=reason.strip(),
+    )  # fmt: skip
+    db.commit()
+    return movement

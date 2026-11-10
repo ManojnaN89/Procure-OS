@@ -38,8 +38,8 @@ from p2p.platform import audit, ratelimit, routing, sod
 from p2p.platform.permissions import PermissionDenied, can_anywhere, require
 from p2p.platform.tokens import decode_access_token
 from p2p.receiving import goods
-from p2p.receiving.stock import stock_levels
-from p2p.requests import duplicates, jobs, replenishment
+from p2p.receiving.stock import StockError, post_count, post_issue, stock_levels
+from p2p.requests import duplicates, jobs, lifecycle, replenishment
 from p2p.sourcing import documents as supplier_documents
 from p2p.sourcing import replies
 from p2p.sourcing import service as sourcing
@@ -473,6 +473,8 @@ def inventory(db: Db, ctx: Ctx, location: str | None = None, status: str | None 
     shown = [line for line in lines if not status or line.status == status]
     return {
         "summary": {"total": len(lines), "by_status": counts},
+        "can_issue": can_anywhere(db, ctx.user_id, "stock.issue"),
+        "can_adjust": can_anywhere(db, ctx.user_id, "stock.adjust"),
         "locations": _rows(db, "select code, name from location where is_stock_location order by code"),
         "lines": [
             {
@@ -494,6 +496,52 @@ def inventory(db: Db, ctx: Ctx, location: str | None = None, status: str | None 
             for line in shown
         ],
     }
+
+
+def _stock_post(call: Any) -> dict[str, Any]:
+    try:
+        movement = call()
+    except StockError as exc:
+        raise HTTPException(409, str(exc)) from None
+    return {"movement": movement}
+
+
+def _quantity(payload: dict[str, Any], key: str) -> Decimal:
+    try:
+        value = Decimal(str(payload[key]))
+    except (KeyError, InvalidOperation):
+        raise HTTPException(422, f"{key} must be a number") from None
+    if not value.is_finite():
+        raise HTTPException(422, f"{key} must be a number")
+    return value
+
+
+@router.post("/inventory/issue")
+def issue_stock(
+    payload: dict[str, Any], db: Db, ctx: Annotated[routing.TenantContext, Depends(require("stock.issue"))]
+) -> dict[str, Any]:
+    """Take stock out for use. The store person says what, where and how much; the books cannot go below zero."""
+    qty = _quantity(payload, "qty")
+    return _stock_post(
+        lambda: post_issue(
+            db, ctx.user_id, str(payload.get("item_code") or ""), str(payload.get("location") or ""), qty,
+            reference=str(payload.get("reference") or "") or None,
+        )
+    )  # fmt: skip
+
+
+@router.post("/inventory/count")
+def count_stock(
+    payload: dict[str, Any], db: Db, ctx: Annotated[routing.TenantContext, Depends(require("stock.adjust"))]
+) -> dict[str, Any]:
+    """After counting the shelf: correct the books to match it. The difference is worked out by the server."""
+    counted = _quantity(payload, "counted_qty")
+    return _stock_post(
+        lambda: post_count(
+            db, ctx.user_id, str(payload.get("item_code") or ""), str(payload.get("location") or ""), counted,
+            str(payload.get("reason") or ""),
+        )
+    )  # fmt: skip
 
 
 _REQUISITION_STATUS = {"submitted": "pending"}  # the screen calls a request waiting for approval "pending"
@@ -690,6 +738,7 @@ def get_requisition(no: str, db: Db, ctx: Ctx) -> dict[str, Any]:
                 for s in approvals.steps_of(db, no)
             ],
             "can_act": approvals.can_act(db, no, ctx.user_id),
+            **{f"can_{k}": v for k, v in lifecycle.allowed(db, no, ctx.user_id).items()},
             "can_submit": rows[0]["status"] in ("draft", "returned")
             and can_anywhere(db, ctx.user_id, "request.submit"),
             "can_source": rows[0]["status"] == "approved"
@@ -742,6 +791,41 @@ def submit_requisition(
     return _approval_action(lambda: approvals.submit(db, ctx.slug, no, sod.user(ctx.user_id)).status)
 
 
+def _lifecycle_action(call: Any) -> dict[str, Any]:
+    try:
+        result: dict[str, Any] = call()
+        return result
+    except lifecycle.LifecycleError as exc:
+        raise HTTPException(404 if "does not exist" in str(exc) else 409, str(exc)) from None
+    except PermissionDenied as exc:
+        raise HTTPException(403, str(exc)) from None
+
+
+@router.post("/requisitions/{no}/withdraw")
+def withdraw_requisition(no: str, db: Db, ctx: Ctx) -> dict[str, Any]:
+    """The requester takes a request back from approval; it is a draft again."""
+    return _lifecycle_action(lambda: {"status": lifecycle.withdraw(db, ctx.slug, no, ctx.user_id)})
+
+
+@router.post("/requisitions/{no}/cancel")
+def cancel_requisition(no: str, payload: dict[str, Any], db: Db, ctx: Ctx) -> dict[str, Any]:
+    """Stop a request for good (a reason is needed)."""
+    return _lifecycle_action(
+        lambda: {"status": lifecycle.cancel(db, ctx.slug, no, ctx.user_id, str(payload.get("reason") or ""))}
+    )
+
+
+@router.post("/requisitions/{no}/copy")
+def copy_requisition(no: str, db: Db, ctx: Ctx, payload: dict[str, Any] | None = None) -> dict[str, Any]:
+    """A new draft with the same lines, in the caller's name."""
+    raw = (payload or {}).get("need_by")
+    try:
+        need_by = date.fromisoformat(str(raw)) if raw else None
+    except ValueError:
+        raise HTTPException(422, "need_by must be a date like 2026-11-20") from None
+    return _lifecycle_action(lambda: {"id": lifecycle.copy(db, ctx.user_id, no, need_by)})
+
+
 @router.post("/requisitions/{no}/duplicate-override")
 def override_duplicate(
     no: str,
@@ -768,14 +852,16 @@ def approve_requisition(
 def reject_requisition(
     no: str, payload: dict[str, Any], db: Db, ctx: Annotated[routing.TenantContext, Depends(require("request.approve"))]
 ) -> dict[str, str]:
-    return _approval_action(lambda: approvals.reject(db, no, ctx.user_id, payload.get("reason")))
+    return _approval_action(lambda: approvals.reject(db, no, ctx.user_id, payload.get("reason"), tenant=ctx.slug))
 
 
 @router.post("/requisitions/{no}/return")
 def return_requisition(
     no: str, payload: dict[str, Any], db: Db, ctx: Annotated[routing.TenantContext, Depends(require("request.approve"))]
 ) -> dict[str, str]:
-    return _approval_action(lambda: approvals.return_for_changes(db, no, ctx.user_id, payload.get("reason")))
+    return _approval_action(
+        lambda: approvals.return_for_changes(db, no, ctx.user_id, payload.get("reason"), tenant=ctx.slug)
+    )
 
 
 @router.post("/requisitions/{no}/source")

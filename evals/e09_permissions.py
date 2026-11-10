@@ -14,6 +14,15 @@ ROLES = ["Admin", "Requester", "Buyer", "Approver", "Store", "AP", "Finance"]
 # role that is allowed gets 404, 409 or 422 and a role that is not gets 403.
 MATRIX = [
     ("POST", "/api/replenishment/run", {}, {"Buyer"}),
+    ("POST", "/api/requisitions", {"lines": [{"item_code": "A", "qty": "1"}], "need_by": "2026-11-20"}, {"Requester"}),
+    ("POST", "/api/requisitions/NOPE/copy", {}, {"Requester"}),
+    ("POST", "/api/inventory/issue", {"item_code": "A", "location": "WH", "qty": "1"}, {"Store"}),
+    (
+        "POST",
+        "/api/inventory/count",
+        {"item_code": "A", "location": "WH", "counted_qty": "1", "reason": "x"},
+        {"Store"},
+    ),
     ("POST", "/api/requisitions/NOPE/submit", None, {"Requester", "Buyer"}),
     ("POST", "/api/requisitions/NOPE/approve", {}, {"Approver"}),
     ("POST", "/api/requisitions/NOPE/reject", {"reason": "x"}, {"Approver"}),
@@ -83,6 +92,7 @@ READS = [
     "/api/payment-runs",
     "/api/receiving/waiting",
     "/api/inventory",
+    "/api/export/requests",
     "/api/vendors",
     "/api/dashboard",
     "/api/settings",

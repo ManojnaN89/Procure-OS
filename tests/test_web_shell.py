@@ -32,7 +32,7 @@ from playwright.sync_api import Page, expect, sync_playwright  # noqa: E402
 expect.set_options(timeout=20_000)
 
 DIST = REPO_ROOT / "frontend" / "dist" / "index.html"
-PORT = 18080
+PORT = int(os.environ.get("P2P_WEB_TEST_PORT", "18080"))  # a second run at the same time sets its own
 URL = f"http://127.0.0.1:{PORT}"
 ADMIN = f"{URL}/admin"  # the admin app lives under /admin
 PASSWORD = "correct horse battery"

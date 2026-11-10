@@ -126,27 +126,74 @@ CHECKS: dict[str, Callable[[dict[str, Any]], str | None]] = {
 }
 
 
+_MIDNIGHT = datetime.min.time()
+
+
+def _cell_text(value: Any) -> str:
+    """An Excel cell as the text a CSV file would hold, so one reading code serves both and money never passes through a float
+    more than Excel itself stored it (its own shortest text, e.g. 129.99)."""
+    if value is None:
+        return ""
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, datetime):
+        return value.date().isoformat() if value.time() == _MIDNIGHT else value.isoformat(sep=" ")
+    if isinstance(value, date):
+        return value.isoformat()
+    if isinstance(value, float) and value == int(value) and abs(value) < 1e15:
+        return str(int(value))
+    return str(value).strip()
+
+
+def _read_xlsx(path: Path) -> tuple[list[str], list[dict[str, str]]]:
+    """The first sheet of an Excel file: the first row names the columns, the rows after it are the data."""
+    import openpyxl
+
+    book = openpyxl.load_workbook(path, read_only=True, data_only=True)
+    try:
+        rows = list(book.worksheets[0].iter_rows(values_only=True))
+    finally:
+        book.close()
+    if not rows:
+        return [], []
+    names = [_cell_text(c) for c in rows[0]]
+    body = [
+        dict(zip(names, (_cell_text(c) for c in row), strict=False))
+        for row in rows[1:]
+        if any(c is not None for c in row)
+    ]
+    return names, body
+
+
+def _read_csv(path: Path) -> tuple[list[str], list[dict[str, str]]]:
+    with path.open(encoding="utf-8-sig", newline="") as f:
+        reader = csv.DictReader(f)
+        return list(reader.fieldnames or []), list(reader)
+
+
 def read_table(path: Path, spec: Table, report: ImportReport) -> list[tuple[int, dict[str, Any]]]:
-    """Read one csv file into typed rows. Unreadable rows go to the report."""
+    """Read one table into typed rows: the csv file, or an Excel file of the same name. Unreadable rows go to the report."""
+    excel = path.with_suffix(".xlsx")
+    if not path.is_file() and excel.is_file():
+        path = excel
     if not path.is_file():
         report.rejected.append(Problem(spec.name, 0, f"file {path.name} is missing"))
         return []
+    fieldnames, raw_rows = _read_xlsx(path) if path.suffix == ".xlsx" else _read_csv(path)
+    missing = [c for c, _ in spec.columns if c not in fieldnames]
+    if missing:
+        report.rejected.append(Problem(spec.name, 1, f"column(s) missing in {path.name}: {', '.join(missing)}"))
+        return []
     out: list[tuple[int, dict[str, Any]]] = []
-    with path.open(encoding="utf-8-sig", newline="") as f:
-        reader = csv.DictReader(f)
-        missing = [c for c, _ in spec.columns if c not in (reader.fieldnames or [])]
-        if missing:
-            report.rejected.append(Problem(spec.name, 1, f"column(s) missing in {path.name}: {', '.join(missing)}"))
-            return []
-        for line, raw in enumerate(reader, start=2):
-            row: dict[str, Any] = {}
-            try:
-                for col, sql_type in spec.columns:
-                    row[col] = _cast(raw[col], sql_type)
-            except (ValueError, InvalidOperation) as exc:
-                report.rejected.append(Problem(spec.name, line, f"{col}: {exc}"))
-                continue
-            out.append((line, row))
+    for line, raw in enumerate(raw_rows, start=2):
+        row: dict[str, Any] = {}
+        try:
+            for col, sql_type in spec.columns:
+                row[col] = _cast(raw.get(col) or "", sql_type)
+        except (ValueError, InvalidOperation) as exc:
+            report.rejected.append(Problem(spec.name, line, f"{col}: {exc}"))
+            continue
+        out.append((line, row))
     return out
 
 

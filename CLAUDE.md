@@ -79,6 +79,8 @@ Match the surrounding code. Short plain-language comments only where the reason 
 | Sourcing: contract price or quotation request, suppliers asked, RFQ emails | `sourcing/service.py`, `sourcing/jobs.py`, `formulas/sourcing.py` |
 | Approval of requests by the rule tables (lookup, chain, submit/approve/reject/return) | `approvals/rules.py`, `approvals/workflow.py` |
 | Replenishment into draft requests, document numbers | `requests/replenishment.py`, `requests/jobs.py`, `formulas/replenishment.py`, `platform/numbering.py` |
+| A request's life outside approval: withdraw, cancel, copy; the requester is told of decisions | `requests/lifecycle.py`, `approvals/workflow.py` (`notify_person`) |
+| Store issues and counts, list export, Excel import of masters | `receiving/stock.py` (`post_issue`, `post_count`), `formulas/stock.py`; `platform/export_api.py`; `masters/importer.py` |
 | Files, parsing, email | `platform/files.py`, `parsing.py`, `emails.py`, `mailbox.py` |
 | Admin API and run viewer | `platform/admin_api.py`, `logs.py` |
 

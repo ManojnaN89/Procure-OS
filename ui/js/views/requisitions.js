@@ -244,12 +244,18 @@ const RequisitionsView = {
       : a.can_submit
         ? `<div class="btn btn-primary btn-sm" id="submitBtn" style="display:inline-flex;"><i class="ti ti-send"></i>Submit for approval</div>`
         : "";
+    const own = [
+      a.can_withdraw ? `<div class="btn btn-sm" id="withdrawBtn"><i class="ti ti-arrow-back-up"></i>Withdraw</div>` : "",
+      a.can_cancel ? `<div class="btn btn-sm" id="cancelReqBtn"><i class="ti ti-ban"></i>Cancel request</div>` : "",
+      a.can_copy ? `<div class="btn btn-sm" id="copyBtn"><i class="ti ti-copy"></i>Copy as a new request</div>` : "",
+    ].join("");
     return `
       <div class="panel" style="margin-bottom:12px;">
         <div class="panel-title">Approval</div>
         ${a.decision ? `<p style="margin:0 0 10px;font-size:12.5px;color:var(--text-secondary);">${this.esc(String(a.decision).replace(/ under rule [A-Za-z0-9-]+ v\d+/, ""))}</p>` : `<p style="margin:0 0 10px;font-size:12.5px;color:var(--text-muted);">Not submitted yet.</p>`}
         ${(a.budget || []).filter((b) => b.status !== "unchecked").map((b) => `<div style="margin:0 0 6px;font-size:12px;color:${b.status === "over" ? "var(--warning-text)" : "var(--text-secondary)"};">Budget account ${this.esc(b.gl_code)}: ${formatCurrency(b.budget)} in all, ${formatCurrency(b.committed)} already committed, this request asks for ${formatCurrency(b.requested)}${b.status === "over" ? ` · over the budget by ${formatCurrency(b.over_by)}` : ""}</div>`).join("")}
         ${trail}${rule}${actions}
+        ${own ? `<div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:10px;">${own}</div>` : ""}
         ${a.can_source ? `<div class="btn btn-primary btn-sm" id="sourceBtn" style="display:inline-flex;margin-top:6px;"><i class="ti ti-search"></i>Find suppliers</div>` : ""}
         <div id="actionNote" style="font-size:12px;color:var(--warning-text);margin-top:8px;"></div>
         <div id="reasonBox" style="display:none;margin-top:10px;">
@@ -301,6 +307,14 @@ const RequisitionsView = {
     };
     on("returnBtn", () => ask("return"));
     on("rejectBtn", () => ask("reject"));
+    on("withdrawBtn", () => act("withdraw", {}));
+    on("cancelReqBtn", () => ask("cancel"));
+    on("copyBtn", async () => {
+      const res = await API.postJSON(`/api/requisitions/${encodeURIComponent(r.id)}/copy`, {});
+      if (res.ok) { window.location.hash = `#/requisitions/${encodeURIComponent(res.data.id)}`; return; }
+      const note = document.getElementById("actionNote");
+      if (note) note.textContent = res.data.detail || "The request could not be copied.";
+    });
     on("reasonCancel", () => { document.getElementById("reasonBox").style.display = "none"; });
     on("reasonOk", () => act(this.pendingVerb, this.pendingVerb === "submit"
       ? { override_reason: document.getElementById("reasonText").value }

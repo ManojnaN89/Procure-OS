@@ -18,6 +18,10 @@ From a stock shortage to a paid invoice. Each step has one person's name on it, 
 
 Everyone starts at **Dashboard**. The **My work** panel lists what needs you, by name. If it says nothing needs you, nothing does.
 
+## Lists in a spreadsheet
+
+Every list (requests, quotations, orders, receipts, invoices, payment runs, vendors, contracts, stock) has an **Export** button that saves the list as a file you can open in Excel.
+
 ## Who is kept apart
 
 The person who asked for something does not approve it. The person who entered an invoice does not release its block. The person who proposed a payment run does not approve it. The person who added a supplier document does not verify it. The screens do not offer you these buttons, and the server refuses them if you try another way.

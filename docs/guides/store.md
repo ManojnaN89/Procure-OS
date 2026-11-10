@@ -19,6 +19,12 @@ More than the tolerance allows over the order is refused. The tolerance is set p
 
 Items marked for inspection wait. Open the receipt and click **Record inspection** with the result.
 
+## Issue stock and count the shelf
+
+Open **Inventory**. On the row of the item click **Issue** to take stock out for use: enter the quantity and who it went to (a department, a machine or a job). You cannot issue more than the books show.
+
+After counting the shelf click **Count**: enter what you counted and why it differs. The system works out the difference and corrects the books. Both are kept in the audit log with your name.
+
 ## Part deliveries
 
 Receive what came. The order stays open for the rest. The buyer is reminded if the supplier's date passes.

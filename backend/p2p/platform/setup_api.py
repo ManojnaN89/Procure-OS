@@ -58,6 +58,8 @@ PERMISSIONS: dict[str, str] = {
     "grn.create": "Receive and inspect goods",
     "stock.view": "See stock",
     "replenishment.run": "Run automatic replenishment",
+    "stock.issue": "Issue stock for use",
+    "stock.adjust": "Correct stock after a count",
     "invoice.view": "See invoices",
     "invoice.book": "Enter invoices",
     "invoice.match": "Work on blocked invoices",

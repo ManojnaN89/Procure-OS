@@ -33,21 +33,21 @@ Only a row with evidence may be `verified` or `fixed`.
 
 | ID | Function | How | Plan step | Status | Evidence (test, eval or screen) | Notes |
 |---|---|---|---|---|---|---|
-| 1.1.1 | Request intake: Request by form | Platform | P1-04 | todo |  |  |
-| 1.1.2 | Request intake: Request by email or free text, turned into a draft | AI agent | P1-08 | todo |  |  |
-| 1.1.3 | Request intake: Request by chat | AI agent | P1-08 | todo |  |  |
-| 1.1.4 | Request intake: Ask the requester for missing details | AI agent | P1-08 | todo |  |  |
-| 1.2.1 | Items & catalogue: Item master: category, unit, tax code | Platform | P1-01 | todo |  |  |
-| 1.2.2 | Items & catalogue: Catalogue and contract items | Platform | P1-01, P1-04 | todo |  |  |
-| 1.2.3 | Items & catalogue: Match free-text items to the item master | AI | P1-08 | todo |  |  |
-| 1.2.4 | Items & catalogue: Default GL account and cost centre by category | Rules | P1-01 | todo |  |  |
-| 1.3.1 | Pre-order checks: Stock and open-order check | Rules | P1-02, P1-05 | todo |  |  |
-| 1.3.2 | Pre-order checks: Duplicate request check | Rules | P1-05 | todo |  |  |
-| 1.3.3 | Pre-order checks: Suggested net quantity | Rules | P1-05 | todo |  |  |
-| 1.3.4 | Pre-order checks: Stock movements from receipts, issues and adjustments | Rules | P1-02, P1-15 | todo |  |  |
-| 1.4.1 | Request lifecycle: Draft, submit, withdraw, cancel, copy a previous request | Platform | P1-04 | todo |  |  |
-| 1.4.2 | Request lifecycle: Status tracking for requesters | Platform | P1-04 | todo |  |  |
-| 1.4.3 | Request lifecycle: In-app and email notifications | Platform | P0-12 | todo |  |  |
+| 1.1.1 | Request intake: Request by form | Platform | P1-04 | verified | tests/test_request_form.py; browser tests/test_demand_screens.py (New request form to a draft, then submit) |  |
+| 1.1.2 | Request intake: Request by email or free text, turned into a draft | AI agent | P1-08 | verified | tests/test_intake_agent.py (a colleague's email to the requests mailbox is drafted and answered; a stranger's is not even read; attachments; split-order flag); eval E24 | Live models (Groq/NVIDIA, 10 Nov): right action 93%, one extra line in a draft out of 30. A draft is always checked by the requester before it goes anywhere. |
+| 1.1.3 | Request intake: Request by chat | AI agent | P1-08 | verified | tests/test_intake_agent.py (chat sends requests to the intake agent and questions to the assistant); eval E24 |  |
+| 1.1.4 | Request intake: Ask the requester for missing details | AI agent | P1-08 | verified | tests/test_intake_agent.py (a missing date is asked once, questions come item then quantity then date, the answer completes the draft, 'cancel' drops the question); eval E24 |  |
+| 1.2.1 | Items & catalogue: Item master: category, unit, tax code | Platform | P1-01 | verified | tests/test_masters_import.py (items with category, unit and HSN/SAC load and are checked); tests/test_reference_data.py (HSN to GST rate by date, longest code wins) |  |
+| 1.2.2 | Items & catalogue: Catalogue and contract items | Platform | P1-01, P1-04 | verified | tests/test_request_form.py (the form offers the active catalogue); tests/test_sourcing.py and tests/test_masters_documents_contracts.py (contract items are priced from active contracts); eval E03 | The form lists catalogue items; whether an item is bought on contract is decided at sourcing (contract price, else quotation). |
+| 1.2.3 | Items & catalogue: Match free-text items to the item master | AI | P1-08 | verified | tests/test_intake_agent.py (words and codes settle an item without a model, typos by similarity, the model sees only the best candidates, a non-match never reaches it); eval E24 (lines mapped right 100%) |  |
+| 1.2.4 | Items & catalogue: Default GL account and cost centre by category | Rules | P1-01 | verified | tests/test_request_defaults.py (new: item GL account, else the category's, on form and restock requests); tests/test_budget.py (a line with no cost centre is held against the cost centres of its delivery place) | The behaviour already existed; the GL default test was added. |
+| 1.3.1 | Pre-order checks: Stock and open-order check | Rules | P1-02, P1-05 | verified | tests/test_duplicates.py (open requests, open orders and goods on the way are counted); tests/test_replenishment.py (open requests and orders count as stock on the way; an item with an open order is not requested again) |  |
+| 1.3.2 | Pre-order checks: Duplicate request check | Rules | P1-05 | verified | tests/test_duplicates.py (same item, place and close dates flagged; a reason is needed and kept with the name); eval E23 (planted repeat requests caught) |  |
+| 1.3.3 | Pre-order checks: Suggested net quantity | Rules | P1-05 | verified | tests/test_duplicates.py (20 ordered, 10 received, 20 requested suggests 10; never below zero; in stock units) |  |
+| 1.3.4 | Pre-order checks: Stock movements from receipts, issues and adjustments | Rules | P1-02, P1-15 | fixed | tests/test_stock_posting.py (new); tests/test_stock.py (balances, history load); tests/test_receiving.py (receipts post stock); browser tests/test_demand_screens.py (Issue and Count on Inventory) | Receipts already posted stock; issues and adjustments could only be imported as history. Built: Issue and Count on the Inventory screen for the Store role (permissions stock.issue and stock.adjust, migration 0039). Issues cannot go below zero; a count needs a reason and the server works out the difference; both are audited. For the owner: whether a large adjustment should need an approver (not built). |
+| 1.4.1 | Request lifecycle: Draft, submit, withdraw, cancel, copy a previous request | Platform | P1-04 | fixed | tests/test_request_lifecycle.py (new); browser tests/test_demand_screens.py (raise, submit, withdraw, submit, cancel with a reason, copy) | Only draft, submit, return and reject existed. Built withdraw (waiting request back to draft), cancel (with a reason, until the buyer starts buying) and copy (new draft in the copier's name), as buttons on the request page, with audit rows request.withdraw, request.cancel and request.copy. |
+| 1.4.2 | Request lifecycle: Status tracking for requesters | Platform | P1-04 | verified | tests/test_approvals.py (the list shows status and who it waits for; the trail on the page); tests/test_request_lifecycle.py (what each person may do now); the 'My requests' tab and the progress strip, browser tests/test_demand_screens.py |  |
+| 1.4.3 | Request lifecycle: In-app and email notifications | Platform | P0-12 | fixed | tests/test_request_lifecycle.py (new): in-app notification and a queued email for each decision; approvers' tasks and reminders already tested in tests/test_approvals.py and tests/test_email.py | The approver was told when a step opened, but the requester was told nothing when the request was approved, rejected or returned. Now they are, in the app and by email; approvers are told when a request is withdrawn or cancelled. |
 
 ## India Compliance
 
@@ -63,9 +63,9 @@ Only a row with evidence may be `verified` or `fixed`.
 
 | ID | Function | How | Plan step | Status | Evidence (test, eval or screen) | Notes |
 |---|---|---|---|---|---|---|
-| 13.1.1 | Data import and export: Excel import with a dry run; export of any list | Platform | P1-01 | todo |  |  |
-| 13.1.2 | Data import and export: Reference data: HSN/SAC, GST states, units, holidays | Platform | P0-21 | todo |  |  |
-| 13.2.1 | Email: Email in and out, linked to cases | Platform | P0-19 | todo |  |  |
+| 13.1.1 | Data import and export: Excel import with a dry run; export of any list | Platform | P1-01 | fixed | tests/test_masters_excel.py (new: an Excel dataset loads exactly what the CSV one does, dry run writes nothing, bad rows reported by sheet line); tests/test_masters_import.py (dry run, audit); tests/test_export.py (new) and browser tests/test_demand_screens.py (Export downloads a CSV) | Import took CSV files only and nothing exported. Now the master import also reads .xlsx files (mixed with CSV if wanted) and every main list has an Export button (CSV with a byte-order mark, formula cells defanged, audited). Import is by folder from the command line (python -m p2p.cli import masters <tenant> <dataset> --dry-run); there is no upload screen. |
+| 13.1.2 | Data import and export: Reference data: HSN/SAC, GST states, units, holidays | Platform | P0-21 | verified | tests/test_reference_data.py (a new tenant comes with the GST states, units, HSN/SAC codes and rates, TDS sections and holidays; the GST rate depends on the date; holidays feed the business calendar) | A unit count assertion was added to the tests. |
+| 13.2.1 | Email: Email in and out, linked to cases | Platform | P0-19 | verified | tests/test_email.py (a reply to an RFQ is stored linked to it and adds a case event; reading a mail twice stores it once; threading by reply address; the poll job; IMAP read); tests/test_intake_agent.py (request mail drafted and answered by email) |  |
 
 ## Invoice & Matching
 

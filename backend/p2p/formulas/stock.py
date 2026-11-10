@@ -2,6 +2,8 @@
 
 from decimal import Decimal
 
+QTY = Decimal("0.0001")
+
 # Worst first: the first one that applies is the status.
 NEGATIVE = "negative"  # the books say less than nothing is on the shelf: a posting error to look into
 STOCKOUT = "stockout"
@@ -36,3 +38,8 @@ def stock_status(
     if max_qty is not None and on_hand > max_qty:
         return OVER_MAX
     return OK
+
+
+def count_difference(counted: Decimal, on_hand: Decimal) -> Decimal:
+    """What a stock count adds to (positive) or takes from (negative) the books to make them match the shelf."""
+    return (counted - on_hand).quantize(QTY)

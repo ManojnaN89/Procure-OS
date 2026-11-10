@@ -632,7 +632,7 @@ def _create(
         nos.append(no)
     db.commit()
     shown = "; ".join(f"{format_qty(li.qty)} {li.uom or ''} {li.name}".replace("  ", " ") for li in infos)
-    reply = f"I created draft request {', '.join(nos)} for {shown}. It is a draft: open it under Requisitions and submit it when it is right."
+    reply = f"I created draft request {', '.join(nos)} for {shown}. It is a draft: open it under Requests and submit it when it is right."
     if warnings:
         reply += "\nPlease note:\n- " + "\n- ".join(warnings)
     return IntakeResult("drafted", reply, nos, infos, warnings)
@@ -724,7 +724,7 @@ def _describe(db: Session, no: str) -> str:
     status = req[0]
     head = f"{no} ({what}) "
     if status == "draft":
-        return head + "is still a draft: open it under Requisitions and submit it so it can be approved."
+        return head + "is still a draft: open it under Requests and submit it so it can be approved."
     if status == "returned":
         return head + "was returned for changes: please correct it and submit it again."
     if status == "rejected":

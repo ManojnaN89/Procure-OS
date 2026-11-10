@@ -12,6 +12,7 @@ from p2p.platform import logs, tenants
 from p2p.platform.admin_api import router as admin_router
 from p2p.platform.agent_api import router as agent_router
 from p2p.platform.auth import router as auth_router
+from p2p.platform.export_api import router as export_router
 from p2p.platform.files import router as files_router
 from p2p.platform.guides_api import router as guides_router
 from p2p.platform.invoice_api import router as invoice_router
@@ -31,6 +32,7 @@ for _module in filter(None, (m.strip() for m in get_settings().extra_modules.spl
 app.include_router(auth_router)
 app.include_router(admin_router)
 app.include_router(files_router)
+app.include_router(export_router)
 app.include_router(setup_router)
 app.include_router(ui_router)
 app.include_router(workspace_router)

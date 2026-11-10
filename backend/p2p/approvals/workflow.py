@@ -54,6 +54,25 @@ def name_of(db: Session, code: str | None) -> str:
     return str(row[0]) if row else code
 
 
+def notify_person(
+    db: Session, tenant: str | None, code: str | None, kind: str, title: str, body: str = "", *, link: str | None = None
+) -> bool:
+    """Tell a person of the organisation (in the app and by email) if they have a login. False if nobody was told."""
+    if not tenant or not code:
+        return False
+    email = db.execute(text("select email from org_user where code = :c and active"), {"c": code}).scalar()
+    user_id = users.user_id_by_email(tenant, str(email)) if email else None
+    if user_id is None:
+        return False
+    notifications.notify(db, tenant, user_id, kind, title, body, link=link)
+    return True
+
+
+def _tell_requester(db: Session, tenant: str | None, req: dict[str, Any], title: str, body: str) -> None:
+    """The requester hears how their request went; an automatic restock request has no requester and tells nobody."""
+    notify_person(db, tenant, req["requester"], "request", title, body, link=f"#/requisitions/{req['no']}")
+
+
 def _locked(db: Session, no: str) -> dict[str, Any]:
     row = db.execute(text("select * from request where no = :n for update"), {"n": no}).mappings().first()
     if row is None:
@@ -162,6 +181,13 @@ def submit(db: Session, tenant: str, no: str, actor: Actor, *, today: date | Non
         )
         db.commit()
         worker.enqueue(tenant, "source_request", {"request_no": no})
+        _tell_requester(
+            db,
+            tenant,
+            req,
+            f"Request {no} approved",
+            "It was within the automatic limit, so it was approved at once. The buyer takes it from here.",
+        )
         return Submitted(no, "approved", rule.code, rule.version, reason, [])
 
     for n, step in enumerate(steps, start=1):
@@ -328,12 +354,15 @@ def approve(db: Session, tenant: str, no: str, user_id: int, comment: str | None
         tasks.complete_task(db, int(step["task_id"]), user_id)
     if following is None:
         worker.enqueue(tenant, "source_request", {"request_no": no})
+        _tell_requester(db, tenant, req, f"Request {no} approved", f"{who}. The buyer takes it from here.")
     if following is not None:
         _open_step(db, tenant, no, req["total_value"], int(following[0]), int(req["approval_round"]))
     return "submitted" if following is not None else "approved"
 
 
-def _stop(db: Session, no: str, user_id: int, reason: str | None, *, status: str, action: str) -> str:
+def _stop(
+    db: Session, no: str, user_id: int, reason: str | None, *, status: str, action: str, tenant: str | None = None
+) -> str:
     if not reason or not reason.strip():
         raise ApprovalError("a reason is required")
     req, step, me = _acting(db, no, user_id)
@@ -365,17 +394,19 @@ def _stop(db: Session, no: str, user_id: int, reason: str | None, *, status: str
     db.commit()
     if step["task_id"]:
         tasks.complete_task(db, int(step["task_id"]), user_id)
+    verb = "rejected" if status == "rejected" else "returned to you for changes"
+    _tell_requester(db, tenant, req, f"Request {no} {verb}", f"{name_of(db, me)}: {reason}")
     return status
 
 
-def reject(db: Session, no: str, user_id: int, reason: str | None) -> str:
-    """Refuse the request for good. Its lines stop counting as stock on the way."""
-    return _stop(db, no, user_id, reason, status="rejected", action="request.reject")
+def reject(db: Session, no: str, user_id: int, reason: str | None, *, tenant: str | None = None) -> str:
+    """Refuse the request for good. Its lines stop counting as stock on the way. With the company's slug, the requester is told."""
+    return _stop(db, no, user_id, reason, status="rejected", action="request.reject", tenant=tenant)
 
 
-def return_for_changes(db: Session, no: str, user_id: int, reason: str | None) -> str:
-    """Send the request back to be changed and submitted again (a new round)."""
-    return _stop(db, no, user_id, reason, status="returned", action="request.return")
+def return_for_changes(db: Session, no: str, user_id: int, reason: str | None, *, tenant: str | None = None) -> str:
+    """Send the request back to be changed and submitted again (a new round). With the company's slug, the requester is told."""
+    return _stop(db, no, user_id, reason, status="returned", action="request.return", tenant=tenant)
 
 
 def steps_of(db: Session, no: str) -> list[dict[str, Any]]:
