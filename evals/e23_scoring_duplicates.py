@@ -21,7 +21,12 @@ NEUTRAL, PRIOR, NEUTRAL_PRICE = Fraction(7, 10), 3, Fraction(8, 10)
 
 
 def columns(db, table: str) -> set[str]:
-    return {r[0] for r in db.execute(text("select column_name from information_schema.columns where table_name = :t"), {"t": table})}
+    return {
+        r[0]
+        for r in db.execute(
+            text("select column_name from information_schema.columns where table_name = :t"), {"t": table}
+        )
+    }
 
 
 def insert(db, table: str, row: dict, extra: dict | None = None) -> None:
@@ -79,7 +84,19 @@ def run(ctx) -> Outcome:
     for r in history("po"):
         insert(db, "po", r)
     for r in history("po_line"):
-        insert(db, "po_line", r, {"received_qty": r["received_qty"] or 0, "invoiced_qty": 0, "source": "award", "request_no": r["po_no"], "request_line_no": int(r["line_no"]), "taxable": (D(r["qty"]) * D(r["unit_price"])).quantize(D("0.01"))})
+        insert(
+            db,
+            "po_line",
+            r,
+            {
+                "received_qty": r["received_qty"] or 0,
+                "invoiced_qty": 0,
+                "source": "award",
+                "request_no": r["po_no"],
+                "request_line_no": int(r["line_no"]),
+                "taxable": (D(r["qty"]) * D(r["unit_price"])).quantize(D("0.01")),
+            },
+        )
     for g in history("goods_receipt"):
         insert(db, "goods_receipt", g, {"posted_by": "import"})
     for ln in history("gr_line"):
@@ -107,11 +124,19 @@ def run(ctx) -> Outcome:
     judged = sum(scores[c].history.receipts for c in active) / max(len(active), 1)
     out.metrics["receipt lines judged per supplier (on average)"] = round(judged, 1)
     if judged < 15:
-        out.notes.append("too little history for rank agreement to mean much: only the order of the profile means is required")
+        out.notes.append(
+            "too little history for rank agreement to mean much: only the order of the profile means is required"
+        )
     if judged >= 15 and rho_delivery < 0.4:
-        out.find("high", f"the delivery score hardly follows how often suppliers really deliver on time (rank agreement {rho_delivery:.2f})")
+        out.find(
+            "high",
+            f"the delivery score hardly follows how often suppliers really deliver on time (rank agreement {rho_delivery:.2f})",
+        )
     if judged >= 15 and rho_quality < 0.2:
-        out.find("medium", f"the quality score hardly follows how much each supplier really rejects (rank agreement {rho_quality:.2f})")
+        out.find(
+            "medium",
+            f"the quality score hardly follows how much each supplier really rejects (rank agreement {rho_quality:.2f})",
+        )
     if not (mean.get("reliable", 0) > mean.get("average", 0) > mean.get("poor", 0)):
         out.find("high", f"the mean score does not fall from reliable to average to poor suppliers: {mean}")
 
@@ -137,11 +162,21 @@ def run(ctx) -> Outcome:
         s = suppliers.get(r["supplier_code"])
         if not s or s["status"] != "active":
             continue
-        if not (date.fromisoformat(r["valid_from"]) <= as_of and (not r["valid_to"] or date.fromisoformat(r["valid_to"]) >= as_of)):
+        if not (
+            date.fromisoformat(r["valid_from"]) <= as_of
+            and (not r["valid_to"] or date.fromisoformat(r["valid_to"]) >= as_of)
+        ):
             continue
         if r["contract_code"]:
             c = contracts.get(r["contract_code"])
-            if not c or c["status"] != "active" or not (date.fromisoformat(c["valid_from"]) <= as_of and (not c["valid_to"] or date.fromisoformat(c["valid_to"]) >= as_of)):
+            if (
+                not c
+                or c["status"] != "active"
+                or not (
+                    date.fromisoformat(c["valid_from"]) <= as_of
+                    and (not c["valid_to"] or date.fromisoformat(c["valid_to"]) >= as_of)
+                )
+            ):
                 continue
         key = (r["item_code"], r["uom"])
         mine = (Fraction(D(r["min_qty"] or "0")), Fraction(D(r["price"])))
@@ -171,7 +206,11 @@ def run(ctx) -> Outcome:
         out.find("high", f"{len(off)} score(s) differ from a recomputation from the raw files; first: {off[0]}")
 
     # ---- C. best-vendor picks are no worse than the cheapest pick, against what the suppliers are really like
-    db.execute(text("insert into app_setting (key, value) values ('sourcing_mode', 'best_vendor') on conflict (key) do update set value = 'best_vendor'"))
+    db.execute(
+        text(
+            "insert into app_setting (key, value) values ('sourcing_mode', 'best_vendor') on conflict (key) do update set value = 'best_vendor'"
+        )
+    )
     db.commit()
     picked, cheapest = [], []
     changed = compared = 0
@@ -196,7 +235,10 @@ def run(ctx) -> Outcome:
     out.metrics["picks that differ from the cheapest"] = changed
     out.metrics["true on-time rate of the picks vs of the cheapest"] = f"{mean_pick:.3f} vs {mean_cheap:.3f}"
     if compared and mean_pick + 1e-9 < mean_cheap:
-        out.find("high", f"the best vendors are less reliable than the cheapest ones ({mean_pick:.3f} against {mean_cheap:.3f})")
+        out.find(
+            "high",
+            f"the best vendors are less reliable than the cheapest ones ({mean_pick:.3f} against {mean_cheap:.3f})",
+        )
     if compared == 0:
         out.find("medium", "no item had two priced suppliers: the best-vendor comparison did not run")
 
@@ -223,16 +265,30 @@ def run(ctx) -> Outcome:
         db.execute(text("update request set status = :s where no = :n"), {"s": r["status"], "n": r["no"]})
         for ln in lines[r["no"]]:
             final = "ordered" if ln["status"] not in ("open", "sourcing", "cancelled") else ln["status"]
-            db.execute(text("update request_line set status = :s where request_no = :n and line_no = :l"), {"s": final, "n": r["no"], "l": int(ln["line_no"])})
+            db.execute(
+                text("update request_line set status = :s where request_no = :n and line_no = :l"),
+                {"s": final, "n": r["no"], "l": int(ln["line_no"])},
+            )
         db.commit()
-    caught = sum(1 for later, earlier in planted.items() if later in flagged and earlier in {d.other_request for d in flagged[later]})
+    caught = sum(
+        1
+        for later, earlier in planted.items()
+        if later in flagged and earlier in {d.other_request for d in flagged[later]}
+    )
     others = [no for no in flagged if no not in planted]
     out.metrics["planted repeat requests / caught"] = f"{len(planted)} / {caught}"
     out.metrics["other requests flagged"] = f"{len(others)} of {len(requests) - len(planted)}"
     out.metrics["requests flagged in all"] = len(flagged)
     if planted and caught < len(planted):
-        missed = [no for no, e in planted.items() if no in {r['no'] for r in requests} and not (no in flagged and e in {d.other_request for d in flagged[no]})]
+        missed = [
+            no
+            for no, e in planted.items()
+            if no in {r["no"] for r in requests} and not (no in flagged and e in {d.other_request for d in flagged[no]})
+        ]
         out.find("high", f"{len(planted) - caught} planted repeat request(s) were not flagged, e.g. {missed[:3]}")
     if requests and len(others) / max(len(requests) - len(planted), 1) > 0.25:
-        out.find("medium", f"{len(others)} ordinary requests were flagged as repeats ({len(others) / (len(requests) - len(planted)):.0%}): the rule is too eager")
+        out.find(
+            "medium",
+            f"{len(others)} ordinary requests were flagged as repeats ({len(others) / (len(requests) - len(planted)):.0%}): the rule is too eager",
+        )
     return out

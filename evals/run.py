@@ -39,17 +39,13 @@ def render(results: list[dict], live: bool) -> str:
     ]
     for r in results:
         key = "; ".join(f"{k} {v}" for k, v in list(r["metrics"].items())[:4])
-        lines.append(
-            f"| {r['id']} | {r['title']} | **{r['status']}** | {r['seconds']} | {key} |"
-        )
+        lines.append(f"| {r['id']} | {r['title']} | **{r['status']}** | {r['seconds']} | {key} |")
     passed = sum(1 for r in results if r["status"] == "PASS")
     lines += ["", f"**{passed} of {len(results)} passed.**", ""]
     findings = [(r["id"], f) for r in results for f in r["findings"]]
     if findings:
         lines += ["## Findings", ""]
-        for rid, f in sorted(
-            findings, key=lambda x: {"high": 0, "medium": 1, "low": 2}[x[1]["severity"]]
-        ):
+        for rid, f in sorted(findings, key=lambda x: {"high": 0, "medium": 1, "low": 2}[x[1]["severity"]]):
             lines.append(f"- **{f['severity']}** ({rid}): {f['text']}")
         lines.append("")
     lines += ["## Details", ""]
@@ -108,10 +104,7 @@ def main() -> int:
                     "status": status,
                     "seconds": seconds,
                     "metrics": outcome.metrics,
-                    "findings": [
-                        {"severity": f.severity, "text": f.text}
-                        for f in outcome.findings
-                    ],
+                    "findings": [{"severity": f.severity, "text": f.text} for f in outcome.findings],
                     "notes": outcome.notes,
                 }
             )
@@ -120,14 +113,10 @@ def main() -> int:
                 print(f"        {f.severity}: {f.text.splitlines()[0][:200]}")
     out = Path(args.out)
     out.parent.mkdir(parents=True, exist_ok=True)
-    out.with_suffix(".json").write_text(
-        json.dumps(results, indent=2, default=str), encoding="utf-8"
-    )
+    out.with_suffix(".json").write_text(json.dumps(results, indent=2, default=str), encoding="utf-8")
     out.with_suffix(".md").write_text(render(results, args.live), encoding="utf-8")
     failed = [r for r in results if r["status"] == "FAIL"]
-    print(
-        f"\n{len(results) - len(failed)} of {len(results)} passed; report in {out.with_suffix('.md')}"
-    )
+    print(f"\n{len(results) - len(failed)} of {len(results)} passed; report in {out.with_suffix('.md')}")
     return 1 if failed else 0
 
 

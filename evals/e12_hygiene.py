@@ -58,33 +58,20 @@ def float_uses() -> list[str]:
                 continue
             tree = ast.parse(path.read_text(encoding="utf-8"))
             for node in ast.walk(tree):
-                if (
-                    isinstance(node, ast.Call)
-                    and isinstance(node.func, ast.Name)
-                    and node.func.id == "float"
-                ):
-                    found.append(
-                        f"{path.relative_to(lib.ROOT)}:{node.lineno} float(...)"
-                    )
+                if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "float":
+                    found.append(f"{path.relative_to(lib.ROOT)}:{node.lineno} float(...)")
                 if (
                     isinstance(node, ast.Constant)
                     and isinstance(node.value, float)
-                    and "confidence"
-                    not in path.read_text(encoding="utf-8").splitlines()[
-                        node.lineno - 1
-                    ]
+                    and "confidence" not in path.read_text(encoding="utf-8").splitlines()[node.lineno - 1]
                 ):
-                    found.append(
-                        f"{path.relative_to(lib.ROOT)}:{node.lineno} float literal {node.value}"
-                    )
+                    found.append(f"{path.relative_to(lib.ROOT)}:{node.lineno} float literal {node.value}")
                 if (
                     isinstance(node, ast.arg)
                     and isinstance(node.annotation, ast.Name)
                     and node.annotation.id == "float"
                 ):
-                    found.append(
-                        f"{path.relative_to(lib.ROOT)}:{node.lineno} parameter typed float ({node.arg})"
-                    )
+                    found.append(f"{path.relative_to(lib.ROOT)}:{node.lineno} parameter typed float ({node.arg})")
     return found
 
 
@@ -92,15 +79,8 @@ def money_as_numbers(obj, path: str = "") -> list[str]:
     bad = []
     if isinstance(obj, dict):
         for k, v in obj.items():
-            counted = path.endswith(
-                "/summary"
-            )  # counts such as summary.total are not money
-            if (
-                k in MONEY_KEYS
-                and not counted
-                and isinstance(v, (int, float))
-                and not isinstance(v, bool)
-            ):
+            counted = path.endswith("/summary")  # counts such as summary.total are not money
+            if k in MONEY_KEYS and not counted and isinstance(v, (int, float)) and not isinstance(v, bool):
                 bad.append(f"{path}/{k} = {v!r}")
             bad += money_as_numbers(v, f"{path}/{k}")
     elif isinstance(obj, list):
@@ -116,17 +96,14 @@ def run(ctx) -> Outcome:
     # 1. floats in money code
     floats = float_uses()
     if floats:
-        out.find(
-            "medium", f"{len(floats)} float use(s) in money code, e.g. {floats[0]}"
-        )
+        out.find("medium", f"{len(floats)} float use(s) in money code, e.g. {floats[0]}")
     # 2. money on the wire is exact text
     state = pipeline.get_state(ctx)
     world, db = state.world, state.world.db
     client = TestClient(app)
     h = world.headers("Admin")
     req, rfq, po = (
-        db.execute(text(f"select no from {t} order by no limit 1")).scalar()
-        for t in ("request", "rfq", "po")
+        db.execute(text(f"select no from {t} order by no limit 1")).scalar() for t in ("request", "rfq", "po")
     )
     paths = [
         "/api/requisitions",
@@ -157,9 +134,7 @@ def run(ctx) -> Outcome:
     utc_dates = []
     for d in ("approvals", "orders", "sourcing", "requests", "receiving", "platform"):
         for path in sorted((BACKEND / d).glob("*.py")):
-            for n, line in enumerate(
-                path.read_text(encoding="utf-8").splitlines(), start=1
-            ):
+            for n, line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
                 if "now(UTC).date()" in line:
                     utc_dates.append(f"{path.relative_to(lib.ROOT)}:{n}")
     if utc_dates:
@@ -168,9 +143,7 @@ def run(ctx) -> Outcome:
             f"{len(utc_dates)} place(s) take today's date from UTC, which is the wrong day in India from 18:30 to midnight (rule 9), e.g. {utc_dates[0]}",
         )
     # 4. no secrets in the repository
-    tracked = subprocess.run(
-        ["git", "ls-files"], cwd=lib.ROOT, capture_output=True, text=True
-    ).stdout.splitlines()
+    tracked = subprocess.run(["git", "ls-files"], cwd=lib.ROOT, capture_output=True, text=True).stdout.splitlines()
     hits = []
     for rel in tracked:
         path = lib.ROOT / rel
@@ -212,20 +185,12 @@ def run(ctx) -> Outcome:
         ("master", "supplier_contact", "phone"),
         ("master", "user", "phone"),
     ):
-        bad_phone += sum(
-            1
-            for r in lib.rows(folder, name)
-            if r[col] and not r[col].startswith("+91 00000")
-        )
+        bad_phone += sum(1 for r in lib.rows(folder, name) if r[col] and not r[col].startswith("+91 00000"))
     for folder, name, col in (
         ("master", "supplier_contact", "email"),
         ("master", "user", "email"),
     ):
-        bad_email += sum(
-            1
-            for r in lib.rows(folder, name)
-            if r[col] and not r[col].endswith(".example")
-        )
+        bad_email += sum(1 for r in lib.rows(folder, name) if r[col] and not r[col].endswith(".example"))
     if bad_pan or bad_phone or bad_email:
         out.find(
             "high",

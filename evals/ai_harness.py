@@ -48,11 +48,7 @@ def scripted_gateway() -> tuple[Gateway, Scripted]:
 
 def supplier_for_emails() -> tuple[str, str]:
     """A real supplier of the dataset with an email address, and that address."""
-    cats = {
-        r["supplier_code"]
-        for r in rows("master", "supplier_category")
-        if r["category_code"] == "MRO"
-    }
+    cats = {r["supplier_code"] for r in rows("master", "supplier_category") if r["category_code"] == "MRO"}
     for c in rows("master", "supplier_contact"):
         if c["supplier_code"] in cats and c["email"]:
             return c["supplier_code"], c["email"]
@@ -71,9 +67,7 @@ def setup_rfq(world: World, tag: str, items: list[Item]) -> tuple[str, str, str]
         {"n": req},
     )
     db.execute(
-        text(
-            "insert into rfq (no, request_no, category_code, due_date, status) values (:r, :q, 'MRO', now(), 'sent')"
-        ),
+        text("insert into rfq (no, request_no, category_code, due_date, status) values (:r, :q, 'MRO', now(), 'sent')"),
         {"r": rfq, "q": req},
     )
     for it in items:
@@ -139,11 +133,7 @@ def perfect_reading(case: Case) -> QuoteReading:
     """What a careful model writes for a case: only what the email says, nothing computed."""
     t = case.truth
     if t.intent == "decline":
-        reason = (
-            case.body.split("because ")[-1].split(".")[0]
-            if "because " in case.body
-            else None
-        )
+        reason = case.body.split("because ")[-1].split(".")[0] if "because " in case.body else None
         return QuoteReading(intent="decline", decline_reason=reason, confidence=0.95)
     if t.intent == "question":
         return QuoteReading(intent="question", question=t.question, confidence=0.95)
@@ -217,8 +207,7 @@ def score(case: Case, draft: dict[str, Any], seconds: float, calls: int) -> Scor
                     want_gst = v["gst"] if v["gst"] is not None else by_item[n].gst
                     checks = {
                         "price": D(g["unit_price"]) == v["price"],
-                        "discount": D(g["discount_pct"])
-                        == (v["discount"] or Decimal(0)),
+                        "discount": D(g["discount_pct"]) == (v["discount"] or Decimal(0)),
                         "gst": D(g["gst_rate"]) == want_gst,
                         "days": g["delivery_days"] == v["days"],
                     }
@@ -232,9 +221,7 @@ def score(case: Case, draft: dict[str, Any], seconds: float, calls: int) -> Scor
                         D(proposal.get("freight")),
                         D(proposal.get("packing_forwarding")),
                     )
-                    if freight != (t.freight or Decimal(0)) or packing != (
-                        t.packing or Decimal(0)
-                    ):
+                    if freight != (t.freight or Decimal(0)) or packing != (t.packing or Decimal(0)):
                         correct, detail = (
                             False,
                             f"charges {freight}/{packing}, expected {t.freight}/{t.packing}",
@@ -273,24 +260,14 @@ def run_case(
     if provider is not None and answer is not None:
         provider.answer = answer.model_dump_json()
     started = time.monotonic()
-    draft_id = replies.read_reply(
-        world.db, world.slug, email_id, gateway, as_of=lib.TODAY
-    )
+    draft_id = replies.read_reply(world.db, world.slug, email_id, gateway, as_of=lib.TODAY)
     seconds = time.monotonic() - started
-    draft = dict(
-        world.db.execute(
-            text("select * from quote_draft where id = :i"), {"i": draft_id}
-        )
-        .mappings()
-        .one()
-    )
+    draft = dict(world.db.execute(text("select * from quote_draft where id = :i"), {"i": draft_id}).mappings().one())
     calls = (
         (provider.calls - calls_before)
         if provider
         else int(
-            world.db.execute(
-                text("select count(*) from model_call where step like 'quote_reading%'")
-            ).scalar_one()
+            world.db.execute(text("select count(*) from model_call where step like 'quote_reading%'")).scalar_one()
         )
     )
     return score(case, draft, seconds, calls)
@@ -302,10 +279,7 @@ def summarise(scored: list[Scored]) -> dict[str, Any]:
     safe = sum(s.correct or s.status == "needs_person" for s in scored)
     silent = [s for s in scored if s.silent_error]
     intent_ok = sum(
-        1
-        for s in scored
-        if s.intent == s.case.truth.intent
-        or (s.status == "needs_person" and s.intent is None)
+        1 for s in scored if s.intent == s.case.truth.intent or (s.status == "needs_person" and s.intent is None)
     )
     by_style: dict[str, list[bool]] = {}
     for s in scored:
@@ -320,9 +294,5 @@ def summarise(scored: list[Scored]) -> dict[str, Any]:
         "by style": {k: f"{sum(v)}/{len(v)}" for k, v in by_style.items()},
         "median seconds": round(sorted(s.seconds for s in scored)[n // 2], 2),
         "silent error cases": [f"{s.case.id}: {s.detail}" for s in silent][:5],
-        "misses": [
-            f"{s.case.id}: {s.detail or s.status}"
-            for s in scored
-            if not s.correct and not s.silent_error
-        ][:6],
+        "misses": [f"{s.case.id}: {s.detail or s.status}" for s in scored if not s.correct and not s.silent_error][:6],
     }

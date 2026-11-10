@@ -32,22 +32,16 @@ def run(ctx) -> Outcome:
             f"{len(missing)} submitted request(s) do not record the rule and version they were decided under, e.g. {missing[0]}",
         )
     po_missing = db.execute(
-        text(
-            "select count(*) from po where approval_round >= 1 and (rule_code is null or rule_version is null)"
-        )
+        text("select count(*) from po where approval_round >= 1 and (rule_code is null or rule_version is null)")
     ).scalar_one()
     if po_missing:
-        out.find(
-            "high", f"{po_missing} submitted order(s) do not record their rule version"
-        )
+        out.find("high", f"{po_missing} submitted order(s) do not record their rule version")
 
     def band_holds() -> tuple[int, int]:
         ok = bad = 0
         for no, value, code, ver, _ in decided:
             row = db.execute(
-                text(
-                    "select min_value, max_value from approval_rule where rule_code = :c and version = :v"
-                ),
+                text("select min_value, max_value from approval_rule where rule_code = :c and version = :v"),
                 {"c": code, "v": ver},
             ).first()
             if row and row[0] <= value <= row[1]:
@@ -66,11 +60,7 @@ def run(ctx) -> Outcome:
     # the company changes its rules: version 3 of every request rule starts tomorrow, with a different chain and band
     switch = date(2026, 11, 7)
     for r in (
-        db.execute(
-            text(
-                "select * from approval_rule where document = 'request' and effective_to is null"
-            )
-        )
+        db.execute(text("select * from approval_rule where document = 'request' and effective_to is null"))
         .mappings()
         .all()
     ):
@@ -105,9 +95,7 @@ def run(ctx) -> Outcome:
         for s in snapshot
     )
     same_requests = db.execute(
-        text(
-            "select count(*) from request where approval_round >= 1 and rule_version is not null"
-        )
+        text("select count(*) from request where approval_round >= 1 and rule_version is not null")
     ).scalar_one() == len(decided)
 
     # evaluating a past date still finds the old version; a new submission finds the new one
@@ -168,9 +156,7 @@ def run(ctx) -> Outcome:
             "changing the rule table altered a version that decisions were made under",
         )
     if not same_requests:
-        out.find(
-            "high", "changing the rule table altered what decided requests recorded"
-        )
+        out.find("high", "changing the rule table altered what decided requests recorded")
     if reproduced != total:
         out.find(
             "high",

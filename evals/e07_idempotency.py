@@ -90,9 +90,7 @@ def run(ctx) -> Outcome:
         for key, seqs in by_series.items():
             if sorted(seqs) != list(range(1, len(seqs) + 1)):
                 gaps.append(f"{doc} {key}: {sorted(seqs)[:8]}...")
-    rfq_seqs = sorted(
-        int(n.rsplit("-", 1)[1]) for (n,) in db.execute(text("select no from rfq"))
-    )
+    rfq_seqs = sorted(int(n.rsplit("-", 1)[1]) for (n,) in db.execute(text("select no from rfq")))
     if rfq_seqs != list(range(1, len(rfq_seqs) + 1)):
         gaps.append(f"rfq: {rfq_seqs[:10]}")
     if gaps:

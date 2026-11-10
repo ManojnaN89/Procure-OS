@@ -41,7 +41,10 @@ def run(ctx) -> Outcome:
     buyer, store = world.headers("Buyer"), world.headers("Store")
 
     # the oracle's own reading of the dataset
-    items = {r["code"]: dict(r, inspection_required="true" if r["code"] in flagged else r["inspection_required"]) for r in rows("master", "item")}
+    items = {
+        r["code"]: dict(r, inspection_required="true" if r["code"] in flagged else r["inspection_required"])
+        for r in rows("master", "item")
+    }
     tolerance: dict[str, Fraction] = {}
     for r in rows("master", "tolerance"):
         if r["key"] == "receipt_over_pct":
@@ -66,9 +69,11 @@ def run(ctx) -> Outcome:
 
     # not-sent orders cannot be received
     refused_wrong = []
-    for (no, status) in db.execute(text("select no, status from po where status <> 'sent' limit 8")).all():
+    for no, status in db.execute(text("select no, status from po where status <> 'sent' limit 8")).all():
         before = db.execute(text("select count(*) from goods_receipt")).scalar_one()
-        r = client.post(f"/api/purchase-orders/{no}/receive", json={"lines": [{"line_no": 1, "qty_received": "1"}]}, headers=store)
+        r = client.post(
+            f"/api/purchase-orders/{no}/receive", json={"lines": [{"line_no": 1, "qty_received": "1"}]}, headers=store
+        )
         if r.status_code != 409 or db.execute(text("select count(*) from goods_receipt")).scalar_one() != before:
             refused_wrong.append(f"{no} ({status}) -> {r.status_code}")
     if refused_wrong:
@@ -77,7 +82,10 @@ def run(ctx) -> Outcome:
     # stock before
     def on_hand() -> dict[tuple[str, str], Fraction]:
         db.expire_all()
-        return {(i, loc): Fraction(q) for i, loc, q in db.execute(text("select item_code, location_code, on_hand from stock_level")).all()}
+        return {
+            (i, loc): Fraction(q)
+            for i, loc, q in db.execute(text("select item_code, location_code, on_hand from stock_level")).all()
+        }
 
     before_stock = on_hand()
     expected_stock: dict[tuple[str, str], Fraction] = defaultdict(Fraction)
@@ -121,7 +129,10 @@ def run(ctx) -> Outcome:
                 too_much = top + Decimal("0.0001")
                 before = db.execute(text("select count(*) from goods_receipt")).scalar_one()
                 r = post(po, line, too_much)
-                if r.status_code != 409 or db.execute(text("select count(*) from goods_receipt")).scalar_one() != before:
+                if (
+                    r.status_code != 409
+                    or db.execute(text("select count(*) from goods_receipt")).scalar_one() != before
+                ):
                     wrong.append(f"{po}/{line}: {too_much} (limit {top}) was not refused: {r.status_code}")
             r = post(po, line, top)
             if r.status_code != 200:
@@ -136,7 +147,10 @@ def run(ctx) -> Outcome:
             for r in (r1, r2):
                 if r is not None and r.status_code != 200:
                     wrong.append(f"{po}/{line} part receipt answered {r.status_code} {r.text[:80]}")
-            credit(Fraction(first if r1 is not None and r1.status_code == 200 else 0) + Fraction(rest if r2 is not None and r2.status_code == 200 else 0))
+            credit(
+                Fraction(first if r1 is not None and r1.status_code == 200 else 0)
+                + Fraction(rest if r2 is not None and r2.status_code == 200 else 0)
+            )
         elif kind == "reject":
             bad = half_up4(Fraction(ordered) / 4)
             r = post(po, line, ordered, rejected=bad)
@@ -153,12 +167,24 @@ def run(ctx) -> Outcome:
                 continue
             gr = r.json()["receipt"]
             stock_now = on_hand()
-            if stock_now.get((item_code, loc), Fraction(0)) != before_stock.get((item_code, loc), Fraction(0)) + expected_stock[(item_code, loc)]:
+            if (
+                stock_now.get((item_code, loc), Fraction(0))
+                != before_stock.get((item_code, loc), Fraction(0)) + expected_stock[(item_code, loc)]
+            ):
                 wrong.append(f"{po}/{line}: stock moved before the inspection")
             bad = half_up4(Fraction(ordered) / 5)
             ins = client.post(
                 f"/api/receipts/{gr}/inspect",
-                json={"lines": [{"line_no": line, "qty_accepted": str(ordered - bad), "qty_rejected": str(bad), "reason": "Out of spec"}]},
+                json={
+                    "lines": [
+                        {
+                            "line_no": line,
+                            "qty_accepted": str(ordered - bad),
+                            "qty_rejected": str(bad),
+                            "reason": "Out of spec",
+                        }
+                    ]
+                },
                 headers=store,
             )
             if ins.status_code != 200:
@@ -177,12 +203,16 @@ def run(ctx) -> Outcome:
         moved = after_stock.get(k, Fraction(0)) - before_stock.get(k, Fraction(0))
         if moved != expected_stock.get(k, Fraction(0)):
             stock_diffs.append(f"{k}: stock moved {float(moved)}, expected {float(expected_stock.get(k, 0))}")
-    out.metrics["stock positions changed"] = len([k for k in after_stock if after_stock[k] != before_stock.get(k, Fraction(0))])
+    out.metrics["stock positions changed"] = len(
+        [k for k in after_stock if after_stock[k] != before_stock.get(k, Fraction(0))]
+    )
     if stock_diffs:
         out.find("high", f"{len(stock_diffs)} stock position(s) differ from what was accepted; first: {stock_diffs[0]}")
 
     line_diffs, status_diffs = [], []
-    for po, line, qty, received, status in db.execute(text("select po_no, line_no, qty, received_qty, status from po_line")).all():
+    for po, line, qty, received, status in db.execute(
+        text("select po_no, line_no, qty, received_qty, status from po_line")
+    ).all():
         want = expected_accepted.get((po, line), Fraction(0))
         if Fraction(received) != want:
             line_diffs.append(f"{po}/{line}: received_qty {received}, expected {float(want)}")
@@ -192,14 +222,28 @@ def run(ctx) -> Outcome:
         if not want_status and status not in ("open", "cancelled"):
             status_diffs.append(f"{po}/{line}: {status}, expected open")
     if line_diffs:
-        out.find("high", f"{len(line_diffs)} order line(s) have a received quantity that differs from what was accepted; first: {line_diffs[0]}")
+        out.find(
+            "high",
+            f"{len(line_diffs)} order line(s) have a received quantity that differs from what was accepted; first: {line_diffs[0]}",
+        )
     if status_diffs:
         out.find("high", f"{len(status_diffs)} line status(es) are wrong; first: {status_diffs[0]}")
 
     order_diffs = []
-    for no, status in db.execute(text("select no, status from po where status in ('sent', 'part_received', 'received')")).all():
-        statuses = [r[0] for r in db.execute(text("select status from po_line where po_no = :n and status <> 'cancelled'"), {"n": no})]
-        want = "received" if statuses and all(s == "received" for s in statuses) else ("part_received" if any(s in ("received", "part_received") for s in statuses) else "sent")
+    for no, status in db.execute(
+        text("select no, status from po where status in ('sent', 'part_received', 'received')")
+    ).all():
+        statuses = [
+            r[0]
+            for r in db.execute(
+                text("select status from po_line where po_no = :n and status <> 'cancelled'"), {"n": no}
+            )
+        ]
+        want = (
+            "received"
+            if statuses and all(s == "received" for s in statuses)
+            else ("part_received" if any(s in ("received", "part_received") for s in statuses) else "sent")
+        )
         if status != want:
             order_diffs.append(f"{no}: {status}, expected {want}")
     if order_diffs:
@@ -207,19 +251,32 @@ def run(ctx) -> Outcome:
 
     # the books agree with themselves
     sums = db.execute(
-        text(
-            "select l.po_no, l.po_line_no, sum(coalesce(l.qty_accepted, 0)) from gr_line l group by 1, 2"
-        )
+        text("select l.po_no, l.po_line_no, sum(coalesce(l.qty_accepted, 0)) from gr_line l group by 1, 2")
     ).all()
-    mismatched = [f"{p}/{ln}" for p, ln, s in sums if Fraction(db.execute(text("select received_qty from po_line where po_no = :p and line_no = :l"), {"p": p, "l": ln}).scalar_one()) != Fraction(s)]
+    mismatched = [
+        f"{p}/{ln}"
+        for p, ln, s in sums
+        if Fraction(
+            db.execute(
+                text("select received_qty from po_line where po_no = :p and line_no = :l"), {"p": p, "l": ln}
+            ).scalar_one()
+        )
+        != Fraction(s)
+    ]
     receipts = db.execute(text("select count(*) from goods_receipt")).scalar_one()
     audits = db.execute(text("select count(*) from audit_event where action = 'grn.post'")).scalar_one()
     numbers = [r[0] for r in db.execute(text("select no from goods_receipt")).all()]
     movements = db.execute(text("select count(*) from stock_movement where source = 'platform'")).scalar_one()
-    refs = db.execute(text("select count(*) from stock_movement where source = 'platform' and ref_doc not in (select no from goods_receipt)")).scalar_one()
+    refs = db.execute(
+        text(
+            "select count(*) from stock_movement where source = 'platform' and ref_doc not in (select no from goods_receipt)"
+        )
+    ).scalar_one()
     out.metrics["receipts posted"] = receipts
     if mismatched:
-        out.find("high", f"received quantities differ from the sum of accepted quantities on the receipts: {mismatched[:3]}")
+        out.find(
+            "high", f"received quantities differ from the sum of accepted quantities on the receipts: {mismatched[:3]}"
+        )
     if receipts != audits:
         out.find("high", f"{receipts} receipts but {audits} audit rows")
     if len(set(numbers)) != len(numbers):

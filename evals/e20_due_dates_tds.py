@@ -63,7 +63,9 @@ def run(ctx) -> Outcome:
             else:
                 due_bad += 1
                 sup = suppliers[r.by_no[key]["supplier_code"]]
-                wrong_due.append(f"{key}: due {due}, expected {due_want[key]} (terms {sup['payment_terms_code']}, msme {sup['msme_category']})")
+                wrong_due.append(
+                    f"{key}: due {due}, expected {due_want[key]} (terms {sup['payment_terms_code']}, msme {sup['msme_category']})"
+                )
         if key in tds_want:
             want = tds_want[key][1]
             if tds == want:

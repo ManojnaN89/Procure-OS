@@ -58,7 +58,9 @@ def run(ctx) -> Outcome:
             net_ok += 1  # which delivery an invoice is for (and so its tax and due date) is not in the data
         else:
             net_bad += 1
-            wrong.append(f"{key}: net {got.net}, dataset {p['amount']} (total {got.total}, tax {got.tds}, credit {got.credit})")
+            wrong.append(
+                f"{key}: net {got.net}, dataset {p['amount']} (total {got.total}, tax {got.tds}, credit {got.credit})"
+            )
         sup = suppliers[p["supplier_code"]]
         if sup["msme_category"] in ("micro", "small"):
             if got.interest == D(p["msme_interest"]):
@@ -84,7 +86,9 @@ def run(ctx) -> Outcome:
         out.find("high", "no invoice was approved for payment: nothing to run")
         return out
     run_date = last_due + timedelta(days=1)
-    before_blocked = {x[0] for x in db.execute(text("select no from invoice where status in ('blocked', 'cancelled', 'received')"))}
+    before_blocked = {
+        x[0] for x in db.execute(text("select no from invoice where status in ('blocked', 'cancelled', 'received')"))
+    }
     run_no = payment.propose_run(db, run_date, finance, window_days=0)
     total = D(db.execute(text("select total from payment_run where no = :n"), {"n": run_no}).scalar_one())
     out.metrics["invoices in the run"] = db.execute(
@@ -107,8 +111,12 @@ def run(ctx) -> Outcome:
     file_total = sum((D(x["amount"]) for x in parsed), D(0))
     if file_total != total:
         out.find("high", f"the bank file totals {file_total} but the approved run is {total}")
-    pay_rows = db.execute(text("select no, supplier_code, amount from payment where run_no = :n order by no"), {"n": run_no}).all()
-    if {x["payment_no"] for x in parsed} != {x[0] for x in pay_rows} or any(D(x["amount"]) != D(a) for x, (_, _, a) in zip(parsed, pay_rows, strict=True)):
+    pay_rows = db.execute(
+        text("select no, supplier_code, amount from payment where run_no = :n order by no"), {"n": run_no}
+    ).all()
+    if {x["payment_no"] for x in parsed} != {x[0] for x in pay_rows} or any(
+        D(x["amount"]) != D(a) for x, (_, _, a) in zip(parsed, pay_rows, strict=True)
+    ):
         out.find("high", "the bank file does not list the payments of the approved run one for one")
 
     # small suppliers first
@@ -116,7 +124,15 @@ def run(ctx) -> Outcome:
     if msme_flags != sorted(msme_flags, reverse=True):
         out.find("high", "a supplier that is not a small enterprise is paid before a small one in the run")
     # nothing blocked, cancelled or copied is in it, and nothing twice
-    in_run = [x[0] for x in db.execute(text("select a.invoice_no from payment_allocation a join payment p on p.no = a.payment_no where p.run_no = :n"), {"n": run_no})]
+    in_run = [
+        x[0]
+        for x in db.execute(
+            text(
+                "select a.invoice_no from payment_allocation a join payment p on p.no = a.payment_no where p.run_no = :n"
+            ),
+            {"n": run_no},
+        )
+    ]
     if set(in_run) & before_blocked:
         out.find("high", f"{len(set(in_run) & before_blocked)} blocked, cancelled or copied invoice(s) are in the run")
     if len(in_run) != len(set(in_run)):
@@ -129,7 +145,9 @@ def run(ctx) -> Outcome:
 
     closed = payment.mark_paid(db, run_no, finance, paid_on=run_date)
     db.commit()
-    unpaid = db.execute(text("select count(*) from invoice where no = any(:n) and status <> 'paid'"), {"n": in_run}).scalar_one()
+    unpaid = db.execute(
+        text("select count(*) from invoice where no = any(:n) and status <> 'paid'"), {"n": in_run}
+    ).scalar_one()
     if unpaid:
         out.find("high", f"{unpaid} invoice(s) of the run are not marked paid")
     # a closed order line was received, invoiced and paid in full
@@ -141,19 +159,27 @@ def run(ctx) -> Outcome:
     if bad_close:
         out.find("high", f"{bad_close} order line(s) were closed before everything was received and invoiced")
     open_closed = db.execute(
-        text("select count(*) from po where no = any(:c) and exists (select 1 from po_line l where l.po_no = po.no and l.status not in ('closed', 'cancelled'))"),
+        text(
+            "select count(*) from po where no = any(:c) and exists (select 1 from po_line l where l.po_no = po.no and l.status not in ('closed', 'cancelled'))"
+        ),
         {"c": list(closed)},
     ).scalar_one()
     if open_closed:
         out.find("high", f"{open_closed} order(s) are closed with lines still open")
     # budget actuals equal what was paid, before tax
     spent = D(db.execute(text("select coalesce(sum(amount), 0) from budget_actual")).scalar_one())
-    taxable_paid = D(db.execute(text("select coalesce(sum(taxable), 0) from invoice where status = 'paid' and type = 'invoice'")).scalar_one())
+    taxable_paid = D(
+        db.execute(
+            text("select coalesce(sum(taxable), 0) from invoice where status = 'paid' and type = 'invoice'")
+        ).scalar_one()
+    )
     if abs(spent - taxable_paid) > D("0.05"):
         out.find("high", f"budget actuals are {spent} but the paid invoices were {taxable_paid} before tax")
     # the second payment of the same invoice is impossible
     twice = db.execute(
-        text("select count(*) from (select invoice_no from payment_allocation a join invoice i on i.no = a.invoice_no where i.type = 'invoice' group by 1 having count(*) > 1) x")
+        text(
+            "select count(*) from (select invoice_no from payment_allocation a join invoice i on i.no = a.invoice_no where i.type = 'invoice' group by 1 having count(*) > 1) x"
+        )
     ).scalar_one()
     if twice:
         out.find("high", f"{twice} invoice(s) were allocated to more than one payment")

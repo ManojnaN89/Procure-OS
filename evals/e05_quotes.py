@@ -30,20 +30,9 @@ def run(ctx) -> Outcome:
     rng = random.Random(55)
     items = {r["code"]: r for r in rows("master", "item") if r["stocked"] == "true"}
     category = "MRO"
-    category_items = [c for c, r in items.items() if r["category_code"] == category][
-        :30
-    ]
-    suppliers = [
-        r["supplier_code"]
-        for r in rows("master", "supplier_category")
-        if r["category_code"] == category
-    ][:6]
-    min_quotes = int(
-        next(
-            r["min_quotes"] for r in rows("master", "category") if r["code"] == category
-        )
-        or 2
-    )
+    category_items = [c for c, r in items.items() if r["category_code"] == category][:30]
+    suppliers = [r["supplier_code"] for r in rows("master", "supplier_category") if r["category_code"] == category][:6]
+    min_quotes = int(next(r["min_quotes"] for r in rows("master", "category") if r["code"] == category) or 2)
     buyer = sod.user(world.logins["Buyer"])
     db.execute(
         text(
@@ -67,9 +56,7 @@ def run(ctx) -> Outcome:
             {"n": req_no},
         )
         db.execute(
-            text(
-                "insert into rfq (no, request_no, category_code, due_date, status) values (:r, :q, :c, :d, 'sent')"
-            ),
+            text("insert into rfq (no, request_no, category_code, due_date, status) values (:r, :q, :c, :d, 'sent')"),
             {
                 "r": rfq_no,
                 "q": req_no,
@@ -86,14 +73,8 @@ def run(ctx) -> Outcome:
             qty[n] = Decimal(rng.randint(1, 60))
             before = D(it["gst_rate_before"]) if it["gst_rate_before"] else None
             after = D(it["gst_rate_after"]) if it["gst_rate_after"] else None
-            changed = (
-                date.fromisoformat(it["gst_rate_change_date"])
-                if it["gst_rate_change_date"]
-                else None
-            )
-            expected_rate[n] = current_gst_rate(
-                before, after, changed, lib.TODAY
-            ) or Decimal(18)
+            changed = date.fromisoformat(it["gst_rate_change_date"]) if it["gst_rate_change_date"] else None
+            expected_rate[n] = current_gst_rate(before, after, changed, lib.TODAY) or Decimal(18)
             db.execute(
                 text(
                     "insert into request_line (request_no, line_no, item_code, qty, uom, category_code, need_by, est_price, status) values (:r, :n, :i, :q, 'NOS', :c, :nb, :e, 'sourcing')"
@@ -131,9 +112,7 @@ def run(ctx) -> Outcome:
         invited = rng.sample(suppliers, k=rng.randint(2, min(5, len(suppliers))))
         for s in invited:
             db.execute(
-                text(
-                    "insert into rfq_supplier (rfq_no, supplier_code, email, invited_at) values (:r, :s, :e, now())"
-                ),
+                text("insert into rfq_supplier (rfq_no, supplier_code, email, invited_at) values (:r, :s, :e, now())"),
                 {"r": rfq_no, "s": s, "e": f"{s.lower()}@eval.example"},
             )
         db.commit()
@@ -145,18 +124,14 @@ def run(ctx) -> Outcome:
             for n in est:
                 if rng.random() < 0.15:
                     continue  # a partial quote
-                price = (
-                    est[n] * Decimal(str(round(rng.uniform(0.5, 1.7), 3)))
-                ).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP) or Decimal("0.01")
+                price = (est[n] * Decimal(str(round(rng.uniform(0.5, 1.7), 3)))).quantize(
+                    Decimal("0.01"), rounding=ROUND_HALF_UP
+                ) or Decimal("0.01")
                 disc = Decimal(rng.choice([0, 0, 0, 2, 5, 12]))
                 rate = (
                     expected_rate[n]
                     if rng.random() > 0.2
-                    else Decimal(
-                        rng.choice(
-                            [r for r in (5, 12, 28) if Decimal(r) != expected_rate[n]]
-                        )
-                    )
+                    else Decimal(rng.choice([r for r in (5, 12, 28) if Decimal(r) != expected_rate[n]]))
                 )
                 days = rng.randint(1, 30)
                 moq = Decimal(rng.randint(1, 80)) if rng.random() < 0.2 else None
@@ -171,21 +146,14 @@ def run(ctx) -> Outcome:
                     )
                 )
                 late = days > need_in
-                flags = (
-                    (valid < lib.TODAY)
-                    + (moq is not None and qty[n] < moq)
-                    + late
-                    + (rate != expected_rate[n])
-                )
+                flags = (valid < lib.TODAY) + (moq is not None and qty[n] < moq) + late + (rate != expected_rate[n])
                 offers[n].append(
                     {
                         "supplier": s,
                         "net": net(price, disc),
                         "days": days,
                         "compliant": flags == 0,
-                        "value": (qty[n] * net(price, disc)).quantize(
-                            Decimal("0.01"), rounding=ROUND_HALF_UP
-                        ),
+                        "value": (qty[n] * net(price, disc)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP),
                     }
                 )
             if lines:
@@ -212,15 +180,10 @@ def run(ctx) -> Outcome:
                 o["supplier"]: o["compliant"] for o in offs
             }
             order_ok += [o.supplier_code for o in g.offers] == [
-                o["supplier"]
-                for o in sorted(
-                    offs, key=lambda o: (o["net"], o["days"], o["supplier"])
-                )
+                o["supplier"] for o in sorted(offs, key=lambda o: (o["net"], o["days"], o["supplier"]))
             ]
             if g.recommended != want:
-                bad.append(
-                    f"{rfq_no} line {n}: platform recommends {g.recommended}, oracle {want}"
-                )
+                bad.append(f"{rfq_no} line {n}: platform recommends {g.recommended}, oracle {want}")
             for o in g.offers:
                 mine = next(x for x in offs if x["supplier"] == o.supplier_code)
                 if o.net_price != mine["net"] or o.value != mine["value"]:
@@ -229,18 +192,14 @@ def run(ctx) -> Outcome:
                     )
         # the award rule: pick a random supplier for each line that has an offer
         picks = {
-            n: rng.choice(
-                [o["supplier"] for o in offs]
-                + ([recommended[n]] * 3 if recommended[n] else [])
-            )
+            n: rng.choice([o["supplier"] for o in offs] + ([recommended[n]] * 3 if recommended[n] else []))
             for n, offs in offers.items()
             if offs
         }
         if not picks:
             continue
         needs_reason = (comp.quotes_received < min_quotes) or any(
-            picks[n] != recommended[n]
-            or not next(o for o in offers[n] if o["supplier"] == picks[n])["compliant"]
+            picks[n] != recommended[n] or not next(o for o in offers[n] if o["supplier"] == picks[n])["compliant"]
             for n in picks
         )
         award_cases += 1

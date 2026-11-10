@@ -29,21 +29,11 @@ def oracle(
         if r["item_code"] != item or r["uom"] != uom or not r["contract_code"]:
             continue
         c = contracts.get(r["contract_code"])
-        if (
-            not c
-            or c["status"] != "active"
-            or suppliers[r["supplier_code"]]["status"] != "active"
-        ):
+        if not c or c["status"] != "active" or suppliers[r["supplier_code"]]["status"] != "active":
             continue
-        if not (
-            d(c["valid_from"]) <= on
-            and (d(c["valid_to"]) is None or on <= d(c["valid_to"]))
-        ):
+        if not (d(c["valid_from"]) <= on and (d(c["valid_to"]) is None or on <= d(c["valid_to"]))):
             continue
-        if not (
-            d(r["valid_from"]) <= on
-            and (d(r["valid_to"]) is None or on <= d(r["valid_to"]))
-        ):
+        if not (d(r["valid_from"]) <= on and (d(r["valid_to"]) is None or on <= d(r["valid_to"]))):
             continue
         if D(r["min_qty"], "0") > qty:
             continue
@@ -77,9 +67,7 @@ def run(ctx) -> Outcome:
     contracts = {r["code"]: r for r in rows("master", "contract")}
     suppliers = {r["code"]: r for r in rows("master", "supplier")}
     items = [r for r in rows("master", "item") if r["stocked"] == "true"]
-    qtys = [
-        Decimal(q) for q in (["1", "50"] if ctx.quick else ["1", "10", "100", "1000"])
-    ]
+    qtys = [Decimal(q) for q in (["1", "50"] if ctx.quick else ["1", "10", "100", "1000"])]
     dates = (
         [date(2026, 11, 6), date(2025, 12, 31)]
         if ctx.quick
@@ -99,22 +87,14 @@ def run(ctx) -> Outcome:
         for qty in qtys:
             for on in dates:
                 want = oracle(prices, contracts, suppliers, item["code"], uom, qty, on)
-                pick = pick_contract_price(
-                    service.contract_options(db, item["code"], uom, on), qty
-                )
-                got = (
-                    (pick.supplier_code, pick.contract_code, pick.price)
-                    if pick
-                    else None
-                )
+                pick = pick_contract_price(service.contract_options(db, item["code"], uom, on), qty)
+                got = (pick.supplier_code, pick.contract_code, pick.price) if pick else None
                 cases += 1
                 on_contract += want is not None
                 if got == want:
                     agree += 1
                 else:
-                    bad.append(
-                        f"{item['code']} qty {qty} on {on}: platform {got}, oracle {want}"
-                    )
+                    bad.append(f"{item['code']} qty {qty} on {on}: platform {got}, oracle {want}")
     out.metrics = {
         "items": len(items),
         "cases": cases,

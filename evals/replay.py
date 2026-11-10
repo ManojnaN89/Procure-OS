@@ -153,7 +153,9 @@ def replay(
                 proposals.approve(db, pid, owner)
                 payment.generate_file(db, run, finance)
                 payment.mark_paid(db, run, finance, paid_on=on)
-                advance_payment[key] = db.execute(text("select no from payment where run_no = :r"), {"r": run}).scalar_one()
+                advance_payment[key] = db.execute(
+                    text("select no from payment where run_no = :r"), {"r": run}
+                ).scalar_one()
             except Exception as exc:  # noqa: BLE001 - recorded, and the eval reports it
                 db.rollback()
                 errors.append(f"advance {key}: {exc}")
@@ -227,11 +229,23 @@ def replay(
         entered[key] = done
         if release_blocked and done.status == "blocked" and r["status"] not in ("cancelled", "received", "blocked"):
             # the dataset resolved this one by accepting it: a person other than the one who entered it releases the block
-            invoices._release(db, {"invoice": done.no, "reason": "accepted, as the dataset records"}, sod.user(world.logins["Finance"]))
+            invoices._release(
+                db,
+                {"invoice": done.no, "reason": "accepted, as the dataset records"},
+                sod.user(world.logins["Finance"]),
+            )
             released.add(key)
 
     return SimpleNamespace(
-        entered=entered, platform_no=platform_no, by_no=by_no, truth=truth, inv_lines=inv_lines,
-        receipt_lines=receipt_lines, receipts=receipts, errors=errors, released=released,
-        advance_payment=advance_payment, advance_rows=advance_rows,
+        entered=entered,
+        platform_no=platform_no,
+        by_no=by_no,
+        truth=truth,
+        inv_lines=inv_lines,
+        receipt_lines=receipt_lines,
+        receipts=receipts,
+        errors=errors,
+        released=released,
+        advance_payment=advance_payment,
+        advance_rows=advance_rows,
     )

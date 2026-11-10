@@ -16,18 +16,14 @@ QTY = Decimal("0.001")
 def expected() -> dict[tuple[str, str], dict]:
     """The lines replenishment should produce, worked out here from the files alone."""
     on_hand: dict[tuple[str, str], Decimal] = {
-        (r["item_code"], r["location_code"]): D(r["qty"])
-        for r in rows("master", "stock_opening")
+        (r["item_code"], r["location_code"]): D(r["qty"]) for r in rows("master", "stock_opening")
     }
     for m in rows("history", "stock_movement"):
         key = (m["item_code"], m["location_code"])
         sign = 1 if m["type"] in ("receipt", "transfer_in", "adjust") else -1
         on_hand[key] = on_hand.get(key, Decimal(0)) + sign * D(m["qty"])
     items = {r["code"]: r for r in rows("master", "item")}
-    conv = {
-        (r["item_code"], r["from_uom"], r["to_uom"]): D(r["factor"])
-        for r in rows("master", "uom_conversion")
-    }
+    conv = {(r["item_code"], r["from_uom"], r["to_uom"]): D(r["factor"]) for r in rows("master", "uom_conversion")}
     out: dict[tuple[str, str], dict] = {}
     for p in rows("master", "item_location"):
         key = (p["item_code"], p["location_code"])
@@ -49,11 +45,7 @@ def expected() -> dict[tuple[str, str], dict]:
         else:
             continue
         item = items[p["item_code"]]
-        if (
-            item["active"] != "true"
-            or not item["standard_price"]
-            or D(item["standard_price"]) <= 0
-        ):
+        if item["active"] != "true" or not item["standard_price"] or D(item["standard_price"]) <= 0:
             continue
         if policy == "minmax":
             need = (mx or Decimal(0)) - have
@@ -69,17 +61,13 @@ def expected() -> dict[tuple[str, str], dict]:
         if need == 0:
             continue
         step = QTY if factor == 1 else Decimal(1)
-        units = ((need / factor) / step).to_integral_value(
-            rounding=ROUND_CEILING
-        ) * step
+        units = ((need / factor) / step).to_integral_value(rounding=ROUND_CEILING) * step
         moq = D(item["moq"], "0")
         qty = max(units, moq)
         out[key] = {
             "qty": qty,
             "uom": buy_uom,
-            "value": (qty * D(item["standard_price"])).quantize(
-                Decimal("0.01"), rounding=ROUND_HALF_UP
-            ),
+            "value": (qty * D(item["standard_price"])).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP),
             "group": (
                 p["location_code"],
                 item["category_code"],
@@ -109,17 +97,9 @@ def run(ctx) -> Outcome:
 
     missing = sorted(set(want) - set(got))
     extra = sorted(set(got) - set(want))
-    exact = sum(
-        1
-        for k in set(want) & set(got)
-        if want[k]["qty"] == got[k]["qty"] and want[k]["uom"] == got[k]["uom"]
-    )
-    value_ok = sum(
-        1 for k in set(want) & set(got) if want[k]["value"] == got[k]["value"]
-    )
-    group_ok = sum(
-        1 for k in set(want) & set(got) if want[k]["group"] == got[k]["group"]
-    )
+    exact = sum(1 for k in set(want) & set(got) if want[k]["qty"] == got[k]["qty"] and want[k]["uom"] == got[k]["uom"])
+    value_ok = sum(1 for k in set(want) & set(got) if want[k]["value"] == got[k]["value"])
+    group_ok = sum(1 for k in set(want) & set(got) if want[k]["group"] == got[k]["group"])
     both = len(set(want) & set(got))
     out.metrics = {
         "lines expected": len(want),
@@ -170,7 +150,5 @@ def run(ctx) -> Outcome:
     for g in (v["group"] for v in want.values()):
         by_group[g] += 1
     if len(by_group) != len(got_requests):
-        out.find(
-            "medium", f"expected {len(by_group)} requests, planned {len(got_requests)}"
-        )
+        out.find("medium", f"expected {len(by_group)} requests, planned {len(got_requests)}")
     return out

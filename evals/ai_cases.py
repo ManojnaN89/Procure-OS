@@ -53,17 +53,11 @@ def items_for_cases(n: int = 3) -> list[Item]:
     cat = [
         r
         for r in rows("master", "item")
-        if r["category_code"] == "MRO"
-        and r["stocked"] == "true"
-        and r["standard_price"]
+        if r["category_code"] == "MRO" and r["stocked"] == "true" and r["standard_price"]
     ]
     out = []
     for i, r in enumerate(cat[: n * 6]):
-        change = (
-            date.fromisoformat(r["gst_rate_change_date"])
-            if r["gst_rate_change_date"]
-            else None
-        )
+        change = date.fromisoformat(r["gst_rate_change_date"]) if r["gst_rate_change_date"] else None
         rate = current_gst_rate(
             D(r["gst_rate_before"]) if r["gst_rate_before"] else None,
             D(r["gst_rate_after"]) if r["gst_rate_after"] else None,
@@ -140,14 +134,9 @@ def build_cases(seed: int = 4, quick: bool = False) -> list[Case]:
 
     def pick(k: int) -> list[Item]:
         chosen = rng.sample(pool, k)
-        return [
-            Item(n, it.code, it.name, it.qty, it.est, it.gst)
-            for n, it in enumerate(chosen, start=1)
-        ]
+        return [Item(n, it.code, it.name, it.qty, it.est, it.gst) for n, it in enumerate(chosen, start=1)]
 
-    def add(
-        style: str, items: list[Item], body: str, truth: Truth, tricky: bool = False
-    ) -> None:
+    def add(style: str, items: list[Item], body: str, truth: Truth, tricky: bool = False) -> None:
         nonlocal counter
         counter += 1
         cases.append(Case(f"{style}-{counter:02d}", style, items, body, truth, tricky))
@@ -158,9 +147,7 @@ def build_cases(seed: int = 4, quick: bool = False) -> list[Case]:
         lines, truth = [], Truth("quote")
         for it in items:
             p, days = price_for(rng, it), rng.choice([3, 5, 7, 10])
-            lines.append(
-                f"{it.name} - {inr(p, fmt)} per piece, GST {it.gst:f}% extra. Delivery within {days} days."
-            )
+            lines.append(f"{it.name} - {inr(p, fmt)} per piece, GST {it.gst:f}% extra. Delivery within {days} days.")
             truth.lines[it.line_no] = {
                 "price": p,
                 "discount": None,
@@ -181,9 +168,7 @@ def build_cases(seed: int = 4, quick: bool = False) -> list[Case]:
         truth, rows_txt = Truth("quote"), []
         for it in items:
             p, days = price_for(rng, it), rng.choice([4, 6, 8])
-            rows_txt.append(
-                f"{it.line_no} | {it.name} | {it.qty:f} | {p} | {it.gst:f}% | {days} days"
-            )
+            rows_txt.append(f"{it.line_no} | {it.name} | {it.qty:f} | {p} | {it.gst:f}% | {days} days")
             truth.lines[it.line_no] = {
                 "price": p,
                 "discount": None,
@@ -193,9 +178,7 @@ def build_cases(seed: int = 4, quick: bool = False) -> list[Case]:
         add(
             "table",
             items,
-            "S.No | Item | Qty | Rate (Rs) | GST | Lead time\n"
-            + "\n".join(rows_txt)
-            + "\nPrices exclusive of taxes.",
+            "S.No | Item | Qty | Rate (Rs) | GST | Lead time\n" + "\n".join(rows_txt) + "\nPrices exclusive of taxes.",
             truth,
         )
 
@@ -214,22 +197,16 @@ def build_cases(seed: int = 4, quick: bool = False) -> list[Case]:
         add(
             "by-code",
             items,
-            "Hi,\nRates for your requirement:\n"
-            + "\n".join(parts)
-            + "\nDelivery ex-stock.",
+            "Hi,\nRates for your requirement:\n" + "\n".join(parts) + "\nDelivery ex-stock.",
             truth,
         )
 
-    for _ in range(
-        3
-    ):  # a discount stated separately: the model must not compute the net
+    for _ in range(3):  # a discount stated separately: the model must not compute the net
         items = pick(2)
         truth, parts = Truth("quote"), []
         for it in items:
             p, disc = price_for(rng, it), rng.choice([5, 10, 12])
-            parts.append(
-                f"{it.name}: list price Rs {p}, our discount {disc}%, GST {it.gst:f}% extra."
-            )
+            parts.append(f"{it.name}: list price Rs {p}, our discount {disc}%, GST {it.gst:f}% extra.")
             truth.lines[it.line_no] = {
                 "price": p,
                 "discount": Decimal(disc),
@@ -248,12 +225,8 @@ def build_cases(seed: int = 4, quick: bool = False) -> list[Case]:
         items = pick(2)
         truth, parts = Truth("quote"), []
         for it in items:
-            incl = (price_for(rng, it) * (1 + it.gst / 100)).quantize(
-                Decimal("0.01"), rounding=ROUND_HALF_UP
-            )
-            parts.append(
-                f"{it.name} @ Rs {incl} per piece inclusive of {it.gst:f}% GST."
-            )
+            incl = (price_for(rng, it) * (1 + it.gst / 100)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+            parts.append(f"{it.name} @ Rs {incl} per piece inclusive of {it.gst:f}% GST.")
             truth.lines[it.line_no] = {
                 "price": exclusive(incl, it.gst),
                 "discount": None,
@@ -294,9 +267,7 @@ def build_cases(seed: int = 4, quick: bool = False) -> list[Case]:
         truth, parts = Truth("quote"), []
         for it in items:
             p, days = price_for(rng, it), rng.choice([5, 9])
-            parts.append(
-                f"{it.name} Rs {p} per piece, GST {it.gst:f}% extra, {days} days"
-            )
+            parts.append(f"{it.name} Rs {p} per piece, GST {it.gst:f}% extra, {days} days")
             truth.lines[it.line_no] = {
                 "price": p,
                 "discount": None,

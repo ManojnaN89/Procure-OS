@@ -56,12 +56,8 @@ def run(ctx) -> Outcome:
     bad_net = bad_line = bad_identity = bad_total = 0
     examples: list[str] = []
     for _ in range(n):
-        qty = Decimal(rng.randint(1, 5_000_000)) / Decimal(
-            10 ** rng.choice([0, 1, 2, 3])
-        )
-        price = Decimal(rng.randint(1, 900_000_000)) / Decimal(
-            10 ** rng.choice([2, 3, 4])
-        )
+        qty = Decimal(rng.randint(1, 5_000_000)) / Decimal(10 ** rng.choice([0, 1, 2, 3]))
+        price = Decimal(rng.randint(1, 900_000_000)) / Decimal(10 ** rng.choice([2, 3, 4]))
         discount = Decimal(rng.randint(0, 4000)) / 100
         rate = rng.choice(rates)
         supplier, place = rng.choice(states), rng.choice(states)
@@ -69,9 +65,7 @@ def run(ctx) -> Outcome:
         net = net_unit_price(price, discount)
         if net != oracle_net(price, discount):
             bad_net += 1
-            examples.append(
-                f"net price {price} less {discount}%: got {net}, expected {oracle_net(price, discount)}"
-            )
+            examples.append(f"net price {price} less {discount}%: got {net}, expected {oracle_net(price, discount)}")
         got = line_amounts(qty, net, rate, supplier, place, Registration(reg))
         want = oracle_line(qty, net, rate, supplier, place, reg)
         if (got.taxable, got.cgst, got.sgst, got.igst) != want:
@@ -105,10 +99,7 @@ def run(ctx) -> Outcome:
             for _ in range(rng.randint(1, 12))
         ]
         t = order_totals(parts)
-        if (
-            t.taxable != sum((p.taxable for p in parts), Decimal(0))
-            or t.total != t.taxable + t.cgst + t.sgst + t.igst
-        ):
+        if t.taxable != sum((p.taxable for p in parts), Decimal(0)) or t.total != t.taxable + t.cgst + t.sgst + t.igst:
             bad_total += 1
     out.metrics = {
         "random lines": n,

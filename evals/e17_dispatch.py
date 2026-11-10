@@ -59,7 +59,10 @@ def run(ctx) -> Outcome:
     if len(box.sent) != mails_before:
         out.find("high", "an email went out for an order that was not approved")
     if refused_wrong:
-        out.find("high", f"{len(refused_wrong)} order(s) that are not approved were not refused with 409: {refused_wrong[:3]}")
+        out.find(
+            "high",
+            f"{len(refused_wrong)} order(s) that are not approved were not refused with 409: {refused_wrong[:3]}",
+        )
 
     # 2. every approved order is sent once, to the supplier's main contact, with exactly its amounts
     contacts: dict[str, list[dict]] = {}
@@ -89,11 +92,18 @@ def run(ctx) -> Outcome:
         mail = mails[0]
         if mail["to"].lower() != str(main_contact(po["supplier_code"])).lower():
             wrong_to.append(f"{no}: sent to {mail['to']}, expected {main_contact(po['supplier_code'])}")
-        lines = db.execute(text("select * from po_line where po_no = :n and status <> 'cancelled' order by line_no"), {"n": no}).mappings().all()
+        lines = (
+            db.execute(
+                text("select * from po_line where po_no = :n and status <> 'cancelled' order by line_no"), {"n": no}
+            )
+            .mappings()
+            .all()
+        )
         total_in_mail = re.search(r"Order total: (.+)", mail["body"])
         taxable_in_mail = re.search(r"Total before tax: (.+)", mail["body"])
         want_taxable = sum((Fraction(l["taxable"]) for l in lines), Fraction(0)) + sum(
-            (Fraction(c) for (c,) in db.execute(text("select amount from po_charge where po_no = :n"), {"n": no})), Fraction(0)
+            (Fraction(c) for (c,) in db.execute(text("select amount from po_charge where po_no = :n"), {"n": no})),
+            Fraction(0),
         )
         problems = []
         if not total_in_mail or money(total_in_mail.group(1)) != Decimal(po["total"]):
@@ -121,19 +131,41 @@ def run(ctx) -> Outcome:
         out.find("high", f"orders sent more than once: {twice[:2]}")
 
     # 3. acknowledgement: promised dates against need-by dates, counted by hand
-    sent_orders = [no for no in by_status.get("approved", []) if db.execute(text("select status from po where no = :n"), {"n": no}).scalar_one() == "sent"]
+    sent_orders = [
+        no
+        for no in by_status.get("approved", [])
+        if db.execute(text("select status from po where no = :n"), {"n": no}).scalar_one() == "sent"
+    ]
     ack_wrong, flagged = [], 0
     for i, no in enumerate(sent_orders[:25]):
-        need = [r["need_by"] for r in db.execute(text("select need_by from po_line where po_no = :n and status = 'open'"), {"n": no}).mappings() if r["need_by"]]
+        need = [
+            r["need_by"]
+            for r in db.execute(
+                text("select need_by from po_line where po_no = :n and status = 'open'"), {"n": no}
+            ).mappings()
+            if r["need_by"]
+        ]
         if not need:
             continue
         offset = [0, 3, 4, -5][i % 4]
         promised = min(need) + timedelta(days=offset)
-        r = client.post(f"/api/purchase-orders/{no}/acknowledge", json={"promised_date": promised.isoformat()}, headers=buyer)
+        r = client.post(
+            f"/api/purchase-orders/{no}/acknowledge", json={"promised_date": promised.isoformat()}, headers=buyer
+        )
         if r.status_code != 200:
             ack_wrong.append(f"{no}: acknowledge answered {r.status_code}")
             continue
-        want = sorted(n for n, d in enumerate(db.execute(text("select line_no, need_by from po_line where po_no = :n and status = 'open' order by line_no"), {"n": no}).all(), start=1) if d[1] and promised > d[1] + timedelta(days=3))
+        want = sorted(
+            n
+            for n, d in enumerate(
+                db.execute(
+                    text("select line_no, need_by from po_line where po_no = :n and status = 'open' order by line_no"),
+                    {"n": no},
+                ).all(),
+                start=1,
+            )
+            if d[1] and promised > d[1] + timedelta(days=3)
+        )
         got = len(r.json()["warnings"])
         flagged += got > 0
         if got != len(want):
@@ -161,7 +193,9 @@ def run(ctx) -> Outcome:
                 bad_overdue.append(f"sent {start}, checked {day}: platform {not (day > deadline)}")
     out.metrics["overdue day-checks"] = 4 * 12
     if bad_overdue:
-        out.find("high", f"overdue acknowledgement differs from the rule in {len(bad_overdue)} case(s): {bad_overdue[0]}")
+        out.find(
+            "high", f"overdue acknowledgement differs from the rule in {len(bad_overdue)} case(s): {bad_overdue[0]}"
+        )
 
     # 5. a blocked supplier or an unverified document stops the send
     ready = next(iter(by_status.get("approved", [])), None)
@@ -173,7 +207,10 @@ def run(ctx) -> Outcome:
         db.commit()
         blocked = client.post(f"/api/purchase-orders/{no}/send", headers=buyer)
         db.execute(text("update supplier set status = 'active' where code = :c"), {"c": sup})
-        db.execute(text("update supplier_document set verified = false where supplier_code = :c and doc_type = 'pan'"), {"c": sup})
+        db.execute(
+            text("update supplier_document set verified = false where supplier_code = :c and doc_type = 'pan'"),
+            {"c": sup},
+        )
         db.commit()
         unverified = client.post(f"/api/purchase-orders/{no}/send", headers=buyer)
         if blocked.status_code != 409 or unverified.status_code != 409 or len(box.sent) != before:

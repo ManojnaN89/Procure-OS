@@ -34,9 +34,7 @@ def environment() -> Iterator[str]:
     from p2p.platform.routing import clear_engine_cache
 
     real_url = get_settings().control_database_url
-    admin = create_engine(
-        make_url(real_url).set(database="postgres"), isolation_level="AUTOCOMMIT"
-    )
+    admin = create_engine(make_url(real_url).set(database="postgres"), isolation_level="AUTOCOMMIT")
     with admin.connect() as c:
         if c.execute(text("select 1 from pg_database where datname = :n"), {"n": CONTROL_DB}).first():
             # a run that was killed leaves its companies behind: drop them before the list of them is lost
@@ -48,11 +46,7 @@ def environment() -> Iterator[str]:
                 pass
         c.execute(text(f'drop database if exists "{CONTROL_DB}" with (force)'))
         c.execute(text(f'create database "{CONTROL_DB}"'))
-    url = (
-        make_url(real_url)
-        .set(database=CONTROL_DB)
-        .render_as_string(hide_password=False)
-    )
+    url = make_url(real_url).set(database=CONTROL_DB).render_as_string(hide_password=False)
     previous = os.environ.get("CONTROL_DATABASE_URL")
     os.environ["CONTROL_DATABASE_URL"] = url
     get_settings.cache_clear()
@@ -72,10 +66,7 @@ def environment() -> Iterator[str]:
         clear_engine_cache()
         tenants.reset_control_engines()
         with create_engine(url).connect() as c:
-            names = [
-                r[0]
-                for r in c.execute(text("select database_name from tenant_database"))
-            ]
+            names = [r[0] for r in c.execute(text("select database_name from tenant_database"))]
         with admin.connect() as c:
             for n in names:
                 c.execute(text(f'drop database if exists "{n}" with (force)'))

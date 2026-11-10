@@ -102,9 +102,7 @@ def simulate_supplier_quotes(state: State, rng: random.Random) -> None:
     """Every invited supplier except a random few replies with prices around our estimate."""
     db, w = state.world.db, state.world
     buyer = sod.user(w.logins["Buyer"])
-    for (rfq_no,) in db.execute(
-        text("select no from rfq where status = 'sent' order by no")
-    ).all():
+    for (rfq_no,) in db.execute(text("select no from rfq where status = 'sent' order by no")).all():
         lines = db.execute(
             text(
                 "select l.line_no, l.qty, l.item_code, rl.est_price, i.gst_rate_before, i.gst_rate_after, i.gst_rate_change_date, l.need_by "
@@ -116,17 +114,11 @@ def simulate_supplier_quotes(state: State, rng: random.Random) -> None:
         suppliers = [
             r[0]
             for r in db.execute(
-                text(
-                    "select supplier_code from rfq_supplier where rfq_no = :n order by 1"
-                ),
+                text("select supplier_code from rfq_supplier where rfq_no = :n order by 1"),
                 {"n": rfq_no},
             )
         ]
-        silent = (
-            set(rng.sample(suppliers, k=1))
-            if len(suppliers) >= 3 and rng.random() < 0.4
-            else set()
-        )
+        silent = set(rng.sample(suppliers, k=1)) if len(suppliers) >= 3 and rng.random() < 0.4 else set()
         from p2p.formulas.orders import current_gst_rate
 
         for s in suppliers:
@@ -140,13 +132,10 @@ def simulate_supplier_quotes(state: State, rng: random.Random) -> None:
                 continue
             qlines = []
             for line_no, qty, item, est, before, after, changed, need_by in lines:
-                price = (
-                    Decimal(est or 100)
-                    * Decimal(str(round(rng.uniform(0.85, 1.12), 3)))
-                ).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
-                rate = current_gst_rate(before, after, changed, lib.TODAY) or Decimal(
-                    18
+                price = (Decimal(est or 100) * Decimal(str(round(rng.uniform(0.85, 1.12), 3)))).quantize(
+                    Decimal("0.01"), rounding=ROUND_HALF_UP
                 )
+                rate = current_gst_rate(before, after, changed, lib.TODAY) or Decimal(18)
                 days = rng.randint(2, 9)
                 qlines.append(
                     quotes.QuoteLineInput(
@@ -173,9 +162,7 @@ def simulate_supplier_quotes(state: State, rng: random.Random) -> None:
         db.commit()
         if quotes.auto_award(db, w.slug, rfq_no, as_of=lib.TODAY) is None:
             comp = quotes.comparison(db, rfq_no, lib.TODAY)
-            choices = {
-                ln.rfq_line_no: ln.recommended for ln in comp.lines if ln.recommended
-            }
+            choices = {ln.rfq_line_no: ln.recommended for ln in comp.lines if ln.recommended}
             if choices:
                 quotes.award(
                     db,
@@ -194,9 +181,7 @@ def accept_variances(state: State) -> int:
     accepted = 0
     user = w.org_logins.get("U006") or next(iter(w.org_logins.values()))
     for (pid,) in db.execute(
-        text(
-            "select hold_proposal_id from po where hold_reason is not null and status = 'draft' order by no"
-        )
+        text("select hold_proposal_id from po where hold_reason is not null and status = 'draft' order by no")
     ).all():
         try:
             proposals.approve(db, int(pid), user)
@@ -261,10 +246,7 @@ def counts(db: Any) -> dict[str, int]:
         "email_message",
         "proposal",
     ]
-    return {
-        n: int(db.execute(text(f"select count(*) from {n}")).scalar_one())
-        for n in names
-    }
+    return {n: int(db.execute(text(f"select count(*) from {n}")).scalar_one()) for n in names}
 
 
 def get_state(ctx: Any) -> State:

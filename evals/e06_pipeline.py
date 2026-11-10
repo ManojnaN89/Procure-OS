@@ -61,9 +61,7 @@ def run(ctx) -> Outcome:
         s = sup[po["supplier_code"]]
         lines = (
             db.execute(
-                text(
-                    "select * from po_line where po_no = :n and status <> 'cancelled'"
-                ),
+                text("select * from po_line where po_no = :n and status <> 'cancelled'"),
                 {"n": po["no"]},
             )
             .mappings()
@@ -84,9 +82,7 @@ def run(ctx) -> Outcome:
                 line_bad += 1
             parts.append(want)
         charge_rate = max((ln["gst_rate"] for ln in lines), default=Decimal(0))
-        for ch in db.execute(
-            text("select * from po_charge where po_no = :n"), {"n": po["no"]}
-        ).mappings():
+        for ch in db.execute(text("select * from po_charge where po_no = :n"), {"n": po["no"]}).mappings():
             parts.append(
                 oracle_line(
                     Decimal(1),
@@ -116,23 +112,15 @@ def run(ctx) -> Outcome:
     # 3. every change left an audit row
     audit = Counter(r[0] for r in db.execute(text("select action from audit_event")))
     n_req, n_rfq, n_po = counts["request"], counts["rfq"], counts["po"]
-    submitted = db.execute(
-        text("select count(*) from request where approval_round >= 1")
-    ).scalar_one()
-    approved_reqs = db.execute(
-        text("select count(*) from request where status in ('approved', 'closed')")
-    ).scalar_one()
-    approved_pos = db.execute(
-        text("select count(*) from po where status = 'approved'")
-    ).scalar_one()
+    submitted = db.execute(text("select count(*) from request where approval_round >= 1")).scalar_one()
+    approved_reqs = db.execute(text("select count(*) from request where status in ('approved', 'closed')")).scalar_one()
+    approved_pos = db.execute(text("select count(*) from po where status = 'approved'")).scalar_one()
     expectations = {
         "request.create": n_req,
         "request.submit": submitted,
         "request.auto_approve + request.approved": approved_reqs,
         "rfq.create": n_rfq,
-        "rfq.send": db.execute(
-            text("select count(*) from rfq where status in ('sent', 'awarded')")
-        ).scalar_one(),
+        "rfq.send": db.execute(text("select count(*) from rfq where status in ('sent', 'awarded')")).scalar_one(),
         "quote.enter": counts["quote"],
         "po.create": n_po,
         "po.auto_approve + po.approved": approved_pos,
@@ -140,27 +128,20 @@ def run(ctx) -> Outcome:
     got = {
         "request.create": audit["request.create"],
         "request.submit": audit["request.submit"],
-        "request.auto_approve + request.approved": audit["request.auto_approve"]
-        + audit["request.approved"],
+        "request.auto_approve + request.approved": audit["request.auto_approve"] + audit["request.approved"],
         "rfq.create": audit["rfq.create"],
         "rfq.send": audit["rfq.send"],
         "quote.enter": audit["quote.enter"],
         "po.create": audit["po.create"],
-        "po.auto_approve + po.approved": audit["po.auto_approve"]
-        + audit["po.approved"],
+        "po.auto_approve + po.approved": audit["po.auto_approve"] + audit["po.approved"],
     }
     for k, want in expectations.items():
         if got[k] != want:
-            out.find(
-                "high", f"audit gap: {want} {k} expected, {got[k]} audit rows found"
-            )
+            out.find("high", f"audit gap: {want} {k} expected, {got[k]} audit rows found")
 
     # 4. only suppliers that may be asked were asked, once each
     sanctioned = {
-        n.lower()
-        for r in rows("master", "sanction_entry")
-        for n in [r["name"], *r["aliases"].split(";")]
-        if n
+        n.lower() for r in rows("master", "sanction_entry") for n in [r["name"], *r["aliases"].split(";")] if n
     }
     approved_for = defaultdict(set)
     for r in rows("master", "supplier_category"):
@@ -183,14 +164,8 @@ def run(ctx) -> Outcome:
             asked_wrong.append(f"{rfq_no}: {email} is not a contact of {supplier}")
         if row["legal_name"].lower() in sanctioned:
             asked_wrong.append(f"{rfq_no}: {supplier} is on the sanctions list")
-    dup = [
-        k
-        for k, v in Counter((m["to"], m["subject"]) for m in state.outbox.sent).items()
-        if v > 1
-    ]
-    invited_total = db.execute(
-        text("select count(*) from rfq_supplier where invited_at is not null")
-    ).scalar_one()
+    dup = [k for k, v in Counter((m["to"], m["subject"]) for m in state.outbox.sent).items() if v > 1]
+    invited_total = db.execute(text("select count(*) from rfq_supplier where invited_at is not null")).scalar_one()
     if asked_wrong:
         out.find(
             "high",
@@ -223,16 +198,11 @@ def run(ctx) -> Outcome:
         )
     ):
         want_on_order[(item, location)] += (base or 0) * max(qty - received, 0) / qty
-    got_on_order = {
-        (x.item_code, x.location_code): x.on_order
-        for x in stock_levels(db)
-        if x.on_order
-    }
+    got_on_order = {(x.item_code, x.location_code): x.on_order for x in stock_levels(db) if x.on_order}
     wrong_stock = [
         k
         for k in set(want_on_order) | set(got_on_order)
-        if abs(want_on_order.get(k, Decimal(0)) - got_on_order.get(k, Decimal(0)))
-        > Decimal("0.0001")
+        if abs(want_on_order.get(k, Decimal(0)) - got_on_order.get(k, Decimal(0))) > Decimal("0.0001")
     ]
     if wrong_stock:
         out.find(

@@ -79,7 +79,9 @@ def run(ctx) -> Outcome:
     # The dataset judges quantity against the one receipt an invoice belongs to; the platform (like standard ERP matching)
     # against everything accepted on the order line and not yet invoiced. They differ only where a line was delivered in
     # several parts, and the first such difference carries on to the invoices after it on the same line.
-    deliveries: Counter[tuple[str, str]] = Counter((g["po_no"], g["po_line_no"]) for lines_ in receipt_lines.values() for g in lines_)
+    deliveries: Counter[tuple[str, str]] = Counter(
+        (g["po_no"], g["po_line_no"]) for lines_ in receipt_lines.values() for g in lines_
+    )
 
     def explained(text_: str) -> bool:
         lines_ = inv_lines.get(text_.split()[0], [])
@@ -89,7 +91,10 @@ def run(ctx) -> Outcome:
     out.metrics["differences explained by part deliveries"] = len(wrong) - len(unexplained)
     out.notes.append("differences: " + " | ".join(wrong[:12]))
     if unexplained:
-        out.find("high", f"{len(unexplained)} verdict(s) differ from the dataset's answers for no part-delivery reason; first: {unexplained[0]}")
+        out.find(
+            "high",
+            f"{len(unexplained)} verdict(s) differ from the dataset's answers for no part-delivery reason; first: {unexplained[0]}",
+        )
     right = checked - len([w for w in wrong if "expected" in w and not explained(w)])
     out.metrics["verdict agrees % (part-delivery differences aside)"] = lib.pct(right, checked)
     if checked == 0:

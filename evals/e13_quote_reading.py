@@ -10,7 +10,9 @@ from lib import Outcome
 
 ID = "E13"
 TITLE = "Supplier emails are read into the right quotes, and when unsure the system asks a person"
-REQUIREMENT = "Plan step 8 and rule 2: the model reads, code checks; a wrong reading must never look clean (silent errors = 0)"
+REQUIREMENT = (
+    "Plan step 8 and rule 2: the model reads, code checks; a wrong reading must never look clean (silent errors = 0)"
+)
 
 
 def corrupt(reading, kind: str, rng: random.Random):
@@ -118,9 +120,7 @@ def run(ctx) -> Outcome:
         ]
         sl = h.summarise(live)
         out.metrics["LIVE model: exact %"] = sl["exact %"]
-        out.metrics["LIVE model: exact or safely refused %"] = sl[
-            "exact or safely refused %"
-        ]
+        out.metrics["LIVE model: exact or safely refused %"] = sl["exact or safely refused %"]
         out.metrics["LIVE model: silent errors"] = sl["silent errors"]
         out.metrics["LIVE model: sent to a person"] = sl["sent to a person"]
         out.metrics["LIVE model: intent right %"] = sl["intent right %"]

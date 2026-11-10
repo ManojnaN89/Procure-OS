@@ -7,7 +7,9 @@ from sqlalchemy import text
 
 ID = "E10"
 TITLE = "One company cannot see another company's data"
-REQUIREMENT = "Rule 6: one database per tenant; a request without tenant context is refused; tenant A cannot read tenant B"
+REQUIREMENT = (
+    "Rule 6: one database per tenant; a request without tenant context is refused; tenant A cannot read tenant B"
+)
 
 SECRET = "SECRET-OF-COMPANY-A"
 
@@ -22,15 +24,11 @@ def run(ctx) -> Outcome:
     da = a.db
     # records that exist only in company A, carrying a marker
     da.execute(
-        text(
-            "insert into item_category (code, name) values ('EVC', :s) on conflict do nothing"
-        ),
+        text("insert into item_category (code, name) values ('EVC', :s) on conflict do nothing"),
         {"s": SECRET},
     )
     da.execute(
-        text(
-            "insert into supplier (code, legal_name, status) values ('EV-A-SUP', :s, 'active')"
-        ),
+        text("insert into supplier (code, legal_name, status) values ('EV-A-SUP', :s, 'active')"),
         {"s": SECRET + " Traders"},
     )
     da.execute(
@@ -61,9 +59,7 @@ def run(ctx) -> Outcome:
         )
     )
     da.execute(
-        text(
-            "insert into notification (user_id, kind, title, severity) values (null, 'x', :s, 'low')"
-        ),
+        text("insert into notification (user_id, kind, title, severity) values (null, 'x', :s, 'low')"),
         {"s": SECRET},
     )
     da.commit()
@@ -84,10 +80,8 @@ def run(ctx) -> Outcome:
     probes = 0
     # company A's own token does see them (so the probes below mean something)
     seen_by_a = (
-        client.get("/api/requisitions/EV-A-REQ", headers=a.headers("Admin")).status_code
-        == 200
-        and client.get("/api/rfqs/EV-A-RFQ", headers=a.headers("Admin")).status_code
-        == 200
+        client.get("/api/requisitions/EV-A-REQ", headers=a.headers("Admin")).status_code == 200
+        and client.get("/api/rfqs/EV-A-RFQ", headers=a.headers("Admin")).status_code == 200
     )
     if not seen_by_a:
         out.find("high", "the eval is broken: company A cannot see its own records")
@@ -102,9 +96,7 @@ def run(ctx) -> Outcome:
         ):
             probes += 1
             r = client.get(path, headers=h)
-            if r.status_code == 200 and (
-                SECRET in r.text or "EV-A" in r.text or "company A" in r.text
-            ):
+            if r.status_code == 200 and (SECRET in r.text or "EV-A" in r.text or "company A" in r.text):
                 leaks.append(f"{role} of company B read {path}")
         for path in (
             "/api/requisitions",

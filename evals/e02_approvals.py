@@ -33,14 +33,9 @@ def oracle_rule(
 ) -> tuple[str, int, list[str]]:
     fits = []
     for r in rules:
-        if r["document"] != doc or not (
-            D(r["min_value"]) <= value <= D(r["max_value"])
-        ):
+        if r["document"] != doc or not (D(r["min_value"]) <= value <= D(r["max_value"])):
             continue
-        if not (
-            d(r["effective_from"]) <= on
-            and (d(r["effective_to"]) is None or on <= d(r["effective_to"]))
-        ):
+        if not (d(r["effective_from"]) <= on and (d(r["effective_to"]) is None or on <= d(r["effective_to"]))):
             continue
         if (
             r["category_code"] not in ("ANY", category or "ANY")
@@ -97,9 +92,7 @@ def oracle_people(
         stand_in = next(
             (
                 x["to_user"]
-                for x in sorted(
-                    delegations, key=lambda x: x["start_date"], reverse=True
-                )
+                for x in sorted(delegations, key=lambda x: x["start_date"], reverse=True)
                 if x["from_user"] == who
                 and d(x["start_date"]) <= on
                 and (d(x["end_date"]) is None or on <= d(x["end_date"]))
@@ -132,10 +125,7 @@ def run(ctx) -> Outcome:
                 edge + Decimal("0.01"),
                 max(edge - Decimal("0.01"), Decimal(0)),
             ]
-    values += [
-        Decimal(str(round(10 ** rng.uniform(0, 7.3), 2)))
-        for _ in range(150 if ctx.quick else 700)
-    ]
+    values += [Decimal(str(round(10 ** rng.uniform(0, 7.3), 2))) for _ in range(150 if ctx.quick else 700)]
     dates = [
         date(2024, 11, 1),
         date(2024, 10, 31),
@@ -152,9 +142,7 @@ def run(ctx) -> Outcome:
                     d(r[key]),
                     d(r[key]) + timedelta(days=1),
                 ]
-    dates += [
-        date(2024, 11, 1) + timedelta(days=rng.randint(0, 800)) for _ in range(40)
-    ]
+    dates += [date(2024, 11, 1) + timedelta(days=rng.randint(0, 800)) for _ in range(40)]
     docs = sorted({r["document"] for r in rule_rows})
 
     cases = rule_ok = rule_none_ok = chain_ok = chain_cases = 0
@@ -164,11 +152,7 @@ def run(ctx) -> Outcome:
             doc = rng.choice(docs)
             spend = rng.choice(["opex", "capex"])
             requester = rng.choice([None, *org]) if doc == "request" else None
-            dept = (
-                org[requester]["department_code"]
-                if requester
-                else rng.choice([None, "LOG", "PRD", "IT"])
-            )
+            dept = org[requester]["department_code"] if requester else rng.choice([None, "LOG", "PRD", "IT"])
             cases += 1
             try:
                 want = oracle_rule(rule_rows, doc, value, on, spend, None, dept)
@@ -176,9 +160,7 @@ def run(ctx) -> Outcome:
                 want = None
                 reason = str(exc)
             try:
-                got_rule = platform.find_rule(
-                    db, doc, value, on, spend_type=spend, category=None, department=dept
-                )
+                got_rule = platform.find_rule(db, doc, value, on, spend_type=spend, category=None, department=dept)
                 got = (got_rule.code, got_rule.version, list(got_rule.roles))
             except platform.ApprovalRuleError:
                 got = None
@@ -186,23 +168,17 @@ def run(ctx) -> Outcome:
                 rule_ok += 1
                 rule_none_ok += want is None
             else:
-                mismatches.append(
-                    f"{doc} {value} on {on} {spend}: platform {got}, oracle {want if want else reason}"
-                )
+                mismatches.append(f"{doc} {value} on {on} {spend}: platform {got}, oracle {want if want else reason}")
                 continue
             if want is None:
                 continue
             chain_cases += 1
             try:
-                people = oracle_people(
-                    want[2], requester, dept, on, org, depts, delegations
-                )
+                people = oracle_people(want[2], requester, dept, on, org, depts, delegations)
             except NoRule:
                 people = None
             try:
-                steps = platform.resolve_chain(
-                    db, tuple(want[2]), requester=requester, department=dept, on_date=on
-                )
+                steps = platform.resolve_chain(db, tuple(want[2]), requester=requester, department=dept, on_date=on)
                 got_people = [(s.approver, s.delegate) for s in steps]
             except platform.ApprovalRuleError:
                 got_people = None

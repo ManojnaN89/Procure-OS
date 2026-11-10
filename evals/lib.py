@@ -52,9 +52,7 @@ class Ctx:
     live: bool = False  # call the real models in the AI evals
     quick: bool = False  # smaller samples
     only: set[str] = field(default_factory=set)
-    cache: dict[str, Any] = field(
-        default_factory=dict
-    )  # things several evals share (a built company, a pipeline run)
+    cache: dict[str, Any] = field(default_factory=dict)  # things several evals share (a built company, a pipeline run)
 
 
 # ---- the raw dataset (what the oracles read) --------------------------------------------------
@@ -100,29 +98,21 @@ class World:
     db: Session
     logins: dict[str, int]  # role -> user id
     emails: dict[str, str]  # role -> email
-    org_logins: dict[
-        str, int
-    ]  # org person code -> user id (every org person with an approver role has a login)
+    org_logins: dict[str, int]  # org person code -> user id (every org person with an approver role has a login)
     seconds_to_build: float = 0.0
 
     def headers(self, role: str) -> dict[str, str]:
         from p2p.platform.tokens import create_access_token
 
-        return {
-            "Authorization": f"Bearer {create_access_token(self.logins[role], self.slug, role)}"
-        }
+        return {"Authorization": f"Bearer {create_access_token(self.logins[role], self.slug, role)}"}
 
     def org_headers(self, code: str) -> dict[str, str]:
         from p2p.platform.tokens import create_access_token
 
-        return {
-            "Authorization": f"Bearer {create_access_token(self.org_logins[code], self.slug, 'Approver')}"
-        }
+        return {"Authorization": f"Bearer {create_access_token(self.org_logins[code], self.slug, 'Approver')}"}
 
 
-def build_world(
-    prefix: str = "ev", *, with_stock: bool = True, dataset: Path = DATASET
-) -> World:
+def build_world(prefix: str = "ev", *, with_stock: bool = True, dataset: Path = DATASET) -> World:
     """A company with the dataset's masters and stock history, a login for every role, and a login for every person in
     the organisation who may approve (found by email, so approval chains can be walked by real approvers)."""
     from p2p.masters.importer import import_masters
@@ -138,15 +128,9 @@ def build_world(
         assert import_movements(db, dataset).rejected == []
     sfx = uuid.uuid4().hex[:5]
     emails = {r: f"{r.lower()}{sfx}@eval.example" for r in ROLES}
-    logins = {
-        r: users.create_user(name, emails[r], PASSWORD, f"{r} Person", r) for r in ROLES
-    }
+    logins = {r: users.create_user(name, emails[r], PASSWORD, f"{r} Person", r) for r in ROLES}
     # the organisation's own people with the approver role get a login under their own address
-    approver_codes = {
-        r["user_code"]
-        for r in rows("master", "user_role", dataset)
-        if r["role"] == "approver"
-    }
+    approver_codes = {r["user_code"] for r in rows("master", "user_role", dataset) if r["role"] == "approver"}
     org_logins: dict[str, int] = {}
     for person in rows("master", "user", dataset):
         if person["code"] in approver_codes and person["email"]:
@@ -157,18 +141,14 @@ def build_world(
                 text("update org_user set email = :e where code = :c"),
                 {"e": own, "c": person["code"]},
             )
-            org_logins[person["code"]] = users.create_user(
-                name, own, PASSWORD, person["name"], "Approver"
-            )
+            org_logins[person["code"]] = users.create_user(name, own, PASSWORD, person["name"], "Approver")
     db.execute(
         text(
             "insert into app_setting (key, value) values ('replenishment_department', 'LOG') on conflict (key) do nothing"
         )
     )
     db.commit()
-    return World(
-        name, db, logins, emails, org_logins, round(time.monotonic() - started, 2)
-    )
+    return World(name, db, logins, emails, org_logins, round(time.monotonic() - started, 2))
 
 
 def timed(fn: Callable[[], Any]) -> tuple[Any, float]:

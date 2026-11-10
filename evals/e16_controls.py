@@ -43,9 +43,7 @@ def documents(ctx, world, out: Outcome) -> None:
     suppliers = [s for s in rows("master", "supplier") if s["status"] == "active"]
     rng = random.Random(16)
     # the dataset as delivered: every active supplier has what it needs, so nobody is wrongly excluded
-    wrongly_blocked = [
-        s["code"] for s in suppliers if not platform_docs.check_supplier(db, s["code"], TODAY).ok
-    ]
+    wrongly_blocked = [s["code"] for s in suppliers if not platform_docs.check_supplier(db, s["code"], TODAY).ok]
     if wrongly_blocked:
         out.find(
             "high",
@@ -68,33 +66,25 @@ def documents(ctx, world, out: Outcome) -> None:
             expected_ok = False
         elif kind == "unverified":
             db.execute(
-                text(
-                    "update supplier_document set verified = false where supplier_code = :c and doc_type = :t"
-                ),
+                text("update supplier_document set verified = false where supplier_code = :c and doc_type = :t"),
                 {"c": code, "t": doc},
             )
             expected_ok = False
         elif kind == "expired yesterday":
             db.execute(
-                text(
-                    "update supplier_document set expires_on = :d where supplier_code = :c and doc_type = :t"
-                ),
+                text("update supplier_document set expires_on = :d where supplier_code = :c and doc_type = :t"),
                 {"c": code, "t": doc, "d": TODAY - timedelta(days=1)},
             )
             expected_ok = False
         elif kind == "expires today":
             db.execute(
-                text(
-                    "update supplier_document set expires_on = :d where supplier_code = :c and doc_type = :t"
-                ),
+                text("update supplier_document set expires_on = :d where supplier_code = :c and doc_type = :t"),
                 {"c": code, "t": doc, "d": TODAY},
             )
             expected_ok = True  # still good on its last day
         else:
             db.execute(
-                text(
-                    "update supplier_document set expires_on = :d where supplier_code = :c and doc_type = :t"
-                ),
+                text("update supplier_document set expires_on = :d where supplier_code = :c and doc_type = :t"),
                 {"c": code, "t": doc, "d": TODAY - timedelta(days=30)},
             )
             db.execute(
@@ -160,7 +150,11 @@ def budget(ctx, world, out: Outcome) -> None:
     for i in range(n_cases):
         cc, gl = rng.choice(pairs)
         ytd = sum(
-            (D(r["amount"]) for r in lines if r["cost_centre_code"] == cc and r["gl_code"] == gl and first <= r["period"] <= last),
+            (
+                D(r["amount"])
+                for r in lines
+                if r["cost_centre_code"] == cc and r["gl_code"] == gl and first <= r["period"] <= last
+            ),
             Decimal(0),
         )
         committed = rng.choice([Decimal(0), (ytd / 4).quantize(Decimal("0.01"))])
@@ -171,19 +165,27 @@ def budget(ctx, world, out: Outcome) -> None:
         db.execute(text("delete from request where no like 'EVB-%'"))
         if committed > 0:
             db.execute(
-                text("insert into request (no, ship_to_location, type, channel, status, total_value) values ('EVB-C', :l, 'goods', 'form', 'approved', :v)"),
+                text(
+                    "insert into request (no, ship_to_location, type, channel, status, total_value) values ('EVB-C', :l, 'goods', 'form', 'approved', :v)"
+                ),
                 {"l": location, "v": committed},
             )
             db.execute(
-                text("insert into request_line (request_no, line_no, free_text, qty, est_price, cost_centre_code, gl_code, status) values ('EVB-C', 1, 'x', 1, :v, :c, :g, 'open')"),
+                text(
+                    "insert into request_line (request_no, line_no, free_text, qty, est_price, cost_centre_code, gl_code, status) values ('EVB-C', 1, 'x', 1, :v, :c, :g, 'open')"
+                ),
                 {"v": committed, "c": cc, "g": gl},
             )
         db.execute(
-            text("insert into request (no, ship_to_location, type, channel, status, total_value) values ('EVB-N', :l, 'goods', 'form', 'draft', :v)"),
+            text(
+                "insert into request (no, ship_to_location, type, channel, status, total_value) values ('EVB-N', :l, 'goods', 'form', 'draft', :v)"
+            ),
             {"l": location, "v": ask},
         )
         db.execute(
-            text("insert into request_line (request_no, line_no, free_text, qty, est_price, cost_centre_code, gl_code, status) values ('EVB-N', 1, 'x', 1, :v, :c, :g, 'open')"),
+            text(
+                "insert into request_line (request_no, line_no, free_text, qty, est_price, cost_centre_code, gl_code, status) values ('EVB-N', 1, 'x', 1, :v, :c, :g, 'open')"
+            ),
             {"v": ask, "c": cc, "g": gl},
         )
         db.commit()
@@ -193,7 +195,9 @@ def budget(ctx, world, out: Outcome) -> None:
         over_seen += want_over
         ok_seen += not want_over
         if (got.check.status == "over") != want_over or got.check.over_by != want_by or got.check.budget != ytd:
-            bad.append(f"{cc}/{gl} ytd {ytd} committed {committed} ask {ask}: platform {got.check.status} over_by {got.check.over_by} budget {got.check.budget}")
+            bad.append(
+                f"{cc}/{gl} ytd {ytd} committed {committed} ask {ask}: platform {got.check.status} over_by {got.check.over_by} budget {got.check.budget}"
+            )
     db.execute(text("delete from request where no like 'EVB-%'"))
     db.commit()
     out.metrics["budget: cases (over / within)"] = f"{over_seen + ok_seen} ({over_seen} / {ok_seen})"
@@ -274,7 +278,9 @@ def ceiling_flow(ctx, out: Outcome) -> None:
     if over_without_hold:
         out.find("high", f"a contract went over its ceiling without a hold: {over_without_hold[0]}")
     if mismatches:
-        out.find("high", f"the usage of {len(mismatches)} contract(s) differs from an independent sum: {mismatches[:3]}")
+        out.find(
+            "high", f"the usage of {len(mismatches)} contract(s) differs from an independent sum: {mismatches[:3]}"
+        )
 
 
 # ---- D. reminders -----------------------------------------------------------------------------
@@ -298,19 +304,29 @@ def reminders(ctx, world, out: Outcome) -> None:
     pool = items_for_cases()
     it = Item(1, pool[0].code, pool[0].name, pool[0].qty, pool[0].est, pool[0].gst)
     rfq, supplier, email = h.setup_rfq(world, "rem", [it])
-    cats = sorted({r["supplier_code"] for r in rows("master", "supplier_category") if r["category_code"] == "MRO"} - {supplier})[:3]
+    cats = sorted(
+        {r["supplier_code"] for r in rows("master", "supplier_category") if r["category_code"] == "MRO"} - {supplier}
+    )[:3]
     contacts = {c["supplier_code"]: c["email"] for c in rows("master", "supplier_contact") if c["email"]}
     silent = [supplier, cats[0]]
     replied, declined = cats[1], cats[2]
     for code in (cats[0], replied, declined):
         db.execute(
-            text("insert into rfq_supplier (rfq_no, supplier_code, email, invited_at) values (:r, :s, :e, now()) on conflict do nothing"),
+            text(
+                "insert into rfq_supplier (rfq_no, supplier_code, email, invited_at) values (:r, :s, :e, now()) on conflict do nothing"
+            ),
             {"r": rfq, "s": code, "e": contacts.get(code, f"{code.lower()}@eval.example")},
         )
     sent_day, due = TODAY, TODAY + timedelta(days=10)
     db.execute(text("update rfq set due_date = :d where no = :r"), {"d": due, "r": rfq})
-    db.execute(text("update rfq_supplier set invited_at = :t where rfq_no = :r"), {"t": datetime(2026, 11, 6, 4, 30, tzinfo=UTC), "r": rfq})
-    db.execute(text("update rfq_supplier set declined = true where rfq_no = :r and supplier_code = :s"), {"r": rfq, "s": declined})
+    db.execute(
+        text("update rfq_supplier set invited_at = :t where rfq_no = :r"),
+        {"t": datetime(2026, 11, 6, 4, 30, tzinfo=UTC), "r": rfq},
+    )
+    db.execute(
+        text("update rfq_supplier set declined = true where rfq_no = :r and supplier_code = :s"),
+        {"r": rfq, "s": declined},
+    )
     db.commit()
     h.deliver(world, rfq, contacts.get(replied, f"{replied.lower()}@eval.example"), "We will send our rates tomorrow.")
 

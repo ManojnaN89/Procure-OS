@@ -28,13 +28,7 @@ PORT = 18181
 
 
 def serve() -> subprocess.Popen[bytes]:
-    py = (
-        lib.ROOT
-        / "backend"
-        / ".venv"
-        / ("Scripts" if sys.platform == "win32" else "bin")
-        / "python"
-    )
+    py = lib.ROOT / "backend" / ".venv" / ("Scripts" if sys.platform == "win32" else "bin") / "python"
     proc = subprocess.Popen(
         [
             str(py),
@@ -52,10 +46,7 @@ def serve() -> subprocess.Popen[bytes]:
     deadline = time.time() + 40
     while time.time() < deadline:
         try:
-            if (
-                httpx.get(f"http://127.0.0.1:{PORT}/api/health", timeout=1).status_code
-                == 200
-            ):
+            if httpx.get(f"http://127.0.0.1:{PORT}/api/health", timeout=1).status_code == 200:
                 return proc
         except httpx.HTTPError:
             time.sleep(0.4)
@@ -70,25 +61,17 @@ def run(ctx) -> Outcome:
     world = lib.build_world("e11")
     db = world.db
     # every supplier, item and category name becomes hostile text, then the whole flow runs so every screen has data
-    for i, (code,) in enumerate(
-        db.execute(text("select code from supplier order by code")).all()
-    ):
+    for i, (code,) in enumerate(db.execute(text("select code from supplier order by code")).all()):
         db.execute(
-            text(
-                "update supplier set legal_name = :n, trade_name = :n where code = :c"
-            ),
+            text("update supplier set legal_name = :n, trade_name = :n where code = :c"),
             {"n": PAYLOADS[i % len(PAYLOADS)] + f" S{i}", "c": code},
         )
-    for i, (code,) in enumerate(
-        db.execute(text("select code from item order by code")).all()
-    ):
+    for i, (code,) in enumerate(db.execute(text("select code from item order by code")).all()):
         db.execute(
             text("update item set name = :n where code = :c"),
             {"n": PAYLOADS[i % len(PAYLOADS)] + f" I{i}", "c": code},
         )
-    for i, (code,) in enumerate(
-        db.execute(text("select code from item_category order by code")).all()
-    ):
+    for i, (code,) in enumerate(db.execute(text("select code from item_category order by code")).all()):
         db.execute(
             text("update item_category set name = :n where code = :c"),
             {"n": PAYLOADS[(i + 2) % len(PAYLOADS)] + f" C{i}", "c": code},
@@ -110,9 +93,7 @@ def run(ctx) -> Outcome:
         with sync_playwright() as p:
             browser = p.chromium.launch()
             page = browser.new_page()
-            page.on(
-                "dialog", lambda d: (fired.append(f"dialog: {d.message}"), d.dismiss())
-            )
+            page.on("dialog", lambda d: (fired.append(f"dialog: {d.message}"), d.dismiss()))
             page.goto(f"http://127.0.0.1:{PORT}/")
             page.locator("#loginEmail").fill(world.emails["Admin"])
             page.locator("#loginPassword").fill(lib.PASSWORD)
@@ -149,9 +130,7 @@ def run(ctx) -> Outcome:
                 if page.evaluate("window.__pwn") is not None:
                     fired.append(f"script ran on #/{r}")
                 # the hostile text must be on the page as text, not as elements
-                if page.locator(
-                    "#appContent script, #appContent img[onerror], #appContent svg[onload]"
-                ).count():
+                if page.locator("#appContent script, #appContent img[onerror], #appContent svg[onload]").count():
                     fired.append(f"hostile markup became an element on #/{r}")
             browser.close()
     finally:
