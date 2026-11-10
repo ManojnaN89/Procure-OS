@@ -81,3 +81,14 @@ def environment() -> Iterator[str]:
 
 def slug(prefix: str = "ev") -> str:
     return prefix + uuid.uuid4().hex[:8]
+
+
+def forget_tenants(prefix: str) -> None:
+    """Remove the companies an eval made under this prefix. The demo company's logins (buyer@flow.example and so on) are
+    unique across the whole control database, so two evals that make it cannot leave their companies behind."""
+    from p2p.platform import tenants
+
+    with tenants.control_engine().connect() as conn:
+        slugs = [r[0] for r in conn.execute(text("select slug from tenant where slug like :p"), {"p": prefix + "%"})]
+    for name in slugs:
+        tenants.drop_tenant(name)

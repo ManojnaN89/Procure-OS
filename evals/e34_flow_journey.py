@@ -163,6 +163,14 @@ def guide_labels(slug: str, hint: str = "") -> tuple[str, list[str]]:
 
 
 def run(ctx: Any) -> Outcome:
+    env.forget_tenants("e34")  # left by an earlier run that stopped half way
+    try:
+        return _run(ctx)
+    finally:
+        env.forget_tenants("e34")
+
+
+def _run(ctx: Any) -> Outcome:
     import logging
 
     import httpx
@@ -270,7 +278,11 @@ def run(ctx: Any) -> Outcome:
             with d.step("buyer", "clicks Check stock levels: a preview, nothing is created yet") as page:
                 page.locator("#replenishBtn").click()
                 panel = page.locator("#replenishPanel")
-                expect(panel).to_contain_text(re.compile(r"4 items at or below their reorder point would become\s+3 requests, about ₹76,600 in all"))
+                expect(panel).to_contain_text(
+                    re.compile(
+                        r"4 items at or below their reorder point would become\s+3 requests, about ₹76,600 in all"
+                    )
+                )
                 expect(panel).to_contain_text("1 approves automatically, 2 need a person's approval")
             c.same("no request exists after the preview", one("select count(*) from request"), 0)
             with d.step("buyer", "clicks Create and submit") as page:
@@ -334,7 +346,10 @@ def run(ctx: Any) -> Outcome:
                 expect(page.locator("#myWork")).to_contain_text("Requests waiting for my approval")
                 for no in (r_mro, r_ele, r_mcb):
                     expect(page.locator("#myWork")).to_contain_text(no)
-            with d.step("manager", f"clicks {r_mro} in My work: Approve, Approve less, Return for changes and Reject are offered") as page:
+            with d.step(
+                "manager",
+                f"clicks {r_mro} in My work: Approve, Approve less, Return for changes and Reject are offered",
+            ) as page:
                 page.locator("#myWork a", has_text=r_mro).first.click()
                 page.wait_for_load_state("networkidle")
                 for label in ("Approve", "Approve less", "Return for changes", "Reject"):
@@ -411,7 +426,11 @@ def run(ctx: Any) -> Outcome:
                 page.wait_for_load_state("networkidle")
                 page.wait_for_timeout(500)
             d.sync()
-            c.same("Find suppliers made a quotation request for the bearing and seal", one("select count(*) from rfq where request_no = :n", n=r_mro), 1)
+            c.same(
+                "Find suppliers made a quotation request for the bearing and seal",
+                one("select count(*) from rfq where request_no = :n", n=r_mro),
+                1,
+            )
             work()
             with d.step("requester", "sees in the notifications that the request was approved") as page:
                 d.go("requester", "dashboard")
@@ -733,9 +752,14 @@ def run(ctx: Any) -> Outcome:
                 d.go("requester", "dashboard")
                 page.locator("#notificationBellBtn").click()
                 page.wait_for_timeout(800)
-                out.notes.append("requester's notifications: " + " | ".join(" ".join(t.split())[:90] for t in page.locator(".notif-row").all_inner_texts()))
+                out.notes.append(
+                    "requester's notifications: "
+                    + " | ".join(" ".join(t.split())[:90] for t in page.locator(".notif-row").all_inner_texts())
+                )
                 west = "|".join(re.escape(n) for n in by_supplier["SUP-002"])
-                expect(page.locator(".notif-row", has_text=re.compile(rf"Goods arrived for ({west})")).first).to_be_visible()
+                expect(
+                    page.locator(".notif-row", has_text=re.compile(rf"Goods arrived for ({west})")).first
+                ).to_be_visible()
             stock_now = {r[0]: Decimal(r[1]) for r in q("select item_code, on_hand from stock_level")}
             c.same(
                 "stock after all receipts: bearing 40+50, seal 3+6, contactor 5+4, shoes 12+8, MCB 24+40",
@@ -1023,8 +1047,18 @@ def run(ctx: Any) -> Outcome:
                 sorted({int(v["cases"]) for v in cycle.values() if isinstance(v, dict) and "cases" in v}),
                 [4],
             )
-            out.notes.append("control tower stages at the end: " + str([(x["stage"], x["count"]) for x in demo_ui.api("GET", "/api/control-tower", token("approver")).json()["stages"]]))
-            out.notes.append("kpis at the end: " + json.dumps(demo_ui.api("GET", "/api/kpis", token("approver")).json())[:700])
+            out.notes.append(
+                "control tower stages at the end: "
+                + str(
+                    [
+                        (x["stage"], x["count"])
+                        for x in demo_ui.api("GET", "/api/control-tower", token("approver")).json()["stages"]
+                    ]
+                )
+            )
+            out.notes.append(
+                "kpis at the end: " + json.dumps(demo_ui.api("GET", "/api/kpis", token("approver")).json())[:700]
+            )
             with d.step("approver", "opens the Control tower: everything has moved to its last stage") as page:
                 d.go("approver", "control-tower")
                 expect(page.locator("#ctTower")).to_be_visible()
@@ -1060,7 +1094,9 @@ def run(ctx: Any) -> Outcome:
             with d.step("admin", "opens Company setup, History: the same change is listed with its reason") as page:
                 page.get_by_role("link", name="Company setup").click()
                 page.get_by_role("tab", name="History").click()
-                expect(page.get_by_role("row").filter(has_text="default_rfq_response_days").first).to_contain_text(reason_text)
+                expect(page.get_by_role("row").filter(has_text="default_rfq_response_days").first).to_contain_text(
+                    reason_text
+                )
             for who in ("requester", "buyer", "store", "ap", "finance"):
                 refused(who, "PUT", "/api/setup/policies/default_rfq_response_days", {"value": "9", "reason": "no"})
 

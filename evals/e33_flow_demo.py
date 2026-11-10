@@ -36,6 +36,14 @@ def money(value: Decimal | int | str) -> Decimal:
 
 
 def run(ctx: Any) -> Outcome:
+    env.forget_tenants("e33")  # left by an earlier run that stopped half way
+    try:
+        return _run(ctx)
+    finally:
+        env.forget_tenants("e33")
+
+
+def _run(ctx: Any) -> Outcome:
     from fastapi.testclient import TestClient
     from p2p.formulas.calendar import pin_today
     from p2p.main import app
