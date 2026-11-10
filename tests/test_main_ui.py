@@ -99,6 +99,7 @@ def test_the_menu_has_no_auctions_and_the_admin_link_is_only_for_people_who_may_
             "Vendors",
             "Inventory",
             "Purchase orders",
+            "Goods receipt",
             "Payments",
             "Contracts",
             "Assistant",
@@ -255,6 +256,9 @@ def test_the_inventory_page_lists_the_worst_stock_first_and_shows_names_as_text(
 
 
 STOCK_TABLES = (
+    "gr_line",
+    "goods_receipt",
+    "stock_movement",
     "quote_draft",
     "po_approval_step",
     "po_charge",
@@ -617,9 +621,47 @@ def test_the_buyer_compares_quotes_and_awards_and_the_approver_signs_the_purchas
         expect(buyer.locator("#poApprove")).to_have_count(0)
         admin.locator("#poApprove").click()
         expect(admin.locator("#appContent")).to_contain_text("Approved by Vikram Procure under rule PO-01 v1")
+        po_no = made.waiting[0]
+        db.execute(
+            text(
+                "insert into supplier_contact (supplier_code, name, email, is_primary) "
+                "values ('S1', 'Contact S1', 's1@supplier.example', true)"
+            )
+        )
+        db.execute(
+            text(
+                "insert into number_series (document_type, prefix, scope, format, reset) "
+                "values ('goods_receipt', 'GRN', 'location', '{prefix}-{loc}-{fy4}-{seq:05d}', 'fy')"
+            )
+        )
+        db.commit()
+        buyer.goto(f"{URL}/#/purchase-orders/{po_no}")
+        buyer.locator("#poSend").click()  # the buyer sends the approved order
+        expect(buyer.locator("#appContent")).to_contain_text("Sent to s1@supplier.example")
+        buyer.locator("#poAckDate").fill(today.replace(year=today.year + 1).isoformat())
+        buyer.locator("#poAck").click()
+        expect(buyer.locator("#appContent")).to_contain_text("Acknowledged on")
+
+        store = open_app(browser, LAPTOP)  # a store person receives the goods
+        sign_in(store, company.emails["Store"])
+        store.goto(f"{URL}/#/receiving")
+        card = store.locator("#waitingWrap .panel")
+        expect(card).to_contain_text(po_no)
+        card.locator(".recv-open").click()
+        card.locator(".recv-qty").fill("10")
+        card.locator(".recv-challan").fill("DC/9")
+        card.locator(".recv-send").click()
+        expect(store.locator("#appContent")).to_contain_text("GRN-BLR-")
+        expect(store.locator("#appContent")).to_contain_text("DC/9")
+        store.goto(f"{URL}/#/purchase-orders/{po_no}")
+        expect(store.locator("#appContent")).to_contain_text("Received")
+        assert (
+            db.execute(text("select coalesce(sum(qty), 0) from stock_movement where source = 'platform'")).scalar_one()
+            == 10
+        )
         admin.goto(f"{URL}/#/requisitions/REQ-UI-1")
         expect(admin.locator("#appContent")).to_contain_text("ordered")
-        assert admin.problems == [] and buyer.problems == []  # type: ignore[attr-defined]
+        assert admin.problems == [] and buyer.problems == [] and store.problems == []  # type: ignore[attr-defined]
     finally:
         clear_stock_and_approvals(company)
 

@@ -11,6 +11,7 @@ const Router = {
     vendors: VendorsView,
     inventory: InventoryView,
     "purchase-orders": PurchaseOrdersView,
+    receiving: ReceivingView,
     payments: PaymentsView,
     contracts: ContractsView,
     assistant: AssistantPageView,

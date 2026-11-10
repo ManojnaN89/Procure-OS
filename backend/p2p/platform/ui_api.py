@@ -36,6 +36,7 @@ from p2p.orders import workflow as po_workflow
 from p2p.platform import routing, sod
 from p2p.platform.permissions import PermissionDenied, can_anywhere, require
 from p2p.platform.tokens import decode_access_token
+from p2p.receiving import goods
 from p2p.receiving.stock import stock_levels
 from p2p.requests import jobs, replenishment
 from p2p.sourcing import documents as supplier_documents
@@ -788,9 +789,12 @@ def _decimal(value: Any, field: str, default: Decimal | None = None) -> Decimal:
             raise HTTPException(422, f"{field} is required")
         return default
     try:
-        return Decimal(str(value))
+        number = Decimal(str(value))
     except InvalidOperation:
         raise HTTPException(422, f"{field} is not a number") from None
+    if not number.is_finite():  # NaN and Infinity read as numbers but are not amounts
+        raise HTTPException(422, f"{field} is not a number")
+    return number
 
 
 def _draft_json(d: dict[str, Any]) -> dict[str, Any]:
@@ -976,6 +980,15 @@ def get_purchase_order(no: str, db: Db, ctx: Ctx) -> dict[str, Any]:
         "ack_overdue": r["status"] == "sent" and dispatch.ack_overdue(db, r["sent_at"], business_today()),
         "can_send": can_dispatch and r["status"] == "approved" and not r["hold_reason"],
         "can_acknowledge": can_dispatch and r["status"] == "sent",
+        "can_receive": r["status"] in goods.RECEIVABLE and can_anywhere(db, ctx.user_id, "grn.create"),
+        "receipts": [
+            {"id": g["no"], "inspection": g["inspection_status"], "at": _iso(g["gate_entry_at"])}
+            for g in _rows(
+                db,
+                "select no, inspection_status, gate_entry_at from goods_receipt where po_no = :n order by no",
+                n=no,
+            )
+        ],
         "waiting_for": r["waiting_for"],
         "buyer_gstin": r["buyer_gstin"],
         "supplier_gstin": r["supplier_gstin"],
@@ -1007,6 +1020,7 @@ def get_purchase_order(no: str, db: Db, ctx: Ctx) -> dict[str, Any]:
                 "igst": _money(line["igst"]),
                 "need_by": line["need_by"].isoformat() if line["need_by"] else None,
                 "promised_date": line["promised_date"].isoformat() if line["promised_date"] else None,
+                "received_qty": _qty(line["received_qty"]),
                 "source": line["source"],
                 "source_ref": line["source_ref"],
             }
@@ -1054,6 +1068,194 @@ def _po_action(call: Any) -> dict[str, str]:
         raise HTTPException(422, str(exc)) from None
     except PermissionDenied as exc:
         raise HTTPException(403, str(exc)) from None
+
+
+def _receipt_error(call: Callable[[], dict[str, Any]]) -> dict[str, Any]:
+    try:
+        return call()
+    except goods.ReceiptError as exc:
+        message = str(exc)
+        if "does not exist" in message:
+            raise HTTPException(404, message) from None
+        raise HTTPException(403 if message.startswith("segregation") else 409, message) from None
+
+
+@router.get("/receiving/waiting")
+def goods_waiting(db: Db, ctx: Ctx) -> list[dict[str, Any]]:
+    """Orders sent to suppliers that still have goods to come."""
+    orders_ = _rows(
+        db,
+        "select p.no, p.status, coalesce(s.trade_name, s.legal_name) as supplier, p.ship_to_location, "
+        "(select max(promised_date) from po_line l where l.po_no = p.no) as promised "
+        "from po p join supplier s on s.code = p.supplier_code where p.status = any(:st) "
+        "order by p.sent_at nulls last, p.no",
+        st=list(goods.RECEIVABLE),
+    )
+    out: list[dict[str, Any]] = []
+    for o in orders_:
+        lines = _rows(
+            db,
+            "select line_no, description, item_code, qty, uom, received_qty from po_line "
+            "where po_no = :n and status in ('open', 'part_received') order by line_no",
+            n=o["no"],
+        )
+        out.append(
+            {
+                "id": o["no"],
+                "status": o["status"],
+                "supplier": o["supplier"],
+                "ship_to": o["ship_to_location"],
+                "promised_date": o["promised"].isoformat() if o["promised"] else None,
+                "lines": [
+                    {
+                        "line_no": ln["line_no"],
+                        "name": ln["description"],
+                        "item_code": ln["item_code"],
+                        "ordered": _qty(ln["qty"]),
+                        "received": _qty(ln["received_qty"]),
+                        "uom": ln["uom"],
+                    }
+                    for ln in lines
+                ],
+            }
+        )
+    return out
+
+
+@router.get("/receipts")
+def list_receipts(db: Db, ctx: Ctx) -> list[dict[str, Any]]:
+    rows = _rows(
+        db,
+        "select g.no, g.po_no, g.location_code, g.gate_entry_at, g.inspection_status, g.received_by, "
+        "coalesce(s.trade_name, s.legal_name) as supplier, (select count(*) from gr_line l where l.gr_no = g.no) as lines "
+        "from goods_receipt g join po on po.no = g.po_no join supplier s on s.code = po.supplier_code "
+        "order by g.created_at desc, g.no desc limit 500",
+    )
+    return [
+        {
+            "id": r["no"],
+            "po_no": r["po_no"],
+            "supplier": r["supplier"],
+            "location": r["location_code"],
+            "received_at": _iso(r["gate_entry_at"]),
+            "inspection": r["inspection_status"],
+            "received_by": r["received_by"],
+            "lines": r["lines"],
+        }
+        for r in rows
+    ]
+
+
+@router.get("/receipts/{no}")
+def get_receipt(no: str, db: Db, ctx: Ctx) -> dict[str, Any]:
+    rows = _rows(db, "select * from goods_receipt where no = :n", n=no)
+    if not rows:
+        raise HTTPException(404, "Not found")
+    g = rows[0]
+    lines = _rows(
+        db,
+        "select l.*, d.description, d.uom, d.item_code from gr_line l "
+        "join po_line d on d.po_no = l.po_no and d.line_no = l.po_line_no where l.gr_no = :n order by l.po_line_no",
+        n=no,
+    )
+    return {
+        "id": g["no"],
+        "po_no": g["po_no"],
+        "location": g["location_code"],
+        "received_at": _iso(g["gate_entry_at"]),
+        "received_by": g["received_by"],
+        "challan": g["delivery_challan_no"],
+        "invoice_ref": g["supplier_invoice_ref"],
+        "eway_bill": g["eway_bill_no"],
+        "vehicle": g["vehicle_no"],
+        "inspection": g["inspection_status"],
+        "accepted_on": g["accepted_on"].isoformat() if g["accepted_on"] else None,
+        "remarks": g["remarks"],
+        "can_inspect": g["inspection_status"] == "pending" and can_anywhere(db, ctx.user_id, "grn.create"),
+        "lines": [
+            {
+                "line_no": ln["po_line_no"],
+                "name": ln["description"],
+                "item_code": ln["item_code"],
+                "uom": ln["uom"],
+                "received": _qty(ln["qty_received"]),
+                "accepted": _qty(ln["qty_accepted"]),
+                "rejected": _qty(ln["qty_rejected"]),
+                "reason": ln["reject_reason"],
+            }
+            for ln in lines
+        ],
+    }
+
+
+@router.post("/purchase-orders/{no}/receive")
+def receive_goods(
+    no: str, payload: dict[str, Any], db: Db, ctx: Annotated[routing.TenantContext, Depends(require("grn.create"))]
+) -> dict[str, Any]:
+    raw_lines = payload.get("lines")
+    if not isinstance(raw_lines, list) or not raw_lines:
+        raise HTTPException(422, "lines must be a list with at least one line")
+    try:
+        lines = [
+            goods.LineIn(
+                int(raw["line_no"]),
+                _decimal(raw.get("qty_received"), "qty_received"),
+                _decimal(raw["qty_rejected"], "qty_rejected") if raw.get("qty_rejected") not in (None, "") else None,
+                raw.get("reject_reason"),
+            )
+            for raw in raw_lines
+        ]
+    except (KeyError, TypeError, ValueError):
+        raise HTTPException(422, "each line needs a line_no and a qty_received") from None
+    header = goods.Header(
+        payload.get("challan"),
+        payload.get("invoice_ref"),
+        payload.get("eway_bill"),
+        payload.get("vehicle"),
+        payload.get("remarks"),
+    )
+
+    def post() -> dict[str, Any]:
+        done = goods.post_receipt(db, no, lines, header, ctx.user_id, as_of=business_today())
+        return {
+            "receipt": done.no,
+            "po_status": done.po_status,
+            "pending_inspection": done.pending_inspection,
+            "accepted": {k: str(v) for k, v in done.accepted.items()},
+        }
+
+    return _receipt_error(post)
+
+
+@router.post("/receipts/{no}/inspect")
+def inspect_goods(
+    no: str, payload: dict[str, Any], db: Db, ctx: Annotated[routing.TenantContext, Depends(require("grn.create"))]
+) -> dict[str, Any]:
+    raw_lines = payload.get("lines")
+    if not isinstance(raw_lines, list) or not raw_lines:
+        raise HTTPException(422, "lines must be a list")
+    try:
+        decisions = [
+            goods.Decision(
+                int(raw["line_no"]),
+                _decimal(raw.get("qty_accepted"), "qty_accepted"),
+                _decimal(raw.get("qty_rejected", 0), "qty_rejected"),
+                raw.get("reason"),
+            )
+            for raw in raw_lines
+        ]
+    except (KeyError, TypeError, ValueError):
+        raise HTTPException(422, "each line needs a line_no, qty_accepted and qty_rejected") from None
+
+    def decide() -> dict[str, Any]:
+        done = goods.inspect(db, no, decisions, ctx.user_id, as_of=business_today())
+        return {
+            "receipt": done.no,
+            "po_status": done.po_status,
+            "accepted": {k: str(v) for k, v in done.accepted.items()},
+        }
+
+    return _receipt_error(decide)
 
 
 def _dispatch_action(call: Callable[[], dict[str, Any]]) -> dict[str, Any]:
