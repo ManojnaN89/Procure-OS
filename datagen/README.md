@@ -43,9 +43,29 @@ The evals use `plant-small` (set `P2P_EVAL_DATASET` to use another).
 | `generator/validate.py` | Quality checks and `report.md` |
 | `generator/ids.py` | GSTIN/PAN helpers. Every generated PAN has the digits 0000, which are never issued, so none can belong to a real taxpayer |
 
+## Documents (v1)
+
+```
+backend/.venv/Scripts/python -I datagen/generator/documents.py --dataset data/datasets/plant-small-v1-seed42 --seed 42 [--limit N] [--out DIR]
+```
+
+Run it with the backend's Python (it needs Pillow, numpy and zxing-cpp). It writes `<dataset>/documents/`, git-ignored like the rest of `data/datasets/`:
+
+| What | Files |
+|---|---|
+| Supplier invoices, one per invoice of the dataset | `invoices/<invoice no>.pdf`, `.png` or `.jpg`, in six looks: `text_pdf` (clean, text layer), `multipage_pdf` (text layer, rows split over pages, terms page), `scan_pdf` (picture only, slightly crooked, grain), `photo_png` (phone photo: tilt, uneven light, soft), `skewed_jpg` (put in several degrees crooked), `low_contrast_pdf` (faded print on grey). An invoice with an IRN carries the e-invoice QR code and prints its IRN; a credit note or an invoice without an IRN has none |
+| Supplier replies to RFQs, one per reply in the dataset | `quotes/<email id>_<rfq>_<supplier>.eml`: prices in the body as text or as a table, or in an attached quotation PDF, or a refusal with the dataset's reason. Some are messy on purpose (`quirks`): `partial` (not every line quoted), `unit_differs` (a price per box of 10), `incl_gst` (prices include GST), `relative_validity` ("valid for 15 days") |
+| The answer key | `manifest.json`: for each file its look, whether it has a text layer and a QR code, and `expected`, the values a reader should find |
+
+The key is copied from the dataset's CSV rows, never read back from the rendered document, so it can score a reader independently. A value a careful reader must not guess is `null` in the key (the unit price of a price per box, the end date of a relative validity) with the printed figure beside it. The look and the quirk of each file are chosen by the generator from the seed (interleaved, so a small `--limit` still shows several); the dataset's `email_message.attachments` column is not followed. The e-invoice signature is a placeholder, as in the platform's own tests.
+
+Safe by construction: every document is checked before it is written (a PAN or GSTIN without `0000`, a phone not `+91 00000 ...`, an email outside `.example` stops the run). Same dataset and seed give the same files on the same machine; the pictures use the installed Arial or DejaVu font, so their bytes can differ across machines. `generator/pagekit.py` has the PDF writer, the page drawing and the damage (scan, photo, skew, fade).
+
+Eval E31 reads them back with the platform's code readers (QR, text layer, arithmetic) and counts what still needs a model or a person.
+
 ## Known simplifications (v0.2)
 
-- Documents are not generated yet: quote and invoice layouts, our outgoing templates and the `document_file` table come later. Email rows hold metadata only (type, sender, time, links), not text.
+- Documents are generated separately by `documents.py` (above). The `document_file` table, our outgoing templates (RFQ, PO, reminder) and the text of the dataset's other emails are not generated; `email_message` rows hold metadata only.
 - `match_result` is not generated: it is the platform's own output. `truth/truth_match_expected.csv` says what a correct match must conclude for every invoice.
 - Advance payments exist only for the five suppliers on 30% advance terms. TDS is deducted on the advance at payment, and the invoice TDS base is reduced by the advanced amount.
 - Free-text request lines are not generated; the document step adds them.

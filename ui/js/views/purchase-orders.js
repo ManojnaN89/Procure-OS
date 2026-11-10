@@ -139,6 +139,7 @@ const PurchaseOrdersView = {
         </div>
         ${this.approvalPanel(po)}
         ${this.dispatchPanel(po)}
+        <div id="supplierMessagesBox"></div>
         <div class="panel" style="margin-bottom:12px;font-size:12.5px;color:var(--text-secondary);">
           Supplier GSTIN ${this.esc(po.supplier_gstin || "none")} · buyer GSTIN ${this.esc(po.buyer_gstin || "none")} · deliver to ${this.esc(po.ship_to)}
           ${po.payment_terms ? ` · payment ${this.esc(po.payment_terms)}` : ""}${po.delivery_terms ? ` · ${this.esc(po.delivery_terms)}` : ""}
@@ -174,6 +175,7 @@ const PurchaseOrdersView = {
         </div>
       `;
       this.wire(po);
+      if (po.sent_at) SupplierMessages.mount(document.getElementById("supplierMessagesBox"), "orders", po.id);
     } catch {
       container.innerHTML = `<div class="empty-state">Couldn't load this purchase order.</div>`;
     }

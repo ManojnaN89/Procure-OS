@@ -95,6 +95,11 @@ export function SetupPage() {
 					{error}
 				</p>
 			) : null}
+			{me.data && tabs.length === 0 ? (
+				<p className="text-sm text-muted-foreground">
+					You do not have access to the company setup. It is for the Admin.
+				</p>
+			) : null}
 			{active === "people" ? <PeopleTab {...shared} /> : null}
 			{active === "roles" ? <RolesTab {...shared} /> : null}
 			{active === "approvers" ? <Approvers {...shared} /> : null}

@@ -6,6 +6,7 @@ import { Card, CardBody, CardHeader, PageTitle } from "../components/ui/card";
 import { Field, Input } from "../components/ui/input";
 import { Table, Td, Th } from "../components/ui/table";
 import { api } from "../lib/api";
+import { can, useMe } from "../lib/me";
 import { select } from "./setup-shared";
 
 type Decision = {
@@ -35,9 +36,12 @@ const LEVEL_LABEL: Record<string, string> = {
 
 export function AutomationPage() {
 	const queryClient = useQueryClient();
+	const me = useMe();
+	const allowed = can(me.data, "admin.settings");
 	const data = useQuery({
 		queryKey: ["setup-automation"],
 		queryFn: () => api<Automation>("/api/setup/automation"),
+		enabled: allowed,
 	});
 	const [reason, setReason] = useState("");
 	const [error, setError] = useState("");
@@ -59,6 +63,12 @@ export function AutomationPage() {
 		}
 	}
 	const d = data.data;
+	if (me.data && !allowed)
+		return (
+			<PageTitle sub="This page is for the Admin.">
+				Automation controls
+			</PageTitle>
+		);
 	if (!d) return null;
 
 	return (

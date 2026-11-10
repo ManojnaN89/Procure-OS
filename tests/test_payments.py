@@ -1,7 +1,7 @@
 """Payment: due dates and the small-supplier rule, tax at source, what is payable, payment runs and their approval, the bank
 file, recording payment, and closing the case."""
 
-from datetime import date
+from datetime import date, timedelta
 from decimal import Decimal
 
 import pytest
@@ -14,6 +14,7 @@ from test_receiving import store  # noqa: F401 - fixtures
 from test_sourcing import PASSWORD, Outbox, db, outbox  # noqa: F401 - fixtures
 
 from p2p.formulas import payment as rules
+from p2p.formulas.calendar import business_today
 from p2p.invoices import payment
 from p2p.invoices.service import InvoiceError
 from p2p.main import app
@@ -482,9 +483,13 @@ def test_finance_plans_the_owner_approves_and_finance_pays_over_the_api(ledger: 
     made = client.post(f"/api/payment-runs/{run}/file", headers=h_fin)
     assert made.status_code == 200 and "PAY-2627-000001" in made.json()["file"]
     assert "PAY-2627-000001" in client.get(f"/api/payment-runs/{run}/file", headers=h_ap).json()["file"]
-    paid = client.post(f"/api/payment-runs/{run}/paid", json={"paid_on": "2026-11-12"}, headers=h_fin)
+    tomorrow = (business_today() + timedelta(days=1)).isoformat()
+    future = client.post(f"/api/payment-runs/{run}/paid", json={"paid_on": tomorrow}, headers=h_fin)
+    assert future.status_code == 422  # the bank cannot have paid on a day that has not come
+    today = business_today().isoformat()
+    paid = client.post(f"/api/payment-runs/{run}/paid", json={"paid_on": today}, headers=h_fin)
     assert paid.status_code == 200 and paid.json()["status"] == "paid" and len(paid.json()["closed_orders"]) == 1
-    assert client.get(f"/api/payment-runs/{run}", headers=h_fin).json()["payments"][0]["paid_on"] == "2026-11-12"
+    assert client.get(f"/api/payment-runs/{run}", headers=h_fin).json()["payments"][0]["paid_on"] == today
     assert [r["id"] for r in client.get("/api/payment-runs", headers=h_fin).json()] == [run]
     assert client.get("/api/payment-runs/NOPE", headers=h_fin).status_code == 404
     assert client.post("/api/payment-runs/NOPE/paid", json={}, headers=h_fin).status_code == 404

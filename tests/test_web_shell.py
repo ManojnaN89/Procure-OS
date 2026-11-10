@@ -22,6 +22,7 @@ from sqlalchemy.orm import Session
 from p2p.config import REPO_ROOT
 from p2p.platform import proposals, routing, tenants, users
 from p2p.platform.sod import Actor
+from p2p.platform.tokens import create_access_token
 from p2p.rules import engine as rules
 
 pytest.importorskip("playwright")
@@ -71,9 +72,11 @@ class Company:
         tenants.create_tenant(self.slug, "Demo Engineering Pvt Ltd", load_reference=False)
         self.db = Session(routing.engine_for(self.slug))
         self.emails: dict[str, str] = {}
+        self.ids: dict[str, int] = {}
         for role in ("Admin", "Finance", "Requester", "Buyer", "Approver", "Store"):
             self.emails[role] = f"{role.lower()}{uuid.uuid4().hex[:5]}@example.com"
             uid = users.create_user(self.slug, self.emails[role], PASSWORD, f"{role} Person", role)
+            self.ids[role] = uid
             if role == "Finance":
                 users.set_limit(self.slug, uid, "payment_run", Decimal("50000000"))
         from test_rules_engine import approval_table  # noqa: PLC0415
@@ -256,3 +259,167 @@ def test_on_a_phone_the_menu_opens_from_a_button(company: Company, browser: Any)
     page.wait_for_url(f"{ADMIN}/users")
     expect(page.get_by_role("heading", name="Users and roles")).to_be_visible()
     shot(page, "phone_users_after_menu")
+
+
+# ---- Company setup and Automation controls ---------------------------------------------------
+
+REASON = "Reason for the change you are about to make (needed for every change)"
+
+
+def _row(page: Page, text_in_row: str) -> Any:
+    return page.get_by_role("row").filter(has_text=text_in_row)
+
+
+def test_company_setup_opens_every_tab_for_the_admin(company: Company, browser: Any) -> None:
+    page = open_page(browser, LAPTOP)
+    sign_in(page, company.emails["Admin"])
+    page.get_by_role("link", name="Company setup").click()
+    expect(page.get_by_role("heading", name="Company setup")).to_be_visible()
+
+    expect(page.get_by_role("tab")).to_have_text(
+        ["People", "Roles", "Approvers", "Approval chains", "Policies", "History"]
+    )
+    expect(page.get_by_role("button", name="Add person")).to_be_visible()  # People opens first
+    expect(page.get_by_text("Finance Person").first).to_be_visible()
+    for tab, probe in (
+        ("Roles", "Save Admin"),  # one box per role, the Admin first
+        ("Approvers", "Set head"),
+        ("Approval chains", "Save new version"),
+        ("Policies", "Save tolerance"),
+    ):
+        page.get_by_role("tab", name=tab).click()
+        expect(page.get_by_role("button", name=probe)).to_be_visible()
+        assert page.get_by_role("tab", name=tab).get_attribute("aria-selected") == "true"
+    page.get_by_role("tab", name="History").click()
+    expect(page.get_by_text("Every change, newest first")).to_be_visible()
+    assert page.errors == []  # type: ignore[attr-defined]
+
+
+def test_a_policy_change_needs_a_reason_is_checked_and_shows_in_the_history_and_the_audit_page(
+    company: Company, browser: Any
+) -> None:
+    page = open_page(browser, LAPTOP)
+    sign_in(page, company.emails["Admin"])
+    page.get_by_role("link", name="Company setup").click()
+    page.get_by_role("tab", name="Policies").click()
+    days = _row(page, "Days suppliers get to quote")
+    days.get_by_role("textbox").fill("6")
+
+    days.get_by_role("button", name="Save").click()
+    expect(page.get_by_role("alert")).to_have_text("Write the reason for the change at the top first.")
+
+    page.get_by_label(REASON).fill("suppliers asked for a day more")
+    days.get_by_role("button", name="Save").click()
+    expect(days).to_contain_text("suppliers asked for a day more")  # the row says who changed it last and why
+
+    box = _row(page, "Requests mailbox")  # the two mailboxes live here too
+    box.get_by_role("textbox").fill("not an address")
+    box.get_by_role("button", name="Save").click()
+    expect(page.get_by_role("alert")).to_contain_text("must be an email address")
+    box.get_by_role("textbox").fill("Requests@Plant.example")
+    box.get_by_role("button", name="Save").click()
+    expect(box).to_contain_text("suppliers asked for a day more")
+    expect(box.get_by_role("textbox")).to_have_value("requests@plant.example")  # stored in lower case
+
+    page.get_by_role("tab", name="History").click()
+    expect(_row(page, "request_mailbox")).to_contain_text("requests@plant.example")
+    expect(_row(page, "default_rfq_response_days")).to_contain_text("suppliers asked for a day more")
+
+    page.get_by_role("link", name="Audit").click()
+    page.get_by_label("Action").fill("setup.policy")
+    page.get_by_role("button", name="Search").click()
+    expect(page.get_by_role("cell", name="setup.policy").first).to_be_visible()
+    assert page.get_by_role("cell", name="setup.policy").count() >= 2
+    assert page.errors == []  # type: ignore[attr-defined]
+
+
+def test_a_person_is_added_from_company_setup_with_a_reason(company: Company, browser: Any) -> None:
+    page = open_page(browser, LAPTOP)
+    sign_in(page, company.emails["Admin"])
+    page.get_by_role("link", name="Company setup").click()
+    page.get_by_label("Email", exact=True).fill(f"new{uuid.uuid4().hex[:5]}@example.com")
+    page.get_by_label("Name", exact=True).fill("New Joiner")
+    page.get_by_label("Password (at least 10 characters)").fill(PASSWORD)
+
+    page.get_by_role("button", name="Add person").click()
+    expect(page.get_by_role("alert")).to_have_text("Write the reason for the change at the top first.")
+    page.get_by_label(REASON).fill("new store assistant joined")
+    page.get_by_role("button", name="Add person").click()
+
+    expect(page.get_by_role("cell", name="New Joiner").first).to_be_visible()
+    page.get_by_role("tab", name="History").click()
+    expect(page.get_by_role("cell", name="new store assistant joined").first).to_be_visible()
+
+
+def test_automation_controls_set_a_level_with_a_reason_and_the_locked_ones_stay_with_a_person(
+    company: Company, browser: Any
+) -> None:
+    page = open_page(browser, LAPTOP)
+    sign_in(page, company.emails["Admin"])
+    page.get_by_role("link", name="Automation").click()
+    expect(page.get_by_role("heading", name="Automation controls")).to_be_visible()
+
+    # paying, activating a supplier and releasing a block have no level to choose
+    expect(page.get_by_text("person only")).to_have_count(3)
+    for locked in ("Approve a payment run", "Activate or block a supplier", "Release a payment block on an invoice"):
+        row = _row(page, locked)
+        assert row.get_by_role("combobox").count() == 0 and row.get_by_role("button", name="Save").count() == 0
+
+    quote = _row(page, "Accept a quote read from an email")
+    quote.get_by_role("combobox").select_option("propose")
+    quote.get_by_role("button", name="Save").click()
+    expect(page.get_by_role("alert")).to_have_text("Write the reason for the change first.")
+
+    page.get_by_label(REASON).fill("a person checks every quote for now")
+    quote.get_by_role("button", name="Save").click()
+    page.wait_for_load_state("networkidle")
+    page.reload()
+    expect(_row(page, "Accept a quote read from an email").get_by_role("combobox")).to_have_value("propose")
+
+    # the server refuses the locked ones even when asked directly
+    token = create_access_token(company.ids["Admin"], company.slug, "Admin")
+    asked = httpx.put(
+        f"{URL}/api/setup/automation/payment_run.approve",
+        json={"level": "auto", "min_confidence": "0.9", "max_wrong_rate": "0.02", "reason": "try"},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert asked.status_code == 422 and "can never be set to act alone" in asked.json()["detail"]
+    assert page.errors == []  # type: ignore[attr-defined]
+
+
+def test_the_kill_switch_stops_everything_and_switches_back(company: Company, browser: Any) -> None:
+    page = open_page(browser, LAPTOP)
+    sign_in(page, company.emails["Admin"])
+    page.get_by_role("link", name="Automation").click()
+    expect(page.get_by_text("The kill switch is off.")).to_be_visible()
+
+    page.get_by_role("button", name="Stop all automation").click()
+    expect(page.get_by_role("alert")).to_have_text("Write the reason for the change first.")
+    page.get_by_label(REASON).fill("checking the supplier agent")
+    page.get_by_role("button", name="Stop all automation").click()
+    expect(page.get_by_text("The kill switch is ON: nothing runs automatically.")).to_be_visible()
+    expect(page.get_by_text("checking the supplier agent")).to_be_visible()
+
+    page.get_by_label(REASON).fill("check finished")
+    page.get_by_role("button", name="Switch off").click()
+    expect(page.get_by_text("The kill switch is off.")).to_be_visible()
+
+
+def test_a_person_who_is_not_the_admin_sees_neither_page(company: Company, browser: Any) -> None:
+    for role in ("Requester", "Buyer", "Finance"):
+        page = open_page(browser, LAPTOP)
+        sign_in(page, company.emails[role])
+        names = page.get_by_label("Main").get_by_role("link").all_inner_texts()
+        assert "Company setup" not in names and "Automation" not in names, role
+
+        page.goto(f"{ADMIN}/setup")
+        expect(page.get_by_text("You do not have access to the company setup.")).to_be_visible()
+        assert page.get_by_role("button", name="Add person").count() == 0
+        page.goto(f"{ADMIN}/automation")
+        expect(page.get_by_text("This page is for the Admin.")).to_be_visible()
+        assert page.get_by_role("button", name="Stop all automation").count() == 0
+
+        token = create_access_token(company.ids[role], company.slug, role)
+        for path in ("/api/setup/people", "/api/setup/policies", "/api/setup/automation"):
+            refused = httpx.get(f"{URL}{path}", headers={"Authorization": f"Bearer {token}"})
+            assert refused.status_code == 403, (role, path)

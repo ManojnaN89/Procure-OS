@@ -453,6 +453,13 @@ def _bank_change(db: Session, tenant: str, ref: str, supplier: str, mail: Any) -
     )
 
 
+_CONDITION = re.compile(
+    r"\b(only if|only when|only after|provided that|provided you|subject to|on (?:the )?condition|unless|in advance|"
+    r"advance payment|prepaid|prepayment|against payment|payment terms?|revised (?:price|rate)|price (?:increase|revision))\b",
+    re.I,
+)
+
+
 def _on_order(
     db: Session, tenant: str, po_no: str, supplier: str, mail: Any, reading: step.SupplierMessage, as_of: date
 ) -> Handled:
@@ -479,6 +486,17 @@ def _on_order(
             {"po_no": po_no, "email_id": int(mail["id"])},
         )  # fmt: skip
         return Handled("task", kind, f"the order is {order['status']}, so nothing was changed", task)
+    if kind in ("ack", "date_change", "delay", "partial_dispatch", "qty_change") and _CONDITION.search(
+        f"{mail['subject'] or ''} {mail['body_text'] or ''}"
+    ):
+        # "Confirmed, but only if payment is made in advance" is not an acknowledgement: it changes the terms. Code decides this, not the model.
+        task = _task(
+            db, tenant, "supplier_change", f"{supplier} set a condition on {po_no}: {mail['subject'] or ''}"[:200], ("Buyer",), 24,
+            {"po_no": po_no, "email_id": int(mail["id"]), "kind": kind},
+        )  # fmt: skip
+        return Handled(
+            "task", kind, "the email sets a condition, so a buyer decides; nothing on the order was changed", task
+        )
     if kind == "ack":
         return _ack(db, tenant, order, supplier, reading, mail, as_of)
     if kind in ("date_change", "delay", "partial_dispatch"):

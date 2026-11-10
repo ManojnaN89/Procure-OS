@@ -33,3 +33,7 @@ Thumbs.db
 # local demo logins
 .dev-credentials
 .acceptance-run
+
+# demo run screenshots (the step-by-step transcripts are kept)
+evals/results/demo_runs/**/*.jpg
+evals/results/demo_runs/*/documents/

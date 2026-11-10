@@ -644,6 +644,33 @@ def test_the_buyer_compares_quotes_and_awards_and_the_approver_signs_the_purchas
         buyer.locator("#poAck").click()
         expect(buyer.locator("#appContent")).to_contain_text("Acknowledged on")
 
+        # the supplier wrote about the order and the agent left it for a person: the buyer sees it on the order and in My work
+        email_id = db.execute(
+            text(
+                "insert into email_message (message_id, direction, from_addr, subject, linked_type, linked_id) "
+                "values ('<ui-1@supplier.example>', 'in', 's1@supplier.example', 'Re: delivery date', 'po', :p) returning id"
+            ),
+            {"p": po_no},
+        ).scalar_one()
+        db.execute(
+            text(
+                "insert into supplier_message (email_id, linked_type, linked_ref, kind, status, action, reply_draft, confidence) "
+                "values (:e, 'po', :p, 'delivery_date', 'needs_person', 'left for a buyer', 'Thank you, please confirm the date in writing.', 0.8)"
+            ),
+            {"e": email_id, "p": po_no},
+        )
+        db.commit()
+        buyer.goto(f"{URL}/#/dashboard")
+        expect(buyer.locator("#appContent")).to_contain_text("Supplier messages to read")
+        buyer.locator("#appContent").get_by_text(f"{po_no}: Re: delivery date").click()
+        panel = buyer.locator("#supplierMessagesPanel")
+        expect(panel).to_contain_text("Re: delivery date")
+        expect(panel).to_contain_text("Needs a person to read it")
+        expect(panel).to_contain_text("Suggested reply (not sent)")
+        expect(panel).to_contain_text("Thank you, please confirm the date in writing.")
+        panel.get_by_text("Chase suppliers now").click()
+        expect(buyer.locator("#chaseNote")).to_contain_text("reminder(s) emailed")
+
         store = open_app(browser, LAPTOP)  # a store person receives the goods
         sign_in(store, company.emails["Store"])
         store.goto(f"{URL}/#/receiving")
@@ -657,6 +684,7 @@ def test_the_buyer_compares_quotes_and_awards_and_the_approver_signs_the_purchas
         expect(store.locator("#appContent")).to_contain_text("DC/9")
         store.goto(f"{URL}/#/purchase-orders/{po_no}")
         expect(store.locator("#appContent")).to_contain_text("Received")
+        expect(store.locator("#supplierMessagesPanel")).to_have_count(0)  # the store may not read the supplier's mail
         assert (
             db.execute(text("select coalesce(sum(qty), 0) from stock_movement where source = 'platform'")).scalar_one()
             == 10
@@ -797,3 +825,60 @@ def test_hostile_text_in_names_and_in_the_address_bar_is_shown_as_text_and_never
         db.execute(text("delete from supplier where code = 'S-X'"))
         db.execute(text("delete from item_category where code = 'C1'"))
         db.commit()
+
+
+def test_the_help_page_opens_the_guide_of_the_role_and_the_others_are_one_click_away(
+    company: Company, browser: Any
+) -> None:
+    buyer = open_app(browser, LAPTOP)
+    sign_in(buyer, company.emails["Buyer"])
+    buyer.goto(f"{URL}/#/help")
+
+    expect(buyer.locator("#guideBody h2")).to_have_text("Buyer guide")
+    expect(buyer.locator("#guideTabs a")).to_have_text(
+        [
+            "How a purchase flows",
+            "Requester guide",
+            "Approver guide",
+            "Buyer guide (yours)",
+            "Store guide",
+            "AP clerk guide",
+            "Finance guide",
+            "Admin guide: rules and automation controls",
+        ]
+    )
+    expect(buyer.locator("#guideBody strong").first).to_be_visible()  # **bold** became bold text, not stars
+    assert "**" not in buyer.locator("#guideBody").inner_text()
+    buyer.locator("#guideTabs a", has_text="Finance guide").click()
+    expect(buyer.locator("#guideBody h2")).to_have_text("Finance guide")
+    buyer.locator("#guideTabs a", has_text="How a purchase flows").click()
+    expect(buyer.locator("#guideBody table")).to_be_visible()  # the overview table
+    expect(buyer.locator("#guideBody table tbody tr")).to_have_count(9)
+    assert buyer.problems == []  # type: ignore[attr-defined]
+
+
+def test_the_admin_link_is_shown_to_everyone_who_decides_something_and_to_no_one_else(
+    company: Company, browser: Any
+) -> None:
+    for role, shown in (("Approver", True), ("Finance", True), ("Buyer", True), ("Store", False), ("Requester", False)):
+        page = open_app(browser, LAPTOP)
+        sign_in(page, company.emails[role])
+        if shown:
+            expect(page.locator("#adminLink")).to_be_visible()
+        else:
+            expect(page.locator("#adminLink")).to_be_hidden()
+
+
+def test_hostile_markup_in_a_guide_is_shown_as_text(company: Company, browser: Any) -> None:
+    page = open_app(browser, LAPTOP)
+    sign_in(page, company.emails["Requester"])
+    page.goto(f"{URL}/#/help")
+    expect(page.locator("#guideBody h2")).to_be_visible()
+
+    hostile = "# <img src=x onerror=window.__hit=1>\n\n[a](b.md) <script>window.__hit=2</script> **<b>x</b>**"
+    drawn = page.evaluate("md => GuideMeView.markdown(md)", hostile)
+    page.locator("#guideBody").evaluate("(el, html) => { el.innerHTML = html; }", drawn)
+
+    assert page.evaluate("window.__hit") is None  # nothing in it ran
+    assert page.locator("#guideBody img, #guideBody script, #guideBody b").count() == 0
+    assert "<script>" in page.locator("#guideBody").inner_text()

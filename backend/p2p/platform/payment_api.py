@@ -230,6 +230,8 @@ def mark_paid(
     no: str, payload: dict[str, Any], db: Db, ctx: Annotated[routing.TenantContext, Depends(require("payment.propose"))]
 ) -> dict[str, Any]:
     paid_on = _date(payload.get("paid_on") or business_today().isoformat(), "paid_on")
+    if paid_on > business_today():
+        raise HTTPException(422, "the bank cannot have paid on a date that has not come yet")
     utrs = payload.get("utrs") if isinstance(payload.get("utrs"), dict) else None
     return _error(
         lambda: {

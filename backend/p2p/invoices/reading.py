@@ -73,8 +73,19 @@ def extract_text(data: bytes, filename: str) -> str:
     from p2p.platform import parsing
 
     parsed = parsing.parse_document(data, filename)
-    tables = "\n".join(" | ".join(cells) for t in parsed.tables for cells in t.rows)
-    return f"{parsed.text}\n{tables}"
+    return merge_tables(parsed.text, [cells for t in parsed.tables for cells in t.rows])
+
+
+def merge_tables(page_text: str, table_rows: list[list[str]]) -> str:
+    """The page text plus the table rows the OCR found, leaving out a row the page text already has (OCR reports a ruled
+    table both ways, and a repeated row would be read as a second item)."""
+
+    def squash(value: str) -> str:
+        return re.sub(r"[\s|]+", "", value)
+
+    seen = squash(page_text)
+    extra = [" | ".join(cells) for cells in table_rows if squash(" ".join(cells)) not in seen]
+    return page_text + "\n" + "\n".join(extra)
 
 
 # ---- rows by arithmetic -----------------------------------------------------------------------
@@ -133,18 +144,15 @@ def parse_rows(source: str, po_numbers: list[str]) -> tuple[list[TextLine], dict
             continue
         row = _SERIAL.sub("", row)
         nums = _numbers(row)
+        # A number in the description ("1/2 inch") can make a small sum work by chance: the real row is the one with
+        # the largest amount, and the last of those when two read the same (the quantity sits next to the price).
         found: tuple[int, int, int] | None = None
         for i in range(len(nums)):
             for j in range(i + 1, len(nums)):
                 for k in range(j + 1, len(nums)):
                     q, p, a = nums[i][0], nums[j][0], nums[k][0]
-                    if q > 0 and p > 0 and abs(q * p - a) <= D("0.02"):
+                    if q > 0 and p > 0 and abs(q * p - a) <= D("0.02") and (found is None or a >= nums[found[2]][0]):
                         found = (i, j, k)
-                        break
-                if found:
-                    break
-            if found:
-                break
         if found is None:
             continue
         i, j, k = found
@@ -365,7 +373,9 @@ def _finish(db: Session, d: Draft, pool: list[Candidate], printed_total: Decimal
             d.assumptions.append("this supplier must issue e-invoices and the document shows no IRN")
     if printed_total is not None and d.lines:
         expected = _expected_total(db, d)
-        if expected is not None and abs(expected.quantize(D("1")) - printed_total) > D("1.00"):
+        if expected is None:  # a total that cannot be checked is not a clean draft
+            d.assumptions.append("the total could not be checked against the lines (the buyer's GSTIN was not read)")
+        elif abs(expected.quantize(D("1")) - printed_total) > D("1.00"):
             d.problems.append(
                 f"the lines come to {expected.quantize(D('1')):,.0f} with GST by our rules, the invoice says {printed_total:,.2f}"
             )
@@ -673,7 +683,8 @@ def read_document(
         confidence=confidence,
         model=model,
     )
-    _maybe_apply(db, tenant, draft_id, draft, confidence, as_of, received_at)
+    if via != "GSTIN":  # a document from someone who is not a known contact of the supplier is always seen by a person
+        _maybe_apply(db, tenant, draft_id, draft, confidence, as_of, received_at)
     return draft_id
 
 

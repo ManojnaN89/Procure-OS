@@ -10,7 +10,7 @@ from sqlalchemy.orm import Session
 from p2p.formulas.calendar import business_today
 from p2p.invoices import reading
 from p2p.invoices import service as invoices
-from p2p.platform import files, routing
+from p2p.platform import files, ratelimit, routing
 from p2p.platform.permissions import require
 
 router = APIRouter(prefix="/api", tags=["invoice-intake"])
@@ -84,7 +84,7 @@ def get_draft(draft_id: int, db: Db, ctx: Ctx) -> dict[str, Any]:
     return _row(dict(row), detail=True)
 
 
-@router.post("/invoice-drafts/upload", status_code=201)
+@router.post("/invoice-drafts/upload", status_code=201, dependencies=[ratelimit.limited("upload")])
 def upload_invoice(file: UploadFile, db: Db, ctx: Book, supplier_code: str | None = None) -> dict[str, Any]:
     """An AP clerk uploads an invoice document: it is read now, and the draft is returned."""
     name = file.filename or "invoice"

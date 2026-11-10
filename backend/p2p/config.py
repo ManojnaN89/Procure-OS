@@ -32,6 +32,10 @@ class Settings(BaseSettings):
     extra_modules: str = ""  # comma-separated modules imported at startup; they register tools and executors
     storage_dir: str = ""  # empty means storage/ in the repository (git-ignored)
     reference_dir: str = ""  # empty means data/reference in the repository
+    login_ip_max_failures: int = 20  # failed sign-ins from one address in the window before it is refused
+    login_ip_window_seconds: int = 600
+    upload_max_per_minute: int = 30  # per signed-in person
+    model_calls_max_per_minute: int = 20  # per signed-in person: the assistant, explain-this-invoice
 
 
 @lru_cache

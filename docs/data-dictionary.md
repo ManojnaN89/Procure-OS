@@ -240,7 +240,7 @@ Additions and differences between this dictionary and what `datagen/generator` w
 - **Extra columns:** `item` has `gst_rate_before`, `gst_rate_after`, alternative rates, `gst_rate_change_date`, `gst_rate_confidence`; `email_message` has `kind`, `style`, `supplier_code`; `item_location` has `order_qty`; `truth_item_demand` has `seasonal_amplitude`; `payment` has type `advance` for the five 30%-advance suppliers; `tds_entry.payment_no` is filled (and `invoice_no` blank) for TDS deducted on advances.
 - **Prospective suppliers:** three suppliers have status `draft` (SUP-0061 to SUP-0063): one matches the sanctions list, one has incomplete documents, one is clean. They have no contracts or orders.
 - **Reference tables written to `reference/`:** `gst_state`, `uqc_unit`, `gst_rate_goods`, `gst_rate_services`, `gst_rate_history`, `tds_section`, `rbi_bank_rate`, `compliance_parameter`. The full `pincode_directory` and `hsn_sac_codes` lists stay in `data/reference/`.
-- **Not generated:** documents (`document_template`, `terms_template`, `document_file`), `match_result` (platform output) and the tables that only the running platform produces.
+- **Not generated:** `document_template`, `terms_template`, `document_file` (the invoice and reply documents themselves come from `datagen/generator/documents.py`, with an answer key `documents/manifest.json`), `match_result` (platform output) and the tables that only the running platform produces.
 
 ## Changes after the data audit (version 2.2)
 

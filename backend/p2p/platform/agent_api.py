@@ -8,7 +8,7 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from p2p.agents import invoice_exceptions
-from p2p.platform import routing
+from p2p.platform import ratelimit, routing
 from p2p.platform.permissions import can_anywhere
 
 router = APIRouter(prefix="/api", tags=["agents"])
@@ -38,7 +38,7 @@ def _run(slug: str, user_id: int, no: str) -> dict[str, Any] | None:
         return _json(done) if done else None
 
 
-@router.post("/invoices/{no}/explain")
+@router.post("/invoices/{no}/explain", dependencies=[ratelimit.limited("model")])
 async def explain_invoice(no: str, ctx: Ctx) -> dict[str, Any]:
     """Look into a blocked invoice: why it is blocked, what to do about it, and a draft of the query to the supplier.
 

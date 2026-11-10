@@ -1,4 +1,5 @@
-"""Login, refresh and logout. Wrong passwords five times in a row lock the account for 15 minutes."""
+"""Login, refresh and logout. Wrong passwords five times in a row lock the account for 15 minutes, and an address that
+fails too often is refused for a while (ratelimit.py)."""
 
 import hashlib
 import secrets
@@ -6,12 +7,12 @@ from datetime import UTC, datetime, timedelta
 from typing import Annotated
 
 from argon2.exceptions import InvalidHashError, VerificationError
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 from sqlalchemy import select, text, update
 from sqlalchemy.orm import Session
 
-from p2p.platform import routing, tenants
+from p2p.platform import ratelimit, routing, tenants
 from p2p.platform.control_models import AppUser, RefreshToken, Tenant
 from p2p.platform.tokens import create_access_token
 from p2p.platform.users import hasher
@@ -69,8 +70,10 @@ def _issue(s: Session, user: AppUser, slug: str) -> TokensOut:
 
 
 @router.post("/login")
-def login(body: LoginIn) -> TokensOut:
+def login(body: LoginIn, request: Request) -> TokensOut:
     now = datetime.now(UTC)
+    address = request.client.host if request.client else "unknown"
+    ratelimit.check_login(address)
     with tenants.control_session() as s:
         user = s.scalar(select(AppUser).where(AppUser.email == body.email.strip().lower()))
         if user is None or not user.active:
@@ -78,8 +81,10 @@ def login(body: LoginIn) -> TokensOut:
                 hasher.verify(_DUMMY_HASH, body.password)
             except VerificationError:
                 pass
+            ratelimit.login_failed(address, body.email)
             raise HTTPException(401, "Wrong email or password")
         if user.locked_until and user.locked_until > now:
+            ratelimit.login_failed(address, body.email)
             raise HTTPException(423, "Account locked after repeated failures; try again later")
         try:
             hasher.verify(user.password_hash, body.password)
@@ -89,12 +94,14 @@ def login(body: LoginIn) -> TokensOut:
                 user.locked_until = now + timedelta(minutes=LOCK_MINUTES)
                 user.failed_attempts = 0
             s.commit()
+            ratelimit.login_failed(address, body.email)
             raise HTTPException(401, "Wrong email or password") from None
         slug = s.scalar(select(Tenant.slug).where(Tenant.id == user.tenant_id, Tenant.active))
         if slug is None:
             raise HTTPException(403, "Tenant is not active")
         user.failed_attempts = 0
         user.locked_until = None
+        ratelimit.login_ok(address, body.email)
         return _issue(s, user, slug)
 
 

@@ -118,7 +118,8 @@ export function Policies(shared: Shared) {
 											</select>
 										) : (
 											<Input
-												inputMode="decimal"
+												inputMode={p.kind === "email" ? "email" : "decimal"}
+												placeholder={p.kind === "email" ? "none" : undefined}
 												value={value}
 												onChange={(e) =>
 													setEdits({ ...edits, [p.key]: e.target.value })

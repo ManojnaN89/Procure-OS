@@ -27,6 +27,8 @@ const NAV: NavItem[] = [
 			"po.approve",
 			"invoice.approve",
 			"payment.approve",
+			"rfq.send",
+			"supplier.activate",
 		),
 	},
 	{ to: "/rules", label: "Rules", show: any("admin.rules") },

@@ -277,11 +277,13 @@ const RfqsView = {
             </tbody>
           </table>
         </div>
+        <div id="supplierMessagesBox"></div>
         ${this.draftsPanel(r)}
         ${this.comparisonPanel(r)}
         ${this.quoteForm(r)}
       `;
       this.wire(r);
+      SupplierMessages.mount(document.getElementById("supplierMessagesBox"), "rfqs", r.id);
     } catch {
       container.innerHTML = `<div class="empty-state">Couldn't load this RFQ.</div>`;
     }

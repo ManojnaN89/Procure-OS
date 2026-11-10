@@ -12,6 +12,8 @@ export function HomePage() {
 		"po.approve",
 		"invoice.approve",
 		"payment.approve",
+		"rfq.send",
+		"supplier.activate",
 	);
 	const pending = useQuery({
 		queryKey: ["proposals", "pending"],

@@ -1,0 +1,8 @@
+[
+  {
+    "id": "GHSA-mrhx-c7xc-m3w5",
+    "package": "zod",
+    "reason": "Reached only through @gorules/jdm-editor (the rule-table editor in the admin app), which runs in the administrator's own browser on tables fetched from our own API. No server code uses zod and no outside party's input reaches it. The only fix (zod 4.6.6 or later) is a major version that the editor does not support, and npm's own suggestion is to go back to an old editor release.",
+    "review_by": "2027-03-01"
+  }
+]

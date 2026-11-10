@@ -196,6 +196,30 @@ def _buyer(db: Session) -> list[dict[str, Any]]:
             ],
         )
     )
+    # what a supplier wrote about an order or a quotation request that the agent left for a person
+    rows = _rows(
+        db,
+        "select m.id, m.linked_type, m.linked_ref, e.subject from supplier_message m join email_message e on e.id = m.email_id "
+        "left join task t on t.id = m.task_id where m.status in ('needs_person', 'task') "
+        "and (m.task_id is null or t.status in ('open', 'overdue')) order by m.id desc limit 50",
+    )
+    out.append(
+        _section(
+            "supplier_messages",
+            "Supplier messages to read",
+            "#/purchase-orders",
+            [
+                _row(
+                    str(r["id"]),
+                    f"{r['linked_ref']}: {r['subject'] or 'no subject'}"[:90],
+                    f"#/rfqs/{r['linked_ref']}"
+                    if r["linked_type"] == "rfq"
+                    else f"#/purchase-orders/{r['linked_ref']}",
+                )
+                for r in rows
+            ],
+        )
+    )
     return out
 
 

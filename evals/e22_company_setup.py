@@ -146,6 +146,10 @@ def run(ctx) -> Outcome:
             good, bad = [("true" if p["value"] == "false" else "false")], ["maybe", "1", ""]
         elif kind == "choice":
             good, bad = [c for c in p["choices"] if c != p["value"]][:1], ["nonsense", "WARN "]
+        elif kind == "email":  # an address, or empty for none; the two mailboxes must differ, so each gets its own
+            mine = f"{key.split('_')[0]}@eval-co.example"
+            good = [mine if p["value"] != mine else f"other.{mine}"]
+            bad = ["not an address", "a@b", "two words@x.example", "x@y.example, z@y.example"]
         else:
             lo, hi = p["min"], p["max"]
             edge = [

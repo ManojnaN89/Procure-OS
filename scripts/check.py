@@ -38,7 +38,9 @@ def main() -> int:
     for name, cmd, cwd in STEPS:
         limit = LIMIT_MINUTES.get(name, DEFAULT_LIMIT_MINUTES)
         try:
-            r = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True, timeout=limit * 60)  # noqa: S603, PLW1510
+            r = subprocess.run(  # noqa: S603, PLW1510
+                cmd, cwd=cwd, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=limit * 60
+            )
         except subprocess.TimeoutExpired as exc:
             print(f"FAIL {name} (no result after {limit} minutes: the step is stuck)")
             failed.append(name)
@@ -47,7 +49,7 @@ def main() -> int:
         print(f"{'ok  ' if r.returncode == 0 else 'FAIL'} {name}")
         if r.returncode:
             failed.append(name)
-            print(r.stdout[-2000:], r.stderr[-2000:])
+            print((r.stdout or "")[-2000:], (r.stderr or "")[-2000:])
     return 1 if failed else 0
 
 

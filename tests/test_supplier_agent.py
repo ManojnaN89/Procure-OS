@@ -165,6 +165,28 @@ def test_an_acknowledgement_waits_for_a_buyer_when_the_gate_says_no(shop: Sessio
     assert shop.execute(text("select status from po")).scalar_one() == "sent"  # not recorded
 
 
+@pytest.mark.parametrize(
+    ("words", "promised"),
+    [
+        ("Confirmed, but only if payment is released 100 percent in advance.", None),
+        ("Order confirmed subject to your acceptance of the revised price.", None),
+        ("We will deliver by 19 Nov 2026 unless the drawing changes.", date(2026, 11, 19)),
+    ],
+)
+def test_an_acknowledgement_that_sets_a_condition_is_never_recorded_by_itself(
+    shop: Session,
+    outbox: Outbox,  # noqa: F811
+    words: str,
+    promised: date | None,
+) -> None:
+    po_no = _placed(shop, promised=None)
+
+    done, _ = _handle(shop, po_no, words, _reading("ack", new_date=promised))
+
+    assert done is not None and done.status == "task" and "condition" in done.action
+    assert shop.execute(text("select status from po")).scalar_one() == "sent"  # the order is not acknowledged
+
+
 # ---- changes of date --------------------------------------------------------------------------
 
 

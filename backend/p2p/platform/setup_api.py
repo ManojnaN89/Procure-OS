@@ -7,6 +7,7 @@ the history. Admin is a setup role: it can change this but holds no business per
 """
 
 import json
+import re
 from datetime import date, datetime, timedelta
 from decimal import Decimal, InvalidOperation
 from typing import Annotated, Any
@@ -211,6 +212,26 @@ POLICIES: dict[str, tuple[str, str, str, str, str, float | None, float | None, t
         (),
     ),
     "duplicate_window_days": ("org", "int", "Duplicate request window (days)", "", "14", 0, 90, ()),
+    "request_mailbox": (
+        "org",
+        "email",
+        "Requests mailbox",
+        "Mail sent to this address from a colleague is read as a purchase request (leave empty for none)",
+        "",
+        None,
+        None,
+        (),
+    ),
+    "invoice_receipt_mailbox": (
+        "org",
+        "email",
+        "Invoices mailbox",
+        "Invoices that suppliers send to this address are read into drafts for AP (leave empty for none)",
+        "",
+        None,
+        None,
+        (),
+    ),
     "auto_replenishment": (
         "app",
         "bool",
@@ -939,6 +960,10 @@ def _validate(
     elif kind == "choice":
         if value not in choices:
             raise _422(f"{label}: must be one of {', '.join(choices)}")
+    elif kind == "email":
+        value = value.lower()
+        if value and (len(value) > 254 or not EMAIL.fullmatch(value)):
+            raise _422(f"{label}: must be an email address like requests@yourcompany.example, or empty")
     else:
         try:
             number = D(value)
@@ -954,6 +979,13 @@ def _validate(
             raise _422(f"{label}: cannot be above {high:g}")
         value = str(int(number)) if kind == "int" else format(number.normalize(), "f")
     return value
+
+
+EMAIL = re.compile(r"[a-z0-9._%+-]+@[a-z0-9-]+(?:\.[a-z0-9-]+)+")
+MAILBOXES = (
+    "request_mailbox",
+    "invoice_receipt_mailbox",
+)  # two mailboxes cannot be one address: the mail would go to both
 
 
 def _stored(db: Session, store: str, key: str) -> str | None:
@@ -1010,6 +1042,10 @@ def put_policy(key: str, body: PolicyBody, db: Db, ctx: SettingsAdmin) -> dict[s
         raise HTTPException(404, f"there is no policy '{key}'")
     store, kind, label, _, default, low, high, choices = spec
     value = _validate(kind, body.value, low, high, choices, label)
+    if key in MAILBOXES and value:
+        other = next(k for k in MAILBOXES if k != key)
+        if _stored(db, "org", other) == value:
+            raise _422(f"{label}: that address already receives {POLICIES[other][2].lower()}; use a different one")
     return _write_policy(db, user_actor(ctx.user_id), key, store, value, default, reason)
 
 

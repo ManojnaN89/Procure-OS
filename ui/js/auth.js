@@ -81,7 +81,7 @@ const Auth = {
     if (role) role.textContent = `${this.me.role} · ${this.me.tenant_name}`;
     if (avatar) avatar.textContent = this.initials(this.me.display_name);
     const admin = document.getElementById("adminLink");
-    if (admin) admin.style.display = this.can("admin.users", "admin.rules", "audit.view") ? "" : "none";
+    if (admin) admin.style.display = this.can("admin.users", "admin.rules", "audit.view", "request.approve", "po.approve", "invoice.approve", "payment.approve", "rfq.send", "supplier.activate") ? "" : "none";
   },
 
   showLogin() {

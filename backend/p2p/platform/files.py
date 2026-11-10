@@ -9,7 +9,7 @@ from pydantic import BaseModel
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
-from p2p.platform import audit, routing, storage
+from p2p.platform import audit, ratelimit, routing, storage
 from p2p.platform.sod import user as user_actor
 
 MAX_BYTES = 25 * 1024 * 1024
@@ -77,7 +77,7 @@ def save_file(
     return FileOut(id=doc_id, filename=name, content_type=content_type, size=len(data), sha256=digest)
 
 
-@router.post("", status_code=201)
+@router.post("", status_code=201, dependencies=[ratelimit.limited("upload")])
 async def upload(
     file: UploadFile,
     ctx: Annotated[routing.TenantContext, Depends(routing.tenant_context)],

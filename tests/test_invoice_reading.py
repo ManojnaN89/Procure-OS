@@ -146,6 +146,27 @@ def test_a_row_whose_numbers_do_not_multiply_is_not_taken_as_a_line() -> None:
     assert [r.description for r in rows] == ["Seal"]
 
 
+def test_a_small_number_in_the_description_does_not_make_a_wrong_row() -> None:
+    rows, _ = reading.parse_rows("1 Socket set 1/2 inch 2 450.00 900.00 18", [])
+
+    assert [(r.description, r.qty, r.unit_price, r.taxable) for r in rows] == [
+        ("Socket set 1/2 inch", D(2), D("450.00"), D("900.00"))
+    ]
+
+
+def test_a_table_row_the_page_text_already_has_is_not_added_again() -> None:
+    page = "Item  Qty  Rate  Amount\n1 Seal 25mm  4  37.50  150.00\nTotal 150.00"
+    table = [
+        ["Item", "Qty", "Rate", "Amount"],
+        ["1", "Seal 25mm", "4", "37.50", "150.00"],
+        ["2", "Gasket", "2", "10", "20"],
+    ]
+
+    merged = reading.merge_tables(page, table)
+
+    assert merged.count("Seal 25mm") == 1 and "Gasket | 2 | 10 | 20" in merged
+
+
 # ---- an e-invoice: no model ------------------------------------------------------------------
 
 

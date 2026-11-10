@@ -51,7 +51,10 @@ def install(app: FastAPI) -> None:
 
     @app.middleware("http")
     async def _log_requests(request: Request, call_next: Any) -> Response:
-        rid = request.headers.get("x-request-id") or uuid.uuid4().hex[:12]
+        rid = (
+            "".join(c for c in request.headers.get("x-request-id", "")[:64] if c.isalnum() or c in "-_.")
+            or uuid.uuid4().hex[:12]
+        )
         request_id.set(rid)
         started = time.monotonic()
         response: Response = await call_next(request)

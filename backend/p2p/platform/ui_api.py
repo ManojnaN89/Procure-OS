@@ -34,7 +34,7 @@ from p2p.orders import contracts as contract_usage
 from p2p.orders import dispatch, quotes
 from p2p.orders import service as orders  # noqa: F401 - registers the price-variance proposal executor
 from p2p.orders import workflow as po_workflow
-from p2p.platform import audit, routing, sod
+from p2p.platform import audit, ratelimit, routing, sod
 from p2p.platform.permissions import PermissionDenied, can_anywhere, require
 from p2p.platform.tokens import decode_access_token
 from p2p.receiving import goods
@@ -1550,7 +1550,7 @@ def _answer(slug: str, user_id: int, message: str) -> str:
         return assistant.ask(db, slug, user_id, message, assistant_gateway()).text
 
 
-@router.post("/chat")
+@router.post("/chat", dependencies=[ratelimit.limited("model")])
 async def chat(payload: dict[str, Any], ctx: Ctx) -> StreamingResponse:
     session = str(payload.get("session_id") or uuid.uuid4())
     message = str(payload.get("message") or "").strip()

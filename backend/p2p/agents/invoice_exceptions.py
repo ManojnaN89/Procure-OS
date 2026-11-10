@@ -391,7 +391,15 @@ def build_registry(db: Session) -> ToolRegistry:
 
 # ---- the agent --------------------------------------------------------------------------------
 
-_CAUSE_LINE = re.compile(r"cause\s*:\s*([a-z_]+)\s*$", re.I | re.M)
+# The last line names one cause. Models dress it in markdown or end it with a full stop, so those are tolerated.
+_CAUSE_LINE = re.compile(r"^[\W_]*cause[\W_]{0,8}(" + "|".join(CAUSES) + r")[\W_]*$", re.I | re.M)
+# A claim that something was done: only a person releases or approves, so text that says it happened is not used.
+_CLAIM = re.compile(
+    r"\b(?:was|were|been|now|already|has|have|i|i've)\s+(?:\w+\s+)?(?:released|unblocked|cleared|paid|approved)\b", re.I
+)
+_LINK = re.compile(r"https?://|www\.|[\w.+-]+@[\w-]+\.[a-z]{2,}", re.I)
+# What a supplier wrote is untrusted: a number or a link that only appears in an email is not a fact about the invoice.
+UNTRUSTED_TOOLS = ("supplier_emails",)
 
 
 def explain(db: Session, tenant: str, user_id: int, invoice_no: str, gateway: Any) -> Diagnosis | None:
@@ -408,7 +416,8 @@ def explain(db: Session, tenant: str, user_id: int, invoice_no: str, gateway: An
     steps: list[tuple[str, Any]] = []
     try:
         outcome = runtime.start(
-            f"Why is invoice {invoice_no} blocked, and what should we do?",
+            f"Why is invoice {invoice_no} blocked, and what should we do? "
+            f"Your answer must end with a last line in exactly this form: 'Cause: <one of {', '.join(CAUSES)}>'.",
             thread_id=f"invoice-exc-{invoice_no}-{uuid.uuid4().hex}",
         )
         run_id = outcome.run_id
@@ -418,18 +427,20 @@ def explain(db: Session, tenant: str, user_id: int, invoice_no: str, gateway: An
     except ModelError:
         db.rollback()
     if answer:
-        said = _CAUSE_LINE.search(answer)
+        said = next(iter(reversed(list(_CAUSE_LINE.finditer(answer)))), None)
         body = _CAUSE_LINE.sub("", answer).strip()
-        facts_text = _plain_facts(steps)
+        facts_text = _plain_facts([s for s in steps if s[0] not in UNTRUSTED_TOOLS])
         bad = ungrounded_numbers(body, facts_text)
-        if said and said.group(1).lower() == base.cause and body and not bad:
+        links = [m for m in _LINK.findall(body) if m.lower() not in facts_text.lower()]
+        claims = [m.group(0) for m in _CLAIM.finditer(body)]
+        if said and said.group(1).lower() == base.cause and body and not bad and not links and not claims:
             base.explanation, base.source, base.run_id = body, "agent", run_id
         else:
             base.run_id = run_id
-            base.grounded = not bad
+            base.grounded = not bad and not links and not claims
             audit.record(
                 db, AGENT, "invoice.explain_rejected", "invoice", invoice_no,
-                after={"said": said.group(1) if said else None, "rules": base.cause, "ungrounded": [str(n) for n in bad]},
+                after={"said": said.group(1) if said else None, "rules": base.cause, "ungrounded": [str(n) for n in bad], "links": links, "claims": claims, "tail": answer[-120:]},
             )  # fmt: skip
     _store(db, base, user_id)
     return base

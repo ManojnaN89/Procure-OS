@@ -89,6 +89,14 @@ def _empty_job_queue(request: pytest.FixtureRequest) -> None:
 
 
 @pytest.fixture(autouse=True)
+def _fresh_rate_limits() -> None:
+    """Every test starts with no failed logins or uploads counted against it."""
+    from p2p.platform import ratelimit
+
+    ratelimit.reset()
+
+
+@pytest.fixture(autouse=True)
 def _fixed_business_day() -> Iterator[None]:
     """The tests are written around Friday 6 November 2026. Pinning the business date keeps them from depending on the day
     they are run (a quote that was 6 days late yesterday must not be 7 days late today)."""

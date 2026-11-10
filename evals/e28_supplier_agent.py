@@ -554,6 +554,9 @@ def run(ctx: lib.Ctx) -> Outcome:
         from p2p.ai_steps.gateway import Gateway as Live
 
         live = [c for c in cases if not c.spoof][: 14 if ctx.quick else 40]
+        autonomy.configure(
+            db, sod.user(1), supplier_comms.DECISION_CHANGE, level="auto"
+        )  # the mutation checks left it changed
         live_gateway = Live()
         right = wrong = 0
         db.execute(text("delete from model_cache"))
@@ -573,7 +576,13 @@ def run(ctx: lib.Ctx) -> Outcome:
                 expect = "task" if case.expect_task else "handled_elsewhere"
             else:
                 expect = "applied" if case.expect_applied else "task"
-            right += handled is not None and handled.status == expect
+            ok = handled is not None and handled.status == expect
+            right += ok
+            if not ok:
+                out.notes.append(
+                    f"live miss: sent as '{case.change}' ({case.kind}); wanted {expect}, got "
+                    f"{handled.status if handled else None} read as '{handled.kind if handled else None}' | {handled.action[:140] if handled else ''} || {case.subject!r} {case.body[:260]!r}"
+                )
             if (
                 before
                 and after
