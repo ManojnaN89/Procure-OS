@@ -46,9 +46,6 @@ class BusinessCalendar:
             d += timedelta(days=1)
         return d
 
-    def on_or_after(self, d: date) -> date:
-        return d if self.is_working_day(d) else self.next_working_day(d)
-
     def add_working_days(self, d: date, n: int) -> date:
         for _ in range(n):
             d = self.next_working_day(d)

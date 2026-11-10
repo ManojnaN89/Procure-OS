@@ -13,8 +13,6 @@ from sqlalchemy.orm import Session
 from p2p.platform import audit
 from p2p.platform.sod import Actor
 
-STATES = ("request", "approval", "sourcing", "order", "supplier", "receipt", "invoice", "payment", "closed")
-
 TRANSITIONS: dict[str, frozenset[str]] = {
     "request": frozenset({"approval", "closed"}),
     "approval": frozenset({"sourcing", "order", "request", "closed"}),  # back to request when returned

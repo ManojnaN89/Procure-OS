@@ -10,11 +10,11 @@ from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
-from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from p2p.platform import permissions, proposals, routing, users
 from p2p.platform.permissions import require
+from p2p.platform.rows import rows as _rows
 from p2p.platform.sod import Actor
 from p2p.platform.sod import user as user_actor
 from p2p.rules import engine as rules
@@ -23,10 +23,6 @@ router = APIRouter(prefix="/api/admin", tags=["admin"])
 Db = Annotated[Session, Depends(routing.tenant_session)]
 Ctx = Annotated[routing.TenantContext, Depends(routing.tenant_context)]
 Rows = list[dict[str, Any]]
-
-
-def _rows(db: Session, sql: str, **params: Any) -> Rows:
-    return [dict(r._mapping) for r in db.execute(text(sql), params)]
 
 
 # ---- run viewer, model calls, rule evaluations, audit ----------------------------------------

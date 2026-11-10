@@ -16,7 +16,6 @@ instruction written in it has nowhere to go, because the model returns a schema 
 """
 
 import hashlib
-import json
 import re
 from dataclasses import dataclass, field
 from datetime import UTC, date, datetime, timedelta
@@ -880,32 +879,6 @@ def _attachment_text(db: Session, tenant: str, ids: list[int]) -> str:
         table_text = "\n".join(" | ".join(cells) for t in parsed.tables for cells in t.rows)
         parts.append(f"--- attachment {row[0]} ---\n{parsed.text}\n{table_text}")
     return "\n".join(parts)
-
-
-def to_json(result: IntakeResult) -> dict[str, Any]:
-    out: dict[str, Any] = json.loads(
-        json.dumps(
-            {
-                "status": result.status,
-                "message": result.message,
-                "requests": result.request_nos,
-                "question": result.question,
-                "asked": result.asked,
-                "warnings": result.warnings,
-                "lines": [
-                    {
-                        "phrase": x.phrase,
-                        "item": x.item_code,
-                        "name": x.name,
-                        "qty": str(x.qty),
-                        "matched_by": x.matched_by,
-                    }
-                    for x in result.lines
-                ],
-            }
-        )
-    )
-    return out
 
 
 @worker.register("intake_email")

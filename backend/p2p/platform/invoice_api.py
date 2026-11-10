@@ -6,7 +6,6 @@ from decimal import Decimal, InvalidOperation
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from p2p.agents import invoice_exceptions
@@ -15,6 +14,7 @@ from p2p.formulas.money import format_qty
 from p2p.invoices import service as invoices
 from p2p.platform import routing
 from p2p.platform.permissions import can_anywhere, require
+from p2p.platform.rows import rows as _rows
 
 router = APIRouter(prefix="/api", tags=["invoices"])
 Db = Annotated[Session, Depends(routing.tenant_session)]
@@ -44,10 +44,6 @@ def _date(value: Any, field: str) -> date:
         return date.fromisoformat(str(value))
     except ValueError:
         raise HTTPException(422, f"{field} must be a date like 2026-11-20") from None
-
-
-def _rows(db: Session, sql: str, **params: Any) -> list[dict[str, Any]]:
-    return [dict(r._mapping) for r in db.execute(text(sql), params)]
 
 
 @router.get("/invoicing/ready")

@@ -29,6 +29,7 @@ from p2p.agents.tools import Tool, ToolRegistry
 from p2p.ai_steps.adapters import ModelError
 from p2p.formulas.money import format_qty
 from p2p.platform import audit
+from p2p.platform.rows import rows as _rows
 from p2p.platform.sod import Actor
 
 AGENT = Actor("agent", "invoice_exceptions")
@@ -39,7 +40,6 @@ CAUSES = (
     "price_mismatch", "qty_mismatch", "rejected_qty_invoiced", "goods_not_received", "wrong_gstin",
     "composition_tax", "e_invoice_missing", "arithmetic",
 )  # fmt: skip
-FIXES = ("credit_note", "corrected_invoice", "wait_for_receipt", "request_release")
 NEXT_ACTION = {
     "credit_note": "Ask the supplier for a credit note",
     "corrected_invoice": "Ask the supplier for a corrected invoice",
@@ -85,10 +85,6 @@ class Diagnosis:
     run_id: int | None = None
     grounded: bool = True
     facts: dict[str, Any] = field(default_factory=dict)
-
-
-def _rows(db: Session, sql: str, **params: Any) -> list[dict[str, Any]]:
-    return [dict(r._mapping) for r in db.execute(text(sql), params)]
 
 
 # ---- the facts --------------------------------------------------------------------------------

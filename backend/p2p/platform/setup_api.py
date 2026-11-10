@@ -21,6 +21,7 @@ from p2p.agents import autonomy
 from p2p.formulas.calendar import business_today
 from p2p.platform import audit, routing, tenants, users
 from p2p.platform.permissions import require
+from p2p.platform.rows import rows as _rows
 from p2p.platform.sod import Actor
 from p2p.platform.sod import user as user_actor
 from p2p.sourcing import templates
@@ -353,10 +354,6 @@ def _log(db: Session, actor: Actor, area: str, key: str, old: Any, new: Any, rea
         },
     )
     audit.record(db, actor, f"setup.{area}", area, key, before=old, after=new, reason=reason)
-
-
-def _rows(db: Session, sql: str, **params: Any) -> Rows:
-    return [dict(r._mapping) for r in db.execute(text(sql), params)]
 
 
 def _iso(value: Any) -> str | None:

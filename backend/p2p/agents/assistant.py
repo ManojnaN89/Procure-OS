@@ -24,6 +24,7 @@ from p2p.ai_steps.evidence import numbers_in
 from p2p.approvals import workflow as approvals
 from p2p.formulas.money import format_qty
 from p2p.platform import audit, permissions
+from p2p.platform.rows import rows as _rows
 from p2p.platform.sod import Actor
 from p2p.receiving.stock import stock_levels
 
@@ -58,10 +59,6 @@ class ByNumber(BaseModel):
 
 class ItemQuery(BaseModel):
     query: str = Field(description="part of an item name or code")
-
-
-def _rows(db: Session, sql: str, **params: Any) -> list[dict[str, Any]]:
-    return [dict(r._mapping) for r in db.execute(text(sql), params)]
 
 
 def _s(value: Any) -> Any:

@@ -198,15 +198,8 @@ def test_roles_are_given_and_taken_back_and_the_last_admin_cannot_lose_the_role(
     )  # not their own
     other = next(r["id"] for r in people[s.admin2]["roles"] if r["role"] == "Admin")
     assert client.delete(f"/api/setup/people/{s.admin2}/roles/{other}?reason=Step down", headers=s.a).status_code == 200
-    only = (
-        next(r["id"] for r in client.get("/api/setup/people", headers=s.a).json()["people"] if r["user_id"] == s.admin)[
-            "roles"
-        ][0]["id"]
-        if False
-        else own
-    )
     assert (
-        client.delete(f"/api/setup/people/{s.admin}/roles/{only}?reason=x", headers=s.a).status_code == 409
+        client.delete(f"/api/setup/people/{s.admin}/roles/{own}?reason=x", headers=s.a).status_code == 409
     )  # the last one
     assert [c["area"] for c in s.changes()] == ["role_grant", "role_revoke", "role_revoke"]
 

@@ -48,7 +48,11 @@ def test_a_repeat_that_was_given_up_counts_and_one_that_went_ahead_on_a_reason_d
 
 
 def test_an_invoice_set_aside_as_a_copy_counts_with_its_value(db: Session) -> None:  # noqa: F811
-    db.execute(text("insert into supplier (code, legal_name, trade_name, status) values ('SD', 'Dup Supplier', null, 'active')"))
+    db.execute(
+        text(
+            "insert into supplier (code, legal_name, trade_name, status) values ('SD', 'Dup Supplier', null, 'active')"
+        )
+    )
     for no, block, status, total in (
         ("PI-D1", "duplicate", "cancelled", "590.00"),
         ("PI-D2", "duplicate", "blocked", "100.50"),

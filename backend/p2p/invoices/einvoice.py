@@ -14,7 +14,6 @@ import base64
 import hashlib
 import io
 import json
-import re
 from dataclasses import dataclass
 from datetime import date, datetime
 from decimal import Decimal, InvalidOperation
@@ -192,7 +191,3 @@ def find_einvoice(data: bytes, filename: str) -> EInvoice | None:
         if parsed is not None:
             return parsed
     return None
-
-
-def gstin_like(value: str) -> bool:
-    return re.fullmatch(r"\d{2}[A-Z]{5}\d{4}[A-Z]\d[A-Z\d][A-Z\d]", value.strip().upper()) is not None

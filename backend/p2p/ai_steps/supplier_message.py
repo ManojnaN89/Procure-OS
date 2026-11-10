@@ -16,11 +16,6 @@ from p2p.ai_steps.runner import AiStep
 
 PROMPT_VERSION = "1"
 
-KINDS = (
-    "ack", "date_change", "qty_change", "price_change", "reject", "question", "partial_dispatch", "delay", "substitution",
-    "extension_request", "payment_followup", "invoice_cover", "bank_change", "quote", "decline_rfq", "other",
-)  # fmt: skip
-
 
 class SupplierMessage(BaseModel):
     type: Literal[

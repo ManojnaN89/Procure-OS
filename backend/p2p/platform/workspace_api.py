@@ -17,15 +17,12 @@ from p2p.formulas.kpis import BUCKETS, working_days_between
 from p2p.invoices import payment
 from p2p.platform import alerts, control_tower, reference, routing
 from p2p.platform.permissions import can_anywhere
+from p2p.platform.rows import rows as _rows
 
 router = APIRouter(prefix="/api", tags=["workspace"])
 Db = Annotated[Session, Depends(routing.tenant_session)]
 Ctx = Annotated[routing.TenantContext, Depends(routing.tenant_context)]
 SHOWN = 8  # rows listed per section; the count is always the whole number
-
-
-def _rows(db: Session, sql: str, **params: Any) -> list[dict[str, Any]]:
-    return [dict(r._mapping) for r in db.execute(text(sql), params)]
 
 
 def _section(key: str, title: str, link: str, rows: list[dict[str, Any]], total: int | None = None) -> dict[str, Any]:

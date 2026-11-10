@@ -12,6 +12,7 @@ from sqlalchemy.orm import Session
 from p2p.formulas import kpis as rules
 from p2p.formulas.calendar import IST, BusinessCalendar
 from p2p.formulas.orders import net_unit_price
+from p2p.platform.rows import rows as _rows
 
 D = Decimal
 IST_DATE = "(%s at time zone 'Asia/Kolkata')::date"
@@ -43,10 +44,6 @@ STAGES: list[tuple[str, str]] = [
 
 def _d(ts: Any) -> date:
     return ts.astimezone(IST).date() if isinstance(ts, datetime) else date(ts.year, ts.month, ts.day)
-
-
-def _rows(db: Session, sql: str, **params: Any) -> list[dict[str, Any]]:
-    return [dict(r) for r in db.execute(text(sql), params).mappings()]
 
 
 def stage_items(db: Session, stage: str) -> list[Item]:

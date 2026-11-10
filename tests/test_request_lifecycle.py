@@ -16,7 +16,6 @@ from p2p.requests import lifecycle
 
 client = TestClient(app)
 KEEPER = "U4"  # a storekeeper with a login that only has the Requester role
-STORES_HEAD = "U3"
 
 
 @pytest.fixture(autouse=True)

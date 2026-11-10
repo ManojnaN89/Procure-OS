@@ -37,6 +37,7 @@ from p2p.orders import service as orders  # noqa: F401 - registers the price-var
 from p2p.orders import workflow as po_workflow
 from p2p.platform import audit, ratelimit, routing, sod
 from p2p.platform.permissions import PermissionDenied, can_anywhere, require
+from p2p.platform.rows import rows as _rows
 from p2p.platform.tokens import decode_access_token
 from p2p.receiving import goods
 from p2p.receiving.stock import StockError, post_count, post_issue, stock_levels
@@ -77,10 +78,6 @@ CURRENCIES = {"INR", "USD", "EUR", "GBP"}
 
 def _iso(value: datetime | None) -> str | None:
     return value.astimezone(UTC).isoformat() if value else None
-
-
-def _rows(db: Session, sql: str, **params: Any) -> list[dict[str, Any]]:
-    return [dict(r._mapping) for r in db.execute(text(sql), params)]
 
 
 # ---- settings ---------------------------------------------------------------------------------
@@ -334,10 +331,6 @@ def dashboard(db: Db, ctx: Ctx) -> dict[str, Any]:
             ).scalar_one()
         ),
     }
-
-
-def _empty_list() -> list[Any]:
-    return []
 
 
 _VENDOR = """
