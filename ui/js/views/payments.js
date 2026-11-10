@@ -21,6 +21,7 @@ const PaymentsView = {
         <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
           <input id="runDate" type="date" style="padding:6px;"> <span class="cell-muted" style="font-size:12px;">pays everything due within</span>
           <input id="runWindow" type="number" min="0" value="7" style="width:60px;padding:6px;"> <span class="cell-muted" style="font-size:12px;">days; small suppliers first</span>
+          <label style="font-size:12px;display:flex;gap:4px;align-items:center;"><input id="runAdvances" type="checkbox" checked> include advances on orders</label>
           <div class="btn btn-secondary btn-sm" id="previewRun">See what is due</div>
           <div class="btn btn-primary btn-sm" id="planRun">Send the run for approval</div>
         </div>
@@ -35,16 +36,22 @@ const PaymentsView = {
       const box = document.getElementById("duePreview");
       try {
         const rows = await API.getJSON(`/api/payment-runs/due?${params()}`);
-        box.innerHTML = rows.length
-          ? `<table class="data-table"><thead><tr><th>INVOICE</th><th>SUPPLIER</th><th>DUE</th><th>INVOICE TOTAL</th><th>TAX HELD</th><th>CREDIT</th><th>INTEREST</th><th>TO PAY</th></tr></thead><tbody>
-              ${rows.map((r) => `<tr><td class="cell-muted">${this.esc(r.invoice)}</td><td>${this.esc(r.supplier)}${r.msme ? ' <span class="badge badge-pending">small supplier</span>' : ""}</td><td>${formatDate(r.due_date)}</td>
-                <td>${formatCurrency(r.total)}</td><td>${formatCurrency(r.tds)}</td><td>${formatCurrency(r.credit)}</td><td>${formatCurrency(r.interest)}</td><td>${formatCurrency(r.net)}</td></tr>`).join("")}
-            </tbody></table>`
-          : `<div class="cell-muted" style="font-size:12.5px;">Nothing approved is due in this window.</div>`;
+        const advances = document.getElementById("runAdvances").checked;
+        const shown = rows.filter((r) => advances || r.kind !== "advance");
+        const money = (v) => (v == null ? "" : formatCurrency(v));
+        const saving = shown.reduce((sum, r) => sum + Number(r.discount || 0), 0);
+        box.innerHTML = shown.length
+          ? `<table class="data-table"><thead><tr><th>FOR</th><th>SUPPLIER</th><th>DUE</th><th>TOTAL</th><th>TAX HELD</th><th>CREDIT</th><th>ADVANCE TAKEN OFF</th><th>DISCOUNT</th><th>INTEREST</th><th>TO PAY</th></tr></thead><tbody>
+              ${shown.map((r) => `<tr><td class="cell-muted">${r.kind === "advance" ? `Advance on ${this.esc(r.po_no)}` : this.esc(r.invoice)}</td><td>${this.esc(r.supplier)}${r.msme ? ' <span class="badge badge-pending">small supplier</span>' : ""}</td><td>${formatDate(r.due_date)}</td>
+                <td>${money(r.total)}</td><td>${money(r.tds)}</td><td>${money(r.credit)}</td><td>${money(r.advance)}</td>
+                <td>${Number(r.discount) ? `${formatCurrency(r.discount)} <span class="cell-muted" style="font-size:11px;">if paid by ${formatDate(r.discount_until)}</span>` : ""}</td><td>${money(r.interest)}</td><td>${formatCurrency(r.net)}</td></tr>`).join("")}
+            </tbody></table>${saving ? `<div class="cell-muted" style="font-size:12px;margin-top:6px;">Early-payment discount earned by paying on this run: ${formatCurrency(saving)}</div>` : ""}
+            ${shown.some((r) => r.kind === "advance") ? `<div class="cell-muted" style="font-size:12px;">Tax at source on an advance is worked out when the run is planned.</div>` : ""}`
+          : `<div class="cell-muted" style="font-size:12.5px;">Nothing is due in this window.</div>`;
       } catch { box.textContent = "Couldn't load what is due."; }
     });
     document.getElementById("planRun").addEventListener("click", async () => {
-      const res = await API.postJSON("/api/payment-runs", { run_date: date.value, window_days: document.getElementById("runWindow").value });
+      const res = await API.postJSON("/api/payment-runs", { run_date: date.value, window_days: document.getElementById("runWindow").value, include_advances: document.getElementById("runAdvances").checked });
       if (res.ok) { window.location.hash = `#/payments/${res.data.run}`; return; }
       document.getElementById("planNote").textContent = res.data.detail || "The run was not planned.";
     });
@@ -75,8 +82,9 @@ const PaymentsView = {
         ${r.status === "proposed" ? `<div class="panel" style="margin-bottom:12px;font-size:12.5px;">Waiting for the owner to approve${r.approval ? `: ${this.esc(r.approval.summary)}` : ""} (under Admin → Approvals). Nothing is paid until then.</div>` : ""}
         ${r.payments.map((p) => `
           <div class="panel" style="margin-bottom:10px;">
-            <div style="display:flex;justify-content:space-between;"><div><strong>${this.esc(p.supplier)}</strong> <span class="cell-muted">${this.esc(p.id)} · ${this.esc(p.mode.toUpperCase())}${p.utr ? ` · bank reference ${this.esc(p.utr)}` : ""}${p.paid_on ? ` · paid ${formatDate(p.paid_on)}` : ""}</span></div><div>${formatCurrency(p.amount)}</div></div>
-            <table class="data-table" style="margin-top:8px;"><tbody>${p.invoices.map((i) => `<tr><td class="cell-muted">${this.esc(i.id)}</td><td>${this.esc(i.number)}${i.type !== "invoice" ? ` <span class="badge badge-pending">${this.esc(i.type.replace("_", " "))}</span>` : ""}</td><td style="text-align:right;">${formatCurrency(i.amount)}</td></tr>`).join("")}</tbody></table>
+            <div style="display:flex;justify-content:space-between;"><div><strong>${this.esc(p.supplier)}</strong>${p.kind === "advance" ? ` <span class="badge badge-pending">advance on ${this.esc(p.po_no)}</span>` : ""} <span class="cell-muted">${this.esc(p.id)} · ${this.esc(p.mode.toUpperCase())}${p.utr ? ` · bank reference ${this.esc(p.utr)}` : ""}${p.paid_on ? ` · paid ${formatDate(p.paid_on)}` : ""}</span></div><div>${formatCurrency(p.amount)}</div></div>
+            <table class="data-table" style="margin-top:8px;"><tbody>${p.invoices.map((i) => `<tr><td class="cell-muted">${this.esc(i.id)}</td><td>${this.esc(i.number)}${i.type !== "invoice" ? ` <span class="badge badge-pending">${this.esc(i.type.replace("_", " "))}</span>` : ""}</td><td style="text-align:right;">${formatCurrency(i.amount)}${Number(i.discount) ? `<div class="cell-muted" style="font-size:11px;">less early-payment discount ${formatCurrency(i.discount)}</div>` : ""}</td></tr>`).join("")}</tbody></table>
+            ${p.kind === "advance" ? `<div class="cell-muted" style="font-size:11.5px;margin-top:6px;">An advance against the order: what is left of it is taken off this order's invoices when they arrive.</div>` : ""}
             ${Number(p.tds) ? `<div class="cell-muted" style="font-size:11.5px;margin-top:6px;">Tax held back ${formatCurrency(p.tds)}</div>` : ""}${Number(p.interest) ? `<div class="cell-muted" style="font-size:11.5px;">Interest to a small supplier ${formatCurrency(p.interest)}</div>` : ""}
           </div>`).join("")}
         <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:6px;">

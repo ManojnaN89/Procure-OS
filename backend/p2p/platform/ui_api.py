@@ -369,7 +369,7 @@ def get_vendor(vendor_id: str, db: Db, ctx: Ctx) -> dict[str, Any]:
     check = supplier_documents.check_supplier(db, vendor_id, today)
     docs = _rows(
         db,
-        "select doc_type, number, issued_on, expires_on, verified from supplier_document "
+        "select id, doc_type, number, issued_on, expires_on, verified from supplier_document "
         "where supplier_code = :c order by doc_type, issued_on",
         c=vendor_id,
     )
@@ -377,12 +377,15 @@ def get_vendor(vendor_id: str, db: Db, ctx: Ctx) -> dict[str, Any]:
     score_numbers = score.numbers()
     return {
         **_vendor(r),
+        "can_add_documents": can_anywhere(db, ctx.user_id, "supplier.documents"),
+        "can_verify_documents": can_anywhere(db, ctx.user_id, "supplier.verify_docs"),
         "documents": {
             "ok": check.ok,
             "problems": check.blocking,
             "warnings": check.warnings,
             "on_file": [
                 {
+                    "id": d["id"],
                     "type": LABELS.get(d["doc_type"], d["doc_type"]),
                     "number": d["number"],
                     "expires_on": d["expires_on"].isoformat() if d["expires_on"] else None,
@@ -1453,8 +1456,30 @@ def get_contract(code: str, db: Db, ctx: Ctx) -> dict[str, Any]:
         "group by po.no, po.status, po.created_at order by po.created_at desc",
         c=code,
     )
+    prices = _rows(
+        db,
+        "select p.id, p.item_code, i.name, p.uom, p.price, p.min_qty, p.valid_from, p.valid_to, p.lead_days from price_record p "
+        "left join item i on i.code = p.item_code where p.contract_code = :c order by p.item_code, p.min_qty",
+        c=code,
+    )
     return {
         **_contract_json(c, contract_usage.usage(db, code)),
+        "can_manage": can_anywhere(db, ctx.user_id, "contract.manage") and c["status"] == "draft",
+        "can_activate": can_anywhere(db, ctx.user_id, "contract.activate") and c["status"] == "draft",
+        "prices": [
+            {
+                "id": p["id"],
+                "item_code": p["item_code"],
+                "name": p["name"],
+                "uom": p["uom"],
+                "price": _money(p["price"]),
+                "min_qty": _qty(p["min_qty"]),
+                "valid_from": p["valid_from"].isoformat() if p["valid_from"] else None,
+                "valid_to": p["valid_to"].isoformat() if p["valid_to"] else None,
+                "lead_days": p["lead_days"],
+            }
+            for p in prices
+        ],
         "terms": "\n".join(terms),
         "orders": [
             {

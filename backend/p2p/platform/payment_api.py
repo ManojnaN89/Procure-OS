@@ -8,6 +8,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
+from p2p.formulas import payment as rules
 from p2p.formulas.calendar import business_today
 from p2p.invoices import payment
 from p2p.invoices.service import InvoiceError
@@ -46,9 +47,34 @@ def _error(call: Callable[[], dict[str, Any]]) -> dict[str, Any]:
 
 @router.get("/payment-runs/due")
 def due(db: Db, ctx: Ctx, on: str | None = None, window: int | None = None) -> list[dict[str, Any]]:
-    """What a run on a date would pay: approved invoices due within the window, small suppliers first."""
+    """What a run on a date would pay: advances to be paid, then approved invoices due within the window (and those whose
+    early-payment discount would be lost by waiting), small suppliers first."""
     run_date = _date(on, "on") if on else business_today()
-    out = []
+    out: list[dict[str, Any]] = []
+    for adv in payment.due_advances(db):
+        gross, taxable = rules.advance_amounts(adv["total"], adv["taxable"], adv["advance_pct"])
+        sup = _rows(
+            db, "select coalesce(trade_name, legal_name) as name from supplier where code = :c", c=adv["supplier_code"]
+        )
+        out.append(
+            {
+                "kind": "advance",
+                "invoice": None,
+                "po_no": adv["no"],
+                "supplier_code": adv["supplier_code"],
+                "supplier": sup[0]["name"] if sup else adv["supplier_code"],
+                "due_date": run_date.isoformat(),
+                "msme": False,
+                "total": _money(gross),
+                "tds": None,
+                "credit": None,
+                "advance": None,
+                "discount": None,
+                "interest": None,
+                "net": _money(gross),
+                "taxable": _money(taxable),
+            }
+        )
     for row in payment.due_invoices(db, run_date, window):
         p = payment.payable(db, row["no"], run_date)
         sup = _rows(
@@ -56,7 +82,9 @@ def due(db: Db, ctx: Ctx, on: str | None = None, window: int | None = None) -> l
         )
         out.append(
             {
+                "kind": "invoice",
                 "invoice": row["no"],
+                "po_no": None,
                 "supplier_code": row["supplier_code"],
                 "supplier": sup[0]["name"] if sup else row["supplier_code"],
                 "due_date": row["due_date"].isoformat(),
@@ -64,6 +92,9 @@ def due(db: Db, ctx: Ctx, on: str | None = None, window: int | None = None) -> l
                 "total": _money(p.total),
                 "tds": _money(p.tds),
                 "credit": _money(p.credit),
+                "advance": _money(p.advance),
+                "discount": _money(p.discount),
+                "discount_until": p.window_end.isoformat() if p.window_end else None,
                 "interest": _money(p.interest),
                 "net": _money(p.net + p.interest),
             }
@@ -106,13 +137,15 @@ def get_run(no: str, db: Db, ctx: Ctx) -> dict[str, Any]:
     for p in payments:
         allocations = _rows(
             db,
-            "select a.invoice_no, a.amount, i.supplier_invoice_no, i.type from payment_allocation a join invoice i on i.no = a.invoice_no "
+            "select a.invoice_no, a.amount, a.discount, i.supplier_invoice_no, i.type from payment_allocation a join invoice i on i.no = a.invoice_no "
             "where a.payment_no = :p order by a.invoice_no",
             p=p["no"],
         )
         out.append(
             {
                 "id": p["no"],
+                "kind": p["type"],
+                "po_no": p["po_no"],
                 "supplier": p["supplier"],
                 "supplier_code": p["supplier_code"],
                 "amount": _money(p["amount"]),
@@ -127,6 +160,7 @@ def get_run(no: str, db: Db, ctx: Ctx) -> dict[str, Any]:
                         "number": a["supplier_invoice_no"],
                         "type": a["type"],
                         "amount": _money(a["amount"]),
+                        "discount": _money(a["discount"]),
                     }
                     for a in allocations
                 ],
@@ -159,10 +193,15 @@ def propose(
 ) -> dict[str, Any]:
     run_date = _date(payload.get("run_date") or business_today().isoformat(), "run_date")
     window = payload.get("window_days")
+    advances = payload.get("include_advances", True) not in (False, "false", "0", 0)
     return _error(
         lambda: {
             "run": payment.propose_run(
-                db, run_date, ctx.user_id, window_days=int(window) if window not in (None, "") else None
+                db,
+                run_date,
+                ctx.user_id,
+                window_days=int(window) if window not in (None, "") else None,
+                include_advances=advances,
             ),
             "status": "waiting for approval",
         }
@@ -196,6 +235,6 @@ def mark_paid(
         lambda: {
             "run": no,
             "status": "paid",
-            "closed_orders": payment.mark_paid(db, no, ctx.user_id, paid_on=paid_on, utrs=utrs),
+            "closed_orders": payment.mark_paid(db, no, ctx.user_id, paid_on=paid_on, utrs=utrs, tenant=ctx.slug),
         }
     )

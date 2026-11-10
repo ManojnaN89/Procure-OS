@@ -13,11 +13,32 @@ const ContractsView = {
         </div>
         <div class="btn btn-primary" id="newContractBtn"><i class="ti ti-plus"></i>Store contract</div>
       </div>
+      <div id="contractForm"></div>
       <div class="table-wrap" id="tableWrap"><div class="empty-state">Loading\u2026</div></div>
     `;
-    document.getElementById("newContractBtn").addEventListener("click", () => {
-      Prefill.set("Store a contract for vendor [ID] titled [title], terms [terms], value [value], end date [YYYY-MM-DD]");
-      window.location.hash = "#/assistant";
+    document.getElementById("newContractBtn").addEventListener("click", async () => {
+      const box = document.getElementById("contractForm");
+      if (box.innerHTML) { box.innerHTML = ""; return; }
+      let vendors = [];
+      try { vendors = await API.listVendors(); } catch { box.textContent = "Couldn't load vendors."; return; }
+      box.innerHTML = `<div class="panel" style="margin-bottom:14px;"><div class="panel-title">Store a contract (saved as a draft; an approver activates it)</div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;">
+          <select id="cSupplier" style="padding:6px;">${vendors.filter((v) => v.active).map((v) => `<option value="${escapeHtml(v.id)}">${escapeHtml(v.name)}</option>`).join("")}</select>
+          <select id="cType" style="padding:6px;"><option value="rate_contract">Rate contract</option><option value="framework">Framework agreement</option><option value="service_contract">Service contract</option></select>
+          <input id="cFrom" type="date" title="Valid from" style="padding:6px;"><input id="cTo" type="date" title="Valid to" style="padding:6px;">
+          <input id="cMax" type="number" min="0" step="any" placeholder="Ceiling before tax (optional)" style="padding:6px;width:220px;">
+          <input id="cTerms" placeholder="Payment terms code, e.g. NET30" style="padding:6px;"><input id="cDelivery" placeholder="Delivery terms" style="padding:6px;">
+          <div class="btn btn-primary btn-sm" id="cSave">Store the contract</div></div>
+        <div id="cNote" style="font-size:12.5px;color:var(--warning-text);margin-top:6px;"></div></div>`;
+      document.getElementById("cSave").addEventListener("click", async () => {
+        const res = await API.postJSON("/api/contracts", {
+          supplier_code: document.getElementById("cSupplier").value, type: document.getElementById("cType").value,
+          valid_from: document.getElementById("cFrom").value, valid_to: document.getElementById("cTo").value,
+          max_value: document.getElementById("cMax").value, payment_terms_code: document.getElementById("cTerms").value,
+          delivery_terms: document.getElementById("cDelivery").value });
+        if (res.ok) { window.location.hash = `#/contracts/${res.data.id}`; return; }
+        document.getElementById("cNote").textContent = res.data.detail || "The contract was not stored.";
+      });
     });
 
     try {
@@ -83,11 +104,32 @@ const ContractsView = {
           </p>
           <div class="btn btn-secondary" id="renewContractBtn" style="font-size:11.5px;padding:6px 12px;display:inline-block;">Renew contract</div>
         </div>
+        <div class="panel" style="margin-bottom:14px;">
+          <div class="panel-title">Price list ${c.status !== "active" ? `<span class="badge badge-pending">${escapeHtml(c.status)}</span>` : ""}</div>
+          ${(c.prices || []).length ? `<table class="data-table"><thead><tr><th>ITEM</th><th>UNIT</th><th>FROM QTY</th><th>PRICE</th><th>VALID</th></tr></thead><tbody>${c.prices.map((p) => `<tr><td>${escapeHtml(p.name || p.item_code)}<div class="cell-muted" style="font-size:11px;">${escapeHtml(p.item_code)}</div></td><td>${escapeHtml(p.uom || "")}</td><td>${escapeHtml(p.min_qty)}</td><td>${formatCurrency(p.price)}</td><td class="cell-muted">${p.valid_from ? formatDate(p.valid_from) : "—"} → ${p.valid_to ? formatDate(p.valid_to) : "—"}</td></tr>`).join("")}</tbody></table>` : `<p class="cell-muted" style="font-size:12px;margin:0;">No prices yet.</p>`}
+          ${c.can_manage ? `<div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:10px;"><input id="pItem" placeholder="Item code" style="padding:5px;"><input id="pUom" placeholder="Unit" style="padding:5px;width:70px;"><input id="pPrice" type="number" min="0" step="any" placeholder="Price" style="padding:5px;width:110px;"><input id="pMin" type="number" min="0" step="any" placeholder="From qty" style="padding:5px;width:90px;"><div class="btn btn-secondary btn-sm" id="pAdd">Add a price</div></div>` : ""}
+          ${c.can_activate ? `<div class="btn btn-primary btn-sm" id="cActivate" style="margin-top:10px;display:inline-block;">Activate this contract</div>` : ""}
+          <div id="cMsg" style="font-size:12.5px;color:var(--warning-text);margin-top:6px;"></div>
+        </div>
         <div class="panel">
           <div class="panel-title">Terms</div>
           <p style="color:var(--text-secondary);font-size:12.5px;margin:0;white-space:pre-wrap;">${escapeHtml(c.terms || "No terms recorded.")}</p>
         </div>
       `;
+
+      const msg = (t) => { const el = document.getElementById("cMsg"); if (el) el.textContent = t; };
+      const pAdd = document.getElementById("pAdd");
+      if (pAdd) pAdd.addEventListener("click", async () => {
+        const res = await API.postJSON(`/api/contracts/${encodeURIComponent(id)}/prices`, { item_code: document.getElementById("pItem").value, uom: document.getElementById("pUom").value, price: document.getElementById("pPrice").value, min_qty: document.getElementById("pMin").value });
+        if (res.ok) return this.renderDetail(container, id);
+        msg(res.data.detail || "The price was not added.");
+      });
+      const act = document.getElementById("cActivate");
+      if (act) act.addEventListener("click", async () => {
+        const res = await API.postJSON(`/api/contracts/${encodeURIComponent(id)}/activate`, {});
+        if (res.ok) return this.renderDetail(container, id);
+        msg(res.data.detail || "The contract was not activated.");
+      });
 
       // Prefill, not auto-send — renewal needs a new end date the user
       // has to actually supply, unlike a one-click action like Dismiss

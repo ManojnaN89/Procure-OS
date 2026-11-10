@@ -2,7 +2,8 @@
 Shared by the invoice evals (E19 matching, E20 due dates and tax, E21 payment)."""
 
 from collections import defaultdict
-from datetime import date, datetime
+from datetime import date, datetime, time
+from pathlib import Path
 from types import SimpleNamespace
 
 import lib
@@ -32,29 +33,52 @@ def when(value: str) -> datetime:
     return datetime.fromisoformat(value)
 
 
-def replay(world, *, release_blocked: bool = False, load_bank_rates: bool = False):
+def replay(
+    world,
+    *,
+    release_blocked: bool = False,
+    load_bank_rates: bool = False,
+    dataset: Path | None = None,
+    suppliers: set[str] | None = None,
+    goods_only: bool = False,
+    advances: bool = False,
+):
+    """Replay the dataset's history. `suppliers` and `goods_only` restrict it to the orders (and what follows from them) of
+    those suppliers that carry no service line; `advances` pays the dataset's advances (through a payment run approved by
+    the Approver login) on the day it paid them, so that invoices received later can take them off."""
+    from p2p.invoices import payment
     from p2p.invoices import service as invoices
-    from p2p.platform import sod
+    from p2p.platform import proposals, sod
 
+    ds = dataset or lib.DATASET
     ap = world.logins["AP"]
-    history = lambda name: rows("history", name)  # noqa: E731
+    finance, owner = world.logins["Finance"], world.logins["Approver"]
+    history = lambda name: rows("history", name, ds)  # noqa: E731
     if load_bank_rates:
-        for r in rows("reference", "rbi_bank_rate"):
+        for r in rows("reference", "rbi_bank_rate", ds):
             world.db.execute(
                 text("insert into ref_rbi_bank_rate (effective_from, rate_pct) values (:d, :r) on conflict do nothing"),
                 {"d": r["effective_from"], "r": r["rate_pct"]},
             )
         world.db.commit()
-    from p2p.invoices import service as invoices
-
     db = world.db
-    ap = world.logins["AP"]
-    history = lambda name: rows("history", name)  # noqa: E731
+
+    all_po = history("po")
+    all_po_lines = history("po_line")
+    if suppliers is not None:
+        all_po = [p for p in all_po if p["supplier_code"] in suppliers]
+    if goods_only:
+        kind_of = {i["code"]: i["kind"] for i in rows("master", "item", ds)}
+        service_pos = {ln["po_no"] for ln in all_po_lines if kind_of.get(ln["item_code"]) == "service"}
+        all_po = [p for p in all_po if p["no"] not in service_pos]
+    allowed = {p["no"] for p in all_po}
 
     # the orders as they ended up; receipts arrive later, one at a time
-    for r in history("po"):
+    for r in all_po:
         insert(db, "po", r)
-    for r in history("po_line"):
+    for r in all_po_lines:
+        if r["po_no"] not in allowed:
+            continue
         insert(
             db,
             "po_line",
@@ -69,10 +93,11 @@ def replay(world, *, release_blocked: bool = False, load_bank_rates: bool = Fals
             },
         )
     for r in history("po_charge"):
-        insert(db, "po_charge", r)
+        if r["po_no"] in allowed:
+            insert(db, "po_charge", r)
     db.commit()
 
-    receipts = {r["no"]: r for r in history("goods_receipt")}
+    receipts = {r["no"]: r for r in history("goods_receipt") if r["po_no"] in allowed}
     receipt_lines: dict[str, list[dict]] = defaultdict(list)
     for r in history("gr_line"):
         receipt_lines[r["gr_no"]].append(r)
@@ -80,10 +105,16 @@ def replay(world, *, release_blocked: bool = False, load_bank_rates: bool = Fals
     inv_lines: dict[str, list[dict]] = defaultdict(list)
     for r in history("invoice_line"):
         inv_lines[r["invoice_no"]].append(r)
+    if suppliers is not None or goods_only:
+        keep = {n for n, ls in inv_lines.items() if ls and all(ln["po_no"] in allowed for ln in ls)}
+        for r in all_invoices:  # a credit note without lines follows the invoice it refers to
+            if not inv_lines.get(r["no"]) and r["ref_invoice_no"] in keep:
+                keep.add(r["no"])
+        all_invoices = [r for r in all_invoices if r["no"] in keep]
     inv_charges: dict[str, list[dict]] = defaultdict(list)
     for r in history("invoice_charge"):
         inv_charges[r["invoice_no"]].append(r)
-    truth = {r["invoice_no"]: r for r in rows("truth", "truth_match_expected")}
+    truth = {r["invoice_no"]: r for r in rows("truth", "truth_match_expected", ds)}
 
     # an invoice is entered once the receipt it is for has been posted (the dataset names it in the receipt)
     receipt_for = {
@@ -98,6 +129,12 @@ def replay(world, *, release_blocked: bool = False, load_bank_rates: bool = Fals
             when(r["received_at"]), receipt_for.get((first_po, r["supplier_invoice_no"]), when(r["received_at"]))
         )
         events.append((arrived, 1, "invoice", r["no"]))
+    advance_rows = {
+        p["no"]: p for p in history("payment") if advances and p["type"] == "advance" and p["po_no"] in allowed
+    }
+    zone = events[0][0].tzinfo if events else None  # the dataset's times may or may not carry an offset
+    for no, p in advance_rows.items():  # paid at noon, after the morning's receipts and invoices
+        events.append((datetime.combine(date.fromisoformat(p["paid_on"]), time(12), tzinfo=zone), 2, "advance", no))
     events.sort(key=lambda e: (e[0], e[1], e[3]))
     by_no = {r["no"]: r for r in all_invoices}
 
@@ -105,7 +142,23 @@ def replay(world, *, release_blocked: bool = False, load_bank_rates: bool = Fals
     entered: dict[str, object] = {}
     errors: list[str] = []
     released: set[str] = set()
+    advance_payment: dict[str, str] = {}  # the dataset's advance payment -> the platform's
     for _, _, kind, key in events:
+        if kind == "advance":
+            p = advance_rows[key]
+            on = date.fromisoformat(p["paid_on"])
+            try:
+                run = payment.propose_run(db, on, finance, advances_only=True, po_nos=[p["po_no"]])
+                pid = db.execute(text("select proposal_id from payment_run where no = :n"), {"n": run}).scalar_one()
+                proposals.approve(db, pid, owner)
+                payment.generate_file(db, run, finance)
+                payment.mark_paid(db, run, finance, paid_on=on)
+                advance_payment[key] = db.execute(text("select no from payment where run_no = :r"), {"r": run}).scalar_one()
+            except Exception as exc:  # noqa: BLE001 - recorded, and the eval reports it
+                db.rollback()
+                errors.append(f"advance {key}: {exc}")
+            db.commit()
+            continue
         if kind == "receipt":
             g = receipts[key]
             insert(db, "goods_receipt", g, {"posted_by": "import"})
@@ -180,4 +233,5 @@ def replay(world, *, release_blocked: bool = False, load_bank_rates: bool = Fals
     return SimpleNamespace(
         entered=entered, platform_no=platform_no, by_no=by_no, truth=truth, inv_lines=inv_lines,
         receipt_lines=receipt_lines, receipts=receipts, errors=errors, released=released,
+        advance_payment=advance_payment, advance_rows=advance_rows,
     )

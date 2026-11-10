@@ -6,6 +6,11 @@ message (the evidence check), matches the item words to the catalogue (ai_steps/
 words, then similarity, and a model only as a fallback among the few best candidates), and either creates the draft or
 asks the requester ONE question from a fixed template: which item, how many, or by when.
 
+It also reads the sheet attached to an email (the lines come from the attachment, and each value must still be in the
+text), makes service and capital requests (free-text lines, no catalogue match, a category only when the words name one),
+warns about a possible split order, and when a message is a follow-up ("any update on my request?") it links it to the
+requester's own open request and answers from the data instead of creating a new draft.
+
 What it never does: submit, approve, order, or change anything but its own new draft. The message is untrusted text: an
 instruction written in it has nowhere to go, because the model returns a schema and the code does the rest.
 """
@@ -34,6 +39,7 @@ from p2p.platform.sod import Actor
 AGENT = Actor("agent", "intake")
 PROMPT_VERSION = "1"
 PENDING_HOURS = 24
+MAX_ATTACHMENT_CHARS = 6000
 
 QUESTIONS = {
     "item": "I could not tell which catalogue item '{phrase}' is.{options} Please give the item code or a fuller description (size, make, material).",
@@ -89,6 +95,12 @@ _REQUEST_WORDS = re.compile(
     r"\b(need|needs|require|required|requirement|order|arrange|raise (a )?(pr|request)|purchase|procure|buy|get us|send us)\b",
     re.I,
 )
+_SERVICE = re.compile(
+    r"\b(amc|annual maintenance contract|maintenance contract|service contract|calibration (service|contract)|"
+    r"labou?r contract|service agreement)\b",
+    re.I,
+)
+_CAPEX = re.compile(r"\b(capex|capital (plan|budget|expenditure|item|purchase|asset)|capital asset)\b", re.I)
 _QUESTION_START = re.compile(
     r"^\s*(what|which|how|show|list|who|when|where|why|is|are|can|could|do|does|status|tell)\b", re.I
 )
@@ -101,6 +113,15 @@ def looks_like_request(message: str) -> bool:
         and not _QUESTION_START.search(message)
         and not message.strip().endswith("?")
     )
+
+
+def request_type(source: str) -> str:
+    """goods, service or capex, from the words the requester wrote (an AMC, a service contract, 'capex plan')."""
+    if _SERVICE.search(source):
+        return "service"
+    if _CAPEX.search(source):
+        return "capex"
+    return "goods"
 
 
 def date_traceable(value: date, source: str) -> bool:
@@ -253,8 +274,12 @@ def handle(
     *,
     channel: str = "chat",
     now: datetime | None = None,
+    attachment_text: str = "",
 ) -> IntakeResult:
-    """One message from a requester. Creates a draft, or asks one question, or says why it did neither."""
+    """One message from a requester. Creates a draft, or asks one question, or says why it did neither.
+
+    `attachment_text` is what could be read from the files attached to the message; the reading and the evidence check
+    see it as part of the message."""
     now = now or datetime.now(UTC)
     message = message.strip()[:4000]
     if not permissions.can_anywhere(db, user_id, "request.create"):
@@ -272,7 +297,12 @@ def handle(
         )
         db.commit()
         return IntakeResult("dropped", "Understood, I have dropped that request.")
-    source = f"{pending['source_text']}\nAnswer: {message}" if pending else message
+    if pending:
+        source = f"{pending['source_text']}\nAnswer: {message}"
+    else:
+        source = (
+            f"{message}\n\n{attachment_text.strip()[:MAX_ATTACHMENT_CHARS]}".strip() if attachment_text else message
+        )
     attempts = int(pending["attempts"]) + 1 if pending else 1
     previous = int(pending["id"]) if pending else None
     today = business_today()
@@ -296,10 +326,7 @@ def handle(
     reading: RequestReading = outcome.value
     if reading.intent == "follow_up":
         _close(db, previous)
-        return IntakeResult(
-            "follow_up",
-            "That sounds like a follow-up on something asked for earlier. Please check the Requisitions page for its status; I did not create a new request.",
-        )
+        return _follow_up(db, person, reading)
     if reading.intent == "other" or not reading.lines:
         if previous and reading.intent == "other":
             _close(db, previous)
@@ -308,12 +335,16 @@ def handle(
             "I could not find anything to order in that. Tell me what you need, for example: 'need 10 nos ball bearing 6205 by 20 Nov'.",
         )
 
-    items = item_matching.catalogue(db)
-    resolved: list[tuple[IntakeLine, item_matching.Candidate | None, item_matching.Match]] = []
+    rtype = request_type(source)
+    items = item_matching.catalogue(db) if rtype == "goods" else []
+    resolved: list[tuple[IntakeLine, item_matching.Candidate | None, item_matching.Match | None]] = []
     clarification = (
         message if pending and pending["asked"] == "item" else ""
     )  # the answer to 'which item?' helps find it
     for line in reading.lines:
+        if rtype != "goods":  # a service or a capital item is a free-text line: no catalogue item to match
+            resolved.append((line, None, None))
+            continue
         m = item_matching.match_phrase(
             db,
             tenant,
@@ -325,11 +356,11 @@ def handle(
         resolved.append((line, m.candidate, m))
 
     # one question, in this order: which item, how many, by when, where
-    for line, cand, m in resolved:
-        if cand is None and attempts < 2:
+    for line, cand, found in resolved:
+        if found is not None and cand is None and attempts < 2:
             options = ""
-            if m.candidates and m.candidates[0].score >= item_matching.WORTH_ASKING_MODEL:
-                options = " Is it one of: " + "; ".join(f"{c.name} ({c.code})" for c in m.candidates[:3]) + "?"
+            if found.candidates and found.candidates[0].score >= item_matching.WORTH_ASKING_MODEL:
+                options = " Is it one of: " + "; ".join(f"{c.name} ({c.code})" for c in found.candidates[:3]) + "?"
             return _ask(
                 db,
                 user_id,
@@ -341,7 +372,7 @@ def handle(
                 previous,
             )
     for line, _, _ in resolved:
-        if line.qty is None or line.qty <= 0:
+        if rtype == "goods" and (line.qty is None or line.qty <= 0):
             return _ask(
                 db, user_id, channel, source, QUESTIONS["qty"].format(phrase=line.item), "qty", attempts, previous
             )
@@ -363,7 +394,7 @@ def handle(
             previous,
         )
 
-    result = _create(db, user_id, person, channel, message, source, reading, resolved, need_by, location, today)
+    result = _create(db, user_id, person, channel, message, source, reading, resolved, need_by, location, today, rtype)
     _close(db, previous)
     return result
 
@@ -395,10 +426,11 @@ def _create(
     message: str,
     source: str,
     reading: RequestReading,
-    resolved: list[tuple[IntakeLine, item_matching.Candidate | None, item_matching.Match]],
+    resolved: list[tuple[IntakeLine, item_matching.Candidate | None, item_matching.Match | None]],
     need_by: date | None,
     location: str,
     today: date,
+    rtype: str = "goods",
 ) -> IntakeResult:
     info = {
         r["code"]: dict(r)
@@ -414,12 +446,28 @@ def _create(
         ).mappings()
     }
     urgent = bool(_URGENT.search(source))
+    split_notes: list[str] = []
     warnings: list[str] = []
     infos: list[LineInfo] = []
     groups: dict[str, list[tuple[IntakeLine, item_matching.Candidate | None, LineInfo]]] = {}
     for line, cand, _match in resolved:
         qty = Decimal(line.qty or 0)
-        if cand is None:
+        if cand is None and rtype != "goods":
+            if qty <= 0:
+                qty = Decimal(1)  # a contract or a capital item is one job unless a number is written
+            category = _free_category(db, line.item, rtype)
+            li = LineInfo(
+                line.item, None, line.item, qty, line.uom or ("job" if rtype == "service" else "nos"), "free_text",
+                f"a {'service' if rtype == 'service' else 'capital'} request: a buyer will get quotations and check the specification",
+            )  # fmt: skip
+            warnings.append(
+                f"'{line.item}' is a {'service' if rtype == 'service' else 'capital'} request, so it is a free-text line for a buyer to quote"
+                + ("" if category else "; no category could be chosen from the words, a buyer will set it")
+            )
+            if line.qty is None or line.qty <= 0:
+                warnings.append(f"no quantity was written for '{line.item}', so 1 was taken")
+            groups.setdefault(category or "", []).append((line, None, li))
+        elif cand is None:
             li = LineInfo(
                 line.item,
                 None,
@@ -441,6 +489,12 @@ def _create(
         infos.append(li)
         for existing in _already_open(db, cand.code if cand else None, location):
             warnings.append(f"{li.name}: {existing}")
+        split = _possible_split(
+            db, cand.code if cand else None, person, location, qty, info.get(cand.code) if cand else None
+        )
+        if split:
+            warnings.append(f"{li.name}: {split}")
+            split_notes.append(f"{li.name}: {split}")
 
     nos: list[str] = []
     for category, entries in sorted(groups.items()):
@@ -473,14 +527,15 @@ def _create(
         db.execute(
             text(
                 "insert into request (no, requester, department_code, ship_to_location, type, priority, need_by, channel, "
-                "source_ref, justification, status, total_value) values (:no, :req, :dep, :loc, 'goods', :prio, :need, :ch, "
+                "source_ref, justification, status, total_value) values (:no, :req, :dep, :loc, :type, :prio, :need, :ch, "
                 ":src, :why, 'draft', :tot)"
             ),
             {
-                "no": no, "req": person["code"], "dep": person["department_code"], "loc": location,
+                "no": no, "req": person["code"], "dep": person["department_code"], "loc": location, "type": rtype,
                 "prio": "urgent" if urgent else "normal", "need": min(r["need"] for r in rows), "ch": channel,
                 "src": f"intake:{channel}:{hashlib.sha1(message.encode(), usedforsecurity=False).hexdigest()[:10]}",  # noqa: S324
-                "why": (reading.reason or f"Requested by {channel}: {message}")[:500], "tot": value,
+                "why": ((reading.reason or f"Requested by {channel}: {message}") + "".join(f" [{n}]" for n in split_notes))[:500],
+                "tot": value,
             },
         )  # fmt: skip
         for n, r in enumerate(rows, start=1):
@@ -500,9 +555,14 @@ def _create(
             no,
             after={
                 "status": "draft", "channel": channel, "location": location, "lines": len(rows), "total_value": str(value),
-                "on_behalf_of": person["code"], "source": message[:500],
+                "on_behalf_of": person["code"], "source": message[:500], "type": rtype,
             },
         )  # fmt: skip
+        if split_notes:
+            audit.record(
+                db, AGENT, "intake.split_order_flag", "request", no, after={"notes": split_notes},
+                reason="the same item was requested a few days ago",
+            )  # fmt: skip
         nos.append(no)
     db.commit()
     shown = "; ".join(f"{format_qty(li.qty)} {li.uom or ''} {li.name}".replace("  ", " ") for li in infos)
@@ -537,6 +597,167 @@ def _already_open(db: Session, item_code: str | None, location: str) -> list[str
     return notes
 
 
+def _free_category(db: Session, phrase: str, rtype: str) -> str | None:
+    """The category a free-text service or capital line belongs to, only when the words of exactly one category name it
+    (for a service the service categories, for a capital item the capital ones). Otherwise a buyer chooses."""
+    where = "kind = 'service'" if rtype == "service" else "capex"
+    cats = db.execute(text(f"select code, name from item_category where {where}")).all()  # noqa: S608 - fixed text
+    words = item_matching._words(phrase)
+    scored = [(len(item_matching._words(name) & words), code) for code, name in cats]
+    scored = [x for x in scored if x[0] > 0]
+    if not scored:
+        return None
+    best = max(n for n, _ in scored)
+    top = [code for n, code in scored if n == best]
+    return str(top[0]) if len(top) == 1 else None
+
+
+def _possible_split(
+    db: Session, item_code: str | None, person: dict[str, Any], location: str, qty: Decimal, info: dict[str, Any] | None
+) -> str | None:
+    """Something that may be a request split in two to stay under an approval limit: the same item asked for by the
+    same department at the same place a few days ago and not cancelled or rejected. Only a warning for the approver."""
+    if not item_code:
+        return None
+    window = int(_setting(db, "split_order_window_days", "7"))
+    row = db.execute(
+        text(
+            "select r.no, r.created_at::date, l.qty, coalesce(l.est_price, 0) from request r join request_line l on l.request_no = r.no "
+            "where l.item_code = :i and r.department_code is not distinct from :d and r.ship_to_location = :loc "
+            "and r.status in ('submitted', 'approved', 'returned', 'closed') and l.status <> 'cancelled' "
+            "and r.created_at >= now() - make_interval(days => :w) order by r.created_at desc limit 1"
+        ),
+        {"i": item_code, "d": person["department_code"], "loc": location, "w": window},
+    ).first()
+    if row is None:
+        return None
+    est = Decimal(info["standard_price"] or 0) if info else Decimal(0)
+    earlier = round_money(Decimal(row[2]) * Decimal(row[3]))
+    now_value = round_money(qty * est)
+    days = (business_today() - row[1]).days
+    return (
+        f"possible split order: {row[0]} asked for the same item {days} day(s) ago (about {earlier}); together with this "
+        f"about {earlier + now_value}. The approver should look at the two together"
+    )
+
+
+# ---- a follow-up on something already asked for -----------------------------------------------
+
+
+def _describe(db: Session, no: str) -> str:
+    """Where a request stands, from the data only: its approval, the quotations, the order and the receipt."""
+    req = db.execute(text("select status, type, need_by from request where no = :n"), {"n": no}).one()
+    lines = db.execute(
+        text(
+            "select l.qty, l.uom, coalesce(i.name, l.free_text) from request_line l left join item i on i.code = l.item_code "
+            "where l.request_no = :n and l.status <> 'cancelled' order by l.line_no limit 3"
+        ),
+        {"n": no},
+    ).all()
+    what = "; ".join(f"{format_qty(q)} {u or ''} {name}".replace("  ", " ") for q, u, name in lines) or "no lines"
+    status = req[0]
+    head = f"{no} ({what}) "
+    if status == "draft":
+        return head + "is still a draft: open it under Requisitions and submit it so it can be approved."
+    if status == "returned":
+        return head + "was returned for changes: please correct it and submit it again."
+    if status == "rejected":
+        return head + "was rejected; the reason is on the request."
+    if status in ("cancelled", "closed"):
+        return head + f"is {status}."
+    if status == "submitted":
+        step = db.execute(
+            text(
+                "select coalesce(u.name, s.approver), s.role from approval_step s left join org_user u on u.code = s.approver "
+                "where s.request_no = :n and s.status = 'pending' order by s.round desc, s.step limit 1"
+            ),
+            {"n": no},
+        ).first()
+        who = f"{step[0]} ({step[1]})" if step else "an approver"
+        return head + f"is waiting for approval by {who}."
+    orders = db.execute(
+        text(
+            "select po.no, po.status, max(l.promised_date), sum(l.received_qty), sum(l.qty) from po join po_line l on l.po_no = po.no "
+            "where l.request_no = :n and l.status <> 'cancelled' and po.status <> 'cancelled' group by po.no, po.status order by po.no"
+        ),
+        {"n": no},
+    ).all()
+    if orders:
+        parts = []
+        for po_no, po_status, promised, got, qty in orders:
+            when = f", promised for {promised:%d %b %Y}" if promised else ""
+            parts.append(
+                f"order {po_no} is {po_status.replace('_', ' ')}{when}; {format_qty(got)} of {format_qty(qty)} received"
+            )
+        return head + "was approved and " + "; ".join(parts) + "."
+    rfq = db.execute(
+        text(
+            "select distinct r.no, r.status from rfq r join rfq_line l on l.rfq_no = r.no where l.request_no = :n "
+            "and r.status <> 'cancelled' order by r.no limit 2"
+        ),
+        {"n": no},
+    ).all()
+    if rfq:
+        return head + "was approved; quotations were asked for in " + ", ".join(f"{n} ({st})" for n, st in rfq) + "."
+    return head + "was approved and is waiting for a buyer to source it."
+
+
+def _follow_up(db: Session, person: dict[str, Any], reading: RequestReading) -> IntakeResult:
+    """Link 'where is my request' to the requester's own open requests and say where they stand. Read only: no draft is
+    made and nothing is changed."""
+    mine = db.execute(
+        text(
+            "select r.no, r.status from request r where r.requester = :c and r.status not in ('cancelled', 'closed', 'rejected') "
+            "order by (r.status = 'draft'), r.created_at desc, r.no desc limit 60"
+        ),
+        {"c": person["code"]},
+    ).all()
+    nos = [str(r[0]) for r in mine]
+    wanted: set[str] = set()
+    for line in reading.lines:
+        wanted |= item_matching._words(line.item)
+    written = " ".join(line.item for line in reading.lines)
+    linked: list[str] = []
+    if wanted:
+        # (is a draft, minus the words in common, position, number): the best sorts first
+        scored: list[tuple[int, int, int, str]] = []
+        for position, (no, status) in enumerate(mine):
+            names = " ".join(
+                str(x[0])
+                for x in db.execute(
+                    text(
+                        "select coalesce(i.name, l.free_text) from request_line l left join item i on i.code = l.item_code "
+                        "where l.request_no = :n"
+                    ),
+                    {"n": no},
+                )
+            )
+            common = len(item_matching._words(names) & wanted)
+            like = item_matching.similarity(written, names)  # a typo in the item name still finds it
+            if common or like >= Decimal("0.5"):
+                # a reminder is about something already sent in, so a draft comes after a request in progress
+                scored.append((int(status == "draft"), -int(like * 1000) - 1000 * common, position, str(no)))
+        linked = [x[3] for x in sorted(scored)][:3]
+    elif nos:
+        linked = nos[:1]  # no item named: the most recent one is what 'my request' means
+    if not linked:
+        if nos:
+            note = f"I could not find an open request of yours for that. Your open requests are: {', '.join(nos[:5])}."
+        else:
+            note = (
+                "You have no open request, so there is nothing to follow up. Tell me what you need and I will draft it."
+            )
+        return IntakeResult("follow_up", note + " I did not create a new request.")
+    said = "\n".join("- " + _describe(db, no) for no in linked)
+    audit.record(
+        db, AGENT, "intake.follow_up", "request", linked[0], after={"requests": linked, "on_behalf_of": person["code"]}
+    )
+    db.commit()
+    return IntakeResult(
+        "follow_up", f"This is about your open request:\n{said}\nI did not create a new request.", request_nos=linked
+    )
+
+
 # ---- email ------------------------------------------------------------------------------------
 
 
@@ -554,7 +775,15 @@ def handle_email(db: Session, tenant: str, email_id: int, gateway: Any) -> Intak
     if user_id is None:
         return None  # not one of ours: nothing is created for a stranger
     body = f"{mail['subject'] or ''}\n\n{mail['body_text'] or ''}".strip()
-    result = handle(db, tenant, user_id, body, gateway, channel="email")
+    result = handle(
+        db,
+        tenant,
+        user_id,
+        body,
+        gateway,
+        channel="email",
+        attachment_text=_attachment_text(db, tenant, mail["attachment_ids"] or []),
+    )
     try:
         emails.send_linked_email(
             db,
@@ -567,6 +796,24 @@ def handle_email(db: Session, tenant: str, email_id: int, gateway: Any) -> Intak
     except OSError:
         db.rollback()  # the draft stands; the reply can be sent again by hand
     return result
+
+
+def _attachment_text(db: Session, tenant: str, ids: list[int]) -> str:
+    """The text of the files attached to the email that can be read (a requirement sheet is often a spreadsheet or a PDF)."""
+    from p2p.platform import parsing, storage  # noqa: PLC0415
+
+    parts: list[str] = []
+    for doc_id in ids:
+        row = db.execute(text("select filename, storage_key from document where id = :i"), {"i": doc_id}).first()
+        if row is None:
+            continue
+        try:
+            parsed = parsing.parse_document(storage.get_storage().get(tenant, row[1]), row[0])
+        except Exception:  # noqa: BLE001, S112 - one unreadable attachment must not stop the email being read
+            continue
+        table_text = "\n".join(" | ".join(cells) for t in parsed.tables for cells in t.rows)
+        parts.append(f"--- attachment {row[0]} ---\n{parsed.text}\n{table_text}")
+    return "\n".join(parts)
 
 
 def to_json(result: IntakeResult) -> dict[str, Any]:

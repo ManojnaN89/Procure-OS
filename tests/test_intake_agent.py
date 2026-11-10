@@ -506,6 +506,234 @@ def test_an_email_from_a_stranger_creates_nothing_and_is_not_even_read_by_a_mode
     assert provider.calls == [] and _drafts(world) == []
 
 
+# ---- follow-ups: linked to the requester's own request and answered from the data ----------------
+
+
+def _draft_of_seal(world: Session, gw: Gateway | None = None) -> str:
+    gw = gw or gateway(reading([("Seal", 10)], need_by="2026-11-20"))[0]
+    got = _say(world, "Need 10 nos Seal by 20 Nov 2026", gw)
+    return got.request_nos[0]
+
+
+FOLLOW = json.dumps({"intent": "follow_up", "lines": [{"item": "Seal", "qty": None}], "confidence": 0.9})
+
+
+def test_a_follow_up_is_linked_to_the_requesters_own_request_and_no_new_draft_is_made(world: Session) -> None:
+    no = _draft_of_seal(world)
+
+    got = _say(world, "Any update on the Seal I asked for?", gateway(FOLLOW)[0])
+
+    assert got.status == "follow_up" and got.request_nos == [no]
+    assert no in got.message and "still a draft" in got.message
+    assert len(_drafts(world)) == 1  # nothing new was created
+    assert world.execute(text("select count(*) from audit_event where action = 'intake.follow_up'")).scalar_one() == 1
+
+
+def test_a_follow_up_says_who_must_approve_and_where_an_approved_request_stands(world: Session) -> None:
+    no = _draft_of_seal(world)
+    world.execute(text("update request set status = 'submitted' where no = :n"), {"n": no})
+    world.execute(
+        text(
+            "insert into approval_step (request_no, round, step, role, approver, status) "
+            "values (:n, 1, 1, 'Dept head', 'U1', 'pending')"
+        ),
+        {"n": no},
+    )
+    world.commit()
+    asked = _say(world, "Any update on the Seal?", gateway(FOLLOW)[0])
+    world.execute(text("update request set status = 'approved' where no = :n"), {"n": no})
+    world.commit()
+    approved = _say(world, "Any update on the Seal?", gateway(FOLLOW)[0])
+
+    assert "waiting for approval by" in asked.message and "(Dept head)" in asked.message
+    assert "waiting for a buyer to source it" in approved.message
+    assert len(_drafts(world)) == 1
+
+
+def test_a_follow_up_never_reaches_another_persons_request(world: Session) -> None:
+    no = _draft_of_seal(world)
+    world.execute(text("update request set requester = 'U9' where no = :n"), {"n": no})
+    world.commit()
+
+    got = _say(world, "Any update on the Seal?", gateway(FOLLOW)[0])
+
+    assert got.status == "follow_up" and got.request_nos == [] and no not in got.message
+    assert "no open request" in got.message
+
+
+def test_a_follow_up_about_something_else_lists_the_requesters_open_requests(world: Session) -> None:
+    no = _draft_of_seal(world)
+    other = json.dumps({"intent": "follow_up", "lines": [{"item": "Titanium anvil", "qty": None}], "confidence": 0.9})
+
+    got = _say(world, "Where is my Titanium anvil?", gateway(other)[0])
+
+    assert got.request_nos == [] and no in got.message and len(_drafts(world)) == 1
+
+
+# ---- service and capital requests -------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("written", "kind"),
+    [
+        ("Request for annual maintenance contract for the air compressor", "service"),
+        ("need an AMC for the lift", "service"),
+        ("Requesting a CNC lathe, budget approved in capex plan", "capex"),
+        ("need 10 nos Seal", "goods"),
+        ("need a campaign poster, capitalised letters", "goods"),
+    ],
+)
+def test_the_kind_of_request_is_taken_from_the_words_written(written: str, kind: str) -> None:
+    assert intake.request_type(written) == kind
+
+
+def test_a_service_request_is_a_free_text_line_with_one_job_and_no_catalogue_match(world: Session) -> None:
+    message = "Request for annual maintenance contract for the air compressor. Current AMC expires on 30 Nov 2026."
+    gw, provider = gateway(
+        reading([("annual maintenance contract for the air compressor", None)], need_by="2026-11-30")
+    )
+
+    got = _say(world, message, gw)
+
+    assert got.status == "drafted" and got.request_nos
+    row = world.execute(text("select type, status from request")).one()
+    assert (row.type, row.status) == ("service", "draft")
+    line = world.execute(text("select item_code, free_text, qty, uom, need_by from request_line")).one()
+    assert line.item_code is None and "air compressor" in line.free_text and line.qty == D("1")
+    assert line.need_by == date(2026, 11, 30)
+    assert provider.calls == ["m"]  # one reading, and no item matching at all
+    assert any("service request" in w for w in got.warnings) and any("1 was taken" in w for w in got.warnings)
+
+
+def test_a_capital_request_is_made_as_a_capex_draft(world: Session) -> None:
+    message = "Requesting a CNC lathe for Maintenance. Budget approved in capex plan. Delivery by 15 Dec 2026."
+    gw, _ = gateway(reading([("CNC lathe", None)], need_by="2026-12-15"))
+
+    got = _say(world, message, gw)
+
+    assert got.status == "drafted"
+    assert world.execute(text("select type from request")).scalar_one() == "capex"
+    assert world.execute(text("select free_text, item_code from request_line")).one() == ("CNC lathe", None)
+
+
+def test_a_service_request_still_asks_by_when(world: Session) -> None:
+    gw, _ = gateway(reading([("annual maintenance contract for the lift", None)]))
+
+    got = _say(world, "need an annual maintenance contract for the lift", gw)
+
+    assert got.status == "question" and got.asked == "need_by" and _drafts(world) == []
+
+
+# ---- attachments on an email ------------------------------------------------------------------
+
+
+def _sheet(rows: list[list[Any]]) -> bytes:
+    import io  # noqa: PLC0415
+
+    import openpyxl  # noqa: PLC0415
+
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    assert ws is not None
+    for r in rows:
+        ws.append(r)
+    buf = io.BytesIO()
+    wb.save(buf)
+    return buf.getvalue()
+
+
+def _mail_with(world: Session, body: str, files: list[tuple[str, str, bytes]]) -> int:
+    _all(world)
+    world.execute(
+        text(
+            "insert into org_setting (key, value) values ('request_mailbox', 'requests@cbcpl.example') on conflict do nothing"
+        )
+    )
+    world.commit()
+    incoming = IncomingMail(
+        message_id=f"<{uuid.uuid4().hex}@staff>", in_reply_to=None, references=[],
+        from_addr=f"Mahesh <keeper{world.info['sfx']}@x.example>", to_addrs=["Purchase <requests@cbcpl.example>"],
+        subject="Requirement sheet", body=body, sent_at=None, attachments=files, raw=b"raw",
+    )  # fmt: skip
+    email_id = emails.ingest(world, world.info["slug"], incoming)
+    assert email_id is not None
+    return email_id
+
+
+XLSX = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+
+
+def test_the_lines_of_a_request_can_come_from_an_attached_sheet(world: Session, outbox: Outbox) -> None:  # noqa: F811
+    sheet = _sheet([["Item", "Qty"], ["Seal", 5], ["Flat file 10 inch", 3]])
+    email_id = _mail_with(world, "PFA the requirement sheet. Needed by 20 Nov 2026.", [("need.xlsx", XLSX, sheet)])
+    gw, _ = gateway(reading([("Seal", 5), ("Flat file 10 inch", 3)], need_by="2026-11-20"))
+
+    result = intake.handle_email(world, world.info["slug"], email_id, gw)
+
+    assert result is not None and result.status == "drafted"
+    got = world.execute(text("select item_code, qty from request_line order by item_code")).all()
+    assert got == [("B", D("5")), ("F1", D("3"))]
+    assert {r.status for r in _drafts(world)} == {"draft"}
+
+
+def test_a_line_that_is_in_neither_the_message_nor_the_sheet_is_refused(world: Session, outbox: Outbox) -> None:  # noqa: F811
+    sheet = _sheet([["Item", "Qty"], ["Seal", 5]])
+    email_id = _mail_with(world, "PFA the requirement sheet. Needed by 20 Nov 2026.", [("need.xlsx", XLSX, sheet)])
+    gw, _ = gateway(reading([("Seal", 50)], need_by="2026-11-20"), reading([("Seal", 50)], need_by="2026-11-20"))
+
+    result = intake.handle_email(world, world.info["slug"], email_id, gw)
+
+    assert result is not None and result.status == "needs_person" and _drafts(world) == []
+
+
+def test_an_email_whose_attachment_cannot_be_read_is_handled_on_its_own_words(world: Session, outbox: Outbox) -> None:  # noqa: F811
+    email_id = _mail_with(world, "need 5 Seal by 20 Nov 2026. Sheet attached.", [("broken.xlsx", XLSX, b"not a sheet")])
+    gw, _ = gateway(reading([("Seal", 5)], need_by="2026-11-20"))
+
+    result = intake.handle_email(world, world.info["slug"], email_id, gw)
+
+    assert result is not None and result.status == "drafted"
+
+
+# ---- a possible split order -------------------------------------------------------------------
+
+
+def _earlier_request(world: Session, days_ago: int) -> str:
+    no = _draft_of_seal(world)
+    world.execute(
+        text("update request set status = 'approved', created_at = now() - make_interval(days => :d) where no = :n"),
+        {"d": days_ago, "n": no},
+    )
+    world.commit()
+    return no
+
+
+def test_the_same_item_asked_for_again_within_days_is_flagged_for_the_approver(world: Session) -> None:
+    earlier = _earlier_request(world, 3)
+    gw, _ = gateway(reading([("Seal", 10)], need_by="2026-11-25"))
+
+    got = _say(world, "need 10 nos Seal again, by 25 Nov 2026", gw)
+
+    assert got.status == "drafted" and any("possible split order" in w and earlier in w for w in got.warnings)
+    new = world.execute(text("select justification from request where no = :n"), {"n": got.request_nos[0]}).scalar_one()
+    assert "possible split order" in new
+    flag = world.execute(text("select after from audit_event where action = 'intake.split_order_flag'")).one()
+    assert flag.after["notes"]
+
+
+def test_a_request_long_after_the_last_one_is_not_flagged(world: Session) -> None:
+    _earlier_request(world, 30)
+    gw, _ = gateway(reading([("Seal", 10)], need_by="2026-11-25"))
+
+    got = _say(world, "need 10 nos Seal again, by 25 Nov 2026", gw)
+
+    assert got.status == "drafted" and not any("split" in w for w in got.warnings)
+    assert (
+        world.execute(text("select count(*) from audit_event where action = 'intake.split_order_flag'")).scalar_one()
+        == 0
+    )
+
+
 def _queued(slug: str, kind: str) -> list[dict[str, Any]]:
     from p2p.platform import tenants
 

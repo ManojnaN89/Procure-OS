@@ -9,6 +9,8 @@ const Dashboard = {
         <p>RFQs, requisitions and spend across all categories \u2014 live from the database.</p>
       </div>
 
+      <div id="myWork" style="margin-bottom:16px;"></div>
+
       <div id="operationalStrip" style="display:flex;gap:18px;margin-bottom:16px;font-family:var(--font-mono);font-size:11px;color:var(--text-muted);"></div>
 
       <div class="panel" id="attentionPanel" style="margin-bottom:16px;">
@@ -40,6 +42,7 @@ const Dashboard = {
         </div>
       </div>
     `;
+    if (typeof WorkspaceView !== "undefined") WorkspaceView.mount(document.getElementById("myWork"));
     await this.load();
     await this.loadAttention();
   },

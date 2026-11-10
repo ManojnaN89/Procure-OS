@@ -24,8 +24,13 @@ const InvoicesView = {
     container.innerHTML = `
       <div class="page-header page-header-row">
         <div><h1>Invoices</h1><p>Supplier invoices, matched to the order and the goods received. Blocked ones wait for a person.</p></div>
-        <div class="btn btn-primary" id="newInvoice"><i class="ti ti-plus"></i>Enter an invoice</div>
+        <div style="display:flex;gap:8px;">
+          <div class="btn btn-secondary" id="uploadInvoice"><i class="ti ti-upload"></i>Upload an invoice</div>
+          <div class="btn btn-primary" id="newInvoice"><i class="ti ti-plus"></i>Enter an invoice</div>
+          <input type="file" id="invFile" accept=".pdf,.png,.jpg,.jpeg,.tif,.tiff,.bmp" style="display:none;">
+        </div>
       </div>
+      <div id="invDrafts"></div>
       <div style="margin-bottom:10px;display:flex;gap:8px;" id="invFilter">
         <div class="btn btn-secondary btn-sm" data-s="">All</div>
         <div class="btn btn-secondary btn-sm" data-s="blocked">Blocked</div>
@@ -34,6 +39,7 @@ const InvoicesView = {
       </div>
       <div class="table-wrap" id="tableWrap"><div class="empty-state">Loading…</div></div>`;
     document.getElementById("newInvoice").addEventListener("click", () => { window.location.hash = "#/invoices/new"; });
+    this.wireDrafts(container);
     const load = async (status) => {
       const wrap = document.getElementById("tableWrap");
       try {
@@ -54,6 +60,55 @@ const InvoicesView = {
     };
     document.querySelectorAll("#invFilter [data-s]").forEach((b) => b.addEventListener("click", () => load(b.dataset.s)));
     load("");
+  },
+
+  // Invoices read from documents (upload, or mail to the invoice mailbox): a person checks each draft, then confirms it.
+  async wireDrafts(container) {
+    const box = document.getElementById("invDrafts");
+    const file = document.getElementById("invFile");
+    const upload = document.getElementById("uploadInvoice");
+    if (!box || !file || !upload) return;
+    upload.addEventListener("click", () => file.click());
+    file.addEventListener("change", async () => {
+      if (!file.files.length) return;
+      const form = new FormData();
+      form.append("file", file.files[0]);
+      upload.textContent = "Reading…";
+      const res = await Auth.fetch("/api/invoice-drafts/upload", { method: "POST", body: form });
+      file.value = "";
+      upload.innerHTML = `<i class="ti ti-upload"></i>Upload an invoice`;
+      if (res.ok) return this.paintDrafts(box);
+      let msg = "The invoice could not be read.";
+      try { msg = (await res.json()).detail || msg; } catch {}
+      box.insertAdjacentHTML("afterbegin", `<div class="panel" style="margin-bottom:10px;color:var(--warning-text);font-size:12.5px;">${this.esc(msg)}</div>`);
+    });
+    this.paintDrafts(box);
+  },
+
+  async paintDrafts(box) {
+    let drafts = [];
+    try { drafts = await API.getJSON("/api/invoice-drafts"); } catch { box.innerHTML = ""; return; }
+    if (!drafts.length) { box.innerHTML = ""; return; }
+    const WAY = { qr: "Read from its QR code", model: "Read by the assistant and checked against the page", none: "Not read" };
+    box.innerHTML = `<div class="panel" style="margin-bottom:14px;"><div class="panel-title">Invoices read from documents (${drafts.length})</div>
+      ${drafts.map((d) => `<div class="draft-row" data-id="${this.esc(d.id)}" style="border-top:1px solid var(--border);padding:8px 0;font-size:12.5px;">
+        <div><strong>${this.esc(d.supplier || "Unknown sender")}</strong> · ${this.esc(d.number || d.filename || "")} ${d.date ? "· " + formatDate(d.date) : ""} ${d.total ? "· " + formatCurrency(d.total) : ""}
+          <span class="cell-muted"> · ${this.esc(WAY[d.path] || "")} · ${this.esc(d.source)}</span></div>
+        ${d.problems.map((p) => `<div style="color:var(--warning-text);">${this.esc(p)}</div>`).join("")}
+        ${d.assumptions.map((p) => `<div class="cell-muted">Assumed: ${this.esc(p)}</div>`).join("")}
+        <div style="margin-top:6px;display:flex;gap:8px;">
+          ${d.number && !d.problems.length ? `<div class="btn btn-primary btn-sm" data-act="confirm">Check and enter</div>` : ""}
+          <div class="btn btn-secondary btn-sm" data-act="dismiss">Dismiss</div></div>
+        <div class="draft-note" style="color:var(--warning-text);margin-top:4px;"></div></div>`).join("")}</div>`;
+    box.querySelectorAll(".draft-row").forEach((row) => {
+      const note = row.querySelector(".draft-note");
+      row.querySelectorAll("[data-act]").forEach((b) => b.addEventListener("click", async () => {
+        const res = await API.postJSON(`/api/invoice-drafts/${row.dataset.id}/${b.dataset.act}`, {});
+        if (res.ok && b.dataset.act === "confirm" && res.data.invoice) { window.location.hash = `#/invoices/${res.data.invoice}`; return; }
+        if (res.ok) return this.paintDrafts(box);
+        note.textContent = res.data.detail || "That did not work.";
+      }));
+    });
   },
 
   async renderEntry(container) {

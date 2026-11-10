@@ -87,3 +87,39 @@ def tds_on_goods(cumulative_before: Decimal, taxable: Decimal, on: date, *, pan_
 def quarter_label(on: date) -> str:
     """'2026-27 Q2': the financial year and its quarter (April to June is the first)."""
     return f"{financial_year(on)} Q{(on.month - 4) % 12 // 3 + 1}"
+
+
+# ---- advances -----------------------------------------------------------------------------------
+
+
+def advance_amounts(order_total: Decimal, order_taxable: Decimal, advance_pct: Decimal) -> tuple[Decimal, Decimal]:
+    """What is paid in advance on an order: the percentage of its total, and of its taxable value (the tax at source
+    on the advance is worked out on the taxable part)."""
+    return q2(order_total * advance_pct / 100), q2(order_taxable * advance_pct / 100)
+
+
+def advance_use(
+    left_gross: Decimal, left_taxable: Decimal, invoice_total: Decimal, invoice_taxable: Decimal
+) -> tuple[Decimal, Decimal]:
+    """How much of what is left of an advance an invoice takes: as much as it can, in total and in taxable value."""
+    return min(left_gross, invoice_total), min(left_taxable, invoice_taxable)
+
+
+# ---- early-payment discount ---------------------------------------------------------------------
+
+
+def discount_window_end(baseline_date: date, discount_days: int) -> date:
+    """The last day on which paying earns the discount (the day itself still does)."""
+    return baseline_date + timedelta(days=discount_days)
+
+
+def early_discount(
+    payable_taxable: Decimal, discount_pct: Decimal, discount_days: int, baseline_date: date, paid_on: date
+) -> Decimal:
+    """The cash discount for paying within the window, on the taxable value still to be paid.
+
+    The invoice's tax stays as invoiced and so does the tax at source: the discount only reduces the cash paid.
+    """
+    if discount_pct <= 0 or discount_days <= 0 or paid_on > discount_window_end(baseline_date, discount_days):
+        return Decimal(0)
+    return q2(payable_taxable * discount_pct / 100)

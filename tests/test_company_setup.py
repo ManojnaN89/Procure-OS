@@ -15,7 +15,7 @@ from p2p.agents import autonomy
 from p2p.approvals import rules as approval_rules
 from p2p.main import app
 from p2p.platform import permissions, sod, users
-from p2p.platform.setup_api import ADMIN_REQUIRED, policy_value_on
+from p2p.platform.setup_api import ADMIN_REQUIRED, PERMISSIONS, policy_value_on
 from p2p.platform.tokens import create_access_token
 from p2p.receiving import goods
 
@@ -269,6 +269,12 @@ def test_a_persons_manager_is_set_checked_for_loops_and_follows_the_login_addres
 
 
 # ---- what each role may do ---------------------------------------------------------------------
+
+
+def test_every_permission_a_role_holds_can_be_set_on_the_roles_page(s: Setup) -> None:
+    held = {r[0] for r in s.db.execute(text("select distinct action from role_permission"))}
+
+    assert held <= set(PERMISSIONS), sorted(held - set(PERMISSIONS))
 
 
 def test_the_permissions_of_a_role_are_changed_and_the_platform_follows(s: Setup) -> None:

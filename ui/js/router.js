@@ -6,6 +6,7 @@
 const Router = {
   routes: {
     dashboard: Dashboard,
+    "control-tower": ControlTowerView,
     rfqs: RfqsView,
     requisitions: RequisitionsView,
     vendors: VendorsView,

@@ -14,10 +14,14 @@ from p2p.platform.agent_api import router as agent_router
 from p2p.platform.auth import router as auth_router
 from p2p.platform.files import router as files_router
 from p2p.platform.invoice_api import router as invoice_router
+from p2p.platform.invoice_intake_api import router as invoice_intake_router
+from p2p.platform.master_api import router as master_router
 from p2p.platform.payment_api import router as payment_router
 from p2p.platform.setup_api import router as setup_router
+from p2p.platform.supplier_agent_api import router as supplier_agent_router
 from p2p.platform.ui_api import router as ui_router
 from p2p.platform.ui_api import sockets as ui_sockets
+from p2p.platform.workspace_api import router as workspace_router
 
 app = FastAPI(title="P2P platform", version="0.0.1")
 logs.install(app)
@@ -28,9 +32,13 @@ app.include_router(admin_router)
 app.include_router(files_router)
 app.include_router(setup_router)
 app.include_router(ui_router)
+app.include_router(workspace_router)
 app.include_router(invoice_router)
+app.include_router(invoice_intake_router)
+app.include_router(master_router)
 app.include_router(agent_router)
 app.include_router(payment_router)
+app.include_router(supplier_agent_router)
 app.include_router(ui_sockets)
 
 

@@ -50,6 +50,10 @@ PERMISSIONS: dict[str, str] = {
     "supplier.view": "See suppliers",
     "supplier.propose": "Ask for a supplier to be activated, blocked or reviewed",
     "supplier.activate": "Approve a supplier's status change",
+    "supplier.documents": "Add a supplier's documents",
+    "supplier.verify_docs": "Verify a supplier's documents against the originals",
+    "contract.manage": "Store contracts and their price lists",
+    "contract.activate": "Activate a contract",
     "grn.create": "Receive and inspect goods",
     "stock.view": "See stock",
     "replenishment.run": "Run automatic replenishment",
@@ -233,6 +237,18 @@ DECISIONS: dict[str, tuple[str, str]] = {
     "rfq.award": ("Award to the recommended supplier", "Awards a quotation when there is a clear winner"),
     "quote.read": ("Accept a quote read from an email", "Turns a clean reading of a supplier's reply into a quote"),
     "po.send": ("Send an approved purchase order", "Emails the order to the supplier"),
+    "invoice.read": (
+        "Enter an invoice read from a document",
+        "Enters a clean reading of a supplier's invoice without AP",
+    ),
+    "supplier.change": (
+        "Apply a small change a supplier asks for",
+        "Moves a promised date within the accepted days; quantities are only noted, prices always go to a buyer",
+    ),
+    "supplier.remind": (
+        "Chase a supplier by email",
+        "Reminds a supplier that has not acknowledged an order, or still owes part of a delivery",
+    ),
 }
 LOCKED_LABELS = {
     "payment_run.approve": "Approve a payment run",

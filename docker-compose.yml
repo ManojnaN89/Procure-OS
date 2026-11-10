@@ -5,6 +5,8 @@ name: p2p
 services:
   postgres:
     image: postgres:17
+    # The default 64 MB of shared memory runs out under parallel queries and the database crashes.
+    shm_size: 512mb
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-p2p}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}

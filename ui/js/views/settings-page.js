@@ -35,6 +35,14 @@ const SettingsView = {
     { key: "replenishment_department", label: "Department for automatic requests", suffix: "its head approves them, e.g. LOG", group: "Automation", isText: true },
     { key: "assistant_enabled", label: "Assistant", suffix: "answers questions about requests, quotations, orders and stock", group: "Automation", isBoolean: true },
     { key: "rfq_supplier_count", label: "Suppliers asked for each quotation", suffix: "at least; a category may ask for more", group: "Automation" },
+    { key: "sourcing_mode", label: "How suppliers are chosen", suffix: "compare asks several suppliers; the best vendor mode orders from the top-scored supplier with a price on file", group: "Sourcing", isSelect: true, options: [
+      { value: "compare", label: "Compare quotations (default)" },
+      { value: "best_vendor", label: "Order from the best-scored vendor" },
+    ] },
+    { key: "score_weight_price", label: "Vendor score: price", suffix: "weight, out of 100 together with the next two", group: "Sourcing" },
+    { key: "score_weight_delivery", label: "Vendor score: delivery", suffix: "weight (on time and quick to acknowledge)", group: "Sourcing" },
+    { key: "score_weight_quality", label: "Vendor score: quality", suffix: "weight (share of goods accepted)", group: "Sourcing" },
+    { key: "duplicate_window_days", label: "Repeat request window", suffix: "days: the same item for the same place within this is flagged", group: "Requests" },
   ],
 
   async load() {

@@ -109,7 +109,12 @@ const VendorsView = {
             <div class="panel-title">Documents ${v.documents.ok ? '<span class="badge badge-approved" style="font-size:10px;">complete</span>' : '<span class="badge badge-rejected" style="font-size:10px;">cannot be used until fixed</span>'}</div>
             ${v.documents.problems.map((p) => `<div style="font-size:12.5px;color:var(--danger-text);margin-bottom:4px;">${escapeHtml(p)}</div>`).join("")}
             ${v.documents.warnings.map((p) => `<div style="font-size:12.5px;color:var(--warning-text);margin-bottom:4px;">${escapeHtml(p)}</div>`).join("")}
-            ${v.documents.on_file.length ? `<table class="data-table" style="margin-top:8px;"><thead><tr><th>DOCUMENT</th><th>NUMBER</th><th>EXPIRES</th><th>CHECKED</th></tr></thead><tbody>${v.documents.on_file.map((d) => `<tr><td>${escapeHtml(d.type)}</td><td class="cell-muted">${escapeHtml(d.number || "—")}</td><td>${d.expires_on ? formatDate(d.expires_on) : "—"}${d.expired ? ' <span class="badge badge-rejected">expired</span>' : ""}</td><td>${d.verified ? "yes" : "no"}</td></tr>`).join("")}</tbody></table>` : '<p class="cell-muted" style="font-size:12px;margin:0;">No documents on file.</p>'}
+            ${v.documents.on_file.length ? `<table class="data-table" style="margin-top:8px;"><thead><tr><th>DOCUMENT</th><th>NUMBER</th><th>EXPIRES</th><th>CHECKED</th></tr></thead><tbody>${v.documents.on_file.map((d) => `<tr><td>${escapeHtml(d.type)}</td><td class="cell-muted">${escapeHtml(d.number || "—")}</td><td>${d.expires_on ? formatDate(d.expires_on) : "—"}${d.expired ? ' <span class="badge badge-rejected">expired</span>' : ""}</td><td>${d.verified ? "yes" : (v.can_verify_documents ? `<span class="btn btn-secondary btn-sm doc-verify" data-id="${d.id}" style="padding:2px 8px;font-size:11px;">Verify</span>` : "no")}</td></tr>`).join("")}</tbody></table>` : '<p class="cell-muted" style="font-size:12px;margin:0;">No documents on file.</p>'}
+            ${v.can_add_documents ? `<div style="margin-top:10px;display:flex;gap:6px;flex-wrap:wrap;align-items:center;">
+              <select id="docType" style="padding:5px;"><option value="pan">PAN card</option><option value="gst_cert">GST certificate</option><option value="udyam">Udyam certificate</option><option value="cancelled_cheque">Bank proof</option><option value="msme_agreement">MSME agreement</option><option value="iso">ISO certificate</option><option value="licence">Licence</option><option value="insurance">Insurance</option></select>
+              <input id="docNumber" placeholder="Number" style="padding:5px;"><input id="docExpires" type="date" title="Expires on" style="padding:5px;">
+              <span class="btn btn-secondary btn-sm" id="docAdd">Add a document</span><span id="docNote" style="font-size:12px;color:var(--warning-text);"></span></div>
+              <div class="cell-muted" style="font-size:11px;margin-top:4px;">A document counts once a person other than the one who added it has checked it against the original and verified it.</div>` : ""}
           </div>` : ""}
         <div class="panel" style="margin-bottom:16px;">
           <div class="panel-title">Vendor status: ${escapeHtml(v.status || "")}</div>
@@ -139,6 +144,18 @@ const VendorsView = {
         </div>
       `;
 
+      container.querySelectorAll(".doc-verify").forEach((b) => b.addEventListener("click", async () => {
+        const res = await API.postJSON(`/api/vendors/${encodeURIComponent(id)}/documents/${b.dataset.id}/verify`, { verified: true });
+        if (res.ok) return this.renderDetail(container, id);
+        const note = document.getElementById("docNote"); if (note) note.textContent = res.data.detail || "Not verified.";
+      }));
+      const docAdd = document.getElementById("docAdd");
+      if (docAdd) docAdd.addEventListener("click", async () => {
+        const res = await API.postJSON(`/api/vendors/${encodeURIComponent(id)}/documents`, {
+          type: document.getElementById("docType").value, number: document.getElementById("docNumber").value, expires_on: document.getElementById("docExpires").value });
+        if (res.ok) return this.renderDetail(container, id);
+        document.getElementById("docNote").textContent = res.data.detail || "Not added.";
+      });
       let chosen = null;
       const box = document.getElementById("statusReasonBox");
       container.querySelectorAll(".vendor-status-btn").forEach((btn) => {

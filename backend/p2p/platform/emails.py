@@ -175,11 +175,23 @@ def ingest(db: Session, tenant: str, incoming: IncomingMail) -> int | None:
         worker.enqueue(
             tenant, "read_supplier_reply", {"email_id": email_id}
         )  # a supplier's reply: read it into a draft
+    elif linked_type == "po":
+        worker.enqueue(
+            tenant, "supplier_message", {"email_id": email_id}
+        )  # a supplier's mail about an order: the supplier communication agent reads it
+    elif linked_type is None and _to_invoice_mailbox(db, incoming.to_addrs):
+        worker.enqueue(tenant, "read_invoice_email", {"email_id": email_id})  # a supplier's invoice: read into a draft
     elif linked_type is None and _to_request_mailbox(db, incoming.to_addrs):
         worker.enqueue(
             tenant, "intake_email", {"email_id": email_id}
         )  # a colleague's request: the intake agent drafts it
     return email_id
+
+
+def _to_invoice_mailbox(db: Session, to_addrs: list[str]) -> bool:
+    from p2p.invoices import reading  # noqa: PLC0415 - reading imports this layer's neighbours
+
+    return reading.is_invoice_mailbox(db, to_addrs)
 
 
 def _to_request_mailbox(db: Session, to_addrs: list[str]) -> bool:
