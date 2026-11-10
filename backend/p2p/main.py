@@ -18,6 +18,7 @@ from p2p.platform.guides_api import router as guides_router
 from p2p.platform.invoice_api import router as invoice_router
 from p2p.platform.invoice_intake_api import router as invoice_intake_router
 from p2p.platform.master_api import router as master_router
+from p2p.platform.order_api import router as order_router
 from p2p.platform.payment_api import router as payment_router
 from p2p.platform.setup_api import router as setup_router
 from p2p.platform.supplier_agent_api import router as supplier_agent_router
@@ -40,6 +41,7 @@ app.include_router(guides_router)
 app.include_router(invoice_router)
 app.include_router(invoice_intake_router)
 app.include_router(master_router)
+app.include_router(order_router)
 app.include_router(agent_router)
 app.include_router(payment_router)
 app.include_router(supplier_agent_router)

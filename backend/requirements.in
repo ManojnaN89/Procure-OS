@@ -17,3 +17,4 @@ langgraph
 langgraph-checkpoint-postgres
 pypdfium2
 zxing-cpp
+reportlab

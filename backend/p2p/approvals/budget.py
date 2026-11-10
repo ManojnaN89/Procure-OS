@@ -45,13 +45,22 @@ def _policy_setting(db: Session) -> str:
     return "block" if value == "block" else "warn"
 
 
-def check_request(db: Session, request_no: str, today: date) -> list[GroupCheck]:
-    """One result per GL account on the request (lines without a GL account cannot be checked and are left out)."""
+def check_request(db: Session, request_no: str, today: date, *, final_prices: bool = False) -> list[GroupCheck]:
+    """One result per GL account on the request (lines without a GL account cannot be checked and are left out).
+
+    With `final_prices` a line that has been ordered is valued at the order's price instead of the estimate: that is the
+    check an order makes on its final amount."""
+    price = (
+        "coalesce((select pl.unit_price from po_line pl where pl.request_no = l.request_no "
+        "and pl.request_line_no = l.line_no and pl.status <> 'cancelled' limit 1), l.est_price, 0)"
+        if final_prices
+        else "coalesce(l.est_price, 0)"
+    )
     lines = (
         db.execute(
             text(
-                "select l.gl_code, l.cost_centre_code, coalesce(l.delivery_location, r.ship_to_location) as location, "
-                "l.qty * coalesce(l.est_price, 0) as value from request_line l join request r on r.no = l.request_no "
+                "select l.gl_code, l.cost_centre_code, coalesce(l.delivery_location, r.ship_to_location) as location, "  # noqa: S608 - the only variable part is one of two fixed fragments
+                f"l.qty * {price} as value from request_line l join request r on r.no = l.request_no "
                 "where l.request_no = :n and l.status <> 'cancelled' and l.gl_code is not null"
             ),
             {"n": request_no},
@@ -113,6 +122,12 @@ def check_request(db: Session, request_no: str, today: date) -> list[GroupCheck]
         policy = "block" if rows["blocks"] or _policy_setting(db) == "block" else "warn"
         out.append(GroupCheck(gl, tuple(scope), check_budget(budget, committed, requested), policy))
     return out
+
+
+def check_order(db: Session, po_no: str, today: date) -> list[GroupCheck]:
+    """The budget check again, on the order's final prices: the request's other lines count at their estimates."""
+    request_no = db.execute(text("select request_no from po where no = :n"), {"n": po_no}).scalar()
+    return check_request(db, str(request_no), today, final_prices=True) if request_no else []
 
 
 def summary(checks: list[GroupCheck]) -> str:

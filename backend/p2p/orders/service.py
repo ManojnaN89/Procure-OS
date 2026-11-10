@@ -155,11 +155,23 @@ def order_request(db: Session, tenant: str, request_no: str, actor: Actor = SERV
         return result
     lines, notes = ready_lines(db, request_no, as_of)
     result.skipped.extend(notes)
-    by_supplier: dict[str, list[ReadyLine]] = {}
+    # One order per supplier and set of terms (the delivery place is the request's, so it is the same for every line).
+    # A contract's payment and delivery terms are not dropped because another line of the same supplier has none.
+    own_terms: dict[str, str | None] = {}
+    by_group: dict[tuple[str, str | None, str | None], list[ReadyLine]] = {}
     for line in lines:
-        by_supplier.setdefault(line.supplier_code, []).append(line)
+        if line.supplier_code not in own_terms:
+            own_terms[line.supplier_code] = db.execute(
+                text("select payment_terms_code from supplier where code = :c"), {"c": line.supplier_code}
+            ).scalar()
+        payment, delivery = _terms(
+            db, [line], line.source_ref if line.source == "contract" else None, own_terms[line.supplier_code]
+        )
+        by_group.setdefault((line.supplier_code, payment, delivery), []).append(line)
     created: list[tuple[str, bool]] = []
-    for supplier, group in sorted(by_supplier.items()):
+    for (supplier, _payment, _delivery), group in sorted(
+        by_group.items(), key=lambda kv: tuple(str(x or "") for x in kv[0])
+    ):
         outcome = _create_po(db, tenant, dict(req), supplier, group, as_of, actor, result)
         if outcome:
             created.append(outcome)
@@ -168,7 +180,7 @@ def order_request(db: Session, tenant: str, request_no: str, actor: Actor = SERV
         if held:
             continue
         status = workflow.submit(db, tenant, po_no, actor, today=as_of)
-        (result.approved if status == "approved" else result.waiting).append(po_no)
+        (result.approved if status == "approved" else result.held if status == "held" else result.waiting).append(po_no)
     return result
 
 
@@ -391,9 +403,13 @@ def _terms(
 def _accept_variance(db: Session, payload: dict[str, Any], actor: Actor) -> dict[str, Any]:
     """A person accepted the price above the estimate: the hold is lifted and the order goes for approval."""
     po_no, tenant = str(payload["po_no"]), str(payload["tenant"])
+    held = db.execute(text("select hold_reason from po where no = :n and status = 'draft'"), {"n": po_no}).scalar()
     db.execute(
-        text("update po set hold_reason = null, hold_proposal_id = null where no = :n and status = 'draft'"),
-        {"n": po_no},
+        text(
+            "update po set hold_reason = null, hold_proposal_id = null, "
+            "budget_accepted = budget_accepted or :b where no = :n and status = 'draft'"
+        ),
+        {"n": po_no, "b": str(held or "").startswith("Over budget")},
     )
     audit.record(db, actor, "po.variance_accepted", "po", po_no)
     db.commit()

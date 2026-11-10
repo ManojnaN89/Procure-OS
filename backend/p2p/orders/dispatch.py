@@ -16,6 +16,7 @@ from sqlalchemy.orm import Session
 
 from p2p.formulas.calendar import IST, business_today
 from p2p.formulas.money import format_inr, format_qty
+from p2p.orders import document
 from p2p.platform import audit, emails, reference, routing, worker
 from p2p.platform.sod import Actor
 from p2p.sourcing import documents
@@ -117,13 +118,22 @@ def send_po(db: Session, po_no: str, actor: Actor = SERVICE) -> str:
         or po["ship_to_location"]
     )
     try:
+        pdf = [(f"{po_no}.pdf", "application/pdf", document.order_document(db, po_no))]
+    except Exception:  # noqa: BLE001 - the order still goes out as text; a fault in the document must not stop it
+        log.warning("the document of %s could not be made; sending the order as text only", po_no, exc_info=True)
+        db.rollback()
+        po = db.execute(text("select * from po where no = :n for update"), {"n": po_no}).mappings().one()
+        pdf = []
+    version = f" (version {po['version']})" if int(po["version"]) > 1 else ""
+    try:
         emails.send_linked_email(
             db,
             contact[0],
-            f"Purchase order {po_no}",
+            f"Purchase order {po_no}{version}",
             _body(dict(po), lines, charges, contact[1], str(company), str(ship_to)),
             linked_type="po",
             linked_ref=po_no,
+            attachments=pdf or None,
         )
     except (OSError, smtplib.SMTPException) as exc:
         db.rollback()

@@ -181,6 +181,15 @@ def reject(db: Session, proposal_id: int, user_id: int, reason: str, *, now: dat
     _set(db, proposal_id, "rejected", user_id, now or datetime.now(UTC), reason)
 
 
+def withdraw(db: Session, proposal_id: int, user_id: int | None, note: str) -> None:
+    """A proposal that is no longer needed (what it asked for was cancelled): it expires, and nobody has to decide it."""
+    p = _load(db, proposal_id)
+    if p.status != "pending":
+        db.rollback()
+        return
+    _set(db, proposal_id, "expired", user_id, datetime.now(UTC), note)
+
+
 def expire_due(db: Session, now: datetime | None = None) -> int:
     rows = db.execute(
         text(

@@ -20,7 +20,15 @@ Each offer is compared on what it costs to our door: its price, its share of the
 
 ## Orders
 
-**Purchase orders** → open the order. When it is approved click **Send to supplier**. When the supplier confirms click **Record acknowledgement** and enter the promised date. If the supplier writes about the order, the panel **Supplier messages** on the order shows what the system understood, and **Chase suppliers now** sends the reminders that are due.
+**Purchase orders** → open the order. Lines that share a supplier and the same payment and delivery terms are on one order; a different set of terms (for example a contract line and a quoted line) makes a second order. **Open the order document (PDF)** shows what the supplier gets; it goes with the email. When it is approved click **Send to supplier**. When the supplier confirms click **Record acknowledgement** and enter the promised date. If the supplier writes about the order, the panel **Supplier messages** on the order shows what the system understood, and **Chase suppliers now** sends the reminders that are due.
+
+## Change or end an order
+
+On the order page, the panel **Order document and changes** keeps the version and its history. Every change needs a reason.
+
+- **Change quantity or date** → **Make a new version**: lower the quantity or move the date of a line. A lower total needs no new approval and the supplier gets the revised order by email. A higher total goes for approval again.
+- **Cancel this order**: only before anything arrives or is invoiced. Tick **Order these lines again** if you want a different supplier or price; otherwise the need is dropped. The supplier and the requester are told.
+- **Close what is still to come**: after a part delivery, when the supplier will not send the rest.
 
 ## Suppliers and contracts
 

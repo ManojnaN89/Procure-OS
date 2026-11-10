@@ -569,6 +569,13 @@ def _ordered(shop: Session, outbox: Outbox) -> tuple[str, str, service.OrderResu
     """Line A on contract and line B awarded to S1 (Maharashtra) for delivery to Bengaluru (Karnataka)."""
     request, rfq = _sent_rfq(shop, outbox)
     _three_quotes(shop, rfq)
+    # S1's quote carries the contract's terms: lines on the same terms share one order (see the test on differing terms)
+    shop.execute(
+        text(
+            "update quote set payment_terms_code = 'NET45', delivery_terms = 'for_destination' where supplier_code = 'S1'"
+        )
+    )
+    shop.commit()
     quotes.award(shop, rfq, {1: "S1"}, sod.user(7), as_of=TODAY)
     return request, rfq, service.order_request(shop, shop.info["slug"], request, as_of=TODAY)
 
@@ -597,7 +604,10 @@ def test_one_order_per_supplier_carries_contract_and_awarded_lines_with_gst_work
         "WH-BLR",
     )
     assert (po["po_type"], po["contract_code"], po["rfq_no"], po["request_no"]) == ("standard", None, rfq, request)
-    assert po["payment_terms_code"] == "NET30"  # the awarded quote carries none, so the supplier's own terms
+    assert (po["payment_terms_code"], po["delivery_terms"]) == (
+        "NET45",
+        "for_destination",
+    )  # the terms both lines share
     lines = {r["item_code"]: r for r in shop.execute(text("select * from po_line order by line_no")).mappings()}
     a, b = lines["A"], lines["B"]
     assert (a["qty"], a["unit_price"], a["gst_rate"], a["taxable"], a["igst"], a["source"], a["source_ref"]) == (

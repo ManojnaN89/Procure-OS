@@ -122,6 +122,77 @@ const PurchaseOrdersView = {
     on("poReasonOk", () => act("reject", { reason: document.getElementById("poReason").value }));
   },
 
+  // The order document, its version and history, and what a buyer may change after the order was made.
+  async mountChanges(po) {
+    const box = document.getElementById("poChangesBox");
+    if (!box) return;
+    const res = await Auth.fetch(`${API.base}/api/purchase-orders/${encodeURIComponent(po.id)}/controls`);
+    if (!res.ok) return;
+    const c = await res.json();
+    const open = po.lines;
+    const history = (c.history || []).map((h) => `
+      <div style="padding:6px 0;border-bottom:1px solid var(--border);font-size:12px;">
+        <b>Version ${this.esc(h.version)}</b> · ${formatDate(h.at)} · ${this.esc(h.by)}
+        <div class="cell-muted">${this.esc(h.reason)} · total ${formatCurrency(h.total_before)} → ${formatCurrency(h.total_after)}${h.reapproval ? " · approved again" : ""}</div>
+      </div>`).join("");
+    box.innerHTML = `
+      <div class="panel" style="margin-bottom:12px;">
+        <div class="panel-title">Order document and changes</div>
+        <p style="margin:0 0 10px;font-size:12.5px;color:var(--text-secondary);">Version ${this.esc(c.version)}.
+          <a href="#" id="poPdf" style="color:var(--accent-tint);">Open the order document (PDF)</a></p>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;">
+          ${c.can_revise ? `<div class="btn btn-sm" id="poReviseOpen"><i class="ti ti-edit"></i>Change quantity or date</div>` : ""}
+          ${c.can_cancel ? `<div class="btn btn-sm" id="poCancelOpen"><i class="ti ti-x"></i>Cancel this order</div>` : ""}
+          ${c.can_close_balance ? `<div class="btn btn-sm" id="poCloseOpen"><i class="ti ti-lock"></i>Close what is still to come</div>` : ""}
+        </div>
+        <div id="poChangeForm" style="display:none;margin-top:10px;"></div>
+        <div id="poChangeNote" style="font-size:12px;color:var(--warning-text);margin-top:8px;"></div>
+        ${history ? `<div style="margin-top:12px;"><div class="cell-muted" style="font-size:11.5px;margin-bottom:4px;">HISTORY</div>${history}</div>` : ""}
+      </div>`;
+    const reload = () => this.renderDetail(document.getElementById("appContent"), po.id);
+    const form = document.getElementById("poChangeForm");
+    const show = (html) => { form.innerHTML = html; form.style.display = "block"; };
+    const reason = `<textarea id="poChangeReason" rows="2" placeholder="Reason (required)" style="width:100%;background:var(--surface-sunken);border:1px solid var(--border);color:var(--text-primary);border-radius:8px;padding:8px;font-size:12.5px;margin-top:8px;"></textarea>`;
+    const on = (id, fn) => { const el = document.getElementById(id); if (el) el.addEventListener("click", fn); };
+    const send = async (verb, body) => {
+      const r = await API.postJSON(`/api/purchase-orders/${encodeURIComponent(po.id)}/${verb}`, { ...body, reason: document.getElementById("poChangeReason").value });
+      if (r.ok) return reload();
+      document.getElementById("poChangeNote").textContent = r.data.detail || "That did not work.";
+    };
+    on("poPdf", async (e) => {
+      e.preventDefault();
+      const r = await Auth.fetch(`${API.base}/api/purchase-orders/${encodeURIComponent(po.id)}/pdf`);
+      if (r.ok) window.open(URL.createObjectURL(await r.blob()), "_blank");
+    });
+    on("poReviseOpen", () => {
+      show(`<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
+          <select id="poRevLine" style="padding:6px;">${open.map((l) => `<option value="${this.esc(l.line_no)}">Line ${this.esc(l.line_no)}: ${this.esc(l.name)} (${this.esc(l.qty)})</option>`).join("")}</select>
+          <input id="poRevQty" type="number" min="0" step="any" placeholder="New quantity" style="padding:6px;width:130px;">
+          <input id="poRevDate" type="date" title="New date needed" style="padding:6px;">
+        </div>${reason}
+        <div class="btn btn-primary btn-sm" id="poRevGo" style="margin-top:8px;display:inline-block;">Make a new version</div>
+        <span class="cell-muted" style="font-size:11.5px;"> A higher total goes for approval again.</span>`);
+      on("poRevGo", () => {
+        const line = { line_no: Number(document.getElementById("poRevLine").value) };
+        const q = document.getElementById("poRevQty").value, d = document.getElementById("poRevDate").value;
+        if (q) line.qty = q;
+        if (d) line.need_by = d;
+        send("revise", { lines: [line] });
+      });
+    });
+    on("poCancelOpen", () => {
+      show(`${reason}
+        <label style="font-size:12.5px;display:block;margin-top:8px;"><input type="checkbox" id="poCancelAgain"> Order these lines again (a different supplier or price is wanted)</label>
+        <div class="btn btn-primary btn-sm" id="poCancelGo" style="margin-top:8px;display:inline-block;">Cancel the order</div>`);
+      on("poCancelGo", () => send("cancel", { reorder: document.getElementById("poCancelAgain").checked }));
+    });
+    on("poCloseOpen", () => {
+      show(`<p style="margin:0;font-size:12.5px;color:var(--text-secondary);">The part the supplier has not delivered is closed. It no longer counts as stock on the way, and the supplier is told.</p>${reason}
+        <div class="btn btn-primary btn-sm" id="poCloseGo" style="margin-top:8px;display:inline-block;">Close what is still to come</div>`);
+      on("poCloseGo", () => send("close-balance", {}));
+    });
+  },
+
   async renderDetail(container, id) {
     container.innerHTML = `<div class="page-header"><h1>${this.esc(id)}</h1></div><div class="panel">Loading…</div>`;
     try {
@@ -140,6 +211,7 @@ const PurchaseOrdersView = {
         ${FlowStrip.forOrder(po)}
         ${this.approvalPanel(po)}
         ${this.dispatchPanel(po)}
+        <div id="poChangesBox"></div>
         <div id="supplierMessagesBox"></div>
         <div class="panel" style="margin-bottom:12px;font-size:12.5px;color:var(--text-secondary);">
           Supplier GSTIN ${this.esc(po.supplier_gstin || "none")} · buyer GSTIN ${this.esc(po.buyer_gstin || "none")} · deliver to ${this.esc(po.ship_to)}
@@ -176,6 +248,7 @@ const PurchaseOrdersView = {
         </div>
       `;
       this.wire(po);
+      this.mountChanges(po);
       if (po.sent_at) SupplierMessages.mount(document.getElementById("supplierMessagesBox"), "orders", po.id);
     } catch {
       container.innerHTML = `<div class="empty-state">Couldn't load this purchase order.</div>`;

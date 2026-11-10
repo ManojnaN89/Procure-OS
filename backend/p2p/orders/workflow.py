@@ -12,11 +12,11 @@ from typing import Any
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
-from p2p.approvals import rules
+from p2p.approvals import budget, rules
 from p2p.approvals.workflow import ApprovalError, name_of, org_code_of
 from p2p.formulas.calendar import business_today
 from p2p.orders import dispatch
-from p2p.platform import audit, permissions, tasks, users
+from p2p.platform import audit, permissions, proposals, tasks, users
 from p2p.platform.sod import Actor
 
 DEFAULT_SLA_HOURS = 24
@@ -43,6 +43,18 @@ def submit(db: Session, tenant: str, po_no: str, actor: Actor, *, today: date | 
     if po["hold_reason"]:
         raise ApprovalError(f"{po_no} is on hold: {po['hold_reason']}")
     rule = rules.find_rule(db, "po", Decimal(po["total"]), today)
+    # the budget again, on the order's final prices (the request was checked on estimates)
+    checks = budget.check_order(db, po_no, today)
+    over = [c for c in checks if c.check.status == "over"]
+    budget_note = ""
+    if over:
+        budget_note = " " + budget.summary(checks)
+        if any(c.policy == "block" for c in over) and not po["budget_accepted"]:
+            return _hold_for_budget(db, tenant, po_no, budget.summary(checks), actor)
+        if rule.is_automatic and _requires_budget(db):
+            while rule.is_automatic:  # over budget: it never approves itself
+                rule = rules.find_rule(db, "po", rule.max_value + Decimal("0.01"), today)
+            budget_note += " It cannot approve itself, so it goes to a person."
     steps = rules.resolve_chain(db, rule.roles, requester=None, department=None, on_date=today)
     round_no = int(po["approval_round"]) + 1
     audit.record(
@@ -56,7 +68,7 @@ def submit(db: Session, tenant: str, po_no: str, actor: Actor, *, today: date | 
         rule_version=f"{rule.code}:v{rule.version}",
     )
     if rule.is_automatic:
-        reason = f"Auto-approved under rule {rule.code} v{rule.version}: the total {po['total']} is within the automatic band."
+        reason = f"Auto-approved under rule {rule.code} v{rule.version}: the total {po['total']} is within the automatic band.{budget_note}"
         db.execute(
             text(
                 "update po set status = 'approved', approved_at = now(), rule_code = :rc, rule_version = :rv, "
@@ -102,13 +114,39 @@ def submit(db: Session, tenant: str, po_no: str, actor: Actor, *, today: date | 
             "rc": rule.code,
             "rv": rule.version,
             "r": round_no,
-            "why": f"Waiting for approval by {names} under rule {rule.code} v{rule.version}",
+            "why": f"Waiting for approval by {names} under rule {rule.code} v{rule.version}"
+            + (f".{budget_note}" if budget_note else ""),
             "n": po_no,
         },
     )
     db.commit()
     _open_step(db, tenant, po_no, po["total"], 1, round_no)
     return "submitted"
+
+
+def _requires_budget(db: Session) -> bool:
+    value = db.execute(text("select value from org_setting where key = 'auto_approve_requires_budget'")).scalar()
+    return str(value) != "false" if value is not None else True
+
+
+def _hold_for_budget(db: Session, tenant: str, po_no: str, summary: str, actor: Actor) -> str:
+    """The budget policy blocks an order that goes over it at its final prices: a person may accept it knowingly."""
+    hold = f"{summary} The budget policy blocks it until a person accepts."
+    pid = proposals.propose(
+        db,
+        actor,
+        action="po.accept_variance",
+        summary=f"Accept {po_no} although it is over budget: {summary}",
+        payload={"po_no": po_no, "tenant": tenant},
+        required_permission="po.approve",
+        risk="medium",
+    )
+    db.execute(
+        text("update po set hold_reason = :h, hold_proposal_id = :p where no = :n"), {"h": hold, "p": pid, "n": po_no}
+    )
+    audit.record(db, actor, "po.budget_hold", "po", po_no, reason=hold)
+    db.commit()
+    return "held"
 
 
 def _open_step(db: Session, tenant: str, po_no: str, total: Decimal, step: int, round_no: int) -> None:

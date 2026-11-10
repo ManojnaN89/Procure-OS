@@ -121,6 +121,7 @@ rapidocr==3.10.0
 rapidocr-onnxruntime==1.4.4
 referencing==0.37.0
 regex==2026.9.29
+reportlab==5.1.0
 requests==2.34.2
 requests-toolbelt==1.0.0
 rich==15.0.0

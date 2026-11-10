@@ -14,7 +14,7 @@ You decide requests, orders and the sensitive things that no program may decide 
 
 ## Approve an order
 
-Open **Purchase orders**, click the order, then **Approve** or **Reject**. An order held for a price or ceiling says why. Accepting that price is your decision, under **Admin** → **Approvals**.
+Open **Purchase orders**, click the order, then **Approve** or **Reject**. An order held for a price, a contract ceiling or a budget says why: the budget is checked again at the order's final price, and when the budget policy blocks, accepting it is your decision, under **Admin** → **Approvals**. An order over budget never approves itself, even when its total is within the automatic band.
 
 ## Decide the rest
 

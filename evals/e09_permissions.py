@@ -34,6 +34,9 @@ MATRIX = [
     ("POST", "/api/quote-drafts/1/dismiss", {}, {"Buyer"}),
     ("POST", "/api/purchase-orders/NOPE/send", None, {"Buyer"}),
     ("POST", "/api/purchase-orders/NOPE/acknowledge", {}, {"Buyer"}),
+    ("POST", "/api/purchase-orders/NOPE/cancel", {"reason": "x"}, {"Buyer"}),
+    ("POST", "/api/purchase-orders/NOPE/close-balance", {"reason": "x"}, {"Buyer"}),
+    ("POST", "/api/purchase-orders/NOPE/revise", {"reason": "x", "lines": [{"line_no": 1, "qty": "1"}]}, {"Buyer"}),
     ("POST", "/api/purchase-orders/NOPE/receive", {"lines": [{"line_no": 1, "qty_received": "1"}]}, {"Store"}),
     (
         "POST",
