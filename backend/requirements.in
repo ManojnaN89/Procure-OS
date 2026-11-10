@@ -18,3 +18,9 @@ langgraph-checkpoint-postgres
 pypdfium2
 zxing-cpp
 reportlab
+httpx2
+docling
+pillow
+jinja2
+langchain-core
+openpyxl

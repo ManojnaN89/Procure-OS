@@ -3,3 +3,6 @@ pytest
 ruff
 mypy
 playwright
+python-docx
+numpy
+pyyaml

@@ -43,3 +43,6 @@ evals/results/ui/
 
 # journey screenshots (the step-by-step transcript journey.md is kept)
 evals/results/journeys/**/*.jpg
+
+# scratch results of parallel working sessions
+evals/results/fork_*
