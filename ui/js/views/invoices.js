@@ -50,7 +50,7 @@ const InvoicesView = {
               ${rows.map((r) => `<tr data-id="${this.esc(r.id)}">
                 <td class="cell-muted">${this.esc(r.id)}${r.type !== "invoice" ? ` <span class="badge badge-pending">${this.esc(r.type.replace("_", " "))}</span>` : ""}</td>
                 <td>${this.esc(r.supplier)}</td><td>${this.esc(r.number)}</td><td class="cell-muted">${formatDate(r.date)}</td><td>${formatCurrency(r.total)}</td>
-                <td><span class="badge ${this.BADGE[r.status] || ""}">${this.esc(this.STATUS[r.status] || r.status)}</span>${r.reason ? `<div class="cell-muted" style="font-size:11px;margin-top:3px;max-width:340px;">${this.esc(r.reason)}</div>` : ""}</td></tr>`).join("")}
+                <td><span class="badge ${this.BADGE[r.status] || ""}">${this.esc(this.STATUS[r.status] || r.status)}</span>${r.reason ? `<div class="cell-muted" style="font-size:11px;margin-top:3px;max-width:340px;">${this.esc(r.reason)}</div>` : ""}${r.next_action ? `<div class="next-action" style="font-size:11.5px;margin-top:3px;max-width:340px;"><strong>Next:</strong> ${this.esc(r.next_action)}</div>` : ""}</td></tr>`).join("")}
             </tbody></table>`
           : `<div class="empty-next"><strong>No invoices${status ? " in this state" : " yet"}.</strong>${status ? "" : "<br>Next: enter the supplier's invoice for goods that have arrived, or upload the document."}</div>`;
         wrap.querySelectorAll("tr[data-id]").forEach((tr) => tr.addEventListener("click", () => { window.location.hash = `#/invoices/${tr.dataset.id}`; }));

@@ -9,6 +9,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
+from p2p.agents import invoice_exceptions
 from p2p.formulas.calendar import business_today
 from p2p.formulas.money import format_qty
 from p2p.invoices import service as invoices
@@ -90,8 +91,17 @@ def list_invoices(db: Db, ctx: Ctx, status: str | None = None) -> list[dict[str,
         "order by i.created_at desc, i.no desc limit 500",
         st=status,
     )
+
+    def next_action(r: dict[str, Any]) -> str | None:
+        """What to do about a blocked invoice, worked out by the rules (no model): the list is the exceptions screen."""
+        if r["status"] != "blocked":
+            return None
+        found = invoice_exceptions.diagnose(db, r["no"])
+        return invoice_exceptions.NEXT_ACTION.get(found.fix) if found else None
+
     return [
         {
+            "next_action": next_action(r),
             "id": r["no"],
             "type": r["type"],
             "supplier_code": r["supplier_code"],

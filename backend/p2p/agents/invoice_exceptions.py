@@ -40,6 +40,12 @@ CAUSES = (
     "composition_tax", "e_invoice_missing", "arithmetic",
 )  # fmt: skip
 FIXES = ("credit_note", "corrected_invoice", "wait_for_receipt", "request_release")
+NEXT_ACTION = {
+    "credit_note": "Ask the supplier for a credit note",
+    "corrected_invoice": "Ask the supplier for a corrected invoice",
+    "wait_for_receipt": "Wait for the goods receipt, then match again",
+    "request_release": "Ask for a release",
+}  # what a person does next, in the words the Invoices screen uses
 BY_REASON = {
     "tax_not_allowed": "composition_tax", "irn_missing": "e_invoice_missing", "gstin_mismatch": "wrong_gstin",
     "arithmetic_mismatch": "arithmetic", "price_variance": "price_mismatch",
