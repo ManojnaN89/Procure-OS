@@ -73,7 +73,7 @@ Match the surrounding code. Short plain-language comments only where the reason 
 | Quotes, comparison, award, purchase orders with GST, order approval (budget checked again at the final price) | `orders/quotes.py`, `orders/service.py`, `orders/workflow.py`, `formulas/orders.py` |
 | The order document (PDF), revising an order (versions), cancelling it, closing what is still to come | `orders/document.py`, `orders/changes.py`, `platform/order_api.py` |
 | Invoices: intake, duplicates, three-way match, blocks and releases | `invoices/service.py`, `formulas/matching.py`, `platform/invoice_api.py` |
-| Payment: due dates, tax at source, runs, bank file, closing | `invoices/payment.py`, `formulas/payment.py`, `platform/payment_api.py` |
+| Payment: due dates, tax at source (rate and threshold from `ref_tds_section`), runs, bank file, bank statement import, closing | `invoices/payment.py`, `invoices/bank_statement.py`, `formulas/payment.py`, `platform/payment_api.py` |
 | Goods receipt (tolerance, rejection, inspection, stock) | `receiving/goods.py`, `formulas/receiving.py` |
 | Sending orders to suppliers, acknowledgement | `orders/dispatch.py` |
 | Budget check on approval, contract ceilings, supplier documents, supplier status proposals, reminders | `approvals/budget.py`, `formulas/budget.py`; `orders/contracts.py`, `formulas/contracts.py`; `sourcing/documents.py`, `formulas/suppliers.py`; `masters/supplier_status.py`; supplier records, onboarding and bank changes `masters/suppliers.py`, `formulas/supplier_master.py`; `sourcing/reminders.py` |

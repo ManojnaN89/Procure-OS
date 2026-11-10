@@ -10,7 +10,7 @@ from sqlalchemy.orm import Session
 
 from p2p.formulas import payment as rules
 from p2p.formulas.calendar import business_today
-from p2p.invoices import payment
+from p2p.invoices import bank_statement, payment
 from p2p.invoices.service import InvoiceError
 from p2p.platform import routing
 from p2p.platform.permissions import can_anywhere, require
@@ -223,6 +223,23 @@ def get_file(
     if not rows or not rows[0]["file_text"]:
         raise HTTPException(404, "No bank file has been made for this run")
     return {"run": no, "file": rows[0]["file_text"]}
+
+
+@router.post("/payment-runs/statement")
+def import_bank_statement(
+    payload: dict[str, Any], db: Db, ctx: Annotated[routing.TenantContext, Depends(require("payment.propose"))]
+) -> dict[str, Any]:
+    """The bank's statement as CSV text. Payments whose reference and amount agree are settled (a run only when every
+    payment in it is on the statement); every other line is listed for a person and one task is made for it."""
+    csv_text = payload.get("csv")
+    if not isinstance(csv_text, str) or not csv_text.strip():
+        raise HTTPException(422, "send the statement as CSV text in 'csv'")
+    if len(csv_text) > 2_000_000:
+        raise HTTPException(422, "the statement is too large")
+    try:
+        return bank_statement.import_statement(db, csv_text, ctx.user_id, today=business_today(), tenant=ctx.slug)
+    except InvoiceError as exc:
+        raise HTTPException(422, str(exc)) from None
 
 
 @router.post("/payment-runs/{no}/paid")

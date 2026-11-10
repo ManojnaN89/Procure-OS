@@ -21,6 +21,8 @@ The Approver approves the run under **Admin** → **Approvals**. Until then ther
 2. Upload it at the bank. When the bank has paid, click **The bank has paid this run**.
 3. Invoices become paid, the orders close, and each supplier gets a payment advice.
 
+Or, instead of step 2, choose the bank's statement (a CSV with a date, the bank reference, the narration and the debit) and click **Import the bank statement**. A payment is settled when the narration carries its payment number and the amount is exact; a run is settled when all its payments are on the statement. Every other line is listed on the page and goes to you as a task.
+
 You cannot enter a date in the future for the payment.
 
 ## Release a blocked invoice

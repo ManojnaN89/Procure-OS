@@ -79,6 +79,25 @@ def _goods_only(db: Session, lines_of: str, key: str) -> bool:
     return int(db.execute(text(sql), {"k": key}).scalar_one()) == 0
 
 
+def tds_rule(db: Session, on: date) -> rules.TdsRule:
+    """Section 194Q as the tax table has it on a date (the latest row that has started and not ended). The rate, the
+    threshold and which Act's wording is used are data, so a change in the law is a new row, and an old decision can be
+    worked out again against the row it used. Without a row the statutory figures in formulas/payment.py apply."""
+    row = db.execute(
+        text(
+            "select act, rate_pct, rate_no_pan_pct, threshold_annual from ref_tds_section where section = '194Q' "
+            "and effective_from <= :d and (effective_to is null or effective_to >= :d) "
+            "and rate_pct is not null and rate_no_pan_pct is not null and threshold_annual is not null "
+            "order by effective_from desc, id desc limit 1"
+        ),
+        {"d": on},
+    ).first()
+    if row is None:
+        return rules.default_tds_rule(on)
+    label = rules.SECTION_LABEL["194Q"] if str(row[0]) == "2025" else "194Q"
+    return rules.TdsRule(label, D(row[1]), D(row[2]), D(row[3]))
+
+
 def _cumulative(db: Session, supplier: str, year: date, *, excluding: str | None = None) -> Decimal:
     """What has been bought from the supplier in the financial year on which tax at source was worked out: the taxable
     value of its booked invoices (less what advances already counted) and of its advances."""
@@ -173,6 +192,7 @@ def book_invoice(db: Session, no: str) -> None:
             D(inv["taxable"]) - used_t,
             inv["received_on"],
             pan_inoperative=sup["pan_status"] == "inoperative",
+            rule=tds_rule(db, inv["received_on"]),
         )
         db.execute(
             text(
@@ -330,6 +350,7 @@ def _advance_payment(db: Session, adv: dict[str, Any], run_no: str, run_date: da
             taxable,
             run_date,
             pan_inoperative=bool(sup and sup[0] == "inoperative"),
+            rule=tds_rule(db, run_date),
         )
         tds_amount = tds.amount
     net = gross - tds_amount

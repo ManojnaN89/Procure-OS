@@ -160,6 +160,55 @@ def test_tax_at_source_is_held_back_only_on_the_part_of_the_year_above_fifty_lak
     assert _row(ledger, done.no)["tds_amount"] == D("0.90")
 
 
+def _earlier_purchases(db_: Session, taxable: str) -> None:
+    """The supplier was bought from earlier in the year, for this taxable value."""
+    db_.execute(
+        text(
+            "insert into invoice (no, supplier_code, supplier_invoice_no, dedupe_key, invoice_date, fy, received_on, taxable, total, "
+            "status, booked_at) values ('PI-OLD', 'S1', 'OLD-1', 'OLD1', '2026-06-01', '2026-27', '2026-06-01', :t, :t, 'paid', now())"
+        ),
+        {"t": taxable},
+    )
+    db_.execute(
+        text(
+            "insert into tds_entry (invoice_no, section, base, rate, amount, booked_on, quarter) values ('PI-OLD', '194Q', 0, 0.1, 0, '2026-06-01', '2026-27 Q1')"
+        )
+    )
+    db_.commit()
+
+
+def test_the_rate_and_threshold_of_tax_at_source_come_from_the_tax_table(ledger: Session, outbox: Outbox) -> None:  # noqa: F811
+    ledger.execute(
+        text(
+            "insert into ref_tds_section (act, section, rate_pct, rate_no_pan_pct, threshold_annual, effective_from) "
+            "values ('2025', '194Q', 0.25, 5, 6000000, '2026-04-01'), ('1961', '194Q', 0.1, 5, 5000000, '2021-07-01')"
+        )
+    )  # the older row has been replaced by the newer one from April 2026
+    ledger.commit()
+    _earlier_purchases(ledger, "5999900")  # 1,000 more is 900 over the new threshold of 60 lakh
+    po_no, _ = _goods(ledger, qty="10", price="100")
+
+    done = _invoice(ledger, po_no)
+
+    assert ledger.execute(
+        text("select section, base, rate, amount from tds_entry where invoice_no = :n"), {"n": done.no}
+    ).one() == ("393(1) Sl.8(ii) [194Q]", D("900.00"), D("0.250"), D("2.25"))
+    assert _row(ledger, done.no)["tds_amount"] == D("2.25")
+
+
+def test_without_a_row_in_the_tax_table_the_statutory_figures_apply(ledger: Session, outbox: Outbox) -> None:  # noqa: F811
+    ledger.execute(text("delete from ref_tds_section where section = '194Q'"))
+    ledger.commit()
+    _earlier_purchases(ledger, "4999900")
+    po_no, _ = _goods(ledger, qty="10", price="100")
+
+    done = _invoice(ledger, po_no)
+
+    assert ledger.execute(text("select base, rate, amount from tds_entry where invoice_no = :n"), {"n": done.no}).one() == (
+        D("900.00"), D("0.100"), D("0.90"),
+    )  # fmt: skip
+
+
 def test_what_is_payable_is_the_total_less_tax_and_credit_notes_and_interest_is_added_when_late(
     ledger: Session, outbox: Outbox
 ) -> None:  # noqa: F811

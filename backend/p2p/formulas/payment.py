@@ -12,6 +12,9 @@ TWO = Decimal("0.01")
 MSME_CATEGORIES = ("micro", "small")  # medium enterprises are outside the 45-day rule
 STATUTORY_DAYS = 45  # the most a buyer may take, agreed in writing, from acceptance
 NO_AGREEMENT_DAYS = 15  # without a written agreement
+# The tax rules are data: the rate, the threshold and the act come from the reference table `ref_tds_section` (see
+# invoices/payment.py). These are the values in force when this was written and are used only when the table has no row
+# for the date, so a company with its reference data not loaded still gets the statutory figure.
 TDS_194Q_THRESHOLD = Decimal("5000000")
 TDS_194Q_RATE = Decimal("0.1")
 TDS_NO_PAN_RATE = Decimal("5")
@@ -74,14 +77,32 @@ class Tds:
     amount: Decimal
 
 
-def tds_on_goods(cumulative_before: Decimal, taxable: Decimal, on: date, *, pan_inoperative: bool) -> Tds:
-    """Tax at source on a purchase of goods (section 194Q): 0.1% (5% without a valid PAN) on what a supplier is paid in
-    a financial year above 50 lakh. `cumulative_before` is what was bought from the supplier earlier in the year."""
-    after = cumulative_before + taxable
-    over = max(Decimal(0), after - max(TDS_194Q_THRESHOLD, cumulative_before))
-    rate = TDS_NO_PAN_RATE if pan_inoperative else TDS_194Q_RATE
+@dataclass(frozen=True)
+class TdsRule:
+    """One row of the tax table as it applies on a date: what the decision was worked out against."""
+
+    section: str  # as it is quoted for the date (the 1961 form, or the 2025 Act's form from April 2026)
+    rate: Decimal
+    rate_no_pan: Decimal
+    threshold: Decimal
+
+
+def default_tds_rule(on: date) -> TdsRule:
     section = SECTION_LABEL["194Q"] if on >= NEW_ACT_FROM else "194Q"
-    return Tds(section, over, rate, q2(over * rate / 100))
+    return TdsRule(section, TDS_194Q_RATE, TDS_NO_PAN_RATE, TDS_194Q_THRESHOLD)
+
+
+def tds_on_goods(
+    cumulative_before: Decimal, taxable: Decimal, on: date, *, pan_inoperative: bool, rule: TdsRule | None = None
+) -> Tds:
+    """Tax at source on a purchase of goods (section 194Q): 0.1% (5% without a valid PAN) on what a supplier is paid in
+    a financial year above 50 lakh. `cumulative_before` is what was bought from the supplier earlier in the year.
+    The rate, threshold and section come from `rule` (the tax table's row for the date)."""
+    rule = rule or default_tds_rule(on)
+    after = cumulative_before + taxable
+    over = max(Decimal(0), after - max(rule.threshold, cumulative_before))
+    rate = rule.rate_no_pan if pan_inoperative else rule.rate
+    return Tds(rule.section, over, rate, q2(over * rate / 100))
 
 
 def quarter_label(on: date) -> str:

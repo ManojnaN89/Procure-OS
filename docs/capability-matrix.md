@@ -53,11 +53,11 @@ Only a row with evidence may be `verified` or `fixed`.
 
 | ID | Function | How | Plan step | Status | Evidence (test, eval or screen) | Notes |
 |---|---|---|---|---|---|---|
-| 9.1.1 | GST: HSN/SAC codes, GST rate table and state-based tax split | Rules | P0-11, P1-13 | todo |  |  |
-| 9.1.2 | GST: Composition, unregistered and reverse-charge cases | Rules | P1-01, P1-13 | todo |  |  |
-| 9.2.1 | TDS: Rate and threshold rules | Rules | P1-19 | todo |  |  |
-| 9.3.1 | MSME: MSME payment deadline tracking | Rules | P1-19 | todo |  |  |
-| 9.4.1 | E-invoice: IRN and QR verification | Rules | P1-16 | todo |  |  |
+| 9.1.1 | GST: HSN/SAC codes, GST rate table and state-based tax split | Rules | P0-11, P1-13 | fixed | tests/test_reference_data.py (HSN directory and GST rate table loaded; rate by date; longest prefix), tests/test_formulas.py (same state CGST+SGST, other state IGST, rounding per component), tests/test_orders.py; E04. New: test_an_item_whose_rate_differs_from_the_rate_table_is_flagged_when_it_is_imported | Order lines take the rate from the item master (rate before and after a change date). The notified rate table was only used to check the HSN code; the item import now also flags an item whose rate today differs from the table for its HSN (a warning, the master stays as given; codes the table marks for review are not compared). |
+| 9.1.2 | GST: Composition, unregistered and reverse-charge cases | Rules | P1-01, P1-13 | blocked | tests/test_formulas.py (composition and unregistered charge no tax; reverse charge computes the tax and adds nothing); tests/test_invoices.py and E19 (tax shown by a composition or unregistered supplier blocks the invoice) | Composition and unregistered work end to end. Reverse charge: the formula and an invoice flag exist, but ordering and matching do not apply it. No supplier or item in the data is reverse-charge and nothing reads reverse_charge_default or gst_reverse_charge, so there is no truth to build against. Owner: say which purchases are reverse-charge (for example road freight) and how the tax is to be shown, then it can be built and checked. |
+| 9.2.1 | TDS: Rate and threshold rules | Rules | P1-19 | fixed | Same evidence as 7.2.1, plus tests/test_reference_data.py (tax sections loaded, 20 or more) | Section 194Q on goods is applied from the table. The other sections in the table (194C, 194J, rent and so on) are loaded but not applied: they are for services, a later phase. |
+| 9.3.1 | MSME: MSME payment deadline tracking | Rules | P1-19 | verified | tests/test_payments.py (due date, MSME interest 3x the bank rate compounded monthly, small suppliers first in a run); tests/test_workspace.py (an invoice falling due alerts Finance as high for a small supplier); key figure MSME on-time payment in tests/test_workspace.py; E20, E21 | Interest uses the bank rate table ref_rbi_bank_rate on the due date. |
+| 9.4.1 | E-invoice: IRN and QR verification | Rules | P1-16 | verified | tests/test_invoice_reading.py (the IRN is recomputed from the invoice and a changed detail breaks it; financial-year rule; a QR that is not an e-invoice; QR found on a PDF and a picture); E27 (e-invoices read with no model call, altered IRN stopped) | The QR signature is not checked against the portal's public key: the key has to be supplied by the owner (plan P1-16: confirm availability at setup). |
 
 ## Integration & Data
 
@@ -91,14 +91,14 @@ Only a row with evidence may be `verified` or `fixed`.
 
 | ID | Function | How | Plan step | Status | Evidence (test, eval or screen) | Notes |
 |---|---|---|---|---|---|---|
-| 7.1.1 | Due date: Due date from payment terms | Rules | P1-19 | todo |  |  |
-| 7.1.2 | Due date: MSME payment-day rule: agreed days up to 45, otherwise 15 days | Rules | P1-19 | todo |  |  |
-| 7.2.1 | Tax at payment: TDS calculation | Rules | P1-19 | todo |  |  |
-| 7.3.1 | Payment run: Propose the payment run by due date, MSME first | Rules | P1-19 | todo |  |  |
-| 7.3.2 | Payment run: Finance approves the payment batch | Person decides | P0-13, P1-19 | todo |  |  |
-| 7.3.3 | Payment run: Bank file and bank statement import | Rules | P1-19 | todo |  |  |
-| 7.3.4 | Payment run: Remittance advice to the supplier | Platform | P1-20 | todo |  |  |
-| 7.3.5 | Payment run: Close the case with full history | Rules | P1-20 | todo |  |  |
+| 7.1.1 | Due date: Due date from payment terms | Rules | P1-19 | verified | tests/test_payments.py (due date counts the terms from invoice date or acceptance; a booked invoice gets its due date); E20 vs the dataset | Terms come from the payment_terms table (baseline, days). |
+| 7.1.2 | Due date: MSME payment-day rule: agreed days up to 45, otherwise 15 days | Rules | P1-19 | verified | tests/test_payments.py (written agreement: earlier of terms and agreed days, max 45; none: 15 days from acceptance; booked small-supplier invoice); E20 | The 45 and 15 day limits are the statute's, kept as named constants in formulas/payment.py, not a table. Medium enterprises are outside the rule. |
+| 7.2.1 | Tax at payment: TDS calculation | Rules | P1-19 | fixed | tests/test_payments.py: test_the_rate_and_threshold_of_tax_at_source_come_from_the_tax_table, test_without_a_row_in_the_tax_table_the_statutory_figures_apply, the 50-lakh boundary tests; E20, E21 | Was hard-coded (0.1%, 5% without PAN, 50 lakh, the 2025-Act wording from April 2026), against CLAUDE.md rule 8. Now read from the versioned table ref_tds_section on the booking date (invoices/payment.py tds_rule); the constants remain only as the fallback when the table has no row. The entry keeps section, base and rate; the threshold is not stored with it. |
+| 7.3.1 | Payment run: Propose the payment run by due date, MSME first | Rules | P1-19 | verified | tests/test_payments.py (a run pays what is due in the window, small suppliers first; blocked or unapproved invoices never in a run; credit notes netted); E21 |  |
+| 7.3.2 | Payment run: Finance approves the payment batch | Person decides | P0-13, P1-19 | verified | tests/test_payments.py (the owner approves, the proposer cannot; over the API); E21; E33 and E30 drive it with separate logins | Approval is a proposal the Approver decides; payment run approval can never be set to automatic. |
+| 7.3.3 | Payment run: Bank file and bank statement import | Rules | P1-19 | fixed | tests/test_bank_statement.py (9), tests/test_payment_screens.py (2, browser), tests/test_payments.py (bank file only for an approved run, no unverified bank account); E09 row for the new endpoint; E21 | The bank file was done; the statement import in the plan (P1-19) was not. Built: invoices/bank_statement.py, POST /api/payment-runs/statement, and an Import the bank statement panel on the run page. A debit line settles a payment when its narration carries the payment number or reference and the amount is exact; a run is settled only when every payment in it is on the statement; the rest is listed and one task goes to Finance. Same statement twice changes nothing. No new table. No live bank connection. |
+| 7.3.4 | Payment run: Remittance advice to the supplier | Platform | P1-20 | verified | tests/test_payments.py (the supplier is told when the bank has paid; a failed remittance email does not undo the payment); E21, E26 | Remittance advice is emailed to the supplier contact; the failure is logged and retried by the person. |
+| 7.3.5 | Payment run: Close the case with full history | Rules | P1-20 | verified | tests/test_payments.py (invoices paid, PO lines and order closed, budget actual incl. freight, requester and buyer told; an order with goods still to come is not closed); E21, E33 |  |
 
 ## Platform & Administration
 

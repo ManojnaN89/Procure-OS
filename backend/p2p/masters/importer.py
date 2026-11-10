@@ -257,6 +257,7 @@ def import_masters(db: Session, dataset: Path, *, actor: Actor = audit.SYSTEM, d
         report.loaded[spec.name] = len(rows)
 
     _warn_unknown_hsn(db, accepted.get("item", []), report)
+    _warn_gst_rate_differs(db, accepted.get("item", []), report)
 
     if not dry_run:
         for spec in reversed(TABLES):
@@ -295,3 +296,31 @@ def _warn_unknown_hsn(db: Session, items: list[dict[str, Any]], report: ImportRe
             report.warnings.append(
                 Problem("item", i, f"{item['code']}: HSN/SAC {item['hsn_sac']} is not in the HSN directory")
             )
+
+
+def _warn_gst_rate_differs(db: Session, items: list[dict[str, Any]], report: ImportReport) -> None:
+    """An item whose GST rate today is not the rate the notified rate table gives for its HSN or SAC code is flagged, so
+    a wrong rate in the item master is seen when it is loaded and not when an order is priced. A code the table is unsure
+    about (needs review) is not compared. The item's rate stays as given: it is the buyer's master data."""
+    from p2p.formulas.calendar import business_today
+    from p2p.formulas.orders import current_gst_rate
+    from p2p.platform import reference
+
+    today = business_today()
+    for i, item in enumerate(items, start=1):
+        code = item.get("hsn_sac")
+        if not code:
+            continue
+        mine = current_gst_rate(
+            item.get("gst_rate_before"), item.get("gst_rate_after"), item.get("gst_rate_change_date"), today
+        )
+        listed = reference.gst_rate_for(db, str(code), today)
+        if mine is None or listed is None or listed.needs_review or mine == listed.igst:
+            continue
+        report.warnings.append(
+            Problem(
+                "item",
+                i,
+                f"{item['code']}: GST rate {mine.normalize():f}% differs from the rate table's {listed.igst.normalize():f}% for {code} today",
+            )
+        )

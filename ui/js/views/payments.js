@@ -93,6 +93,10 @@ const PaymentsView = {
           ${r.has_file ? `<div class="btn btn-secondary btn-sm" id="showFile">Show the bank file</div>` : ""}
           ${r.can_mark_paid ? `<input id="paidOn" type="date" style="padding:6px;"><div class="btn btn-primary btn-sm" id="markPaid">The bank has paid this run</div>` : ""}
         </div>
+        ${r.can_mark_paid ? `<div class="panel" style="margin-top:12px;"><div class="panel-title">Or settle it from the bank statement</div>
+          <p class="cell-muted" style="font-size:12px;margin:0 0 8px;">A CSV with a date, the bank reference, the narration (it must carry the payment number) and the debit. A payment is settled when its reference and amount agree; every other line is listed for you.</p>
+          <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;"><input id="stmtFile" type="file" accept=".csv,text/csv"><div class="btn btn-secondary btn-sm" id="importStmt">Import the bank statement</div></div>
+          <div id="stmtResult" style="font-size:12.5px;margin-top:8px;"></div></div>` : ""}
         <pre id="fileText" style="display:none;margin-top:10px;font-size:11.5px;background:var(--surface-sunken);padding:10px;border-radius:8px;overflow:auto;"></pre>
         <div id="runNote" style="font-size:12.5px;color:var(--warning-text);margin-top:8px;"></div>`;
       const note = document.getElementById("runNote");
@@ -114,6 +118,18 @@ const PaymentsView = {
         const res = await API.postJSON(`/api/payment-runs/${encodeURIComponent(id)}/paid`, { paid_on: paid.value });
         if (res.ok) return this.renderRun(container, id);
         note.textContent = res.data.detail || "That did not work.";
+      });
+      on("importStmt", async () => {
+        const file = document.getElementById("stmtFile").files[0];
+        const out = document.getElementById("stmtResult");
+        if (!file) { out.textContent = "Choose the statement file first."; return; }
+        const res = await API.postJSON("/api/payment-runs/statement", { csv: await file.text() });
+        if (!res.ok) { out.textContent = res.data.detail || "The statement was not read."; return; }
+        const d = res.data;
+        const open = [...d.for_a_person.map((x) => `line ${x.row}: ${x.why}`), ...d.waiting.map((x) => `line ${x.row}: ${x.why}`)];
+        out.innerHTML = `<div>${d.matched.length} payment(s) matched, ${d.runs_paid.length} run(s) settled${d.already_paid.length ? `, ${d.already_paid.length} already paid` : ""}.</div>`
+          + (open.length ? `<div style="margin-top:6px;color:var(--warning-text);">${open.length} line(s) need a person (a task was made):<ul style="margin:4px 0 0 18px;">${open.slice(0, 10).map((t) => `<li>${this.esc(t)}</li>`).join("")}</ul></div>` : "");
+        if (d.runs_paid.includes(id)) return this.renderRun(container, id);
       });
     } catch {
       container.innerHTML = `<div class="empty-state">Couldn't load this payment run.</div>`;

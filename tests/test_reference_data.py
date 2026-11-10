@@ -89,3 +89,41 @@ def test_tds_sections_are_loaded_with_their_rates(tenant_db: Session) -> None:
         text("select rate_pct, rate_no_pan_pct, threshold_annual from ref_tds_section where section = '194Q' limit 1")
     ).one()
     assert (row[0], row[1], row[2]) == (Decimal("0.100"), Decimal("5.000"), Decimal("5000000.00"))
+
+
+def test_an_item_whose_rate_differs_from_the_rate_table_is_flagged_when_it_is_imported(tenant_db: Session) -> None:
+    from p2p.masters import importer
+
+    report = importer.ImportReport()
+    items = [
+        # right: 18% until 21 Sep 2025, 5% after (the business date in tests is 6 Nov 2026)
+        {
+            "code": "OK",
+            "hsn_sac": "28070010",
+            "gst_rate_before": 18,
+            "gst_rate_after": 5,
+            "gst_rate_change_date": date(2025, 9, 22),
+        },
+        # still on the old rate
+        {
+            "code": "OLD",
+            "hsn_sac": "28070010",
+            "gst_rate_before": 18,
+            "gst_rate_after": None,
+            "gst_rate_change_date": None,
+        },
+        {"code": "NOHSN", "hsn_sac": None, "gst_rate_before": 18, "gst_rate_after": None, "gst_rate_change_date": None},
+        {
+            "code": "UNKNOWN",
+            "hsn_sac": "0000",
+            "gst_rate_before": 18,
+            "gst_rate_after": None,
+            "gst_rate_change_date": None,
+        },
+    ]
+
+    importer._warn_gst_rate_differs(tenant_db, items, report)
+
+    assert [(w.line, w.reason) for w in report.warnings] == [
+        (2, "OLD: GST rate 18% differs from the rate table's 5% for 28070010 today")
+    ]
