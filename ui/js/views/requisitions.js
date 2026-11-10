@@ -4,66 +4,143 @@ const RequisitionsView = {
   },
 
   async render(container, params) {
+    if (params && params.id === "new") return this.renderForm(container);
     if (params && params.id) return this.renderDetail(container, params.id);
     return this.renderList(container);
   },
 
+  TABS: [
+    { key: "needs_me", label: "Needs my decision", test: (r) => r.needs_me },
+    { key: "mine", label: "My requests", test: (r) => r.mine },
+    { key: "approved", label: "Approved", test: (r) => r.status === "approved" },
+    { key: "waiting", label: "Waiting for approval", test: (r) => r.status === "pending" },
+    { key: "all", label: "All", test: () => true },
+  ],
+
   async renderList(container) {
     const canRun = Auth.can("replenishment.run");
+    const canRaise = Auth.can("request.create");
     container.innerHTML = `
       <div class="page-header page-header-row">
         <div>
-          <h1>Requisitions</h1>
-          <p>Internal purchase requests and their approval status</p>
+          <h1>Requests</h1>
+          <p>What people have asked for, and where each request is in approval</p>
         </div>
-        <div style="display:flex;gap:8px;">
+        <div style="display:flex;gap:8px;flex-wrap:wrap;">
           ${canRun ? `<div class="btn" id="replenishBtn"><i class="ti ti-refresh"></i>Check stock levels</div>` : ""}
-          <div class="btn btn-primary" id="newReqBtn"><i class="ti ti-plus"></i>New requisition</div>
+          ${canRaise ? `<a class="btn btn-primary" href="#/requisitions/new"><i class="ti ti-plus"></i>New request</a>` : ""}
         </div>
       </div>
       <div id="replenishPanel"></div>
+      <div class="tabs" id="reqTabs"></div>
       <div class="table-wrap" id="tableWrap"><div class="empty-state">Loading…</div></div>
     `;
-    document.getElementById("newReqBtn").addEventListener("click", () => {
-      Prefill.set("Create a requisition for [item/description], amount [amount], requested by [name]");
-      window.location.hash = "#/assistant";
-    });
     if (canRun) document.getElementById("replenishBtn").addEventListener("click", () => this.previewReplenishment());
     await this.loadList();
   },
 
   async loadList() {
     try {
-      const rows = await API.listRequisitions();
-      const wrap = document.getElementById("tableWrap");
-      if (!wrap) return; // the person has already gone to another page
-      if (!rows.length) {
-        wrap.innerHTML = `<div class="empty-state">No requisitions yet. Check the stock levels, or ask the assistant to raise one.</div>`;
-        return;
+      this.rows = await API.listRequisitions();
+      if (!document.getElementById("tableWrap")) return; // the person has already gone to another page
+      const counts = Object.fromEntries(this.TABS.map((t) => [t.key, this.rows.filter(t.test).length]));
+      if (!this.tab || (this.tab !== "all" && !counts[this.tab])) {
+        this.tab = (this.TABS.find((t) => t.key !== "all" && counts[t.key]) || { key: "all" }).key;
       }
-      wrap.innerHTML = `
-        <table class="data-table">
-          <thead><tr><th>NUMBER</th><th>TITLE</th><th>AMOUNT</th><th>REQUESTED BY</th><th>STATUS</th></tr></thead>
-          <tbody>
-            ${rows.map((r) => `
-              <tr data-id="${this.esc(r.id)}">
-                <td class="cell-muted" style="white-space:nowrap;">${this.esc(r.id)}</td>
-                <td>${this.esc(r.title)}${r.priority === "urgent" ? ' <span class="badge badge-rejected" style="font-size:10px;">urgent</span>' : ""}</td>
-                <td>${formatCurrency(r.amount)}</td>
-                <td class="cell-muted">${this.esc(r.requested_by)}</td>
-                <td>${statusBadge(r.status)}${r.waiting_for ? `<div class="cell-muted" style="font-size:11px;margin-top:3px;">waiting for ${this.esc(r.waiting_for)}</div>` : ""}</td>
-              </tr>
-            `).join("")}
-          </tbody>
-        </table>
-      `;
-      wrap.querySelectorAll("tr[data-id]").forEach((tr) => {
-        tr.addEventListener("click", () => { window.location.hash = `#/requisitions/${tr.dataset.id}`; });
-      });
+      this.drawList(counts);
     } catch {
       const gone = document.getElementById("tableWrap");
-      if (gone) gone.innerHTML = `<div class="empty-state">Couldn't load requisitions.</div>`;
+      if (gone) gone.innerHTML = `<div class="empty-state">Couldn't load the requests. Reload the page to try again.</div>`;
     }
+  },
+
+  drawList(counts) {
+    const tabs = document.getElementById("reqTabs");
+    const wrap = document.getElementById("tableWrap");
+    if (!tabs || !wrap) return;
+    tabs.innerHTML = this.TABS.filter((t) => t.key === "all" || counts[t.key] || t.key === this.tab)
+      .map((t) => `<button class="tab${t.key === this.tab ? " active" : ""}" data-tab="${t.key}">${t.label}<span class="count">${counts[t.key]}</span></button>`).join("");
+    tabs.querySelectorAll(".tab").forEach((el) => el.addEventListener("click", () => { this.tab = el.dataset.tab; this.drawList(counts); }));
+    const test = this.TABS.find((t) => t.key === this.tab).test;
+    const rows = this.rows.filter(test);
+    if (!rows.length) {
+      wrap.innerHTML = this.rows.length
+        ? `<div class="empty-next"><strong>Nothing in this list.</strong><br>Try another tab above.</div>`
+        : `<div class="empty-next"><strong>No requests yet.</strong><br>${Auth.can("request.create") ? `Next: <a href="#/requisitions/new" style="color:var(--accent-tint);">raise a new request</a>${Auth.can("replenishment.run") ? ", or check the stock levels." : "."}` : "Stock that falls to its reorder point creates requests automatically."}</div>`;
+      return;
+    }
+    wrap.innerHTML = `
+      <table class="data-table">
+        <thead><tr><th>REQUEST</th><th>AMOUNT</th><th>REQUESTED BY</th><th>STATUS</th></tr></thead>
+        <tbody>
+          ${rows.map((r) => `
+            <tr data-id="${this.esc(r.id)}">
+              <td>${this.esc(r.title)}${r.priority === "urgent" ? ' <span class="badge badge-rejected" style="font-size:10px;">urgent</span>' : ""}
+                  <div class="cell-muted" style="margin-top:2px;">${this.esc(r.id)}${r.items > 1 ? ` \u00b7 ${r.items} items` : ""}</div></td>
+              <td style="white-space:nowrap;">${formatCurrency(r.amount)}</td>
+              <td class="cell-muted">${this.esc(r.requested_by)}</td>
+              <td>${statusBadge(r.status)}${r.waiting_for ? `<div class="cell-muted" style="font-size:11px;margin-top:3px;">waiting for ${this.esc(r.waiting_for)}</div>` : ""}</td>
+            </tr>
+          `).join("")}
+        </tbody>
+      </table>`;
+    wrap.querySelectorAll("tr[data-id]").forEach((tr) => {
+      tr.addEventListener("click", () => { window.location.hash = `#/requisitions/${tr.dataset.id}`; });
+    });
+  },
+
+  // The New request screen: pick items from the catalogue, say how many, by when, and where. Saved as a draft.
+  async renderForm(container) {
+    container.innerHTML = `<div class="page-header"><h1>New request</h1></div><div class="panel">Loading…</div>`;
+    let form;
+    try {
+      form = await API.getJSON("/api/requisition-form");
+    } catch {
+      container.innerHTML = `<div class="empty-next"><strong>You can't raise requests here.</strong><br>Ask your administrator to give your role the right to raise requests.</div>`;
+      return;
+    }
+    const itemOptions = `<option value="">Choose an item…</option>${form.items.map((i) => `<option value="${this.esc(i.code)}" data-uom="${this.esc(i.uom || "")}">${this.esc(i.name)} (${this.esc(i.code)})</option>`).join("")}`;
+    const row = () => `<div class="form-grid req-line" style="grid-template-columns:minmax(220px,3fr) minmax(90px,1fr) 70px 40px;margin-bottom:8px;">
+        <label>Item<select class="req-item">${itemOptions}</select></label>
+        <label>Quantity<input class="req-qty" type="number" min="0" step="any" placeholder="0"></label>
+        <label>Unit<span class="req-uom cell-muted" style="padding:10px 0;">\u2014</span></label>
+        <button type="button" class="tab req-remove" title="Remove this line">\u2715</button>
+      </div>`;
+    container.innerHTML = `
+      <div class="page-header"><a href="#/requisitions" style="color:var(--text-muted);font-size:12px;text-decoration:none;">\u2190 Requests</a>
+        <h1 style="margin-top:6px;">New request</h1><p>Say what you need. It is saved as a draft; you submit it for approval when it is right.</p></div>
+      <div class="panel" style="max-width:860px;">
+        <div id="reqLines">${row()}</div>
+        <button type="button" class="btn btn-sm" id="addLine"><i class="ti ti-plus"></i>Add another item</button>
+        <div class="form-grid" style="margin-top:18px;">
+          <label>Needed by<input id="reqNeed" type="date" value="${this.esc(form.need_by)}"></label>
+          <label>Deliver to<select id="reqLoc">${form.locations.length > 1 && !form.location ? '<option value="">Choose…</option>' : ""}${form.locations.map((l) => `<option value="${this.esc(l.code)}"${l.code === form.location ? " selected" : ""}>${this.esc(l.name)}</option>`).join("")}</select></label>
+        </div>
+        <label style="display:flex;flex-direction:column;gap:5px;font-size:12px;color:var(--text-secondary);margin-top:12px;">Why it is needed (optional)<textarea id="reqWhy" rows="2" placeholder="For example: spare for the line 3 repair"></textarea></label>
+        <div class="form-actions"><button type="button" class="btn btn-primary" id="reqSave">Save as draft</button><a class="btn" href="#/requisitions">Cancel</a></div>
+        <div class="note-line" id="reqNote"></div>
+      </div>`;
+    const lines = document.getElementById("reqLines");
+    const wire = () => {
+      lines.querySelectorAll(".req-line").forEach((el) => {
+        el.querySelector(".req-item").onchange = (e) => { el.querySelector(".req-uom").textContent = e.target.selectedOptions[0].dataset.uom || "\u2014"; };
+        el.querySelector(".req-remove").onclick = () => { if (lines.children.length > 1) el.remove(); };
+      });
+    };
+    wire();
+    document.getElementById("addLine").onclick = () => { lines.insertAdjacentHTML("beforeend", row()); wire(); };
+    document.getElementById("reqSave").onclick = async () => {
+      const note = document.getElementById("reqNote");
+      const picked = [...lines.querySelectorAll(".req-line")].map((el) => ({ item_code: el.querySelector(".req-item").value, qty: el.querySelector(".req-qty").value })).filter((l) => l.item_code || l.qty);
+      if (!picked.length) { note.textContent = "Choose at least one item."; return; }
+      if (picked.some((l) => !l.item_code || !(Number(l.qty) > 0))) { note.textContent = "Every line needs an item and a quantity above zero."; return; }
+      const res = await API.postJSON("/api/requisitions", {
+        lines: picked, need_by: document.getElementById("reqNeed").value, location: document.getElementById("reqLoc").value || null,
+        reason: document.getElementById("reqWhy").value,
+      });
+      if (res.ok) { window.location.hash = `#/requisitions/${res.data.id}`; return; }
+      note.textContent = res.data.detail || "The request was not saved.";
+    };
   },
 
   // Shows what the stock check would create and how each request would be approved, and only does it when the person confirms.
@@ -157,7 +234,7 @@ const RequisitionsView = {
               </div>
             </div>`).join("")}
         </div>` : "";
-    const rule = a.rule_code ? `<div class="cell-muted" style="font-size:11.5px;margin-bottom:10px;">Rule ${this.esc(a.rule_code)} version ${this.esc(a.rule_version)}</div>` : "";
+    const rule = a.rule_code ? `<details class="more" style="margin:0 0 10px;"><summary>How this was routed</summary><div class="cell-muted">Approval rule ${this.esc(a.rule_code)}, version ${this.esc(a.rule_version)}. The rule is kept with the request, so the decision can be reproduced later.</div></details>` : "";
     const actions = a.can_act
       ? `<div style="display:flex;gap:10px;flex-wrap:wrap;" id="decideBtns">
            <div class="btn btn-primary btn-sm" id="approveBtn"><i class="ti ti-check"></i>Approve</div>
@@ -170,8 +247,8 @@ const RequisitionsView = {
     return `
       <div class="panel" style="margin-bottom:12px;">
         <div class="panel-title">Approval</div>
-        ${a.decision ? `<p style="margin:0 0 10px;font-size:12.5px;color:var(--text-secondary);">${this.esc(a.decision)}</p>` : `<p style="margin:0 0 10px;font-size:12.5px;color:var(--text-muted);">Not submitted yet.</p>`}
-        ${(a.budget || []).filter((b) => b.status !== "unchecked").map((b) => `<div style="margin:0 0 6px;font-size:12px;color:${b.status === "over" ? "var(--warning-text)" : "var(--text-secondary)"};">Budget GL ${this.esc(b.gl_code)} (${this.esc(b.cost_centres.join(", ") || "-")}): ${formatCurrency(b.budget)} so far, ${formatCurrency(b.committed)} committed, ${formatCurrency(b.requested)} asked${b.status === "over" ? ` · over by ${formatCurrency(b.over_by)}` : ""}</div>`).join("")}
+        ${a.decision ? `<p style="margin:0 0 10px;font-size:12.5px;color:var(--text-secondary);">${this.esc(String(a.decision).replace(/ under rule [A-Za-z0-9-]+ v\d+/, ""))}</p>` : `<p style="margin:0 0 10px;font-size:12.5px;color:var(--text-muted);">Not submitted yet.</p>`}
+        ${(a.budget || []).filter((b) => b.status !== "unchecked").map((b) => `<div style="margin:0 0 6px;font-size:12px;color:${b.status === "over" ? "var(--warning-text)" : "var(--text-secondary)"};">Budget account ${this.esc(b.gl_code)}: ${formatCurrency(b.budget)} in all, ${formatCurrency(b.committed)} already committed, this request asks for ${formatCurrency(b.requested)}${b.status === "over" ? ` · over the budget by ${formatCurrency(b.over_by)}` : ""}</div>`).join("")}
         ${trail}${rule}${actions}
         ${a.can_source ? `<div class="btn btn-primary btn-sm" id="sourceBtn" style="display:inline-flex;margin-top:6px;"><i class="ti ti-search"></i>Find suppliers</div>` : ""}
         <div id="actionNote" style="font-size:12px;color:var(--warning-text);margin-top:8px;"></div>
@@ -238,11 +315,12 @@ const RequisitionsView = {
       const lines = r.lines || [];
       container.innerHTML = `
         <div class="page-header">
-          <a href="#/requisitions" style="color:var(--text-muted);font-size:12px;text-decoration:none;">← Requisitions</a>
+          <a href="#/requisitions" style="color:var(--text-muted);font-size:12px;text-decoration:none;">← Requests</a>
           <h1 style="margin-top:6px;">${this.esc(r.title)}</h1>
           <p>${this.esc(r.id)} · ${formatCurrency(r.amount)} · ${this.esc(r.requested_by)} · ${statusBadge(r.status)}
              ${r.ship_to ? ` · deliver to ${this.esc(r.ship_to)}` : ""}${r.need_by ? ` · needed by ${formatDate(r.need_by)}` : ""}</p>
         </div>
+        ${FlowStrip.forRequisition(r)}
         ${this.approvalPanel(r)}
         ${this.checksPanel(r)}
         ${lines.length ? `
@@ -264,8 +342,8 @@ const RequisitionsView = {
           </table>
         </div>` : ""}
         <div class="panel">
-          <div class="panel-title">Details</div>
-          <p style="color:var(--text-secondary);font-size:12.5px;margin:0 0 14px;">${this.esc(r.description) || "No description provided."}</p>
+          <div class="panel-title">Why it is needed</div>
+          <p style="color:var(--text-secondary);font-size:12.5px;margin:0 0 14px;">${this.esc(r.description) || "No reason was given."}</p>
           ${r.purchase_order
             ? `<div style="font-size:12px;color:var(--text-secondary);">Linked purchase order: <a href="#/purchase-orders/${this.esc(r.purchase_order.id)}" style="color:var(--accent-tint)">#${this.esc(r.purchase_order.id)}</a> — ${statusBadge(r.purchase_order.status)}</div>`
             : `<div style="font-size:12px;color:var(--text-muted);">No purchase order linked yet.</div>`}
@@ -273,7 +351,7 @@ const RequisitionsView = {
       `;
       this.wireApproval(r);
     } catch {
-      container.innerHTML = `<div class="empty-state">Couldn't load this requisition.</div>`;
+      container.innerHTML = `<div class="empty-state">Couldn't load this request. Go back to the list and try again.</div>`;
     }
   },
 };

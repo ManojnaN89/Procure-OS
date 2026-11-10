@@ -4,6 +4,27 @@ import { Card, CardBody, PageTitle } from "../components/ui/card";
 import { api } from "../lib/api";
 import { can, useMe } from "../lib/me";
 
+const GO = [
+	{
+		to: "/setup",
+		label: "Company setup",
+		what: "people, roles, who approves what, policies",
+		needs: ["admin.users", "admin.rules", "admin.settings"],
+	},
+	{
+		to: "/automation",
+		label: "Automation",
+		what: "what the system may do by itself, and the off switch",
+		needs: ["admin.settings"],
+	},
+	{
+		to: "/audit",
+		label: "Audit",
+		what: "every change and decision, and who made it",
+		needs: ["audit.view"],
+	},
+] as const;
+
 export function HomePage() {
 	const me = useMe();
 	const canDecide = can(
@@ -40,18 +61,24 @@ export function HomePage() {
 								to="/approvals"
 								className="mt-2 inline-block text-sm text-primary underline"
 							>
-								Open approvals
+								Open Approvals
 							</Link>
 						</CardBody>
 					</Card>
 				) : null}
 				<Card>
 					<CardBody>
-						<div className="mb-1 text-sm font-medium">What you can do</div>
-						<ul className="list-inside list-disc text-sm text-muted-foreground">
-							{(me.data?.permissions ?? []).map((p) => (
-								<li key={p}>{p}</li>
+						<div className="mb-2 text-sm font-medium">What is here</div>
+						<ul className="space-y-1 text-sm text-muted-foreground">
+							{GO.filter((g) => can(me.data, ...g.needs)).map((g) => (
+								<li key={g.to}>
+									<span className="font-medium text-foreground">{g.label}</span>{" "}
+									· {g.what}
+								</li>
 							))}
+							<li>
+								Requests, orders, invoices and payments are in the main app.
+							</li>
 						</ul>
 					</CardBody>
 				</Card>

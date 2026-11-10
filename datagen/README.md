@@ -32,6 +32,20 @@ invoices and payments that are wholly about those items. Every row is a row of t
 The approval rules use only roles that exist in the small team (no CFO): the Managing Director is the last approver and approves payment runs.
 The evals use `plant-small` (set `P2P_EVAL_DATASET` to use another).
 
+## The small demo company (`flow`)
+
+```
+python -I datagen/generator/profile_flow.py            # -> data/datasets/flow-demo-v1
+python -I datagen/generator/profile_flow.py --check data/datasets/flow-demo-v1
+python -m p2p.cli demo reset flow                      # from backend/: drop and make the company, logins to .dev-credentials
+```
+
+One plant, four departments, eight people (one login each), twelve items in three categories, four suppliers (a micro enterprise,
+a rate-contract holder, two for quotations), one active contract, no history. Four items are below their reorder point, so the first
+click on **Check stock levels** makes three requests. Written by hand (not cut from another dataset); only the chart of accounts,
+banks, payment terms and number series are copied from `datagen/catalog/flow/`. The walk-through is `docs/demo-script.md`; the
+eval `E33` runs it with the eight logins.
+
 ## How it is built
 
 | File | Role |

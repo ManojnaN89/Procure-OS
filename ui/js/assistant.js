@@ -60,9 +60,12 @@ const Assistant = {
     if (messages.length === 0) {
       const empty = document.createElement("div");
       empty.className = "empty-state";
+      const requester = typeof Auth !== "undefined" && Auth.can("request.create");
       empty.textContent = compact
-        ? "Ask the assistant to do something."
-        : "Try: \"Onboard a vendor called Acme Supplies, email acme@supplies.com, category electronics\"";
+        ? "Ask where something stands, or say what you need."
+        : requester
+          ? "Try: \"I need 10 ball bearings 6205 by next Friday\" or \"Where is my last request?\""
+          : "Try: \"What is waiting for me?\" or \"Which invoices are blocked, and why?\"";
       container.appendChild(empty);
       return;
     }
@@ -168,7 +171,7 @@ const Assistant = {
           const text = document.createElement("div");
           text.className = "chat-bubble-text";
           text.innerHTML = renderMarkdownSafe(
-            `Total spend stands at ${formatCurrency(m.spendSnapshot.total_spend)} this period, with ${formatCurrency(m.spendSnapshot.cost_savings_period)} in savings identified so far.`
+            `${formatCurrency(m.spendSnapshot.total_spend)} has been ordered so far.`
           );
           section.appendChild(text);
           bubble.appendChild(section);

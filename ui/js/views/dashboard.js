@@ -1,235 +1,148 @@
 const Dashboard = {
   mounted: false,
 
+  greeting() {
+    const h = new Date().getHours();
+    const part = h < 12 ? "Good morning" : h < 17 ? "Good afternoon" : "Good evening";
+    const name = String((Auth.me && Auth.me.display_name) || "").trim();
+    return name ? `${part}, ${name}` : part;
+  },
+
+  // The start page: what needs this person first, then where everything stands. Figures and charts are one click away.
   async render(container) {
     this.mounted = true;
+    this.analyticsLoaded = false;
+    const canRaise = Auth.can("request.create");
     container.innerHTML = `
-      <div class="page-header">
-        <h1>Procurement overview</h1>
-        <p>RFQs, requisitions and spend across all categories \u2014 live from the database.</p>
+      <div class="page-header page-header-row">
+        <div>
+          <h1>${escapeHtml(this.greeting())}</h1>
+          <p>What needs you today, and where the purchases in progress stand.</p>
+        </div>
+        ${canRaise ? `<a class="btn btn-primary" href="#/requisitions/new"><i class="ti ti-plus"></i>New request</a>` : ""}
       </div>
 
-      <div id="myWork" style="margin-bottom:16px;"></div>
+      <div id="myWork" style="margin-bottom:20px;"></div>
 
-      <div id="operationalStrip" style="display:flex;gap:18px;margin-bottom:16px;font-family:var(--font-mono);font-size:11px;color:var(--text-muted);"></div>
+      <h2 class="section-title">Where things stand</h2>
+      <div id="stageRow" class="stage-row"><div class="empty-state" style="grid-column:1/-1;padding:16px;">Loading…</div></div>
 
-      <div class="panel" id="attentionPanel" style="margin-bottom:16px;">
+      <div class="panel" id="attentionPanel" style="margin-bottom:16px;display:none;">
         <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:2px;">
           <div style="display:flex;align-items:center;gap:8px;">
-            <span class="panel-title" style="margin:0;">Needs attention</span>
+            <span class="panel-title" style="margin:0;">Notices</span>
             <span id="attentionBadges"></span>
           </div>
-          <a href="#/notification-history" style="color:var(--text-muted);font-size:11px;text-decoration:none;">View all</a>
+          <a href="#/notification-history" style="color:var(--text-muted);font-size:12px;text-decoration:none;">View all</a>
         </div>
-        <p style="color:var(--text-muted);font-size:11px;margin:0 0 12px;">Surfaced automatically \u2014 nothing here was asked for</p>
-        <div id="attentionList"><div class="empty-state">Loading\u2026</div></div>
+        <div id="attentionList"></div>
       </div>
 
-      <div class="stat-grid" id="headlineGrid" style="grid-template-columns:repeat(3,1fr);margin-bottom:16px;"></div>
-
-      <div class="two-col">
-        <div class="panel">
-          <div class="panel-row"><span class="panel-title">Requisition status</span></div>
-          <div id="reqStatusBlock"></div>
-          <div id="cycleTimeStat" style="margin-top:12px;padding-top:12px;border-top:1px solid var(--border);"></div>
-        </div>
-        <div class="panel">
-          <div class="panel-row">
-            <span class="panel-title">Spend by category</span>
+      <details class="more" id="analytics">
+        <summary>The company in figures</summary>
+        <div class="stat-grid" id="headlineGrid" style="margin-bottom:16px;"></div>
+        <div class="two-col">
+          <div class="panel">
+            <div class="panel-row"><span class="panel-title">Requests</span></div>
+            <div id="reqStatusBlock"></div>
           </div>
-          <div id="spendBlock"></div>
-          <div id="secondaryStats" style="margin-top:12px;padding-top:12px;border-top:1px solid var(--border);display:flex;gap:20px;"></div>
+          <div class="panel">
+            <div class="panel-row"><span class="panel-title">Ordered by category (goods, before tax)</span></div>
+            <div id="spendBlock"></div>
+          </div>
         </div>
-      </div>
+      </details>
     `;
     if (typeof WorkspaceView !== "undefined") WorkspaceView.mount(document.getElementById("myWork"));
-    await this.load();
+    document.getElementById("analytics").addEventListener("toggle", (e) => {
+      if (e.target.open && !this.analyticsLoaded) { this.analyticsLoaded = true; this.load(); }
+    });
+    this.loadStages();
     await this.loadAttention();
+  },
+
+  // The flow as six counts. Each one opens the screen where that work is done.
+  async loadStages() {
+    const row = document.getElementById("stageRow");
+    if (!row) return;
+    const GROUPS = [
+      { label: "Waiting for approval", keys: ["request_approval"], link: "#/requisitions" },
+      { label: "Being priced", keys: ["sourcing", "rfq_out", "award"], link: "#/rfqs" },
+      { label: "Orders to approve or confirm", keys: ["po_approval", "po_sent"], link: "#/purchase-orders" },
+      { label: "Goods to come", keys: ["awaiting_receipt"], link: "#/receiving" },
+      { label: "Invoices to enter or fix", keys: ["awaiting_invoice", "invoice_blocked"], link: "#/invoices" },
+      { label: "To pay", keys: ["awaiting_payment"], link: "#/payments" },
+    ];
+    try {
+      const t = await API.getJSON("/api/control-tower");
+      if (!document.body.contains(row)) return;
+      const by = Object.fromEntries(t.stages.map((s) => [s.stage, Number(s.count) || 0]));
+      row.innerHTML = GROUPS.map((g) => {
+        const n = g.keys.reduce((sum, k) => sum + (by[k] || 0), 0);
+        return `<a class="stage-chip${n ? " hot" : ""}" href="${g.link}"><div class="n">${n}</div><div class="l">${g.label}</div></a>`;
+      }).join("");
+    } catch {
+      row.style.display = "none"; // a role that may not see the tower just has no strip
+      const title = row.previousElementSibling;
+      if (title && title.classList.contains("section-title")) title.style.display = "none";
+    }
   },
 
   async load() {
     try {
       const d = await API.getDashboard();
-      this.renderOperationalStrip(d);
-      this.renderHeadline(d.headline);
+      this.renderHeadline(d);
       this.renderReqStatus(d);
-      this.renderCycleTime(d.inline_stats);
       this.renderSpend(d);
-      this.renderSecondaryStats(d.inline_stats);
     } catch (err) {
       const grid = document.getElementById("headlineGrid");
-      if (grid) grid.innerHTML = `<div class="empty-state">Couldn't load dashboard data. Is the backend running?</div>`;
+      if (grid) grid.innerHTML = `<div class="empty-state" style="grid-column:1/-1;">Couldn't load the figures. Reload the page to try again.</div>`;
     }
   },
 
-  renderOperationalStrip(d) {
-    const el = document.getElementById("operationalStrip");
-    if (!el) return;
-    el.innerHTML = `
-      <span><a href="#/rfqs" style="color:inherit;text-decoration:none;">${d.open_rfqs} open RFQs</a></span>
-      <span><a href="#/requisitions" style="color:inherit;text-decoration:none;">${d.pending_requisitions} pending requisitions</a></span>
-      <span><a href="#/vendors" style="color:inherit;text-decoration:none;">${d.vendors} vendors</a></span>
-      <span><a href="#/purchase-orders" style="color:inherit;text-decoration:none;">${d.purchase_orders} purchase orders</a></span>
-    `;
-  },
-
   refreshIfMounted() {
-    if (this.mounted && document.getElementById("headlineGrid")) { this.load(); this.loadAttention(); }
+    if (this.mounted && document.getElementById("stageRow")) {
+      if (this.analyticsLoaded) this.load();
+      this.loadStages();
+      this.loadAttention();
+    }
   },
 
-  renderHeadline(h) {
+  // Four figures counted from the real records: what has been ordered, what has been paid, and the two that need a person.
+  renderHeadline(d) {
     const grid = document.getElementById("headlineGrid");
-    if (!grid || !h) return;
-    grid.style.gridTemplateColumns = "repeat(4, 1fr)";
-
-    const cards = [
-      {
-        id: "total-spend", icon: "ti-currency-rupee", iconBg: "#3C3489", iconFg: "#CECBF6",
-        label: "TOTAL SPEND", value: formatCurrency(h.total_spend),
-        changePct: h.total_spend_change_pct, trend: h.total_spend_trend, sparkColor: "#9B8CFF",
-        prompt: "Show me my spend trend over the last 6 months",
-      },
-      {
-        id: "cost-savings", icon: "ti-piggy-bank", iconBg: "#085041", iconFg: "#9FE1CB",
-        label: "COST SAVINGS THIS PERIOD", value: formatCurrency(h.cost_savings_period),
-        changePct: h.cost_savings_change_pct, trend: h.cost_savings_trend, sparkColor: "#2ECC71",
-        prompt: "Show me budget versus actual spend for this month",
-      },
-      {
-        id: "exceptions", icon: "ti-alert-triangle", iconBg: "#501313", iconFg: "#F09595",
-        label: "EXCEPTIONS", value: String(h.exceptions_count),
-        changePct: h.exceptions_change_pct, trend: h.exceptions_trend, sparkColor: "#EF4444",
-        invertTrendColor: true, // for exceptions, going UP is bad — flip the green/red convention
-        onClick: () => { if (typeof Notifications !== "undefined") Notifications.toggleDropdown(); },
-      },
+    if (!grid) return;
+    const tiles = [
+      { label: "ORDERED SO FAR", value: formatCurrency(d.total_po_value), sub: `${d.purchase_orders} order${d.purchase_orders === 1 ? "" : "s"} placed`, link: "#/purchase-orders" },
+      { label: "PAID SO FAR", value: formatCurrency(d.paid_total), sub: `${d.invoices_to_pay} invoice${d.invoices_to_pay === 1 ? "" : "s"} approved and waiting to be paid`, link: "#/payments" },
+      { label: "INVOICES BLOCKED", value: String(d.blocked_invoices), sub: "held back by the match", link: "#/invoices", hot: d.blocked_invoices > 0 },
+      { label: "QUOTATIONS OUT", value: String(d.open_rfqs), sub: `${d.vendors} active supplier${d.vendors === 1 ? "" : "s"}`, link: "#/rfqs" },
     ];
-
-    grid.innerHTML = cards.map((c) => {
-      const hasChange = c.changePct !== null && c.changePct !== undefined;
-      let pillClass = "";
-      let pillLabel = "";
-      if (hasChange) {
-        const isIncrease = c.changePct >= 0;
-        const badIfUp = !!c.invertTrendColor;
-        const isGood = badIfUp ? !isIncrease : isIncrease;
-        pillClass = isGood ? "trend-up" : "trend-down";
-        pillLabel = `${isIncrease ? "\u2197" : "\u2198"} ${Math.abs(c.changePct)}%`;
-      }
-      return `
-        <div class="stat-card stat-card-clickable" data-card-id="${c.id}" title="Click for more detail">
-          <div class="stat-card-top">
-            <div class="stat-icon" style="background:${c.iconBg}"><i class="ti ${c.icon}" style="color:${c.iconFg}"></i></div>
-            ${hasChange ? `<span class="trend-pill ${pillClass}">${pillLabel}</span>` : ""}
-          </div>
-          <div class="stat-label">${escapeHtml(c.label)}</div>
-          <div class="stat-value">${escapeHtml(c.value)}</div>
-          <div class="stat-card-sparkline"><canvas id="spark-${c.id}"></canvas></div>
-        </div>
-      `;
-    }).join("") + `
-        <div class="stat-card">
-          <div style="display:flex;align-items:center;gap:5px;">
-            <div class="stat-label">SPEND UNDER MANAGEMENT</div>
-            <i class="ti ti-info-circle" style="font-size:12px;color:var(--text-muted);cursor:help;" title="${h.proxy_note}"></i>
-          </div>
-          <div class="stat-value">${h.spend_under_management_pct}%</div>
-          <div style="display:flex;height:5px;border-radius:6px;overflow:hidden;margin-top:8px;">
-            <div style="width:${h.spend_under_management_pct}%;background:var(--accent);"></div>
-            <div style="width:${h.maverick_spend_pct}%;background:var(--warning);"></div>
-          </div>
-          <div style="font-size:10px;color:var(--text-muted);margin-top:4px;">${h.maverick_spend_pct}% maverick spend</div>
-        </div>
-    `;
-
-    cards.forEach((c) => this.renderSparkline(`spark-${c.id}`, c.trend, c.sparkColor));
-
-    // Click-through: an unambiguous question (the click IS the whole question,
-    // nothing more to type) sends immediately rather than just pre-filling —
-    // same reasoning already used for notification routing, applied to reads.
-    grid.querySelectorAll(".stat-card-clickable").forEach((cardEl) => {
-      const card = cards.find((c) => c.id === cardEl.dataset.cardId);
-      if (!card) return;
-      cardEl.addEventListener("click", () => {
-        if (card.onClick) { card.onClick(); return; }
-        if (card.prompt) {
-          if (typeof FloatingAssistant !== "undefined") FloatingAssistant.open();
-          Conversation.send(card.prompt);
-        }
-      });
-    });
-  },
-
-  renderSparkline(canvasId, data, color) {
-    const canvas = document.getElementById(canvasId);
-    if (!canvas || typeof Chart === "undefined" || !data) return;
-    new Chart(canvas, {
-      type: "line",
-      data: {
-        labels: data.map((_, i) => i),
-        datasets: [{
-          data,
-          borderColor: color,
-          borderWidth: 1.5,
-          tension: 0.35,
-          pointRadius: 0,
-          fill: false,
-        }],
-      },
-      options: {
-        responsive: true,
-        maintainAspectRatio: false,
-        plugins: { legend: { display: false }, tooltip: { enabled: false } },
-        scales: { x: { display: false }, y: { display: false } },
-      },
-    });
+    grid.innerHTML = tiles.map((c) => `
+      <a class="stat-card stat-card-clickable" href="${c.link}" style="text-decoration:none;${c.hot ? "border-color:var(--warning);" : ""}">
+        <div class="stat-label">${c.label}</div>
+        <div class="stat-value">${escapeHtml(c.value)}</div>
+        <div class="cell-muted" style="margin-top:6px;">${escapeHtml(c.sub)}</div>
+      </a>`).join("");
   },
 
   renderReqStatus(d) {
     const el = document.getElementById("reqStatusBlock");
     if (!el) return;
-    const total = (d.pending_requisitions || 0) + (d.approved_requisitions || 0) + (d.rejected_requisitions || 0);
-    const pct = (n) => total ? Math.round((n / total) * 100) : 0;
+    const rows = [
+      ["Drafts and returned", d.draft_requisitions, "var(--text-muted)"],
+      ["Waiting for approval", d.pending_requisitions, "var(--warning)"],
+      ["Approved", d.approved_requisitions, "var(--success)"],
+      ["Rejected", d.rejected_requisitions, "var(--danger)"],
+    ];
+    const total = rows.reduce((sum, r) => sum + (r[1] || 0), 0);
+    if (!total) {
+      el.innerHTML = `<div class="empty-next" style="padding:14px;"><strong>No requests yet.</strong></div>`;
+      return;
+    }
     el.innerHTML = `
-      <div class="progress-bar">
-        <div style="width:${pct(d.pending_requisitions)}%;background:var(--warning)"></div>
-        <div style="width:${pct(d.approved_requisitions)}%;background:var(--success)"></div>
-        <div style="width:${pct(d.rejected_requisitions)}%;background:var(--danger)"></div>
-      </div>
-      <div class="progress-legend">
-        <div class="row"><span>\u25cf Pending</span><span>${d.pending_requisitions || 0}</span></div>
-        <div class="row"><span>\u25cf Approved</span><span>${d.approved_requisitions || 0}</span></div>
-        <div class="row"><span>\u25cf Rejected</span><span>${d.rejected_requisitions || 0}</span></div>
-      </div>
-    `;
-  },
-
-  renderCycleTime(stats) {
-    const el = document.getElementById("cycleTimeStat");
-    if (!el || !stats) return;
-    const val = stats.po_cycle_time_days;
-    el.innerHTML = `
-      <div style="display:flex;justify-content:space-between;font-size:11.5px;">
-        <span style="color:var(--text-muted);">Avg. PO cycle time</span>
-        <span style="color:var(--text-primary);font-weight:500;">${val === null ? "\u2014" : val + " days"}</span>
-      </div>
-    `;
-  },
-
-  renderSecondaryStats(stats) {
-    const el = document.getElementById("secondaryStats");
-    if (!el || !stats) return;
-    const otd = stats.on_time_delivery_rate_pct;
-    const cc = stats.contract_coverage_pct;
-    el.innerHTML = `
-      <div style="flex:1;">
-        <div style="color:var(--text-muted);font-size:10.5px;">On-time delivery</div>
-        <div style="color:var(--text-primary);font-size:15px;font-weight:600;">${otd === null ? "\u2014" : otd + "%"}</div>
-      </div>
-      <div style="flex:1;">
-        <div style="color:var(--text-muted);font-size:10.5px;">Contract coverage</div>
-        <div style="color:var(--text-primary);font-size:15px;font-weight:600;">${cc}%</div>
-      </div>
-    `;
+      <div class="progress-bar">${rows.map((r) => `<div style="width:${Math.round(((r[1] || 0) / total) * 100)}%;background:${r[2]}"></div>`).join("")}</div>
+      <div class="progress-legend">${rows.map((r) => `<div class="row"><span>\u25cf ${r[0]}</span><span>${r[1] || 0}</span></div>`).join("")}</div>`;
   },
 
   renderSpend(d) {
@@ -237,18 +150,18 @@ const Dashboard = {
     if (!el) return;
     const entries = Object.entries(d.spend_by_category || {});
     if (!entries.length) {
-      el.innerHTML = `<div class="empty-state">No purchase orders yet \u2014 spend will show up here once POs are created.</div>`;
+      el.innerHTML = `<div class="empty-state">Nothing has been ordered yet.</div>`;
       return;
     }
-    const max = Math.max(...entries.map(([, v]) => v));
+    const max = Math.max(...entries.map(([, v]) => Number(v)));
     el.innerHTML = entries.map(([cat, val]) => `
-      <div class="category-row" data-category="${cat}" style="margin-bottom:10px;cursor:pointer;" title="Click to see ${cat} vendor detail">
+      <div class="category-row" data-category="${escapeHtml(cat)}" style="margin-bottom:10px;cursor:pointer;" title="Ask the assistant about this category">
         <div style="display:flex;justify-content:space-between;font-size:11.5px;margin-bottom:4px;">
-          <span style="color:var(--text-secondary)">${cat}</span>
+          <span style="color:var(--text-secondary)">${escapeHtml(cat)}</span>
           <span style="color:var(--text-primary)">${formatCurrency(val)}</span>
         </div>
         <div style="background:var(--surface-sunken);border-radius:6px;height:6px;overflow:hidden;">
-          <div style="width:${max ? (val / max) * 100 : 0}%;background:var(--accent);height:100%;"></div>
+          <div style="width:${max ? (Number(val) / max) * 100 : 0}%;background:var(--accent);height:100%;"></div>
         </div>
       </div>
     `).join("");
@@ -275,9 +188,12 @@ const Dashboard = {
     const badges = document.getElementById("attentionBadges");
     if (!list) return;
     try {
-      const rows = await API.listNotifications({ unresolved_only: true, limit: 20 });
+      // a task notice repeats what My work already lists, so only the other notices are shown here
+      const rows = (await API.listNotifications({ unresolved_only: true, limit: 20 })).filter((n) => n.type !== "task");
+      const panel = document.getElementById("attentionPanel");
+      if (panel) panel.style.display = rows.length ? "" : "none";
       if (!rows.length) {
-        list.innerHTML = `<div class="empty-state">Nothing needs attention right now.</div>`;
+        list.innerHTML = "";
         badges.innerHTML = "";
         return;
       }

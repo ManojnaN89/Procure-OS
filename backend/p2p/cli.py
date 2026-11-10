@@ -17,6 +17,9 @@ python -m p2p.cli remind <tenant> [--dry-run] [--schedule]
         reminds suppliers who have not answered a quotation request; --schedule queues the daily morning run
 python -m p2p.cli order <tenant> [--request NO]
         makes purchase orders from the lines that are ready (contract prices and awarded quotations) and sends them for approval
+python -m p2p.cli demo reset flow [--dataset DIR]
+        drops and makes again the small demo company (8 people, 12 items, 4 suppliers, no history); the logins go to
+        .dev-credentials and are not printed
 python -m p2p.cli worker      runs the job worker (timers, escalations, email, mailbox polling) until stopped
 """
 
@@ -68,6 +71,10 @@ def main(argv: list[str] | None = None) -> int:
     ordr = sub.add_parser("order")
     ordr.add_argument("tenant")
     ordr.add_argument("--request")
+    demo = sub.add_parser("demo").add_subparsers(dest="cmd", required=True)
+    reset = demo.add_parser("reset")
+    reset.add_argument("name", choices=["flow"])
+    reset.add_argument("--dataset")
     sub.add_parser("worker")
     args = p.parse_args(argv)
 
@@ -77,6 +84,20 @@ def main(argv: list[str] | None = None) -> int:
             worker.run_forever()
         except KeyboardInterrupt:
             pass
+        return 0
+    if args.group == "demo":
+        from p2p.platform.demo import DemoError, reset_flow
+
+        try:
+            company = reset_flow(Path(args.dataset) if args.dataset else None)
+        except DemoError as exc:
+            print(f"not made: {exc}")
+            return 1
+        loaded = company.report.rows_loaded if company.report else 0
+        print(f"company '{company.slug}' made: {loaded} master rows, {len(company.logins)} logins")
+        for email, role, designation in company.logins:
+            print(f"  {email}  {role}  ({designation})")
+        print(f"passwords are in {company.credentials_file}")
         return 0
     if args.group == "replenish":
         from sqlalchemy.orm import Session

@@ -407,6 +407,72 @@ def wants(db: Session, user_id: int, message: str) -> bool:
     return _pending(db, user_id, datetime.now(UTC)) is not None or looks_like_request(message)
 
 
+class FormError(Exception):
+    """A request typed on the screen that cannot be made, with the reason in plain words."""
+
+
+def create_from_form(
+    db: Session,
+    user_id: int,
+    lines: list[tuple[str, Decimal]],
+    need_by: date,
+    location: str | None = None,
+    reason: str | None = None,
+    *,
+    today: date | None = None,
+) -> IntakeResult:
+    """A request filled in on the Requests screen: catalogue items and quantities, with no model involved. It is a draft
+    exactly like one the assistant makes, so the same checks (open requests, split orders) and the same audit row apply."""
+    today = today or business_today()
+    if not permissions.can_anywhere(db, user_id, "request.create"):
+        raise FormError("Your role may not raise purchase requests.")
+    person = _person(db, user_id)
+    if person is None:
+        raise FormError("Your login is not linked to a person in the organisation yet.")
+    if not lines:
+        raise FormError("Add at least one item.")
+    if need_by < today:
+        raise FormError("The date it is needed by is in the past.")
+    codes = [c for c, _ in lines]
+    if len(set(codes)) != len(codes):
+        raise FormError("An item is listed twice: put the total on one line.")
+    names = {
+        r[0]: (r[1], r[2], r[3])
+        for r in db.execute(
+            text("select code, name, coalesce(purchase_uom, base_uom), category_code from item where code = any(:c)"),
+            {"c": codes},
+        )
+    }
+    resolved: list[tuple[IntakeLine, item_matching.Candidate | None, item_matching.Match | None]] = []
+    for code, qty in lines:
+        if code not in names:
+            raise FormError(f"There is no item {code}.")
+        if qty <= 0:
+            raise FormError(f"The quantity of {names[code][0]} must be more than zero.")
+        name, uom, category = names[code]
+        resolved.append(
+            (
+                IntakeLine(item=name, qty=qty, uom=uom),
+                item_matching.Candidate(code, name, Decimal(1), "code", uom, category),
+                None,
+            )
+        )
+    stock = {r[0] for r in db.execute(text("select code from location where is_stock_location"))}
+    place = location if location else _location(db, None, person)[0]
+    if place not in stock:
+        raise FormError("Choose where it is to be delivered.")
+    reading = RequestReading(
+        intent="request",
+        lines=[line for line, _, _ in resolved],
+        need_by=need_by,
+        location_text=None,
+        reason=(reason or "").strip()[:300] or "Raised on the Requests screen",
+        confidence=1,
+    )
+    message = (reason or "").strip() or "Raised on the Requests screen"
+    return _create(db, user_id, person, "form", message, message, reading, resolved, need_by, str(place), today)
+
+
 def _close(db: Session, pending_id: int | None) -> None:
     if pending_id:
         db.execute(

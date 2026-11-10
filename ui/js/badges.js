@@ -31,7 +31,7 @@ const AppConfig = {
   currencySymbol: CURRENCY_PRESETS.INR.symbol,
   currencyLocale: CURRENCY_PRESETS.INR.locale,
   currencyPreset: "INR",
-  launchInFocusMode: true,
+  launchInFocusMode: false,
   async load() {
     try {
       const settings = await API.getSettings();

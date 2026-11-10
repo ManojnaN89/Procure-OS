@@ -8,7 +8,7 @@ You decide requests, orders and the sensitive things that no program may decide 
 
 ## Approve a request
 
-1. Click the request in **My work**, or open **Requisitions**.
+1. Click the request in **My work**, or open **Requests**.
 2. Read the lines, the amount and the budget warning if there is one.
 3. Click **Approve**, **Return for changes** or **Reject**. Returning and rejecting need a reason: write it and click **Confirm**.
 

@@ -37,3 +37,6 @@ Thumbs.db
 # demo run screenshots (the step-by-step transcripts are kept)
 evals/results/demo_runs/**/*.jpg
 evals/results/demo_runs/*/documents/
+
+# UI audit screenshots (regenerate with the audit script; large)
+evals/results/ui/

@@ -17,7 +17,7 @@ const ReceivingView = {
         <p>Goods that suppliers still have to deliver, and what has been received</p>
       </div>
       <div id="waitingWrap"><div class="empty-state">Loading…</div></div>
-      <h2 style="font-size:14px;margin:22px 0 8px;">Receipts</h2>
+      <h2 class="section-title" style="margin-top:22px;">Receipts already booked</h2>
       <div class="table-wrap" id="receiptsWrap"></div>
     `;
     try {
@@ -26,7 +26,7 @@ const ReceivingView = {
       if (!w) return; // the person has already gone to another page
       w.innerHTML = waiting.length
         ? waiting.map((o) => this.orderCard(o)).join("")
-        : `<div class="empty-state">Nothing is waiting to be received. Orders appear here once they have been sent to the supplier.</div>`;
+        : `<div class="empty-next"><strong>Nothing is waiting to be received.</strong><br>Orders appear here once they have been sent to the supplier and confirmed.</div>`;
       document.getElementById("receiptsWrap").innerHTML = receipts.length
         ? `<table class="data-table"><thead><tr><th>RECEIPT</th><th>ORDER</th><th>SUPPLIER</th><th>WHEN</th><th>STATUS</th></tr></thead><tbody>
             ${receipts.map((r) => `<tr data-id="${this.esc(r.id)}"><td class="cell-muted">${this.esc(r.id)}</td><td>${this.esc(r.po_no)}</td><td>${this.esc(r.supplier)}</td><td class="cell-muted">${formatDate(r.received_at)}</td><td>${this.esc(this.INSPECTION[r.inspection] || "received")}</td></tr>`).join("")}

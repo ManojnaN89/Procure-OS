@@ -9,7 +9,7 @@ import asyncio
 import json
 import uuid
 from collections.abc import AsyncIterator, Callable
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal, InvalidOperation
 from typing import Annotated, Any
 
@@ -58,7 +58,7 @@ DEFAULT_SETTINGS: dict[str, str] = {
     "risk_score_medium_cutoff": "25",
     "risk_score_high_cutoff": "55",
     "currency_preset": "INR",
-    "launch_in_focus_mode": "true",
+    "launch_in_focus_mode": "false",
     "auto_replenishment": "false",
     "replenishment_department": "",
     "rfq_supplier_count": "3",
@@ -245,8 +245,7 @@ def briefing(db: Db, ctx: Ctx) -> dict[str, Any]:
         "top_priority_signal": _notification(ranked[0]) if ranked else None,
         "signal_counts": counts,
         "total_unresolved": len(rows),
-        "total_spend": "0",
-        "cost_savings_period": 0,
+        "total_spend": _ordered_value(db),
     }
 
 
@@ -288,39 +287,52 @@ def trail(
 # ---- the data pages: empty until their services exist ----------------------------------------
 
 
-def empty_dashboard() -> dict[str, Any]:
-    zeros = [0] * 6
-    return {
-        "open_rfqs": 0,
-        "pending_requisitions": 0,
-        "approved_requisitions": 0,
-        "rejected_requisitions": 0,
-        "purchase_orders": 0,
-        "vendors": 0,
-        "total_po_value": 0,
-        "spend_by_category": {},
-        "headline": {
-            "total_spend": "0",
-            "total_spend_trend": zeros,
-            "total_spend_change_pct": None,
-            "cost_savings_period": 0,
-            "cost_savings_trend": zeros,
-            "cost_savings_change_pct": None,
-            "spend_under_management_pct": 0,
-            "maverick_spend_pct": 0,
-            "exceptions_count": 0,
-            "exceptions_trend": zeros,
-            "exceptions_change_pct": None,
-            "is_proxy": False,
-            "proxy_note": "",
-        },
-        "inline_stats": {"po_cycle_time_days": None, "on_time_delivery_rate_pct": None, "contract_coverage_pct": 0},
-    }
+_ORDERED = "po.status not in ('draft', 'cancelled', 'rejected')"  # an order that is really on its way to the supplier
+
+
+def _ordered_value(db: Session) -> str:
+    return str(db.execute(text(f"select coalesce(sum(po.total), 0) from po where {_ORDERED}")).scalar_one())  # noqa: S608
 
 
 @router.get("/dashboard")
 def dashboard(db: Db, ctx: Ctx) -> dict[str, Any]:
-    return empty_dashboard()
+    """The figures behind the Dashboard, counted from the real tables. What needs the signed-in person is in /api/workspace;
+    where every case stands is in /api/control-tower. This is the company-wide picture: no figure here is invented."""
+    by_status = {
+        r["status"]: int(r["n"]) for r in _rows(db, "select status, count(*) as n from request group by status")
+    }
+
+    def count(sql: str) -> int:
+        return int(db.execute(text(sql)).scalar_one())
+
+    spend = {
+        r["name"]: str(r["amount"])
+        for r in _rows(
+            db,
+            "select coalesce(c.name, 'Other') as name, sum(round(l.qty * l.unit_price, 2)) as amount "  # noqa: S608
+            "from po_line l join po on po.no = l.po_no left join item i on i.code = l.item_code "
+            f"left join item_category c on c.code = i.category_code where {_ORDERED} and l.status <> 'cancelled' "
+            "group by 1 order by 2 desc",
+        )
+    }
+    return {
+        "open_rfqs": count("select count(*) from rfq where status in ('draft', 'sent')"),
+        "draft_requisitions": by_status.get("draft", 0) + by_status.get("returned", 0),
+        "pending_requisitions": by_status.get("submitted", 0),
+        "approved_requisitions": by_status.get("approved", 0),
+        "rejected_requisitions": by_status.get("rejected", 0),
+        "purchase_orders": count(f"select count(*) from po where {_ORDERED}"),  # noqa: S608
+        "vendors": count("select count(*) from supplier where status = 'active'"),
+        "total_po_value": _ordered_value(db),
+        "spend_by_category": spend,
+        "blocked_invoices": count("select count(*) from invoice where status = 'blocked'"),
+        "invoices_to_pay": count("select count(*) from invoice where status = 'approved'"),
+        "paid_total": str(
+            db.execute(
+                text("select coalesce(sum(total), 0) from invoice where status = 'paid' and type = 'invoice'")
+            ).scalar_one()
+        ),
+    }
 
 
 def _empty_list() -> list[Any]:
@@ -333,7 +345,9 @@ _VENDOR = """
            (select email from supplier_contact c where c.supplier_code = s.code order by is_primary desc, id limit 1) as email,
            (select string_agg(distinct ic.name, ', ') from supplier_category sc join item_category ic on ic.code = sc.category_code
              where sc.supplier_code = s.code) as category,
-           (select count(*) from supplier_document d where d.supplier_code = s.code and not coalesce(d.verified, false)) as unverified_docs
+           (select count(*) from supplier_document d where d.supplier_code = s.code and not coalesce(d.verified, false)) as unverified_docs,
+           (select coalesce(sum(p.total), 0) from po p where p.supplier_code = s.code
+             and p.status not in ('draft', 'cancelled', 'rejected')) as ordered
     from supplier s
 """
 
@@ -345,7 +359,7 @@ def _vendor(r: dict[str, Any]) -> dict[str, Any]:
         "email": r["email"],
         "category": r["category"],
         "rating": None,
-        "total_spend": "0",
+        "total_spend": str(r["ordered"]),
         "created_at": None,
         "under_review": r["status"] == "draft",
         "active": r["status"] == "active",
@@ -486,15 +500,25 @@ _REQUISITION_STATUS = {"submitted": "pending"}  # the screen calls a request wai
 
 
 def _requisition(r: dict[str, Any]) -> dict[str, Any]:
+    n_lines = int(r.get("n_lines") or 0)
+    first = r.get("first_item")
+    if first and n_lines > 1:
+        title = f"{first} and {n_lines - 1} more item{'s' if n_lines > 2 else ''}"
+    else:
+        title = first or r["justification"] or f"Request for {r['ship_to_location']}"
     return {
         "id": r["no"],
-        "title": r["justification"] or f"Request for {r['ship_to_location']}",
+        "title": title,
+        "reason": r["justification"],
+        "items": n_lines,
         "amount": str(r["total_value"]),
-        "requested_by": r["requester"] or "Automatic replenishment",
+        "requested_by": r.get("requester_name") or "Automatic restock",
         "status": _REQUISITION_STATUS.get(r["status"], r["status"]),
         "priority": r["priority"],
         "created_at": _iso(r["created_at"]),
         "waiting_for": r.get("waiting_for"),
+        "mine": bool(r.get("mine")),
+        "needs_me": bool(r.get("needs_me")),
     }
 
 
@@ -506,13 +530,78 @@ _WAITING = (
 
 @router.get("/requisitions")
 def list_requisitions(db: Db, ctx: Ctx) -> list[dict[str, Any]]:
-    sql = f"select r.*, {_WAITING} as waiting_for from request r order by r.created_at desc, r.no desc limit 500"  # noqa: S608
-    return [_requisition(r) for r in _rows(db, sql)]
+    me = approvals.org_code_of(db, ctx.user_id)
+    sql = (
+        f"select r.*, {_WAITING} as waiting_for, u.name as requester_name, "  # noqa: S608
+        "(select count(*) from request_line l where l.request_no = r.no) as n_lines, "
+        "(select coalesce(i.name, l.free_text) from request_line l left join item i on i.code = l.item_code "
+        " where l.request_no = r.no order by l.line_no limit 1) as first_item, "
+        "(r.requester is not null and r.requester = :me) as mine, "
+        "exists (select 1 from approval_step s where s.request_no = r.no and s.round = r.approval_round "
+        " and s.status = 'pending' and coalesce(s.delegate, s.approver) = :me) as needs_me "
+        "from request r left join org_user u on u.code = r.requester order by r.created_at desc, r.no desc limit 500"
+    )
+    return [_requisition(r) for r in _rows(db, sql, me=me)]
+
+
+@router.get("/requisition-form")
+def requisition_form(
+    db: Db, ctx: Annotated[routing.TenantContext, Depends(require("request.create"))]
+) -> dict[str, Any]:
+    """What the New request screen needs: the catalogue, the places goods can be delivered to, and sensible defaults."""
+    me = approvals.org_code_of(db, ctx.user_id)
+    own = db.execute(text("select location_code from org_user where code = :c"), {"c": me}).scalar() if me else None
+    places = _rows(db, "select code, name from location where is_stock_location order by code")
+    return {
+        "items": _rows(
+            db,
+            "select code, name, coalesce(purchase_uom, base_uom) as uom, category_code as category from item "
+            "where coalesce(active, true) order by name",
+        ),
+        "locations": places,
+        "location": own if any(p["code"] == own for p in places) else (places[0]["code"] if len(places) == 1 else None),
+        "need_by": (business_today() + timedelta(days=7)).isoformat(),
+    }
+
+
+@router.post("/requisitions")
+def create_requisition(
+    payload: dict[str, Any], db: Db, ctx: Annotated[routing.TenantContext, Depends(require("request.create"))]
+) -> dict[str, Any]:
+    """A request typed on the screen. It is saved as a draft; the person submits it when it is right."""
+    raw = payload.get("lines")
+    if not isinstance(raw, list):
+        raise HTTPException(422, "lines must be a list of items and quantities")
+    lines: list[tuple[str, Decimal]] = []
+    try:
+        for entry in raw:
+            lines.append((str(entry["item_code"]), Decimal(str(entry["qty"]))))
+        need_by = date.fromisoformat(str(payload.get("need_by")))
+    except (KeyError, TypeError, ValueError, InvalidOperation):
+        raise HTTPException(
+            422, "each line needs an item_code and a number qty, and need_by must be a date like 2026-11-20"
+        ) from None
+    try:
+        result = intake.create_from_form(
+            db, ctx.user_id, lines, need_by, payload.get("location") or None, payload.get("reason") or None
+        )
+    except intake.FormError as exc:
+        db.rollback()
+        raise HTTPException(422, str(exc)) from None
+    return {"id": result.request_nos[0], "request_nos": result.request_nos, "warnings": result.warnings}
 
 
 @router.get("/requisitions/{no}")
 def get_requisition(no: str, db: Db, ctx: Ctx) -> dict[str, Any]:
-    rows = _rows(db, "select * from request where no = :n", n=no)
+    rows = _rows(
+        db,
+        f"select r.*, u.name as requester_name, {_WAITING} as waiting_for, "  # noqa: S608
+        "(select count(*) from request_line l where l.request_no = r.no) as n_lines, "
+        "(select coalesce(i.name, l.free_text) from request_line l left join item i on i.code = l.item_code "
+        " where l.request_no = r.no order by l.line_no limit 1) as first_item "
+        "from request r left join org_user u on u.code = r.requester where r.no = :n",
+        n=no,
+    )
     if not rows:
         raise HTTPException(404, "Not found")
     lines = _rows(

@@ -7,7 +7,7 @@ const AssistantPageView = {
       <div class="page-header page-header-row">
         <div>
           <h1>Assistant</h1>
-          <p>Routed automatically to the right specialist agent</p>
+          <p>Ask where something stands, or say what you need in plain words. It only answers, or drafts something for you to check.</p>
         </div>
         <span class="status-pill" id="statusPill"><span class="dot"></span>Assistant ready</span>
       </div>
@@ -18,7 +18,7 @@ const AssistantPageView = {
           <div class="chat-composer">
             <input type="file" id="assistantFileInput" accept=".pdf,.xlsx,.xls,.csv" style="display:none;" />
             <i class="ti ti-paperclip composer-attach-btn" id="assistantAttachBtn" title="Attach a quote or CSV"></i>
-            <input type="text" id="assistantInput" placeholder="Ask ProcureOS to do something..." autocomplete="off" />
+            <input type="text" id="assistantInput" placeholder="Ask a question, or say what you need..." autocomplete="off" />
             <button class="send-btn" id="assistantSendBtn"><i class="ti ti-arrow-right"></i></button>
           </div>
         </div>

@@ -256,10 +256,18 @@ function PeopleTab(shared: Shared) {
 										</div>
 									))}
 								</Td>
-								<Td>{p.person?.manager_code ?? "-"}</Td>
+								<Td>
+									{(data.data?.org ?? []).find(
+										(o) => o.code === p.person?.manager_code,
+									)?.name ??
+										p.person?.manager_code ??
+										"-"}
+								</Td>
 								<Td>
 									<div className="flex items-center gap-2">
-										<Badge>{p.active ? "ok" : "failed"}</Badge>
+										<Badge tone={p.active ? "success" : "danger"}>
+											{p.active ? "Active" : "Inactive"}
+										</Badge>
 										<button
 											type="button"
 											className="text-xs underline"

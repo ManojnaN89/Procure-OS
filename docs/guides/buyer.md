@@ -8,13 +8,13 @@ You turn approved requests into orders.
 
 ## Find a price
 
-1. **Requisitions** → click **Check stock levels** to draft requests for stock at its reorder point, then **Create and submit**.
+1. **Requests** → click **Check stock levels** to draft requests for stock at its reorder point, then **Create and submit**.
 2. Open an approved request and click **Find suppliers**. A contract price is used when there is one. Otherwise a request for quotation is made.
 3. Sending the quotation request needs a person (unless the company made it automatic): **Admin** → **Approvals** → **Approve**.
 
 ## Quotes and award
 
-Suppliers answer by email. Under **RFQs**, open the RFQ: each reply is read into a draft. Check it and click **Confirm this quote**, or **Dismiss**. To type one yourself click **Enter a quote**, then **Save the quote**. When you have enough, click **Award the selected suppliers**. The order is made with GST.
+Suppliers answer by email. Under **Quotations**, open the RFQ: each reply is read into a draft. Check it and click **Confirm this quote**, or **Dismiss**. To type one yourself click **Enter a quote**, then **Save the quote**. When you have enough, click **Award the selected suppliers**. The order is made with GST.
 
 ## Orders
 

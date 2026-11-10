@@ -82,6 +82,19 @@ const Auth = {
     if (avatar) avatar.textContent = this.initials(this.me.display_name);
     const admin = document.getElementById("adminLink");
     if (admin) admin.style.display = this.can("admin.users", "admin.rules", "audit.view", "request.approve", "po.approve", "invoice.approve", "payment.approve", "rfq.send", "supplier.activate") ? "" : "none";
+    // the menu shows what this person's role can use, so each person sees their own flow
+    document.querySelectorAll("#navList .nav-item[data-needs]").forEach((el) => {
+      el.style.display = this.can(...el.dataset.needs.split(" ")) ? "" : "none";
+    });
+    document.querySelectorAll("#navList .sidebar-label").forEach((label) => {
+      let next = label.nextElementSibling;
+      let any = false;
+      while (next && !next.classList.contains("sidebar-label")) {
+        if (next.classList.contains("nav-item") && next.style.display !== "none") any = true;
+        next = next.nextElementSibling;
+      }
+      label.style.display = any ? "" : "none";
+    });
   },
 
   showLogin() {

@@ -13,8 +13,8 @@ const RfqsView = {
   async renderList(container) {
     container.innerHTML = `
       <div class="page-header">
-        <h1>RFQs</h1>
-        <p>Requests for quotation sent to suppliers for approved requests</p>
+        <h1>Quotations</h1>
+        <p>Prices asked from suppliers for approved requests, and the answers that came back</p>
       </div>
       <div class="table-wrap" id="tableWrap"><div class="empty-state">Loading…</div></div>
     `;
@@ -23,7 +23,7 @@ const RfqsView = {
       const wrap = document.getElementById("tableWrap");
       if (!wrap) return; // the person has already gone to another page
       if (!rows.length) {
-        wrap.innerHTML = `<div class="empty-state">No quotation requests yet. They are made when an approved request has items with no contract price.</div>`;
+        wrap.innerHTML = `<div class="empty-next"><strong>No quotations yet.</strong><br>When an approved request has items with no contract price, a request for quotation is made here.<br>Next: <a href="#/requisitions" style="color:var(--accent-tint);">open the approved requests</a>.</div>`;
         return;
       }
       wrap.innerHTML = `
@@ -244,11 +244,12 @@ const RfqsView = {
       if (r.error) { container.innerHTML = `<div class="empty-state">${this.esc(r.error)}</div>`; return; }
       container.innerHTML = `
         <div class="page-header">
-          <a href="#/rfqs" style="color:var(--text-muted);font-size:12px;text-decoration:none;">← RFQs</a>
+          <a href="#/rfqs" style="color:var(--text-muted);font-size:12px;text-decoration:none;">← Quotations</a>
           <h1 style="margin-top:6px;">${this.esc(r.title)}</h1>
           <p>${this.esc(r.id)} · ${statusBadge(r.status)} · for <a href="#/requisitions/${this.esc(r.request_no)}" style="color:var(--accent-tint)">${this.esc(r.request_no)}</a>
              · reply by ${formatDate(r.due_date)}${r.sent_at ? ` · sent ${formatDate(r.sent_at)}` : ""}</p>
         </div>
+        ${FlowStrip.forRfq(r)}
         ${r.status === "draft" && r.proposal_id ? `<div class="panel" style="margin-bottom:12px;font-size:12.5px;color:var(--text-secondary);">Not sent yet: a buyer has to approve sending (Admin → Approvals).</div>` : ""}
         ${r.note ? `<div class="panel" style="margin-bottom:12px;font-size:12.5px;color:var(--warning-text);">${this.esc(r.note)}</div>` : ""}
         <div class="table-wrap" style="margin-bottom:12px;">

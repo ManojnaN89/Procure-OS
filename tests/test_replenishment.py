@@ -417,7 +417,7 @@ def test_the_requisition_pages_show_the_drafts_with_their_lines_and_amounts_as_e
     listed = client.get("/api/requisitions", headers=h).json()
     assert len(listed) == 2
     assert {r["status"] for r in listed} == {"draft"}
-    assert {r["requested_by"] for r in listed} == {"Automatic replenishment"}
+    assert {r["requested_by"] for r in listed} == {"Automatic restock"}
     assert sorted(r["amount"] for r in listed) == ["8000.00", "9725.00"]
 
     detail = client.get(f"/api/requisitions/{listed[0]['id']}", headers=h).json()

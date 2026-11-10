@@ -7,10 +7,15 @@
  */
 const SettingsView = {
   async render(container) {
+    if (!Auth.can("admin.settings")) {
+      container.innerHTML = `<div class="page-header"><h1>Settings</h1></div>
+        <div class="empty-next"><strong>Settings are changed by the administrator.</strong><br>Ask them if a limit or a policy needs to change.</div>`;
+      return;
+    }
     container.innerHTML = `
       <div class="page-header">
-        <h1>Configuration</h1>
-        <p>Thresholds that drive exception flagging, risk scoring, and proactive signals \u2014 not the scoring formulas themselves.</p>
+        <h1>Settings</h1>
+        <p>Limits that raise alerts and score suppliers, and what runs by itself. Approval chains and people are under Admin.</p>
       </div>
       <div class="panel" id="settingsForm"><div class="empty-state">Loading\u2026</div></div>
     `;

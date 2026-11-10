@@ -181,14 +181,14 @@ def test_the_menu_follows_the_role(company: Company, browser: Any) -> None:
     expect(admin.get_by_label("Main").get_by_role("link")).to_have_text(
         [
             "Home",
-            "Rules",
-            "Users",
             "Company setup",
             "Automation",
             "Audit",
             "Agent runs",
             "Rule decisions",
             "Model calls",
+            "Rules",
+            "Users",
         ]
     )
     shot(admin, "laptop_home_admin")
@@ -403,6 +403,19 @@ def test_the_kill_switch_stops_everything_and_switches_back(company: Company, br
     page.get_by_label(REASON).fill("check finished")
     page.get_by_role("button", name="Switch off").click()
     expect(page.get_by_text("The kill switch is off.")).to_be_visible()
+
+
+def test_a_person_who_opens_a_page_of_another_role_gets_a_plain_message_and_no_failed_request(
+    company: Company, browser: Any
+) -> None:
+    page = open_page(browser, LAPTOP)
+    refused: list[str] = []
+    page.on("response", lambda r: refused.append(r.url) if r.status == 403 else None)
+    sign_in(page, company.emails["Requester"])
+    for path in ("audit", "rules", "users", "runs", "approvals"):
+        page.goto(f"{ADMIN}/{path}")
+        expect(page.get_by_text("This page is not for your role")).to_be_visible()
+    assert refused == []  # the screens do not ask the server for what the role may not see
 
 
 def test_a_person_who_is_not_the_admin_sees_neither_page(company: Company, browser: Any) -> None:

@@ -157,7 +157,7 @@ const FocusMode = {
         signals: data.signals || [],
         signalTotal: total,
         signalCounts: data.signal_counts || {},
-        spendSnapshot: { total_spend: data.total_spend, cost_savings_period: data.cost_savings_period },
+        spendSnapshot: { total_spend: data.total_spend },
       });
       Conversation.notify();
     }
@@ -461,7 +461,7 @@ const FocusMode = {
     label.textContent = "Spend snapshot";
     section.appendChild(label);
 
-    const text = `Total spend stands at ${formatCurrency(snapshot.total_spend)} this period, with ${formatCurrency(snapshot.cost_savings_period)} in savings identified so far.`;
+    const text = `${formatCurrency(snapshot.total_spend)} has been ordered so far.`;
     const body = document.createElement("div");
     body.innerHTML = this._parseBlocks(text).map((b) => b.html).join("");
     section.appendChild(body);

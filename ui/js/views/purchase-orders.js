@@ -12,7 +12,7 @@ const PurchaseOrdersView = {
     container.innerHTML = `
       <div class="page-header">
         <h1>Purchase orders</h1>
-        <p>Orders made from contract prices and awarded quotations, and their approval</p>
+        <p>What has been ordered from suppliers, and where each order is</p>
       </div>
       <div class="table-wrap" id="tableWrap"><div class="empty-state">Loading…</div></div>
     `;
@@ -21,7 +21,7 @@ const PurchaseOrdersView = {
       const wrap = document.getElementById("tableWrap");
       if (!wrap) return; // the person has already gone to another page
       if (!rows.length) {
-        wrap.innerHTML = `<div class="empty-state">No purchase orders yet. They are made when an approved request has lines on a contract or an awarded quotation.</div>`;
+        wrap.innerHTML = `<div class="empty-next"><strong>No purchase orders yet.</strong><br>An order is made when an approved request has a contract price or an awarded quotation.<br>Next: <a href="#/rfqs" style="color:var(--accent-tint);">see the quotations</a>.</div>`;
         return;
       }
       wrap.innerHTML = `
@@ -137,6 +137,7 @@ const PurchaseOrdersView = {
              ${po.rfq_no ? ` · <a href="#/rfqs/${this.esc(po.rfq_no)}" style="color:var(--accent-tint)">${this.esc(po.rfq_no)}</a>` : ""}
              ${po.contract_code ? ` · contract ${this.esc(po.contract_code)}` : ""}</p>
         </div>
+        ${FlowStrip.forOrder(po)}
         ${this.approvalPanel(po)}
         ${this.dispatchPanel(po)}
         <div id="supplierMessagesBox"></div>

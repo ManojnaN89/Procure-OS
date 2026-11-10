@@ -1,17 +1,18 @@
 @import "tailwindcss";
 
 :root {
-	color-scheme: light;
-	--background: #ffffff;
-	--foreground: #1a1a1a;
-	--muted: #f4f5f7;
-	--muted-foreground: #5b6270;
-	--border: #e2e5ea;
-	--primary: #1f4e79;
+	color-scheme: dark;
+	--canvas: #0b0d12;
+	--background: #12141c;
+	--foreground: #f3f4f8;
+	--muted: #1b1f2a;
+	--muted-foreground: #9aa2b5;
+	--border: #262b38;
+	--primary: #6c5ce7;
 	--primary-foreground: #ffffff;
-	--danger: #b42318;
-	--success: #1a7f4b;
-	--warning: #b54708;
+	--danger: #f0605d;
+	--success: #3ddc84;
+	--warning: #f5a623;
 }
 
 @theme inline {
@@ -35,9 +36,20 @@ body,
 
 body {
 	margin: 0;
-	background: var(--background);
+	background: var(--canvas);
 	color: var(--foreground);
-	font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+	font-family: Inter, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
 	font-size: 15px;
 	overflow-x: hidden;
+}
+
+/* links and focus read clearly on the dark surface */
+a.text-primary,
+.text-primary {
+	color: #a99cff;
+}
+select,
+input,
+textarea {
+	color-scheme: dark;
 }

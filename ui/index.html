@@ -6,7 +6,7 @@
 <title>ProcureOS</title>
 <!-- Boot-time guess to avoid a flash of the dashboard before Focus Mode
      takes over on launch. Uses the last real setting value cached in
-     localStorage (default: on) so repeat visits never flash; app.js
+     localStorage (default: off) so repeat visits never flash; app.js
      reconciles this against the real setting once it loads and corrects
      course on the rare occasion the guess was wrong (e.g. changed on
      another device). Deliberately inline, not in an external file, so it
@@ -15,7 +15,7 @@
 (function () {
   try {
     var cached = localStorage.getItem("procureos_launch_focus_mode");
-    if (cached === null || cached === "true") {
+    if (cached === "true") {
       document.documentElement.classList.add("fm-boot-hide");
     }
   } catch (e) { /* localStorage unavailable — just show the dashboard normally */ }
@@ -34,6 +34,7 @@
 <link rel="stylesheet" href="css/motion.css" />
 <link rel="stylesheet" href="css/focus-mode.css" />
 <link rel="stylesheet" href="css/auth.css" />
+<link rel="stylesheet" href="css/clean.css" />
 <link rel="stylesheet" href="css/responsive.css" />
 </head>
 <body>
@@ -62,21 +63,24 @@
       <div class="mark">P</div>
       <span class="name">ProcureOS</span>
     </div>
-    <div class="sidebar-label">MENU</div>
     <div class="nav-list" id="navList">
       <a class="nav-item" data-route="dashboard" href="#/dashboard"><i class="ti ti-layout-dashboard"></i>Dashboard</a>
-      <a class="nav-item" data-route="control-tower" href="#/control-tower"><i class="ti ti-radar-2"></i>Control tower</a>
-      <a class="nav-item" data-route="rfqs" href="#/rfqs"><i class="ti ti-file-text"></i>RFQs</a>
-      <a class="nav-item" data-route="requisitions" href="#/requisitions"><i class="ti ti-clipboard-check"></i>Requisitions</a>
-      <a class="nav-item" data-route="vendors" href="#/vendors"><i class="ti ti-building-store"></i>Vendors</a>
-      <a class="nav-item" data-route="inventory" href="#/inventory"><i class="ti ti-packages"></i>Inventory</a>
-      <a class="nav-item" data-route="purchase-orders" href="#/purchase-orders"><i class="ti ti-receipt"></i>Purchase orders</a>
-      <a class="nav-item" data-route="receiving" href="#/receiving"><i class="ti ti-truck-delivery"></i>Goods receipt</a>
-      <a class="nav-item" data-route="invoices" href="#/invoices"><i class="ti ti-file-invoice"></i>Invoices</a>
-      <a class="nav-item" data-route="payments" href="#/payments"><i class="ti ti-credit-card"></i>Payments</a>
-      <a class="nav-item" data-route="contracts" href="#/contracts"><i class="ti ti-file-certificate"></i>Contracts</a>
+
+      <div class="sidebar-label">THE FLOW</div>
+      <a class="nav-item" data-route="requisitions" data-needs="request.view request.view_own request.create" href="#/requisitions"><i class="ti ti-clipboard-check"></i>Requests</a>
+      <a class="nav-item" data-route="rfqs" data-needs="rfq.create rfq.send po.approve" href="#/rfqs"><i class="ti ti-file-text"></i>Quotations</a>
+      <a class="nav-item" data-route="purchase-orders" data-needs="po.create po.approve po.send grn.create invoice.view" href="#/purchase-orders"><i class="ti ti-receipt"></i>Purchase orders</a>
+      <a class="nav-item" data-route="receiving" data-needs="grn.create po.create" href="#/receiving"><i class="ti ti-truck-delivery"></i>Goods receipt</a>
+      <a class="nav-item" data-route="invoices" data-needs="invoice.view invoice.book invoice.approve" href="#/invoices"><i class="ti ti-file-invoice"></i>Invoices</a>
+      <a class="nav-item" data-route="payments" data-needs="payment.view payment.propose payment.approve" href="#/payments"><i class="ti ti-credit-card"></i>Payments</a>
+
+      <div class="sidebar-label">RECORDS &amp; SETUP</div>
+      <a class="nav-item" data-route="vendors" data-needs="supplier.view supplier.propose supplier.documents supplier.activate" href="#/vendors"><i class="ti ti-building-store"></i>Vendors</a>
+      <a class="nav-item" data-route="contracts" data-needs="contract.manage contract.activate" href="#/contracts"><i class="ti ti-file-certificate"></i>Contracts</a>
+      <a class="nav-item" data-route="inventory" data-needs="stock.view replenishment.run" href="#/inventory"><i class="ti ti-packages"></i>Inventory</a>
+      <a class="nav-item" data-route="control-tower" data-needs="po.approve payment.approve request.approve po.create payment.propose audit.view" href="#/control-tower"><i class="ti ti-radar-2"></i>Control tower</a>
       <a class="nav-item" data-route="assistant" href="#/assistant"><i class="ti ti-message-circle"></i>Assistant</a>
-      <div class="nav-divider"></div>
+      <a class="nav-item" data-route="settings" data-needs="admin.settings" href="#/settings"><i class="ti ti-settings"></i>Settings</a>
       <a class="nav-item" data-route="help" href="#/help"><i class="ti ti-help"></i>Help</a>
       <a class="nav-item admin-link" id="adminLink" href="/admin/" style="display:none;"><i class="ti ti-shield-lock"></i>Admin</a>
     </div>
@@ -87,17 +91,17 @@
       <div class="icon-btn menu-btn" id="menuBtn" title="Menu"><i class="ti ti-menu-2"></i></div>
       <div class="search-box" id="searchBox">
         <i class="ti ti-search"></i>
-        <input type="text" id="searchInput" placeholder="Search anything..." autocomplete="off" />
+        <input type="text" id="searchInput" placeholder="Search requests, orders, vendors..." autocomplete="off" />
         <div class="search-results" id="searchResults"></div>
       </div>
       <div class="topbar-actions">
-        <div class="icon-btn" id="focusModeToggle" title="Focus mode">
+        <div class="icon-btn topbar-quiet" id="focusModeToggle" title="Focus mode">
           <i class="ti ti-focus-2"></i>
         </div>
-        <div class="icon-btn" id="settingsBtn" title="Configuration">
+        <div class="icon-btn topbar-quiet" id="settingsBtn" title="Settings">
           <i class="ti ti-settings"></i>
         </div>
-        <div class="icon-btn" id="trailBellBtn" title="Agent trail">
+        <div class="icon-btn topbar-quiet" id="trailBellBtn" title="Agent trail">
           <i class="ti ti-history"></i>
           <div class="dot" id="trailDot" style="display:none;"></div>
         </div>
@@ -199,6 +203,7 @@
 <script src="js/mobile-nav.js"></script>
 <script src="js/api.js"></script>
 <script src="js/badges.js"></script>
+<script src="js/flow-strip.js"></script>
 <script src="js/interactive-elements.js"></script>
 <script src="js/state.js"></script>
 <script src="js/trail.js"></script>

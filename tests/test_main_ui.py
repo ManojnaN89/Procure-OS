@@ -85,36 +85,55 @@ def test_the_main_interface_asks_for_a_login_and_shows_who_is_signed_in(company:
     assert [p for p in page.problems if "401" not in p] == []  # type: ignore[attr-defined]
 
 
-def test_the_menu_has_no_auctions_and_the_admin_link_is_only_for_people_who_may_use_it(
-    company: Company, browser: Any
-) -> None:
-    admin = open_app(browser, LAPTOP)
-    sign_in(admin, company.emails["Admin"])
-    items = admin.locator("#navList .nav-item")
-    expect(items).to_have_text(
-        [
-            "Dashboard",
-            "Control tower",
-            "RFQs",
-            "Requisitions",
-            "Vendors",
-            "Inventory",
-            "Purchase orders",
-            "Goods receipt",
-            "Invoices",
-            "Payments",
-            "Contracts",
-            "Assistant",
-            "Help",
-            "Admin",
-        ]
-    )
-    admin.locator("#adminLink").click()
-    admin.wait_for_url(f"{URL}/admin/")
+MENUS = {
+    # each person's menu holds what their role can use, in the order of the flow, with the records and setup after it
+    "Admin": ["Dashboard", "Control tower", "Assistant", "Settings", "Help", "Admin"],
+    "Requester": ["Dashboard", "Requests", "Assistant", "Help"],
+    "Buyer": [
+        "Dashboard",
+        "Requests",
+        "Quotations",
+        "Purchase orders",
+        "Goods receipt",
+        "Vendors",
+        "Contracts",
+        "Inventory",
+        "Control tower",
+        "Assistant",
+        "Help",
+        "Admin",
+    ],  # fmt: skip
+    "Store": ["Dashboard", "Requests", "Purchase orders", "Goods receipt", "Inventory", "Assistant", "Help"],
+    "Finance": [
+        "Dashboard",
+        "Purchase orders",
+        "Invoices",
+        "Payments",
+        "Control tower",
+        "Assistant",
+        "Help",
+        "Admin",
+    ],  # fmt: skip
+}
 
-    requester = open_app(browser, LAPTOP)
-    sign_in(requester, company.emails["Requester"])
-    expect(requester.locator("#adminLink")).to_be_hidden()
+
+@pytest.mark.parametrize("role", list(MENUS))
+def test_each_role_sees_a_menu_of_what_it_can_use_and_the_admin_link_only_when_it_may(
+    company: Company, browser: Any, role: str
+) -> None:
+    page = open_app(browser, LAPTOP)
+    sign_in(page, company.emails[role])
+    expect(page.locator("#navList .nav-item:visible")).to_have_text(MENUS[role])
+    # a label with nothing under it is not shown either
+    labels = page.locator("#navList .sidebar-label:visible").all_inner_texts()
+    assert ("THE FLOW" in labels) == any(
+        n in MENUS[role] for n in ("Requests", "Quotations", "Purchase orders", "Invoices", "Payments")
+    )
+    if "Admin" in MENUS[role]:
+        page.locator("#adminLink").click()
+        page.wait_for_url(f"{URL}/admin/")
+    else:
+        expect(page.locator("#adminLink")).to_be_hidden()
 
 
 def test_every_page_opens_without_errors_on_a_laptop(company: Company, browser: Any) -> None:
@@ -359,7 +378,7 @@ def test_a_buyer_checks_stock_and_a_small_request_approves_itself(company: Compa
         page = open_app(browser, LAPTOP)
         sign_in(page, company.emails["Buyer"])
         page.goto(f"{URL}/#/requisitions")
-        expect(page.locator("#tableWrap")).to_contain_text("No requisitions yet")
+        expect(page.locator("#tableWrap")).to_contain_text("No requests yet")
 
         page.locator("#replenishBtn").click()
         panel = page.locator("#replenishPanel")
@@ -373,7 +392,10 @@ def test_a_buyer_checks_stock_and_a_small_request_approves_itself(company: Compa
         expect(row).to_have_count(1)
         expect(row).to_contain_text("Approved")
         row.click()
-        expect(page.locator("#appContent")).to_contain_text("Auto-approved under rule R-LOW v1")
+        expect(page.locator("#appContent")).to_contain_text("Auto-approved")
+        expect(page.locator("#appContent")).to_contain_text(
+            "Approval rule R-LOW, version 1"
+        )  # kept with the request, under "How this was routed"
         expect(page.locator("#appContent")).to_contain_text("<i>Bearing</i>")  # shown as typed, not as italics
         expect(page.locator("#appContent")).to_contain_text("95")  # 100 less the 5 on hand
         assert page.locator("#appContent i:not(.ti)").count() == 0
@@ -423,7 +445,8 @@ def test_a_bigger_request_waits_for_the_right_person_who_must_give_a_reason_to_r
 
         approver.locator("#reasonCancel").click()
         approver.locator("#approveBtn").click()
-        expect(approver.locator("#appContent")).to_contain_text("Approved by Prakash Stores under rule R-MID v1")
+        expect(approver.locator("#appContent")).to_contain_text("Approved by Prakash Stores")
+        expect(approver.locator("#appContent")).to_contain_text("Approval rule R-MID, version 1")
         expect(approver.locator("#approveBtn")).to_have_count(0)
         approver.goto(f"{URL}/#/requisitions")
         expect(approver.locator("#tableWrap tbody tr")).to_contain_text("Approved")

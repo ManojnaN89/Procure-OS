@@ -14,7 +14,7 @@ const PaymentsView = {
   async renderList(container) {
     container.innerHTML = `
       <div class="page-header page-header-row">
-        <div><h1>Payments</h1><p>Payment runs: what is due, approved by the owner, paid through the bank</p></div>
+        <div><h1>Payments</h1><p>Pay what is due: plan a run, the owner approves it, then it goes to the bank</p></div>
       </div>
       <div class="panel" style="margin-bottom:14px;">
         <div class="panel-title">Plan a payment run</div>
@@ -63,7 +63,7 @@ const PaymentsView = {
         ? `<table class="data-table"><thead><tr><th>RUN</th><th>DATE</th><th>PAYMENTS</th><th>TOTAL</th><th>STATUS</th></tr></thead><tbody>
             ${rows.map((r) => `<tr data-id="${this.esc(r.id)}"><td class="cell-muted">${this.esc(r.id)}</td><td>${formatDate(r.run_date)}</td><td>${this.esc(r.payments)}</td><td>${formatCurrency(r.total)}</td>
               <td><span class="badge ${this.BADGE[r.status] || ""}">${this.esc(this.STATUS[r.status] || r.status)}</span></td></tr>`).join("")}</tbody></table>`
-        : `<div class="empty-state">No payment runs yet.</div>`;
+        : `<div class="empty-next"><strong>No payment runs yet.</strong><br>Next: choose a date above and press <strong>See what is due</strong>.</div>`;
       wrap.querySelectorAll("tr[data-id]").forEach((tr) => tr.addEventListener("click", () => { window.location.hash = `#/payments/${tr.dataset.id}`; }));
     } catch {
       const wrap = document.getElementById("tableWrap");
@@ -79,6 +79,7 @@ const PaymentsView = {
         <div class="page-header"><a href="#/payments" style="color:var(--text-muted);font-size:12px;text-decoration:none;">← Payments</a>
           <h1 style="margin-top:6px;">${this.esc(r.id)}</h1>
           <p><span class="badge ${this.BADGE[r.status] || ""}">${this.esc(this.STATUS[r.status] || r.status)}</span> · ${formatCurrency(r.total)} · run date ${formatDate(r.run_date)}</p></div>
+        ${FlowStrip.forRun(r)}
         ${r.status === "proposed" ? `<div class="panel" style="margin-bottom:12px;font-size:12.5px;">Waiting for the owner to approve${r.approval ? `: ${this.esc(r.approval.summary)}` : ""} (under Admin → Approvals). Nothing is paid until then.</div>` : ""}
         ${r.payments.map((p) => `
           <div class="panel" style="margin-bottom:10px;">

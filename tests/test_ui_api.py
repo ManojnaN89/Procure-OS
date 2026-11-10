@@ -66,7 +66,7 @@ def test_every_data_endpoint_needs_a_login(control_db: str) -> None:
 def test_the_pages_without_a_service_yet_answer_with_empty_data_in_the_expected_shape(env: Env) -> None:
     h = env.h(env.admin, "Admin")
     d = client.get("/api/dashboard", headers=h).json()
-    assert d["headline"]["total_spend_trend"] == [0] * 6 and d["inline_stats"]["contract_coverage_pct"] == 0
+    assert (d["purchase_orders"], d["total_po_value"], d["spend_by_category"], d["blocked_invoices"]) == (0, "0", {}, 0)
     for name in ("rfqs", "requisitions", "vendors", "purchase-orders", "payments", "contracts"):
         assert client.get(f"/api/{name}", headers=h).json() == []
         assert client.get(f"/api/{name}/1", headers=h).status_code == 404

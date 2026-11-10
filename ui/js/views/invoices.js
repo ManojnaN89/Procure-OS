@@ -31,11 +31,11 @@ const InvoicesView = {
         </div>
       </div>
       <div id="invDrafts"></div>
-      <div style="margin-bottom:10px;display:flex;gap:8px;" id="invFilter">
-        <div class="btn btn-secondary btn-sm" data-s="">All</div>
-        <div class="btn btn-secondary btn-sm" data-s="blocked">Blocked</div>
-        <div class="btn btn-secondary btn-sm" data-s="approved">Approved for payment</div>
-        <div class="btn btn-secondary btn-sm" data-s="paid">Paid</div>
+      <div class="tabs" id="invFilter">
+        <button class="tab active" data-s="">All</button>
+        <button class="tab" data-s="blocked">Blocked</button>
+        <button class="tab" data-s="approved">Approved for payment</button>
+        <button class="tab" data-s="paid">Paid</button>
       </div>
       <div class="table-wrap" id="tableWrap"><div class="empty-state">Loading…</div></div>`;
     document.getElementById("newInvoice").addEventListener("click", () => { window.location.hash = "#/invoices/new"; });
@@ -52,13 +52,16 @@ const InvoicesView = {
                 <td>${this.esc(r.supplier)}</td><td>${this.esc(r.number)}</td><td class="cell-muted">${formatDate(r.date)}</td><td>${formatCurrency(r.total)}</td>
                 <td><span class="badge ${this.BADGE[r.status] || ""}">${this.esc(this.STATUS[r.status] || r.status)}</span>${r.reason ? `<div class="cell-muted" style="font-size:11px;margin-top:3px;max-width:340px;">${this.esc(r.reason)}</div>` : ""}</td></tr>`).join("")}
             </tbody></table>`
-          : `<div class="empty-state">No invoices${status ? " in this state" : " yet"}.</div>`;
+          : `<div class="empty-next"><strong>No invoices${status ? " in this state" : " yet"}.</strong>${status ? "" : "<br>Next: enter the supplier's invoice for goods that have arrived, or upload the document."}</div>`;
         wrap.querySelectorAll("tr[data-id]").forEach((tr) => tr.addEventListener("click", () => { window.location.hash = `#/invoices/${tr.dataset.id}`; }));
       } catch {
         if (wrap) wrap.innerHTML = `<div class="empty-state">Couldn't load invoices.</div>`;
       }
     };
-    document.querySelectorAll("#invFilter [data-s]").forEach((b) => b.addEventListener("click", () => load(b.dataset.s)));
+    document.querySelectorAll("#invFilter [data-s]").forEach((b) => b.addEventListener("click", () => {
+      document.querySelectorAll("#invFilter .tab").forEach((x) => x.classList.toggle("active", x === b));
+      load(b.dataset.s);
+    }));
     load("");
   },
 
@@ -176,6 +179,7 @@ const InvoicesView = {
         <div class="page-header"><a href="#/invoices" style="color:var(--text-muted);font-size:12px;text-decoration:none;">← Invoices</a>
           <h1 style="margin-top:6px;">${this.esc(i.id)} · ${this.esc(i.supplier)}</h1>
           <p><span class="badge ${this.BADGE[i.status] || ""}">${this.esc(this.STATUS[i.status] || i.status)}</span> · ${formatCurrency(i.total)} · supplier's number ${this.esc(i.number)} · ${formatDate(i.date)}${i.type !== "invoice" ? ` · ${this.esc(i.type.replace("_", " "))}${i.ref_invoice_no ? ` for ${this.esc(i.ref_invoice_no)}` : ""}` : ""}</p></div>
+        ${FlowStrip.forInvoice(i)}
         ${i.reason ? `<div class="panel" style="margin-bottom:12px;color:var(--warning-text);font-size:12.5px;"><strong>${this.esc(i.status === "cancelled" && i.duplicate_of ? "Copy of " + i.duplicate_of : "Why it is blocked")}:</strong> ${this.esc(i.reason)}</div>` : ""}
         ${i.pending_release ? `<div class="panel" style="margin-bottom:12px;font-size:12.5px;">Waiting for approval: ${this.esc(i.pending_release.summary)} (approve it under Admin → Approvals).</div>` : ""}
         <div class="table-wrap" style="margin-bottom:12px;"><table class="data-table"><thead><tr><th>ORDER LINE</th><th>ITEM</th><th>QTY</th><th>PRICE</th><th>TAXABLE</th><th>MATCH</th></tr></thead><tbody>

@@ -25,18 +25,17 @@ const VendorsView = {
       const wrap = document.getElementById("tableWrap");
       if (!wrap) return; // the person has already gone to another page
       if (!rows.length) {
-        wrap.innerHTML = `<div class="empty-state">No vendors yet. Ask the assistant to onboard one.</div>`;
+        wrap.innerHTML = `<div class="empty-next"><strong>No vendors yet.</strong><br>Next: onboard a supplier (the assistant can start it for you).</div>`;
         return;
       }
       wrap.innerHTML = `
         <table class="data-table">
-          <thead><tr><th>NAME</th><th>CATEGORY</th><th>RATING</th><th>TOTAL SPEND</th></tr></thead>
+          <thead><tr><th>NAME</th><th>SUPPLIES</th><th>ORDERED SO FAR</th></tr></thead>
           <tbody>
             ${rows.map((v) => `
               <tr data-id="${escapeHtml(v.id)}">
                 <td>${escapeHtml(v.name)}</td>
                 <td class="cell-muted">${escapeHtml(v.category || "\u2014")}</td>
-                <td class="cell-muted">${escapeHtml(v.rating ?? "\u2014")}</td>
                 <td>${formatCurrency(v.total_spend)}</td>
               </tr>
             `).join("")}
@@ -74,7 +73,7 @@ const VendorsView = {
           <p>${escapeHtml(v.category || "\u2014")} \u00b7 ${escapeHtml(v.email || "no email on file")}</p>
         </div>
         <div class="stat-grid" style="grid-template-columns:repeat(4,1fr);margin-bottom:8px;">
-          <div class="stat-card"><div class="stat-label">TOTAL SPEND</div><div class="stat-value" style="font-size:20px;">${formatCurrency(v.total_spend)}</div></div>
+          <div class="stat-card"><div class="stat-label">ORDERED SO FAR</div><div class="stat-value" style="font-size:20px;">${formatCurrency(v.total_spend)}</div></div>
           <div class="stat-card"><div class="stat-label">PURCHASE ORDERS</div><div class="stat-value" style="font-size:20px;">${v.purchase_orders.length}</div></div>
           <div class="stat-card"><div class="stat-label">RFQS INVOLVED IN</div><div class="stat-value" style="font-size:20px;">${v.rfq_count}</div></div>
           <div class="stat-card">
