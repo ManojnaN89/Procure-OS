@@ -25,6 +25,7 @@ MATRIX = [
     ("POST", "/api/quote-drafts/1/dismiss", {}, {"Buyer"}),
     ("POST", "/api/purchase-orders/NOPE/approve", {}, {"Approver"}),
     ("POST", "/api/purchase-orders/NOPE/reject", {"reason": "x"}, {"Approver"}),
+    ("POST", "/api/vendors/NOPE/status", {"to": "active", "reason": "x"}, {"Buyer", "Approver"}),
     ("POST", "/api/settings", {"stale_requisition_days": "5"}, {"Admin"}),
     ("GET", "/api/admin/audit", None, {"Admin"}),
     ("GET", "/api/admin/agent-runs", None, {"Admin"}),

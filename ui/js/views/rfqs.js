@@ -259,7 +259,7 @@ const RfqsView = {
                 <tr>
                   <td>${this.esc(s.name)}<div class="cell-muted" style="font-size:11px;">${this.esc(s.code)}</div></td>
                   <td class="cell-muted">${this.esc(s.email)}</td>
-                  <td><span class="badge ${this.STATE_BADGE[s.state] || ""}">${this.esc(s.state)}</span>${s.error ? `<div class="cell-muted" style="font-size:11px;">${this.esc(s.error)}</div>` : ""}</td>
+                  <td><span class="badge ${this.STATE_BADGE[s.state] || ""}">${this.esc(s.state)}</span>${s.error ? `<div class="cell-muted" style="font-size:11px;">${this.esc(s.error)}</div>` : ""}${s.reminders ? `<div class="cell-muted" style="font-size:11px;">reminded ${this.esc(s.reminders)} time(s), last ${formatDate(s.last_reminded_at)}</div>` : ""}</td>
                 </tr>`).join("")}
             </tbody>
           </table>

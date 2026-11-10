@@ -7,7 +7,7 @@ from sqlalchemy.orm import Session
 
 from p2p.formulas.calendar import IST
 from p2p.platform import routing, worker
-from p2p.sourcing import service
+from p2p.sourcing import reminders, service
 
 log = logging.getLogger(__name__)
 JOB = "source_request"
@@ -22,6 +22,7 @@ def _run(ctx: worker.JobContext) -> None:
             # not approved (any more) or gone: nothing to do, and trying again later would not change that
             db.rollback()
             log.info("sourcing skipped for %s: %s", ctx.payload.get("request_no"), exc)
+    reminders.schedule(ctx.tenant)  # the daily reminder job keeps itself going once it has started
 
 
 @worker.register("read_supplier_reply")

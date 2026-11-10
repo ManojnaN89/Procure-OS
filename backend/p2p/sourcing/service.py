@@ -18,10 +18,13 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from p2p.agents import autonomy
+from p2p.formulas.contracts import ceiling_breach
 from p2p.formulas.money import format_inr, format_qty
 from p2p.formulas.sourcing import PriceOption, pick_contract_price
+from p2p.orders import contracts as contract_usage
 from p2p.platform import audit, emails, numbering, proposals, reference, worker
 from p2p.platform.sod import Actor
+from p2p.sourcing import documents
 
 DECISION_TYPE = "rfq.send"
 SERVICE = Actor("service", "sourcing")
@@ -119,14 +122,34 @@ def _decide(db: Session, line: dict[str, Any], as_of: date) -> LineOutcome:
     if not line["item_code"]:
         return LineOutcome(**base, method="rfq", reason="A free-text line has no item, so no contract can cover it")
     options = contract_options(db, line["item_code"], line["uom"], as_of)
+    blocked = {
+        code: docs.blocking
+        for code in sorted({o.supplier_code for o in options})
+        if not (docs := documents.check_supplier(db, code, as_of)).ok
+    }
+    options = [o for o in options if o.supplier_code not in blocked]
     pick = pick_contract_price(options, line["qty"])
     if pick is None:
-        why = (
-            f"No contract price applies to a quantity of {format_qty(line['qty'])} (the first price break is higher)"
-            if options
-            else "No contract price in force for this item"
-        )
+        if options:
+            why = f"No contract price applies to a quantity of {format_qty(line['qty'])} (the first price break is higher)"
+        elif blocked:
+            why = "The contract supplier cannot be used: " + "; ".join(
+                f"{code}: {', '.join(problems)}" for code, problems in blocked.items()
+            )
+        else:
+            why = "No contract price in force for this item"
         return LineOutcome(**base, method="rfq", reason=why)
+    use = contract_usage.usage(db, pick.contract_code)
+    breach = ceiling_breach(use.max_value, use.used, Decimal(line["qty"]) * pick.price)
+    if breach > 0 and use.max_value is not None:
+        return LineOutcome(
+            **base,
+            method="rfq",
+            reason=(
+                f"Contract {pick.contract_code} has {format_inr(use.remaining or 0)} left of its ceiling of "
+                f"{format_inr(use.max_value)}, not enough for this line"
+            ),
+        )
     until = f", in force until {pick.valid_to:%d %b %Y}" if pick.valid_to else ""
     return LineOutcome(
         **base,
@@ -174,6 +197,8 @@ def eligible_suppliers(
             notes.append(f"{r['code']} left out: matches the sanctions list")
         elif not r["email"]:
             notes.append(f"{r['code']} left out: no email address on file")
+        elif not (docs := documents.check_supplier(db, r["code"], as_of)).ok:
+            notes.append(f"{r['code']} left out: " + "; ".join(docs.blocking))
         else:
             chosen.append(Invitee(r["code"], r["name"], r["email"], r["contact"], int(r["history"])))
     return chosen, notes
@@ -385,14 +410,18 @@ def _dispatch(db: Session, rfq_no: str, value: Decimal, actor: Actor, result: So
     result.proposals.append(pid)
 
 
-def _body(rfq: dict[str, Any], lines: list[dict[str, Any]], contact: str | None, company: str, deliver_to: str) -> str:
-    items = "\n".join(
+def item_lines(lines: list[dict[str, Any]]) -> str:
+    return "\n".join(
         f"{n:>3}. {ln['description']}"
         + (f" ({ln['item_code']})" if ln["item_code"] else "")
         + f" - {format_qty(ln['qty'])} {ln['uom'] or ''}".rstrip()
         + (f" - needed by {ln['need_by']:%d %b %Y}" if ln["need_by"] else "")
         for n, ln in enumerate(lines, start=1)
     )
+
+
+def _body(rfq: dict[str, Any], lines: list[dict[str, Any]], contact: str | None, company: str, deliver_to: str) -> str:
+    items = item_lines(lines)
     return (
         f"Dear {contact or 'Sir or Madam'},\n\n"
         f"{company} invites you to quote for the items below.\n\n"

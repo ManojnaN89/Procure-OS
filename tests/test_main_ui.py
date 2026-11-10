@@ -27,6 +27,18 @@ PAGES = [
 ]
 
 
+def give_documents(db, code: str, *, gst: bool = False) -> None:  # type: ignore[no-untyped-def]
+    """The documents a supplier must have on file, so that it is asked to quote."""
+    for doc_type in ("pan", "cancelled_cheque", *(("gst_cert",) if gst else ())):
+        db.execute(
+            text(
+                "insert into supplier_document (supplier_code, doc_type, number, issued_on, verified) "
+                "values (:c, :t, 'X', '2020-01-01', true)"
+            ),
+            {"c": code, "t": doc_type},
+        )
+
+
 def open_app(browser: Any, size: dict[str, int], *, focus_mode: bool = False) -> Page:
     ctx = browser.new_context(viewport=size)
     ctx.add_init_script(f"localStorage.setItem('procureos_launch_focus_mode', '{str(focus_mode).lower()}')")
@@ -255,6 +267,7 @@ STOCK_TABLES = (
     "rfq_supplier",
     "rfq_line",
     "rfq",
+    "supplier_document",
     "supplier_contact",
     "supplier_category",
     "supplier",
@@ -430,6 +443,7 @@ def test_an_approved_request_is_sourced_and_its_rfq_shows_the_suppliers_waiting_
             text("insert into supplier (code, legal_name, status) values (:c, :n, 'active')"), {"c": code, "n": name}
         )
         db.execute(text("insert into supplier_category (supplier_code, category_code) values (:c, 'C1')"), {"c": code})
+        give_documents(db, code)
         db.execute(
             text(
                 "insert into supplier_contact (supplier_code, name, email, is_primary) values (:c, 'Contact', :e, true)"
@@ -511,6 +525,7 @@ def test_the_buyer_compares_quotes_and_awards_and_the_approver_signs_the_purchas
             ),
             {"c": code, "n": name, "s": state},
         )
+        give_documents(db, code, gst=True)
     # an approved request whose only line is out for quotation to both suppliers
     db.execute(
         text(
@@ -621,6 +636,7 @@ def test_the_buyer_checks_a_reply_read_from_email_corrects_one_value_and_confirm
     db = company.db
     later = datetime.now(IST).date().replace(year=datetime.now(IST).date().year + 1)
     db.execute(text("insert into supplier (code, legal_name, status) values ('S1', 'Alpha <b>Traders</b>', 'active')"))
+    give_documents(db, "S1")
     db.execute(
         text(
             "insert into request (no, ship_to_location, type, channel, status, total_value) values ('REQ-D', 'WH-BLR', 'goods', 'planning', 'approved', 1000)"
@@ -732,6 +748,7 @@ def test_hostile_text_in_names_and_in_the_address_bar_is_shown_as_text_and_never
             assert page.locator("#appContent img[onerror]").count() == 0, f"markup injected on #/{route}"
         assert fired == []
     finally:
+        db.execute(text("delete from supplier_document where supplier_code = 'S-X'"))
         db.execute(text("delete from supplier_category where supplier_code = 'S-X'"))
         db.execute(text("delete from supplier where code = 'S-X'"))
         db.execute(text("delete from item_category where code = 'C1'"))

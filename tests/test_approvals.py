@@ -313,7 +313,7 @@ def test_a_small_request_approves_itself_and_says_why(db: Session, logins: Login
     assert row["status"] == "approved" and row["decided_at"] is not None
     assert (row["rule_code"], row["rule_version"]) == ("REQ-01", 2)
     assert "Auto-approved under rule REQ-01 v2" in row["decision_reason"]
-    assert "No budget check was applied" in row["decision_reason"]  # honest about what was not checked
+    assert "No budget was checked" in row["decision_reason"]  # honest about what was not checked
     (auto,) = _audit(db, "request.auto_approve", no)
     assert auto["actor_type"] == "rule" and auto["actor_id"] == "REQ-01" and auto["rule_version"] == "REQ-01:v2"
     assert len(_audit(db, "request.submit", no)) == 1

@@ -25,7 +25,11 @@ from p2p.ai_steps.gateway import Gateway
 from p2p.approvals import rules as approval_rules
 from p2p.approvals import workflow as approvals
 from p2p.formulas.calendar import business_today
+from p2p.formulas.contracts import ContractUse
 from p2p.formulas.money import format_qty, round_money
+from p2p.formulas.suppliers import LABELS
+from p2p.masters import supplier_status
+from p2p.orders import contracts as contract_usage
 from p2p.orders import quotes
 from p2p.orders import service as orders  # noqa: F401 - registers the price-variance proposal executor
 from p2p.orders import workflow as po_workflow
@@ -34,6 +38,7 @@ from p2p.platform.permissions import PermissionDenied, can_anywhere, require
 from p2p.platform.tokens import decode_access_token
 from p2p.receiving.stock import stock_levels
 from p2p.requests import jobs, replenishment
+from p2p.sourcing import documents as supplier_documents
 from p2p.sourcing import replies
 from p2p.sourcing import service as sourcing
 
@@ -339,9 +344,35 @@ def get_vendor(vendor_id: str, db: Db, ctx: Ctx) -> dict[str, Any]:
         raise HTTPException(404, "Not found")
     r = rows[0]
     note = f"{r['legal_name']} · GSTIN {r['gstin'] or 'none'} · PAN {r['pan'] or 'none'} · MSME {r['msme_category'] or 'no'} · terms {r['payment_terms_code']}"
+    today = business_today()
+    check = supplier_documents.check_supplier(db, vendor_id, today)
+    docs = _rows(
+        db,
+        "select doc_type, number, issued_on, expires_on, verified from supplier_document "
+        "where supplier_code = :c order by doc_type, issued_on",
+        c=vendor_id,
+    )
     return {
         **_vendor(r),
+        "documents": {
+            "ok": check.ok,
+            "problems": check.blocking,
+            "warnings": check.warnings,
+            "on_file": [
+                {
+                    "type": LABELS.get(d["doc_type"], d["doc_type"]),
+                    "number": d["number"],
+                    "expires_on": d["expires_on"].isoformat() if d["expires_on"] else None,
+                    "verified": bool(d["verified"]),
+                    "expired": bool(d["expires_on"] and d["expires_on"] < today),
+                }
+                for d in docs
+            ],
+        },
         "verification_note": note,
+        "status": r["status"],
+        "pending_change": supplier_status.pending_change(db, vendor_id),
+        "can_propose": can_anywhere(db, ctx.user_id, "supplier.propose"),
         "rfq_count": 0,
         "risk": {
             "risk_score": 0,
@@ -353,6 +384,29 @@ def get_vendor(vendor_id: str, db: Db, ctx: Ctx) -> dict[str, Any]:
         },
         "purchase_orders": [],
     }
+
+
+@router.post("/vendors/{vendor_id}/status")
+def propose_vendor_status(
+    vendor_id: str,
+    payload: dict[str, Any],
+    db: Db,
+    ctx: Annotated[routing.TenantContext, Depends(require("supplier.propose"))],
+) -> dict[str, Any]:
+    """Ask for a supplier to be activated, blocked or put under review. A person with the right permission approves."""
+    try:
+        pid = supplier_status.request_change(
+            db,
+            vendor_id,
+            str(payload.get("to") or ""),
+            sod.user(ctx.user_id),
+            str(payload.get("reason") or ""),
+            today=business_today(),
+        )
+    except supplier_status.SupplierStatusError as exc:
+        db.rollback()
+        raise HTTPException(409 if "does not exist" not in str(exc) else 404, str(exc)) from None
+    return {"proposal_id": pid, "status": "waiting for approval"}
 
 
 def _qty(value: Decimal | None) -> str | None:
@@ -477,6 +531,7 @@ def get_requisition(no: str, db: Db, ctx: Ctx) -> dict[str, Any]:
             "rule_code": rows[0]["rule_code"],
             "rule_version": rows[0]["rule_version"],
             "decision": rows[0]["decision_reason"],
+            "budget": rows[0]["budget_check"] or [],
             "steps": [
                 {
                     "step": s["step"],
@@ -592,7 +647,7 @@ def get_rfq(no: str, db: Db, ctx: Ctx) -> dict[str, Any]:
     suppliers = _rows(
         db,
         "select s.supplier_code, coalesce(v.trade_name, v.legal_name) as name, s.email, s.invited_at, s.send_error, "
-        "s.responded_at, s.declined from rfq_supplier s join supplier v on v.code = s.supplier_code "
+        "s.responded_at, s.declined, s.reminders_sent, s.last_reminded_at from rfq_supplier s join supplier v on v.code = s.supplier_code "
         "where s.rfq_no = :n order by s.supplier_code",
         n=no,
     )
@@ -635,6 +690,8 @@ def get_rfq(no: str, db: Db, ctx: Ctx) -> dict[str, Any]:
                 "email": s["email"],
                 "invited_at": _iso(s["invited_at"]),
                 "error": s["send_error"],
+                "reminders": s["reminders_sent"],
+                "last_reminded_at": _iso(s["last_reminded_at"]),
                 "state": state(s),
             }
             for s in suppliers
@@ -1002,7 +1059,80 @@ def reject_purchase_order(
     return _po_action(lambda: po_workflow.reject(db, no, ctx.user_id, payload.get("reason")))
 
 
-for _name in ("payments", "contracts"):
+_CONTRACT_TYPES = {
+    "rate_contract": "Rate contract",
+    "service_contract": "Service contract",
+    "framework": "Framework agreement",
+}
+
+
+def _contract_json(c: dict[str, Any], use: ContractUse) -> dict[str, Any]:
+    return {
+        "id": c["code"],
+        "title": f"{_CONTRACT_TYPES.get(c['type'], (c['type'] or 'Contract').replace('_', ' ').capitalize())} {c['code']}",
+        "vendor": {"id": c["supplier_code"], "name": c["supplier_name"]},
+        "status": c["status"],
+        "value": _money(use.max_value),
+        "used": str(use.used.quantize(Decimal("0.01"))),
+        "remaining": _money(use.remaining),
+        "pct_used": None if use.pct_used is None else str(use.pct_used),
+        "start_date": c["valid_from"].isoformat() if c["valid_from"] else None,
+        "end_date": c["valid_to"].isoformat() if c["valid_to"] else None,
+    }
+
+
+_CONTRACT = (
+    "select c.*, coalesce(s.trade_name, s.legal_name) as supplier_name from contract c "
+    "left join supplier s on s.code = c.supplier_code"
+)
+
+
+@router.get("/contracts")
+def list_contracts(db: Db, ctx: Ctx) -> list[dict[str, Any]]:
+    rows = _rows(db, _CONTRACT + " order by c.status = 'active' desc, c.valid_to desc nulls last, c.code")
+    return [_contract_json(c, contract_usage.usage(db, c["code"])) for c in rows]
+
+
+@router.get("/contracts/{code}")
+def get_contract(code: str, db: Db, ctx: Ctx) -> dict[str, Any]:
+    rows = _rows(db, _CONTRACT + " where c.code = :c", c=code)
+    if not rows:
+        raise HTTPException(404, "Not found")
+    c = rows[0]
+    terms = [
+        f"{label}: {value}"
+        for label, value in (
+            ("Payment terms", c["payment_terms_code"]),
+            ("Delivery", c["delivery_terms"]),
+            ("Freight", c["freight_terms"]),
+            ("Warranty (months)", c["warranty_months"]),
+            ("Service levels", c["sla_text"]),
+        )
+        if value
+    ]
+    releases = _rows(
+        db,
+        "select po.no, po.status, po.created_at, sum(l.taxable) as taxable from po_line l join po on po.no = l.po_no "
+        "where l.source = 'contract' and l.source_ref = :c and po.status <> 'cancelled' and l.status <> 'cancelled' "
+        "group by po.no, po.status, po.created_at order by po.created_at desc",
+        c=code,
+    )
+    return {
+        **_contract_json(c, contract_usage.usage(db, code)),
+        "terms": "\n".join(terms),
+        "orders": [
+            {
+                "id": r["no"],
+                "status": _PO_STATUS.get(r["status"], r["status"]),
+                "amount": _money(r["taxable"]),
+                "created_at": _iso(r["created_at"]),
+            }
+            for r in releases
+        ],
+    }
+
+
+for _name in ("payments",):
 
     def _list(db: Db, ctx: Ctx) -> list[Any]:
         return []

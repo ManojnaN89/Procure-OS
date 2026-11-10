@@ -4,6 +4,7 @@ Deterministic. The rule table decides whether a request approves itself or who h
 carries that out, one step at a time, and writes an audit row for every change. Rules read: approvals/rules.py.
 """
 
+import json
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from decimal import Decimal
@@ -12,7 +13,7 @@ from typing import Any
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
-from p2p.approvals import rules
+from p2p.approvals import budget, rules
 from p2p.formulas.calendar import business_today
 from p2p.platform import audit, notifications, permissions, tasks, users, worker
 from p2p.platform.sod import Actor
@@ -65,6 +66,12 @@ def _sla_hours(db: Session) -> Decimal:
     return Decimal(str(value)) if value else Decimal(DEFAULT_SLA_HOURS)
 
 
+def _requires_budget(db: Session) -> bool:
+    """Whether the company wants auto-approval only when the budget allows it (the default)."""
+    value = db.execute(text("select value from org_setting where key = 'auto_approve_requires_budget'")).scalar()
+    return value != "false"
+
+
 # ---- submit -----------------------------------------------------------------------------------
 
 
@@ -87,6 +94,28 @@ def submit(db: Session, tenant: str, no: str, actor: Actor, *, today: date | Non
     rule = rules.find_rule(
         db, "request", value, today, spend_type=spend, category=category, department=req["department_code"]
     )
+    checks = budget.check_request(db, no, today)
+    over = [c for c in checks if c.check.status == "over"]
+    if any(c.policy == "block" for c in over):
+        raise ApprovalError(f"request {no} cannot be submitted: {budget.summary(checks)} The budget policy blocks it.")
+    budget_note = budget.summary(checks)
+    if over and rule.is_automatic and _requires_budget(db):
+        # a request that is over budget never approves itself: it goes to the first rule above the automatic band
+        while rule.is_automatic:
+            rule = rules.find_rule(
+                db,
+                "request",
+                rule.max_value + Decimal("0.01"),
+                today,
+                spend_type=spend,
+                category=category,
+                department=req["department_code"],
+            )
+        budget_note += " It cannot approve itself, so it goes to a person."
+    db.execute(
+        text("update request set budget_check = cast(:b as jsonb) where no = :n"),
+        {"b": json.dumps([c.as_json() for c in checks]), "n": no},
+    )
     steps = rules.resolve_chain(
         db, rule.roles, requester=req["requester"], department=req["department_code"], on_date=today
     )
@@ -98,19 +127,20 @@ def submit(db: Session, tenant: str, no: str, actor: Actor, *, today: date | Non
         "request",
         no,
         before={"status": req["status"]},
-        after={"rule": rule.code, "version": rule.version, "approvers": [s.approver for s in steps]},
+        after={
+            "rule": rule.code,
+            "version": rule.version,
+            "approvers": [s.approver for s in steps],
+            "budget": budget_note,
+        },
         rule_version=f"{rule.code}:v{rule.version}",
     )
     common = {"n": no, "rc": rule.code, "rv": rule.version, "round": round_no, "now": datetime.now(UTC)}
 
     if rule.is_automatic:
-        no_budget = not db.execute(
-            text("select 1 from request_line where request_no = :n and cost_centre_code is not null limit 1"), {"n": no}
-        ).first()
         reason = (
             f"Auto-approved under rule {rule.code} v{rule.version}: the value {value} is within the automatic band "
-            f"(up to {rule.max_value:.2f})."
-            + (" No budget check was applied: the lines carry no cost centre." if no_budget else "")
+            f"(up to {rule.max_value:.2f}). {budget_note}"
         )
         db.execute(
             text(
@@ -156,7 +186,11 @@ def submit(db: Session, tenant: str, no: str, actor: Actor, *, today: date | Non
             "update request set status = 'submitted', rule_code = :rc, rule_version = :rv, submitted_at = :now, "
             "decided_at = null, decision_reason = :why, approval_round = :round where no = :n"
         ),
-        {**common, "why": f"Waiting for approval by {names} under rule {rule.code} v{rule.version}"},
+        {
+            **common,
+            "why": f"Waiting for approval by {names} under rule {rule.code} v{rule.version}."
+            + (f" {budget_note}" if over else ""),
+        },
     )
     db.commit()
     _open_step(db, tenant, no, req["total_value"], 1, round_no)

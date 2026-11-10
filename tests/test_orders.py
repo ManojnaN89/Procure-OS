@@ -13,6 +13,7 @@ from test_approvals import _make_logins, _org
 from test_sourcing import Outbox, _auto_send, _price, _request, _source, db, outbox  # noqa: F401 - fixtures
 
 from p2p.agents import autonomy
+from p2p.formulas.contracts import ContractUse, ceiling_breach
 from p2p.formulas.gst import Registration
 from p2p.formulas.orders import (
     charge_rate,
@@ -23,6 +24,7 @@ from p2p.formulas.orders import (
     variance_pct,
 )
 from p2p.main import app
+from p2p.orders import contracts as contract_usage
 from p2p.orders import quotes, service, workflow
 from p2p.platform import proposals, routing, sod, users
 from p2p.platform.tokens import create_access_token
@@ -166,6 +168,14 @@ def _setup(db: Session) -> None:
         )
     )
     x(text("update supplier set state_code = '29', gstin = null, gst_reg_type = 'composition' where code = 'S3'"))
+    for code in ("S1", "S2"):  # registered for GST, so the certificate is a required document
+        x(
+            text(
+                "insert into supplier_document (supplier_code, doc_type, number, issued_on, verified) "
+                "values (:c, 'gst_cert', 'G', '2020-01-01', true)"
+            ),
+            {"c": code},
+        )
     x(text("update location set gstin = '29BBBBB0000B1Z5', state_code = '29' where code = 'WH-BLR'"))
     x(text("update item set gst_rate_before = 18, gst_rate_after = 18 where code in ('A', 'D', 'R')"))
     x(
@@ -1057,3 +1067,109 @@ def test_exactly_the_minimum_number_of_quotes_is_enough_without_a_reason(shop: S
     done = quotes.award(shop, rfq, {1: "S1"}, sod.user(7), as_of=TODAY)
 
     assert done.overridden == [] and done.complete is True
+
+
+# ---- how much of a contract has been used --------------------------------------------------------
+
+
+def test_reaching_the_ceiling_exactly_fits_and_one_paisa_over_does_not() -> None:
+    assert ceiling_breach(D("1000"), D("400"), D("600")) == D("0.00")
+    assert ceiling_breach(D("1000"), D("400"), D("600.01")) == D("0.01")
+    assert ceiling_breach(None, D("999999"), D("999999")) == D("0.00")  # a contract with no ceiling has no limit
+    use = ContractUse(D("1000"), D("250"))
+    assert (use.remaining, use.pct_used) == (D("750.00"), D("25.0"))
+    assert ContractUse(D("1000"), D("1200")).remaining == D("0.00")  # never negative
+    assert ContractUse(None, D("5")).remaining is None and ContractUse(None, D("5")).pct_used is None
+
+
+def _ceiling(shop: Session, value: str | None) -> None:
+    shop.execute(text("update contract set max_value = :v where code = 'K-ACTIVE'"), {"v": value})
+    shop.commit()
+
+
+def test_a_line_that_would_use_more_than_is_left_of_a_contract_goes_to_quotation(shop: Session) -> None:
+    _price(shop, "S1", "A", "100")
+    _ceiling(shop, "999.99")
+    request = _request(shop, "R-20", [("A", "10", None, "C1")])  # 1,000.00 against 999.99
+
+    result = _source(shop, request, dispatch=False)
+
+    (line,) = result.lines
+    assert line.method == "rfq" and "left of its ceiling" in line.reason and "999.99" in line.reason
+
+    _ceiling(shop, "1000")  # exactly the line's value: it fits
+    again = _request(shop, "R-21", [("A", "10", None, "C1")])
+    assert _source(shop, again, dispatch=False).lines[0].method == "contract"
+
+
+def test_an_order_that_would_go_over_the_ceiling_is_held_until_a_person_accepts_it(
+    shop: Session, outbox: Outbox
+) -> None:
+    logins = _logins(shop)
+    slug = shop.info["slug"]
+    _price(shop, "S1", "A", "100")
+    _ceiling(shop, "1000")
+    first = _request(shop, "R-22", [("A", "6", None, "C1")])
+    second = _request(shop, "R-23", [("A", "6", None, "C1")])
+    _source(shop, first, dispatch=False)
+    _source(shop, second, dispatch=False)  # both were fine when they were sourced
+
+    made_first = service.order_request(shop, slug, first, as_of=TODAY)
+    made_second = service.order_request(shop, slug, second, as_of=TODAY)
+
+    assert made_first.held == [] and len(made_second.held) == 1
+    po_no = made_second.held[0]
+    hold, pid = shop.execute(text("select hold_reason, hold_proposal_id from po where no = :n"), {"n": po_no}).one()
+    assert "Contract K-ACTIVE would go over its ceiling" in hold and "200.00" in hold
+    summary = shop.execute(text("select summary from proposal where id = :p"), {"p": pid}).scalar_one()
+    assert summary.startswith(f"Accept {po_no} despite:")
+    assert contract_usage.usage(shop, "K-ACTIVE").used == D("1200.00")  # the held order counts: it is a commitment
+
+    proposals.approve(shop, pid, logins["procurement"])
+
+    assert shop.execute(text("select status, hold_reason from po where no = :n"), {"n": po_no}).one() == (
+        "submitted",
+        None,
+    )
+
+
+def test_a_cancelled_order_gives_its_value_back_to_the_contract(shop: Session, outbox: Outbox) -> None:
+    _price(shop, "S1", "A", "100")
+    _ceiling(shop, "5000")
+    request = _request(shop, "R-24", [("A", "6", None, "C1")])
+    _source(shop, request, dispatch=False)
+    made = service.order_request(shop, shop.info["slug"], request, as_of=TODAY)
+    assert contract_usage.usage(shop, "K-ACTIVE").used == D("600.00")
+
+    shop.execute(text("update po set status = 'cancelled' where no = :n"), {"n": made.pos[0]})
+    shop.commit()
+
+    assert contract_usage.usage(shop, "K-ACTIVE").used == D("0")
+
+
+def test_the_contract_pages_show_the_ceiling_what_is_used_and_the_orders(shop: Session, outbox: Outbox) -> None:
+    logins = _logins(shop)
+    slug = shop.info["slug"]
+    _price(shop, "S1", "A", "100")
+    _ceiling(shop, "2400")
+    request = _request(shop, "R-25", [("A", "6", None, "C1")])
+    _source(shop, request, dispatch=False)
+    made = service.order_request(shop, slug, request, as_of=TODAY)
+    h = _headers(slug, logins["buyer"], "Buyer")
+
+    listed = {c["id"]: c for c in client.get("/api/contracts", headers=h).json()}
+    active = listed["K-ACTIVE"]
+    assert (active["value"], active["used"], active["remaining"], active["pct_used"]) == (
+        "2400.0000",
+        "600.00",
+        "1800.00",
+        "25.0",
+    )
+    assert active["vendor"]["name"] == "Alpha Traders" and active["status"] == "active"
+    assert listed["K-EXPIRED"]["status"] == "expired" and listed["K-EXPIRED"]["used"] == "0.00"
+
+    detail = client.get("/api/contracts/K-ACTIVE", headers=h).json()
+    assert [(o["id"], o["amount"]) for o in detail["orders"]] == [(made.pos[0], "600.00")]
+    assert "Payment terms: NET45" in detail["terms"] and "Delivery: for_destination" in detail["terms"]
+    assert client.get("/api/contracts/NOPE", headers=h).status_code == 404
+    assert client.get("/api/contracts").status_code == 401

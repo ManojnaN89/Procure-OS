@@ -171,6 +171,7 @@ const RequisitionsView = {
       <div class="panel" style="margin-bottom:12px;">
         <div class="panel-title">Approval</div>
         ${a.decision ? `<p style="margin:0 0 10px;font-size:12.5px;color:var(--text-secondary);">${this.esc(a.decision)}</p>` : `<p style="margin:0 0 10px;font-size:12.5px;color:var(--text-muted);">Not submitted yet.</p>`}
+        ${(a.budget || []).filter((b) => b.status !== "unchecked").map((b) => `<div style="margin:0 0 6px;font-size:12px;color:${b.status === "over" ? "var(--warning-text)" : "var(--text-secondary)"};">Budget GL ${this.esc(b.gl_code)} (${this.esc(b.cost_centres.join(", ") || "-")}): ${formatCurrency(b.budget)} so far, ${formatCurrency(b.committed)} committed, ${formatCurrency(b.requested)} asked${b.status === "over" ? ` · over by ${formatCurrency(b.over_by)}` : ""}</div>`).join("")}
         ${trail}${rule}${actions}
         ${a.can_source ? `<div class="btn btn-primary btn-sm" id="sourceBtn" style="display:inline-flex;margin-top:6px;"><i class="ti ti-search"></i>Find suppliers</div>` : ""}
         <div id="actionNote" style="font-size:12px;color:var(--warning-text);margin-top:8px;"></div>

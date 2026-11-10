@@ -14,11 +14,13 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from p2p.agents import autonomy
-from p2p.formulas.sourcing import PriceOption, pick_contract_price
+from p2p.formulas.calendar import BusinessCalendar
+from p2p.formulas.sourcing import PriceOption, pick_contract_price, reminder_due
+from p2p.formulas.suppliers import SupplierDocument, check_documents, required_documents
 from p2p.main import app
 from p2p.platform import mail, proposals, routing, sod, tenants, users, worker
 from p2p.platform.tokens import create_access_token
-from p2p.sourcing import jobs, service
+from p2p.sourcing import jobs, reminders, service
 
 D = Decimal
 client = TestClient(app)
@@ -110,6 +112,14 @@ def _world(db: Session) -> None:
             ),
             {"c": code},
         )
+        for doc_type in ("pan", "cancelled_cheque"):
+            x(
+                text(
+                    "insert into supplier_document (supplier_code, doc_type, number, issued_on, verified) "
+                    "values (:c, :t, 'X', '2020-01-01', true)"
+                ),
+                {"c": code, "t": doc_type},
+            )
         if code != "S5":
             x(
                 text("insert into supplier_contact (supplier_code, name, email, is_primary) values (:c, :n, :e, true)"),
@@ -721,3 +731,311 @@ def test_the_rfq_really_arrives_in_the_suppliers_mailbox_with_the_reply_address(
     message = httpx.get(f"http://127.0.0.1:8025/api/v1/message/{found['ID']}").json()
     assert message["ReplyTo"][0]["Address"].startswith("rfq+RFQ-")
     assert "Seal (B) - 5 NOS" in message["Text"]
+
+
+# ---- reminders to suppliers who stay silent -----------------------------------------------------
+
+FRI, MON, TUE, WED, THU = (date(2026, 11, d) for d in (6, 9, 10, 11, 12))
+REPLY_BY = date(2026, 11, 13)
+
+
+def _due(
+    today: date,
+    *,
+    sent: int = 0,
+    after: int = 2,
+    most: int = 2,
+    last: date = FRI,
+    due: date = REPLY_BY,
+) -> bool:
+    return reminder_due(
+        last_contact=last,
+        reminders_sent=sent,
+        max_reminders=most,
+        after_days=after,
+        today=today,
+        due_date=due,
+        calendar=BusinessCalendar.of(),
+    )
+
+
+@pytest.mark.parametrize(
+    ("today", "expected"),
+    [
+        (FRI, False),
+        (MON, False),
+        (TUE, True),
+        (WED, True),
+    ],  # two working days after Friday is Tuesday, not Sunday
+)
+def test_a_reminder_is_due_after_the_working_days_not_the_calendar_days(today: date, expected: bool) -> None:
+    assert _due(today) is expected
+
+
+def test_the_reminder_rule_stops_at_its_limits() -> None:
+    assert _due(REPLY_BY) is True  # the reply date itself is still a day to remind
+    assert _due(date(2026, 11, 14)) is False  # after the reply date it is a decision for the buyer
+    assert _due(TUE, sent=1, most=2) is True and _due(TUE, sent=2, most=2) is False
+    assert _due(TUE, after=0) is False  # zero switches reminders off
+    assert _due(REPLY_BY, last=TUE) is True and _due(WED, last=TUE) is False  # counted from the last reminder
+    on_a_holiday = reminder_due(
+        last_contact=FRI,
+        reminders_sent=0,
+        max_reminders=2,
+        after_days=2,
+        today=TUE,
+        due_date=REPLY_BY,
+        calendar=BusinessCalendar.of([MON]),
+    )
+    assert on_a_holiday is False  # a holiday does not count as a working day
+
+
+def _sent_rfq(db: Session, outbox: Outbox) -> str:
+    """An RFQ sent on Friday 6 November to S1, S2 and S3."""
+    _auto_send(db)
+    no = _request(db, "R-30", [("B", "5", None, "C1")])
+    _source(db, no)
+    db.execute(text("update rfq_supplier set invited_at = '2026-11-06 10:00+05:30'"))
+    db.commit()
+    outbox.sent.clear()
+    return str(db.execute(text("select no from rfq")).scalar_one())
+
+
+def _remind(db: Session, today: date, **kw: Any) -> reminders.ReminderResult:
+    return reminders.run(
+        db,
+        as_of=today,
+        now=datetime.combine(today, datetime.min.time(), tzinfo=UTC),
+        **kw,
+    )
+
+
+def test_suppliers_who_stay_silent_are_reminded_twice_and_then_left_alone(db: Session, outbox: Outbox) -> None:
+    rfq = _sent_rfq(db, outbox)
+
+    assert _remind(db, MON).sent == []  # too early
+    first = _remind(db, TUE)
+    assert sorted(s for _, s in first.sent) == ["S1", "S2", "S3"]
+    mail_one = next(m for m in outbox.sent if m["to"] == "s1@supplier.example")
+    assert mail_one["subject"].startswith(f"Reminder: request for quotation {rfq}")
+    assert mail_one["reply_to"].startswith(f"rfq+{rfq}@")  # a reply still comes back tagged with the RFQ
+    assert "reminder 1" in mail_one["body"] and "Please reply by: 13 Nov 2026" in mail_one["body"]
+    assert "1. Seal (B) - 5 NOS" in mail_one["body"]
+    assert _remind(db, TUE).sent == []  # the same day again sends nothing
+    assert _remind(db, WED).sent == []  # two working days have not passed since Tuesday
+    second = _remind(db, THU)
+    assert len(second.sent) == 3 and "reminder 2" in outbox.sent[-1]["body"]
+    assert _remind(db, REPLY_BY).sent == []  # the limit of two
+    assert set(db.execute(text("select reminders_sent from rfq_supplier")).scalars()) == {2}
+    assert db.execute(text("select count(*) from audit_event where action = 'rfq.remind'")).scalar_one() == 6
+
+
+def test_a_supplier_who_has_answered_in_any_way_is_not_reminded(db: Session, outbox: Outbox) -> None:
+    rfq = _sent_rfq(db, outbox)
+    db.execute(text("update rfq_supplier set responded_at = now() where supplier_code = 'S1'"))  # a quote was entered
+    db.execute(text("update rfq_supplier set declined = true where supplier_code = 'S2'"))
+    db.commit()
+    assert [s for _, s in _remind(db, TUE, dry_run=True).sent] == ["S3"]
+    db.execute(  # S3 replied by email and a buyer has not looked at it yet
+        text(
+            "insert into email_message (message_id, direction, from_addr, to_addr, subject, body_text, sent_at, "
+            "linked_type, linked_id) values ('<r@x>', 'in', 'Contact S3 <S3@Supplier.example>', 'p@x', 's', 'b', now(), "
+            "'rfq', :r)"
+        ),
+        {"r": rfq},
+    )
+    db.commit()
+
+    assert _remind(db, TUE).sent == [] and outbox.sent == []
+
+
+def test_a_supplier_whose_reply_is_waiting_as_a_draft_is_not_reminded(db: Session, outbox: Outbox) -> None:
+    rfq = _sent_rfq(db, outbox)
+    db.execute(text("update rfq_supplier set declined = true where supplier_code in ('S2', 'S3')"))
+    db.execute(
+        text("insert into quote_draft (rfq_no, supplier_code, email_id, status) values (:r, 'S1', 1, 'needs_person')"),
+        {"r": rfq},
+    )
+    db.commit()
+
+    assert _remind(db, TUE).sent == []
+
+
+def test_no_reminder_goes_out_while_the_kill_switch_is_on_or_for_an_rfq_that_is_not_open(
+    db: Session, outbox: Outbox
+) -> None:
+    rfq = _sent_rfq(db, outbox)
+    autonomy.set_kill_switch(db, sod.user(1), True, "incident")
+    stopped = _remind(db, TUE)
+    assert stopped.sent == [] and stopped.stopped == "the kill switch is on"
+    autonomy.set_kill_switch(db, sod.user(1), False, "over")
+    db.execute(text("update rfq set status = 'awarded' where no = :r"), {"r": rfq})
+    db.commit()
+
+    assert _remind(db, TUE).sent == [] and outbox.sent == []
+
+
+def test_a_failed_reminder_is_not_counted_and_is_tried_again(db: Session, outbox: Outbox) -> None:
+    _sent_rfq(db, outbox)
+    outbox.refuse = {"s2@supplier.example"}
+
+    done = _remind(db, TUE)
+
+    assert len(done.sent) == 2 and [s for _, s in done.failed] == ["S2"]
+    assert db.execute(text("select reminders_sent from rfq_supplier where supplier_code = 'S2'")).scalar_one() == 0
+    outbox.refuse = set()
+    assert [s for _, s in _remind(db, WED).sent] == ["S2"]  # the others were reminded on Tuesday
+
+
+def test_the_daily_job_sends_reminders_and_queues_the_next_morning(db: Session, outbox: Outbox) -> None:
+    _sent_rfq(db, outbox)
+    slug = db.info["slug"]
+    now = datetime(2026, 11, 10, 4, 30, tzinfo=UTC)  # 10:00 in India
+
+    reminders._run(worker.JobContext(id=-1, tenant=slug, payload={}, now=now))
+
+    assert len(outbox.sent) == 3
+    with tenants.control_engine().connect() as c:
+        queued = (
+            c.execute(
+                text("select run_at from job where tenant_slug = :t and kind = 'rfq_reminders' and status = 'queued'"),
+                {"t": slug},
+            )
+            .scalars()
+            .all()
+        )
+    assert len(queued) == 1 and queued[0] == datetime(2026, 11, 11, 4, 0, tzinfo=UTC)  # 09:30 India time
+
+
+def test_the_rfq_page_shows_how_often_a_supplier_was_reminded(db: Session, outbox: Outbox) -> None:
+    rfq = _sent_rfq(db, outbox)
+    _remind(db, TUE)
+    slug, sfx = db.info["slug"], db.info["sfx"]
+    buyer = users.create_user(slug, f"b{sfx}@x.example", PASSWORD, "Buyer", "Buyer")
+
+    r = client.get(f"/api/rfqs/{rfq}", headers=_headers(slug, buyer, "Buyer"))
+
+    assert r.status_code == 200
+    assert {s["code"]: s["reminders"] for s in r.json()["suppliers"]} == {
+        "S1": 1,
+        "S2": 1,
+        "S3": 1,
+    }
+
+
+# ---- supplier documents -------------------------------------------------------------------------
+
+
+def _doc(kind: str, expires: str | None = None, verified: bool = True) -> SupplierDocument:
+    return SupplierDocument(kind, date.fromisoformat(expires) if expires else None, verified)
+
+
+@pytest.mark.parametrize(
+    ("gst", "msme", "expected"),
+    [
+        (None, None, ("pan", "cancelled_cheque")),
+        ("composition", "none", ("pan", "cancelled_cheque")),
+        ("regular", "none", ("pan", "cancelled_cheque", "gst_cert")),
+        ("regular", "small", ("pan", "cancelled_cheque", "gst_cert", "udyam")),
+        ("unregistered", "micro", ("pan", "cancelled_cheque", "udyam")),
+    ],
+)
+def test_the_documents_a_supplier_must_have_follow_its_gst_and_msme_status(
+    gst: str | None, msme: str | None, expected: tuple[str, ...]
+) -> None:
+    assert required_documents(gst, msme) == expected
+
+
+def test_a_required_document_must_be_there_verified_and_not_expired() -> None:
+    required = ("pan", "gst_cert")
+    today = date(2026, 11, 10)
+
+    assert check_documents(required, [_doc("pan"), _doc("gst_cert")], today).ok
+    assert check_documents(required, [_doc("pan")], today).blocking == ["GST certificate is missing"]
+    assert check_documents(required, [_doc("pan"), _doc("gst_cert", verified=False)], today).blocking == [
+        "GST certificate is not verified"
+    ]
+    assert check_documents(required, [_doc("pan"), _doc("gst_cert", "2026-11-09")], today).blocking == [
+        "GST certificate has expired"
+    ]
+    assert check_documents(required, [_doc("pan"), _doc("gst_cert", "2026-11-10")], today).ok  # the last day is good
+    # an old expired copy does not matter when a newer verified one is on file
+    assert check_documents(
+        required, [_doc("pan"), _doc("gst_cert", "2025-01-01"), _doc("gst_cert", "2028-01-01")], today
+    ).ok
+
+
+def test_other_documents_only_warn_when_they_expire_or_are_about_to() -> None:
+    today = date(2026, 11, 10)
+    docs = [
+        _doc("pan"),
+        _doc("iso", "2026-10-31"),  # expired
+        _doc("insurance", "2026-12-10"),  # 30 days away: warns
+        _doc("licence", "2026-12-11"),  # 31 days away: does not yet
+        _doc("lower_tds_cert"),  # never expires
+    ]
+
+    check = check_documents(("pan",), docs, today, warn_days=30)
+
+    assert check.ok
+    assert check.warnings == ["insurance expires on 10 Dec 2026", "ISO certificate expired on 31 Oct 2026"]
+
+
+def test_a_supplier_with_a_document_missing_or_expired_is_not_asked_to_quote(db: Session) -> None:
+    db.execute(text("delete from supplier_document where supplier_code = 'S2' and doc_type = 'cancelled_cheque'"))
+    db.execute(text("update supplier set gst_reg_type = 'regular' where code = 'S3'"))
+    db.execute(
+        text(
+            "insert into supplier_document (supplier_code, doc_type, number, issued_on, expires_on, verified) "
+            "values ('S3', 'gst_cert', 'G', '2020-01-01', '2026-11-05', true)"
+        )
+    )
+    db.commit()
+
+    chosen, notes = service.eligible_suppliers(db, "C1", ["A"], TODAY)
+
+    assert [c.code for c in chosen] == ["S1", "S4"]
+    assert "S2 left out: bank proof (cancelled cheque) is missing" in notes
+    assert "S3 left out: GST certificate has expired" in notes
+
+
+def test_a_contract_supplier_with_bad_documents_is_not_used_and_the_line_goes_to_quotation(db: Session) -> None:
+    _price(db, "S1", "A", "100")
+    db.execute(text("update supplier_document set verified = false where supplier_code = 'S1' and doc_type = 'pan'"))
+    db.commit()
+    no = _request(db, "R-40", [("A", "5", None, "C1")])
+
+    result = _source(db, no, dispatch=False)
+
+    (line,) = result.lines
+    assert (
+        line.method == "rfq"
+        and "contract supplier cannot be used" in line.reason
+        and "PAN card is not verified" in line.reason
+    )
+
+
+def test_the_vendor_page_lists_the_documents_and_what_is_wrong_with_them(db: Session) -> None:
+    slug, sfx = db.info["slug"], db.info["sfx"]
+    buyer = users.create_user(slug, f"b{sfx}@x.example", PASSWORD, "Buyer", "Buyer")
+    db.execute(
+        text(
+            "insert into supplier_document (supplier_code, doc_type, number, issued_on, expires_on, verified) "
+            "values ('S1', 'iso', 'ISO-1', '2020-01-01', '2026-10-31', true)"
+        )
+    )
+    db.execute(text("delete from supplier_document where supplier_code = 'S2' and doc_type = 'pan'"))
+    db.commit()
+    h = _headers(slug, buyer, "Buyer")
+
+    s1 = client.get("/api/vendors/S1", headers=h).json()["documents"]
+    s2 = client.get("/api/vendors/S2", headers=h).json()["documents"]
+
+    assert (
+        s1["ok"] is True
+        and s1["problems"] == []
+        and len(s1["warnings"]) == 1
+        and "ISO certificate expired" in s1["warnings"][0]
+    )
+    assert {d["type"]: d["expired"] for d in s1["on_file"]}["ISO certificate"] is True
+    assert s2["ok"] is False and s2["problems"] == ["PAN card is missing"]

@@ -13,6 +13,8 @@ python -m p2p.cli replenish <tenant> [--dry-run] [--no-submit] [--schedule]
         creates purchase requests for stock at its reorder point and sends them for approval; --schedule queues the daily morning run
 python -m p2p.cli source <tenant> [--request NO] [--no-send]
         decides how approved requests are bought (contract or quotation request) and sends the quotation requests
+python -m p2p.cli remind <tenant> [--dry-run] [--schedule]
+        reminds suppliers who have not answered a quotation request; --schedule queues the daily morning run
 python -m p2p.cli order <tenant> [--request NO]
         makes purchase orders from the lines that are ready (contract prices and awarded quotations) and sends them for approval
 python -m p2p.cli worker      runs the job worker (timers, escalations, email, mailbox polling) until stopped
@@ -24,6 +26,7 @@ import os
 import sys
 from pathlib import Path
 
+from p2p.formulas.calendar import business_today
 from p2p.platform import routing, tenants, users, worker
 
 
@@ -58,6 +61,10 @@ def main(argv: list[str] | None = None) -> int:
     src.add_argument("tenant")
     src.add_argument("--request")
     src.add_argument("--no-send", action="store_true")
+    rem = sub.add_parser("remind")
+    rem.add_argument("tenant")
+    rem.add_argument("--dry-run", action="store_true")
+    rem.add_argument("--schedule", action="store_true")
     ordr = sub.add_parser("order")
     ordr.add_argument("tenant")
     ordr.add_argument("--request")
@@ -74,7 +81,6 @@ def main(argv: list[str] | None = None) -> int:
     if args.group == "replenish":
         from sqlalchemy.orm import Session
 
-        from p2p.formulas.calendar import business_today
         from p2p.requests import jobs, replenishment
 
         if args.schedule:
@@ -95,6 +101,26 @@ def main(argv: list[str] | None = None) -> int:
             )
         for reason, count in replenishment.summary(result)["skipped"].items():
             print(f"  skipped {count}: {reason}")
+        return 0
+    if args.group == "remind":
+        from sqlalchemy.orm import Session
+
+        from p2p.sourcing import reminders
+
+        if args.schedule:
+            reminders.schedule(args.tenant)
+            print(f"daily supplier reminders queued for {args.tenant}; they run when the worker is running")
+            return 0
+        with Session(routing.engine_for(args.tenant)) as db:
+            reminded = reminders.run(db, as_of=business_today(), dry_run=args.dry_run)
+        if reminded.stopped:
+            print(f"no reminders: {reminded.stopped}")
+        verb = "would remind" if args.dry_run else "reminded"
+        for rfq_no, supplier in reminded.sent:
+            print(f"  {verb} {supplier} about {rfq_no}")
+        for rfq_no, supplier in reminded.failed:
+            print(f"  could not reach {supplier} about {rfq_no}")
+        print(f"{len(reminded.sent)} reminder(s)")
         return 0
     if args.group == "order":
         from sqlalchemy.orm import Session

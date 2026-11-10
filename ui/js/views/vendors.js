@@ -93,21 +93,30 @@ const VendorsView = {
               <span>Flagged incidents: <strong style="color:var(--text-primary)">${risk.flagged_incidents}</strong></span>
             </div>
             <p style="color:var(--text-muted);font-size:11px;margin:0 0 12px;font-style:italic;">${escapeHtml(risk.basis || "")}</p>
-            <div class="btn btn-secondary" id="reviewToggleBtn" style="font-size:11.5px;padding:6px 12px;display:inline-block;">
-              ${v.under_review ? "Remove from review" : "Flag for review"}
-            </div>
           </div>
         ` : ""}
+        ${v.documents ? `
+          <div class="panel" style="margin-bottom:16px;">
+            <div class="panel-title">Documents ${v.documents.ok ? '<span class="badge badge-approved" style="font-size:10px;">complete</span>' : '<span class="badge badge-rejected" style="font-size:10px;">cannot be used until fixed</span>'}</div>
+            ${v.documents.problems.map((p) => `<div style="font-size:12.5px;color:var(--danger-text);margin-bottom:4px;">${escapeHtml(p)}</div>`).join("")}
+            ${v.documents.warnings.map((p) => `<div style="font-size:12.5px;color:var(--warning-text);margin-bottom:4px;">${escapeHtml(p)}</div>`).join("")}
+            ${v.documents.on_file.length ? `<table class="data-table" style="margin-top:8px;"><thead><tr><th>DOCUMENT</th><th>NUMBER</th><th>EXPIRES</th><th>CHECKED</th></tr></thead><tbody>${v.documents.on_file.map((d) => `<tr><td>${escapeHtml(d.type)}</td><td class="cell-muted">${escapeHtml(d.number || "—")}</td><td>${d.expires_on ? formatDate(d.expires_on) : "—"}${d.expired ? ' <span class="badge badge-rejected">expired</span>' : ""}</td><td>${d.verified ? "yes" : "no"}</td></tr>`).join("")}</tbody></table>` : '<p class="cell-muted" style="font-size:12px;margin:0;">No documents on file.</p>'}
+          </div>` : ""}
         <div class="panel" style="margin-bottom:16px;">
-          <div class="panel-title">Vendor status</div>
+          <div class="panel-title">Vendor status: ${escapeHtml(v.status || "")}</div>
           ${v.verification_note ? `<p style="color:var(--text-muted);font-size:11px;margin:0 0 10px;">Verification note: ${escapeHtml(v.verification_note)}</p>` : ""}
-          <div style="display:flex;gap:8px;">
-            <div class="btn btn-secondary" id="activeToggleBtn" style="font-size:11.5px;padding:6px 12px;">
-              ${v.active === false ? "Reactivate" : "Deactivate"}
+          ${v.pending_change ? `<p style="font-size:12.5px;color:var(--warning-text);margin:0 0 10px;">Waiting for approval: ${escapeHtml(v.pending_change.summary)} (approve it under Admin → Approvals).</p>` : ""}
+          ${v.can_propose && !v.pending_change ? `
+            <div style="display:flex;gap:8px;flex-wrap:wrap;">
+              ${(({ draft: [["active", "Activate"]], active: [["blocked", "Block"], ["draft", "Put under review"]], blocked: [["active", "Reactivate"]] })[v.status] || []).map(([to, label]) => `<div class="btn btn-secondary vendor-status-btn" data-to="${escapeHtml(to)}" style="font-size:11.5px;padding:6px 12px;">${escapeHtml(label)}</div>`).join("")}
             </div>
-            <div class="btn btn-secondary" id="verifyToggleBtn" style="font-size:11.5px;padding:6px 12px;">
-              ${v.verified ? "Remove verified mark" : "Mark as verified"}
+            <div id="statusReasonBox" style="display:none;margin-top:10px;">
+              <input id="statusReason" placeholder="Why? (needed)" style="width:60%;padding:6px 8px;font-size:12.5px;">
+              <div class="btn btn-primary btn-sm" id="statusSend" style="display:inline-block;margin-left:6px;">Send for approval</div>
+              <div class="btn btn-secondary btn-sm" id="statusCancel" style="display:inline-block;margin-left:4px;">Cancel</div>
             </div>
+            <p id="statusMsg" style="font-size:12px;margin:8px 0 0;"></p>` : ""}
+        </div>
           </div>
         </div>
         <div class="panel">
@@ -121,42 +130,28 @@ const VendorsView = {
         </div>
       `;
 
-      const reviewBtn = document.getElementById("reviewToggleBtn");
-      if (reviewBtn) {
-        reviewBtn.addEventListener("click", () => {
-          Conversation.send(
-            v.under_review
-              ? `Remove vendor ${id} from review`
-              : `Flag vendor ${id} for review`
-          );
-          if (typeof FloatingAssistant !== "undefined") FloatingAssistant.open();
+      let chosen = null;
+      const box = document.getElementById("statusReasonBox");
+      container.querySelectorAll(".vendor-status-btn").forEach((btn) => {
+        btn.addEventListener("click", () => {
+          chosen = btn.dataset.to;
+          box.style.display = "block";
+          document.getElementById("statusReason").focus();
+        });
+      });
+      if (box) {
+        document.getElementById("statusCancel").addEventListener("click", () => { box.style.display = "none"; });
+        document.getElementById("statusSend").addEventListener("click", async () => {
+          const msg = document.getElementById("statusMsg");
+          const reason = document.getElementById("statusReason").value.trim();
+          if (!reason) { msg.textContent = "A reason is needed."; return; }
+          const res = await API.postJSON(`/api/vendors/${encodeURIComponent(id)}/status`, { to: chosen, reason });
+          msg.textContent = res.ok
+            ? `Sent for approval (proposal ${res.data.proposal_id}). Nothing changes until a person approves it.`
+            : (res.data.detail || "Could not send this for approval.");
+          if (res.ok) box.style.display = "none";
         });
       }
-
-      // Deactivate/Reactivate is a single unambiguous action — auto-send,
-      // same pattern as Dismiss elsewhere in the app
-      document.getElementById("activeToggleBtn").addEventListener("click", () => {
-        Conversation.send(
-          v.active === false
-            ? `Reactivate vendor ${id}`
-            : `Deactivate vendor ${id}, we're no longer working with them`
-        );
-        if (typeof FloatingAssistant !== "undefined") FloatingAssistant.open();
-      });
-
-      // Mark as Verified usually wants a note (tax ID, registration number)
-      // — prefill, not auto-send, same pattern as contract renewal. Removing
-      // an existing verified mark needs no extra detail, so that direction
-      // auto-sends.
-      document.getElementById("verifyToggleBtn").addEventListener("click", () => {
-        if (v.verified) {
-          Conversation.send(`Remove the verified mark from vendor ${id}`);
-          if (typeof FloatingAssistant !== "undefined") FloatingAssistant.open();
-        } else {
-        Prefill.set(`Mark vendor ${id} as verified, tax ID is [tax ID or registration number]`);
-          window.location.hash = "#/assistant";
-        }
-      });
     } catch {
       container.innerHTML = `<div class="empty-state">Couldn't load this vendor.</div>`;
     }

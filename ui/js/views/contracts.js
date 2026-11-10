@@ -31,17 +31,18 @@ const ContractsView = {
       const now = new Date();
       wrap.innerHTML = `
         <table class="data-table">
-          <thead><tr><th>ID</th><th>TITLE</th><th>VENDOR</th><th>VALUE</th><th>ENDS</th></tr></thead>
+          <thead><tr><th>CONTRACT</th><th>VENDOR</th><th>CEILING</th><th>USED</th><th>ENDS</th></tr></thead>
           <tbody>
             ${rows.map((c) => {
-              const endsSoon = c.end_date && (new Date(c.end_date) - now) / 86400000 <= 30;
+              const endsSoon = c.status === "active" && c.end_date && (new Date(c.end_date) - now) / 86400000 <= 30;
+              const high = c.pct_used !== null && Number(c.pct_used) >= 80;
               return `
                 <tr data-id="${escapeHtml(c.id)}">
-                  <td class="cell-muted">#${escapeHtml(c.id)}</td>
-                  <td>${escapeHtml(c.title)}</td>
-                  <td>${c.vendor ? c.vendor.name : "\u2014"}</td>
-                  <td>${formatCurrency(c.value)}</td>
-                  <td>${c.end_date ? formatDate(c.end_date) : "\u2014"} ${endsSoon ? '<span class="badge badge-pending">expiring soon</span>' : ""}</td>
+                  <td>${escapeHtml(c.title)}${c.status !== "active" ? ` <span class="badge badge-pending">${escapeHtml(c.status)}</span>` : ""}</td>
+                  <td>${c.vendor ? escapeHtml(c.vendor.name) : "—"}</td>
+                  <td>${c.value ? formatCurrency(c.value) : "—"}</td>
+                  <td>${formatCurrency(c.used)}${c.pct_used !== null ? ` <span class="badge ${high ? "badge-rejected" : "badge-approved"}">${escapeHtml(c.pct_used)}%</span>` : ""}</td>
+                  <td>${c.end_date ? formatDate(c.end_date) : "—"} ${endsSoon ? '<span class="badge badge-pending">expiring soon</span>' : ""}</td>
                 </tr>
               `;
             }).join("")}
@@ -58,7 +59,7 @@ const ContractsView = {
   },
 
   async renderDetail(container, id) {
-    container.innerHTML = `<div class="page-header"><h1>Contract #${escapeHtml(id)}</h1></div><div class="panel">Loading\u2026</div>`;
+    container.innerHTML = `<div class="page-header"><h1>Contract ${escapeHtml(id)}</h1></div><div class="panel">Loading\u2026</div>`;
     try {
       const c = await API.getContract(id);
       if (c.error) { container.innerHTML = `<div class="empty-state">${escapeHtml(c.error)}</div>`; return; }
@@ -67,6 +68,13 @@ const ContractsView = {
           <a href="#/contracts" style="color:var(--text-muted);font-size:12px;text-decoration:none;">\u2190 Contracts</a>
           <h1 style="margin-top:6px;">${escapeHtml(c.title)}</h1>
           <p>${c.vendor ? c.vendor.name : "\u2014"} \u00b7 ${formatCurrency(c.value)}</p>
+        </div>
+        <div class="panel" style="margin-bottom:14px;">
+          <div class="panel-title">Ordered against this contract</div>
+          <p style="color:var(--text-secondary);font-size:12.5px;margin:0 0 10px;">
+            ${formatCurrency(c.used)} before tax${c.value ? ` of ${formatCurrency(c.value)} (${escapeHtml(c.pct_used)}%), ${formatCurrency(c.remaining)} left` : ""}
+          </p>
+          ${(c.orders || []).length ? `<table class="data-table"><thead><tr><th>ORDER</th><th>STATUS</th><th>BEFORE TAX</th></tr></thead><tbody>${c.orders.map((o) => `<tr data-po="${escapeHtml(o.id)}"><td>${escapeHtml(o.id)}</td><td>${statusBadge(o.status)}</td><td>${formatCurrency(o.amount)}</td></tr>`).join("")}</tbody></table>` : `<p class="cell-muted" style="font-size:12px;margin:0;">No orders yet.</p>`}
         </div>
         <div class="panel" style="margin-bottom:14px;">
           <div class="panel-title">Term</div>

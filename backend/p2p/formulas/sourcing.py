@@ -5,6 +5,8 @@ from dataclasses import dataclass
 from datetime import date
 from decimal import Decimal
 
+from p2p.formulas.calendar import BusinessCalendar
+
 
 @dataclass(frozen=True)
 class PriceOption:
@@ -37,3 +39,24 @@ def pick_contract_price(options: Sequence[PriceOption], qty: Decimal) -> PriceOp
         best_per_supplier.values(),
         key=lambda o: (o.price, o.lead_days if o.lead_days is not None else 10_000, o.supplier_code),
     )
+
+
+def reminder_due(
+    *,
+    last_contact: date,
+    reminders_sent: int,
+    max_reminders: int,
+    after_days: int,
+    today: date,
+    due_date: date,
+    calendar: BusinessCalendar,
+) -> bool:
+    """Whether a supplier that has not answered should be reminded today.
+
+    `last_contact` is the day the request, or the previous reminder, went out. A reminder is due once `after_days`
+    working days have passed since then, never after the reply date the supplier was given, and never more than
+    `max_reminders` times. `after_days` of zero or less switches reminders off.
+    """
+    if after_days <= 0 or reminders_sent >= max_reminders or today > due_date:
+        return False
+    return today >= calendar.add_working_days(last_contact, after_days)

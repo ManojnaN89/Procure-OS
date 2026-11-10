@@ -4,7 +4,7 @@
     "title": "Replenishment orders the right items in the right quantities",
     "requirement": "Plan: read stock levels, create requests for items at their reorder point (quantity from the planning data, whole packs, supplier minimum)",
     "status": "PASS",
-    "seconds": 2.4,
+    "seconds": 3.0,
     "metrics": {
       "lines expected": 118,
       "lines planned": 118,
@@ -24,7 +24,7 @@
     "title": "Approval routing follows the rule table and the organisation",
     "requirement": "Rule 8 and the plan: a rule is chosen by value band, spend type, category, department and the date it is in force; its chain becomes real people",
     "status": "PASS",
-    "seconds": 15.1,
+    "seconds": 13.5,
     "metrics": {
       "cases": 2388,
       "rule agreement %": 100.0,
@@ -40,7 +40,7 @@
     "title": "Sourcing picks the right contract price, or sends the line to quotation",
     "requirement": "Plan: contract vs RFQ per line; only an active contract in force, for an active supplier, in the right unit, with the quantity break",
     "status": "PASS",
-    "seconds": 7.3,
+    "seconds": 7.2,
     "metrics": {
       "items": 172,
       "cases": 4128,
@@ -72,7 +72,7 @@
     "title": "Quote comparison recommends the right supplier and the award rules hold",
     "requirement": "Plan: collect quotes, compare, award; the recommendation is the lowest compliant offer; an override or too few quotes needs a reason",
     "status": "PASS",
-    "seconds": 12.3,
+    "seconds": 13.1,
     "metrics": {
       "scenarios": 160,
       "lines compared": 323,
@@ -89,7 +89,7 @@
     "title": "The whole flow, stock level to approved purchase order, keeps its promises",
     "requirement": "Plan: nothing is lost, money reconciles, every change is audited, only eligible suppliers are asked, stock on the way is counted once",
     "status": "PASS",
-    "seconds": 9.3,
+    "seconds": 10.5,
     "metrics": {
       "requests": 16,
       "lines": 118,
@@ -103,14 +103,14 @@
         "quotation open": 1
       },
       "stage seconds": {
-        "replenishment and submission": 0.92,
-        "request approvals": 0.55,
-        "sourcing and RFQ emails": 1.24,
-        "quotes and awards": 0.88,
+        "replenishment and submission": 1.23,
+        "request approvals": 0.62,
+        "sourcing and RFQ emails": 1.81,
+        "quotes and awards": 0.86,
         "purchase orders and their approval": 3.16
       },
-      "total seconds": 6.8,
-      "company build seconds": 2.45,
+      "total seconds": 7.7,
+      "company build seconds": 2.64,
       "orders lines checked": 117
     },
     "findings": [],
@@ -121,7 +121,7 @@
     "title": "Repeating or racing any stage makes no duplicates",
     "requirement": "Plan: no duplicate requests, RFQs, emails or orders; document numbers have no gaps and no repeats",
     "status": "PASS",
-    "seconds": 0.3,
+    "seconds": 0.4,
     "metrics": {
       "serial repeats": 3,
       "concurrent callers": 6,
@@ -157,11 +157,11 @@
     "title": "Every write action is open to exactly the roles the plan names",
     "requirement": "Rule 7 and the plan: requester, buyer, approver and administrator duties are separate; nobody else can do them; nobody can without logging in",
     "status": "PASS",
-    "seconds": 6.9,
+    "seconds": 7.2,
     "metrics": {
-      "actions": 19,
+      "actions": 20,
       "roles tried": 8,
-      "cells checked": 152,
+      "cells checked": 160,
       "too permissive": 0,
       "too strict": 0,
       "reads open without login": 0
@@ -174,7 +174,7 @@
     "title": "One company cannot see another company's data",
     "requirement": "Rule 6: one database per tenant; a request without tenant context is refused; tenant A cannot read tenant B",
     "status": "PASS",
-    "seconds": 6.1,
+    "seconds": 6.2,
     "metrics": {
       "probes": 73,
       "leaks": 0,
@@ -188,7 +188,7 @@
     "title": "Hostile text is shown as text and never run",
     "requirement": "Security: names from imported data and typed identifiers cannot inject script into the screens or SQL into the database",
     "status": "PASS",
-    "seconds": 27.4,
+    "seconds": 31.0,
     "metrics": {
       "screens opened": 17,
       "hostile payloads": 6,
@@ -207,13 +207,13 @@
     "title": "No floats in money, exact amounts on the wire, India's calendar, no secrets, synthetic data stays synthetic",
     "requirement": "Rules 1, 9, 10 and the generated-data safety rule",
     "status": "PASS",
-    "seconds": 0.3,
+    "seconds": 0.6,
     "metrics": {
       "money modules scanned": 6,
       "float uses": 0,
       "money fields as JSON numbers": 0,
       "UTC dates in business logic": 0,
-      "tracked files scanned for secrets": 443,
+      "tracked files scanned for secrets": 475,
       "secret hits": 0,
       "unsafe generated values": 0
     },
@@ -227,7 +227,7 @@
     "title": "Supplier emails are read into the right quotes, and when unsure the system asks a person",
     "requirement": "Plan step 8 and rule 2: the model reads, code checks; a wrong reading must never look clean (silent errors = 0)",
     "status": "PASS",
-    "seconds": 7.6,
+    "seconds": 8.4,
     "metrics": {
       "email cases": 39,
       "perfect reader: exact %": 100.0,
@@ -249,7 +249,7 @@
     "title": "Hostile emails, even obeyed by the model, change nothing they should not",
     "requirement": "Security and rule 5: untrusted text cannot award, decline others, set a nonsense price, or reach a model from a stranger",
     "status": "PASS",
-    "seconds": 3.7,
+    "seconds": 4.1,
     "metrics": {
       "attacks": 13,
       "runs": 26,
@@ -272,5 +272,28 @@
     "notes": [
       "skipped: this eval needs the real models (run with --live)"
     ]
+  },
+  {
+    "id": "E16",
+    "title": "Documents, budget, contract ceilings and reminders do what the plan says",
+    "requirement": "Plan, phase 1 controls: a supplier needs good documents, a request must fit its budget, a contract has a ceiling, and a silent supplier is reminded a limited number of times",
+    "status": "PASS",
+    "seconds": 7.4,
+    "metrics": {
+      "documents: suppliers checked": 60,
+      "documents: spoiled cases": "50 (50 right)",
+      "documents: bad suppliers asked to quote": 0,
+      "budget: cases (over / within)": "80 (44 / 36)",
+      "budget: disagreements": 0,
+      "ceilings: random cases": 3000,
+      "ceilings: disagreements": 0,
+      "ceilings: contract orders replayed": 18,
+      "ceilings: usage figures that differ from the replay": 0,
+      "reminders: expected days": "Tue 10 Nov, Thu 12 Nov",
+      "reminders: silent suppliers on schedule": "2 of 2",
+      "reminders: reminded though replied or declined": 0
+    },
+    "findings": [],
+    "notes": []
   }
 ]

@@ -15,6 +15,7 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from p2p.formulas.calendar import business_today
+from p2p.formulas.contracts import ceiling_breach
 from p2p.formulas.gst import Registration
 from p2p.formulas.money import format_inr
 from p2p.formulas.orders import (
@@ -25,6 +26,7 @@ from p2p.formulas.orders import (
     order_totals,
     variance_pct,
 )
+from p2p.orders import contracts as contract_usage
 from p2p.orders import workflow
 from p2p.platform import audit, numbering, proposals
 from p2p.platform.sod import Actor
@@ -240,7 +242,17 @@ def _create_po(
         v = variance_pct(ln.unit_price, ln.est_price) if ln.est_price else None
         if v is not None and v > band:
             over.append(f"{ln.name}: {format_inr(ln.unit_price)} is {v}% above the estimate {format_inr(ln.est_price)}")
-    hold = ("Price above the estimate by more than " + f"{band}%: " + "; ".join(over)) if over else None
+    holds = ["Price above the estimate by more than " + f"{band}%: " + "; ".join(over)] if over else []
+    for code in sorted(c for c in contracts if c):
+        use = contract_usage.usage(db, code)
+        new = sum((a.taxable for ln, a in zip(lines, amounts, strict=True) if ln.source_ref == code), Decimal(0))
+        breach = ceiling_breach(use.max_value, use.used, new)
+        if breach > 0 and use.max_value is not None:
+            holds.append(
+                f"Contract {code} would go over its ceiling of {format_inr(use.max_value)} by {format_inr(breach)} "
+                f"({format_inr(use.used)} already ordered)"
+            )
+    hold = "; ".join(holds) or None
 
     db.execute(
         text(
@@ -340,7 +352,11 @@ def _create_po(
             db,
             SERVICE,
             action="po.accept_variance",
-            summary=f"Accept a price above the estimate on {po_no}: {hold}",
+            summary=(
+                f"Accept {po_no} despite: {hold}"
+                if "ceiling" in hold
+                else f"Accept a price above the estimate on {po_no}: {hold}"
+            ),
             payload={"po_no": po_no, "tenant": tenant},
             required_permission="po.approve",
             risk="medium",
