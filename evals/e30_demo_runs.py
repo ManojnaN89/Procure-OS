@@ -420,7 +420,7 @@ def replenish(d: Demo, c: Checks, pick: Pick, route: str) -> str:
 
     with d.step("buyer", "checks the stock levels (a preview, nothing is created yet)") as page:
         d.go("buyer", "requisitions")
-        expect(page.locator("#tableWrap")).to_contain_text("No requisitions yet")
+        expect(page.locator("#tableWrap")).to_contain_text("No requests yet")
         page.locator("#replenishBtn").click()
         panel = page.locator("#replenishPanel")
         expect(panel).to_contain_text("1 item at or below their reorder point would become 1 request")
@@ -1290,7 +1290,9 @@ def quotation_to_order(
     with d.step("stores_head", "approves the request") as page:
         expect(page.locator("#appContent")).to_contain_text(req)
         page.locator("#approveBtn").click()
-        expect(page.locator("#appContent")).to_contain_text("Approved by Prakash Gowda under rule REQ-02")
+        expect(page.locator("#appContent")).to_contain_text("Approved by Prakash Gowda")
+        page.get_by_text("How this was routed").click()  # the rule is kept with the request and shown on demand
+        expect(page.locator("#appContent")).to_contain_text("Approval rule REQ-02")
     d.sync()
     c.same(
         "request status",
