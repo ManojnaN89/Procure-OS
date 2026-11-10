@@ -383,7 +383,7 @@ def _headers(slug: str, role: str) -> dict[str, str]:
     return {"Authorization": f"Bearer {create_access_token(uid, slug, role)}"}
 
 
-def test_only_a_buyer_or_admin_may_run_it_and_a_preview_is_the_default(company: tuple[str, Session]) -> None:
+def test_only_a_buyer_may_run_it_and_a_preview_is_the_default(company: tuple[str, Session]) -> None:
     slug, db = company
 
     assert client.post("/api/replenishment/run", json={}, headers=_headers(slug, "Requester")).status_code == 403
@@ -395,7 +395,12 @@ def test_only_a_buyer_or_admin_may_run_it_and_a_preview_is_the_default(company: 
     assert preview["skipped"]["Item is inactive"] == 1
     assert _requests(db) == []
 
-    done = client.post("/api/replenishment/run", json={"dry_run": False}, headers=_headers(slug, "Admin")).json()
+    # the person who administers the system does not buy: running it creates requests
+    assert (
+        client.post("/api/replenishment/run", json={"dry_run": False}, headers=_headers(slug, "Admin")).status_code
+        == 403
+    )
+    done = client.post("/api/replenishment/run", json={"dry_run": False}, headers=_headers(slug, "Buyer")).json()
     assert len(done["requests"]) == 2 and all(r["no"].startswith("REQ-BLR-") for r in done["requests"])
     assert len(_requests(db)) == 2
     actor = db.execute(text("select actor_type from audit_event where action = 'request.create' limit 1")).scalar_one()

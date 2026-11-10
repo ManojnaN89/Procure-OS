@@ -182,12 +182,36 @@ const RequisitionsView = {
       </div>`;
   },
 
+  checksPanel(r) {
+    const c = r.checks || { lines: [], duplicates: [] };
+    const dup = (c.duplicates || []).map((d) => `
+      <div style="font-size:12.5px;margin-bottom:6px;color:${d.overridden ? "var(--text-secondary)" : "var(--warning-text)"};">
+        ${d.likely ? "Likely a repeat" : "Possibly a repeat"} of <a href="#/requisitions/${this.esc(d.other_request)}" style="color:var(--accent-tint)">${this.esc(d.other_request)}</a>
+        (${this.esc(d.other_status)}; ${d.lines.length} line(s) alike)${d.overridden ? ` — gone ahead: “${this.esc(d.override_reason)}”` : ""}
+      </div>`).join("");
+    const rows = (c.lines || []).filter((l) => l.item_code);
+    if (!dup && !rows.length) return "";
+    return `
+      <div class="panel" style="margin-bottom:12px;">
+        <div class="panel-title">Check before ordering</div>
+        ${dup}
+        ${rows.length ? `<table class="data-table" style="margin-top:6px;"><thead><tr><th>ITEM</th><th>ON HAND</th><th>OTHER REQUESTS</th><th>ORDERED, NOT SENT</th><th>ON THE WAY</th><th>SUGGESTED TO BUY</th></tr></thead><tbody>
+          ${rows.map((l) => `<tr><td>${this.esc(l.name)}</td><td>${this.esc(l.on_hand)}</td><td>${this.esc(l.open_requests)}</td><td>${this.esc(l.open_po_balance)}</td><td>${this.esc(l.inbound)}</td><td><strong>${this.esc(l.suggested_net_qty)}</strong> <span class="cell-muted">${this.esc(l.uom)}</span></td></tr>`).join("")}
+        </tbody></table>` : ""}
+      </div>`;
+  },
+
   wireApproval(r) {
     const act = async (verb, body) => {
       const res = await API.postJSON(`/api/requisitions/${encodeURIComponent(r.id)}/${verb}`, body);
       if (res.ok) return this.renderDetail(document.getElementById("appContent"), r.id);
       const note = document.getElementById("actionNote");
       if (note) note.textContent = res.data.detail || res.data.error || "That did not work.";
+      if (verb === "submit" && String(res.data.detail || "").includes("looks like a repeat")) {
+        this.pendingVerb = "submit";  // go ahead only with a reason, which is kept with the request
+        document.getElementById("reasonBox").style.display = "block";
+        document.getElementById("reasonText").focus();
+      }
     };
     const on = (id, fn) => { const el = document.getElementById(id); if (el) el.addEventListener("click", fn); };
     on("submitBtn", () => act("submit"));
@@ -201,7 +225,9 @@ const RequisitionsView = {
     on("returnBtn", () => ask("return"));
     on("rejectBtn", () => ask("reject"));
     on("reasonCancel", () => { document.getElementById("reasonBox").style.display = "none"; });
-    on("reasonOk", () => act(this.pendingVerb, { reason: document.getElementById("reasonText").value }));
+    on("reasonOk", () => act(this.pendingVerb, this.pendingVerb === "submit"
+      ? { override_reason: document.getElementById("reasonText").value }
+      : { reason: document.getElementById("reasonText").value }));
   },
 
   async renderDetail(container, id) {
@@ -218,6 +244,7 @@ const RequisitionsView = {
              ${r.ship_to ? ` · deliver to ${this.esc(r.ship_to)}` : ""}${r.need_by ? ` · needed by ${formatDate(r.need_by)}` : ""}</p>
         </div>
         ${this.approvalPanel(r)}
+        ${this.checksPanel(r)}
         ${lines.length ? `
         <div class="table-wrap" style="margin-bottom:12px;">
           <table class="data-table">

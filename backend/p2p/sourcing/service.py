@@ -25,7 +25,9 @@ from p2p.orders import contracts as contract_usage
 from p2p.platform import audit, emails, numbering, proposals, reference, worker
 from p2p.platform.sod import Actor
 from p2p.sourcing import documents
+from p2p.suppliers import scoring
 
+D = Decimal
 DECISION_TYPE = "rfq.send"
 SERVICE = Actor("service", "sourcing")
 
@@ -111,6 +113,74 @@ def _supplier_name(db: Session, code: str) -> str:
     return str(row[0]) if row else code
 
 
+def _sourcing_mode(db: Session) -> str:
+    """'compare' (the default: contract price, else a request for quotation) or 'best_vendor' (see _best_vendor)."""
+    mode = _app_setting(db, "sourcing_mode", "compare")
+    return mode if mode in ("compare", "best_vendor") else "compare"
+
+
+def _best_vendor(db: Session, line: dict[str, Any], as_of: date, base: dict[str, Any]) -> LineOutcome | None:
+    """In best-vendor mode a line whose item has prices on file goes straight to the best-scored supplier, without a quotation
+    request: price against the others on offer, delivery and quality from the supplier's own record. The supplier must be
+    one that could be asked (not sanctioned, has an email address, good documents) and a contract's ceiling must have room.
+    Returns None when nobody qualifies, and the line is then sourced the usual way."""
+    qty = Decimal(line["qty"])
+    rows = db.execute(
+        text(
+            "select p.supplier_code, p.contract_code, p.price, coalesce(p.min_qty, 0) as min_qty "
+            "from price_record p join supplier s on s.code = p.supplier_code left join contract c on c.code = p.contract_code "
+            "where p.item_code = :i and p.uom is not distinct from :u and p.valid_from <= :d "
+            "and (p.valid_to is null or p.valid_to >= :d) and s.status = 'active' "
+            "and (p.contract_code is null or (c.status = 'active' and c.valid_from <= :d and (c.valid_to is null or c.valid_to >= :d)))"
+        ),
+        {"i": line["item_code"], "u": line["uom"], "d": as_of},
+    ).mappings()
+    per_supplier: dict[str, dict[str, Any]] = {}
+    for r in rows:
+        if r["min_qty"] > qty:
+            continue  # the quantity does not reach this price break
+        held = per_supplier.get(r["supplier_code"])
+        if held is None or (r["min_qty"], -r["price"]) > (held["min_qty"], -held["price"]):
+            per_supplier[r["supplier_code"]] = dict(r)
+    sanctioned = _sanctioned_names(db)
+    candidates: list[tuple[str, Decimal]] = []
+    for code, opt in per_supplier.items():
+        who = db.execute(
+            text(
+                "select legal_name, trade_name, (select c.email from supplier_contact c where c.supplier_code = s.code "
+                "and c.email is not null limit 1) as email from supplier s where s.code = :c"
+            ),
+            {"c": code},
+        ).one()
+        if {str(who[0]).lower(), str(who[1] or "").lower()} & sanctioned or not who[2]:
+            continue
+        if not documents.check_supplier(db, code, as_of).ok:
+            continue
+        if opt["contract_code"]:
+            use = contract_usage.usage(db, opt["contract_code"])
+            if ceiling_breach(use.max_value, use.used, qty * D(opt["price"])) > 0 and use.max_value is not None:
+                continue
+        candidates.append((code, D(opt["price"])))
+    ranked = scoring.rank(db, candidates, as_of)
+    if not ranked:
+        return None
+    top = ranked[0]
+    pick = per_supplier[top.supplier_code]
+    return LineOutcome(
+        **base,
+        method="contract",
+        supplier_code=top.supplier_code,
+        contract_code=pick["contract_code"],
+        price=top.price,
+        reason=(
+            f"Best vendor {_supplier_name(db, top.supplier_code)} of {len(ranked)} priced: score {top.total} "
+            f"(price {top.price_score:.2f}, delivery {top.delivery:.2f}, quality {top.quality:.2f}), "
+            f"{format_inr(top.price)} per {line['uom']}"
+            + (f" on contract {pick['contract_code']}" if pick["contract_code"] else "")
+        ),
+    )
+
+
 def _decide(db: Session, line: dict[str, Any], as_of: date) -> LineOutcome:
     base = {
         "line_no": line["line_no"],
@@ -121,6 +191,10 @@ def _decide(db: Session, line: dict[str, Any], as_of: date) -> LineOutcome:
     }
     if not line["item_code"]:
         return LineOutcome(**base, method="rfq", reason="A free-text line has no item, so no contract can cover it")
+    if _sourcing_mode(db) == "best_vendor":
+        chosen = _best_vendor(db, line, as_of, base)
+        if chosen is not None:
+            return chosen
     options = contract_options(db, line["item_code"], line["uom"], as_of)
     blocked = {
         code: docs.blocking

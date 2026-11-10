@@ -83,7 +83,15 @@ def load_reference(db: Session, directory: Path | None = None) -> dict[str, int]
     """Replace the reference tables of one tenant database with the contents of the reference files."""
     d = directory or reference_dir()
     counts: dict[str, int] = {}
-    for table in ("ref_gst_state", "ref_uom", "ref_hsn_sac", "ref_gst_rate", "ref_holiday", "ref_tds_section"):
+    for table in (
+        "ref_gst_state",
+        "ref_uom",
+        "ref_hsn_sac",
+        "ref_gst_rate",
+        "ref_holiday",
+        "ref_tds_section",
+        "ref_rbi_bank_rate",
+    ):
         db.execute(text(f"delete from {table}"))  # noqa: S608 - fixed table names
 
     def insert(table: str, cols: list[str], rows: list[dict[str, Any]]) -> None:
@@ -251,6 +259,16 @@ def load_reference(db: Session, directory: Path | None = None) -> dict[str, int]
         ],
         tds,
     )
+    bank_rates = d / "rbi_bank_rate.csv"
+    if bank_rates.exists():
+        insert(
+            "ref_rbi_bank_rate",
+            ["effective_from", "rate_pct"],
+            [
+                {"effective_from": _date(r["effective_from"]), "rate_pct": _dec(r["rate_pct"])}
+                for r in _rows(bank_rates)
+            ],
+        )
     db.execute(text("insert into ref_load (files) values (cast(:f as jsonb))"), {"f": json.dumps(counts)})
     db.commit()
     return counts

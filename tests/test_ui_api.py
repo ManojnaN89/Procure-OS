@@ -246,7 +246,9 @@ def test_the_vendor_pages_show_the_imported_suppliers_and_can_be_searched(env: E
     assert listed["S-2"]["under_review"] is True and listed["S-2"]["active"] is False
 
     detail = client.get("/api/vendors/S-1", headers=h).json()
-    assert detail["risk"]["risk_level"] == "low" and "Shree Packaging" in detail["verification_note"]
+    assert (
+        detail["risk"]["risk_level"] == "medium" and "Shree Packaging" in detail["verification_note"]
+    )  # no history: unknown, not low
     assert client.get("/api/vendors/nope", headers=h).status_code == 404
 
     found = client.get("/api/search?q=shree", headers=h).json()

@@ -18,6 +18,9 @@ from p2p.platform.sod import Actor
 
 WINDOW = timedelta(days=30)
 
+# Decisions that a person always makes (rule 5). No setting, by anyone, lets them happen without one.
+LOCKED = frozenset({"payment_run.approve", "supplier.set_status", "invoice.release_block"})
+
 
 @dataclass(frozen=True)
 class GateDecision:
@@ -34,6 +37,8 @@ def gate(
     now: datetime | None = None,
 ) -> GateDecision:
     now = now or datetime.now(UTC)
+    if decision_type in LOCKED:
+        return GateDecision(False, f"'{decision_type}' is always decided by a person")
     if db.execute(text("select kill_switch from autonomy_global where id = 1")).scalar_one():
         return GateDecision(False, "the kill switch is on")
     row = db.execute(
@@ -87,6 +92,8 @@ def configure(
     min_confidence: Decimal = Decimal("0.9"),
     max_wrong_rate: Decimal = Decimal("0.02"),
 ) -> None:
+    if decision_type in LOCKED and level != "propose":
+        raise ValueError(f"'{decision_type}' is always decided by a person and cannot be set to '{level}'")
     db.execute(
         text(
             "insert into autonomy_setting (decision_type, level, value_cap, min_confidence, max_wrong_rate) "

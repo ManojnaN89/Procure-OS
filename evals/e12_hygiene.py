@@ -47,7 +47,7 @@ SECRET_PATTERNS = [
 ]
 
 
-NOT_MONEY = {"calendar.py"}  # hours and days, not rupees
+NOT_MONEY = {"calendar.py", "duplicates.py"}  # hours and days; how alike two wordings are (a ratio, not an amount)
 
 
 def float_uses() -> list[str]:

@@ -13,7 +13,7 @@ ROLES = ["Admin", "Requester", "Buyer", "Approver", "Store", "AP", "Finance"]
 # (method, path, body, the roles the plan lets do it). Identifiers do not exist: the permission check comes first, so a
 # role that is allowed gets 404, 409 or 422 and a role that is not gets 403.
 MATRIX = [
-    ("POST", "/api/replenishment/run", {}, {"Buyer", "Admin"}),
+    ("POST", "/api/replenishment/run", {}, {"Buyer"}),
     ("POST", "/api/requisitions/NOPE/submit", None, {"Requester", "Buyer"}),
     ("POST", "/api/requisitions/NOPE/approve", {}, {"Approver"}),
     ("POST", "/api/requisitions/NOPE/reject", {"reason": "x"}, {"Approver"}),
@@ -26,7 +26,19 @@ MATRIX = [
     ("POST", "/api/purchase-orders/NOPE/send", None, {"Buyer"}),
     ("POST", "/api/purchase-orders/NOPE/acknowledge", {}, {"Buyer"}),
     ("POST", "/api/purchase-orders/NOPE/receive", {"lines": [{"line_no": 1, "qty_received": "1"}]}, {"Store"}),
-    ("POST", "/api/receipts/NOPE/inspect", {"lines": [{"line_no": 1, "qty_accepted": "1", "qty_rejected": "0"}]}, {"Store"}),
+    (
+        "POST",
+        "/api/receipts/NOPE/inspect",
+        {"lines": [{"line_no": 1, "qty_accepted": "1", "qty_rejected": "0"}]},
+        {"Store"},
+    ),
+    ("POST", "/api/invoices", {"supplier_code": "S", "number": "N", "date": "2026-11-06", "lines": []}, {"AP"}),
+    ("POST", "/api/invoices/NOPE/rematch", None, {"AP"}),
+    ("POST", "/api/invoices/NOPE/release", {"reason": "x"}, {"AP"}),
+    ("POST", "/api/invoices/NOPE/cancel", {"reason": "x"}, {"AP"}),
+    ("POST", "/api/payment-runs", {"run_date": "2026-11-06"}, {"Finance"}),
+    ("POST", "/api/payment-runs/NOPE/file", None, {"Finance"}),
+    ("POST", "/api/payment-runs/NOPE/paid", {}, {"Finance"}),
     ("POST", "/api/purchase-orders/NOPE/approve", {}, {"Approver"}),
     ("POST", "/api/purchase-orders/NOPE/reject", {"reason": "x"}, {"Approver"}),
     ("POST", "/api/vendors/NOPE/status", {"to": "active", "reason": "x"}, {"Buyer", "Approver"}),
@@ -53,6 +65,8 @@ READS = [
     "/api/rfqs",
     "/api/purchase-orders",
     "/api/receipts",
+    "/api/invoices",
+    "/api/payment-runs",
     "/api/receiving/waiting",
     "/api/inventory",
     "/api/vendors",
@@ -87,19 +101,12 @@ def run(ctx) -> Outcome:
             should = role in allowed
             cells += 1
             if passed_gate and not should:
-                over.append(
-                    f"{role or 'nobody signed in'} can {method} {path} (status {resp.status_code})"
-                )
+                over.append(f"{role or 'nobody signed in'} can {method} {path} (status {resp.status_code})")
             elif should and not passed_gate:
-                under.append(
-                    f"{role} cannot {method} {path} (status {resp.status_code})"
-                )
+                under.append(f"{role} cannot {method} {path} (status {resp.status_code})")
     anon_reads = [p for p in READS if client.get(p).status_code != 401]
     signed_in_reads = [
-        (r, p)
-        for r in ROLES
-        for p in READS
-        if client.get(p, headers=world.headers(r)).status_code != 200
+        (r, p) for r in ROLES for p in READS if client.get(p, headers=world.headers(r)).status_code != 200
     ]
     out.metrics = {
         "actions": len(MATRIX),

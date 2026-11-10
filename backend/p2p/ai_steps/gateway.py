@@ -64,6 +64,8 @@ DEFAULT_ROUTES: dict[str, list[tuple[Any, ...]]] = {
     "reply_classification": [(*_G20, _LOW), _LAGUNA, (*_G120, _LOW)],
     "reply_classification.strong": [(*_G120, _MEDIUM), _ULTRA],
     "item_mapping": [(*_G20, _LOW), _LAGUNA, (*_G120, _LOW)],
+    "request_reading": [(*_G20, _LOW), (*_G120, _LOW), _LAGUNA],
+    "request_reading.strong": [(*_G120, _MEDIUM), _ULTRA],
     "item_mapping.strong": [(*_G120, _MEDIUM), _ULTRA],
     "certificate_reading": [(*_G20, _LOW), (*_G120, _LOW), _LAGUNA],
     "certificate_reading.strong": [(*_G120, _MEDIUM), _ULTRA],

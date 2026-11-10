@@ -10,11 +10,13 @@ import { Shell } from "./components/shell";
 import { claims } from "./lib/api";
 import { ApprovalsPage } from "./pages/approvals";
 import { AuditPage } from "./pages/audit";
+import { AutomationPage } from "./pages/automation";
 import { DecisionsPage } from "./pages/decisions";
 import { HomePage } from "./pages/home";
 import { LoginPage } from "./pages/login";
 import { RulesPage } from "./pages/rules";
 import { ModelCallsPage, RunDetailPage, RunsPage } from "./pages/runs";
+import { SetupPage } from "./pages/setup";
 import { UsersPage } from "./pages/users";
 
 // The decision-table editor is large, so it loads only when someone opens it.
@@ -73,6 +75,16 @@ const usersRoute = createRoute({
 	path: "/users",
 	component: UsersPage,
 });
+const setupRoute = createRoute({
+	getParentRoute: () => appRoute,
+	path: "/setup",
+	component: SetupPage,
+});
+const automationRoute = createRoute({
+	getParentRoute: () => appRoute,
+	path: "/automation",
+	component: AutomationPage,
+});
 const auditRoute = createRoute({
 	getParentRoute: () => appRoute,
 	path: "/audit",
@@ -109,6 +121,8 @@ const routeTree = rootRoute.addChildren([
 		rulesRoute,
 		ruleRoute,
 		usersRoute,
+		setupRoute,
+		automationRoute,
 		auditRoute,
 		runsRoute,
 		runRoute,

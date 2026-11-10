@@ -34,7 +34,7 @@ def test_user_logs_in_and_sees_only_their_tenant(control_db: str) -> None:
     body = me.json()
     assert (body["tenant"], body["role"], body["display_name"]) == (slug, "Approver", "Test Person")
     assert body["tenant_name"] == slug
-    assert "request.approve" in body["permissions"] and "payment.approve" not in body["permissions"]
+    assert "request.approve" in body["permissions"] and "payment.propose" not in body["permissions"]
 
 
 def test_wrong_email_and_wrong_password_look_the_same(control_db: str) -> None:

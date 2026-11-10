@@ -45,6 +45,7 @@ def register(kind: str) -> Callable[[Handler], Handler]:
 
 def load_handlers() -> None:
     """Import the modules that register handlers."""
+    from p2p.agents import intake  # noqa: F401, PLC0415 - the intake agent's email job
     from p2p.orders import jobs as order_jobs  # noqa: F401, PLC0415
     from p2p.platform import emails, notifications, tasks  # noqa: F401, PLC0415
     from p2p.requests import jobs  # noqa: F401, PLC0415

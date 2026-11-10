@@ -23,7 +23,7 @@ os.environ.setdefault("TENANT_SECRET_KEY", Fernet.generate_key().decode())
 from sqlalchemy import create_engine, text
 from sqlalchemy.engine import make_url
 
-CONTROL_DB = "p2p_control_eval"
+CONTROL_DB = os.environ.get("P2P_EVAL_CONTROL_DB", "p2p_control_eval")
 
 
 @contextlib.contextmanager

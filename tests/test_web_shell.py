@@ -176,7 +176,17 @@ def test_the_menu_follows_the_role(company: Company, browser: Any) -> None:
     admin = open_page(browser, LAPTOP)
     sign_in(admin, company.emails["Admin"])
     expect(admin.get_by_label("Main").get_by_role("link")).to_have_text(
-        ["Home", "Rules", "Users", "Audit", "Agent runs", "Rule decisions", "Model calls"]
+        [
+            "Home",
+            "Rules",
+            "Users",
+            "Company setup",
+            "Automation",
+            "Audit",
+            "Agent runs",
+            "Rule decisions",
+            "Model calls",
+        ]
     )
     shot(admin, "laptop_home_admin")
 

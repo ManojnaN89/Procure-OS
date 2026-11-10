@@ -1,43 +1,113 @@
 const PaymentsView = {
-  async render(container) {
+  esc(value) {
+    return String(value ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+  },
+
+  STATUS: { proposed: "Waiting for approval", approved: "Approved", file_generated: "Bank file made", paid: "Paid", cancelled: "Cancelled" },
+  BADGE: { proposed: "badge-pending", approved: "badge-approved", file_generated: "badge-pending", paid: "badge-approved", cancelled: "badge-rejected" },
+
+  async render(container, params) {
+    if (params && params.id) return this.renderRun(container, params.id);
+    return this.renderList(container);
+  },
+
+  async renderList(container) {
     container.innerHTML = `
-      <div class="page-header">
-        <h1>Payments</h1>
-        <p>Every payment processed against a purchase order</p>
+      <div class="page-header page-header-row">
+        <div><h1>Payments</h1><p>Payment runs: what is due, approved by the owner, paid through the bank</p></div>
       </div>
-      <div class="table-wrap" id="tableWrap"><div class="empty-state">Loading\u2026</div></div>
-    `;
+      <div class="panel" style="margin-bottom:14px;">
+        <div class="panel-title">Plan a payment run</div>
+        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+          <input id="runDate" type="date" style="padding:6px;"> <span class="cell-muted" style="font-size:12px;">pays everything due within</span>
+          <input id="runWindow" type="number" min="0" value="7" style="width:60px;padding:6px;"> <span class="cell-muted" style="font-size:12px;">days; small suppliers first</span>
+          <div class="btn btn-secondary btn-sm" id="previewRun">See what is due</div>
+          <div class="btn btn-primary btn-sm" id="planRun">Send the run for approval</div>
+        </div>
+        <div id="duePreview" style="margin-top:10px;"></div>
+        <div id="planNote" style="font-size:12.5px;color:var(--warning-text);margin-top:6px;"></div>
+      </div>
+      <div class="table-wrap" id="tableWrap"><div class="empty-state">Loading…</div></div>`;
+    const date = document.getElementById("runDate");
+    date.value = new Date().toISOString().slice(0, 10);
+    const params = () => `on=${encodeURIComponent(date.value)}&window=${encodeURIComponent(document.getElementById("runWindow").value || 7)}`;
+    document.getElementById("previewRun").addEventListener("click", async () => {
+      const box = document.getElementById("duePreview");
+      try {
+        const rows = await API.getJSON(`/api/payment-runs/due?${params()}`);
+        box.innerHTML = rows.length
+          ? `<table class="data-table"><thead><tr><th>INVOICE</th><th>SUPPLIER</th><th>DUE</th><th>INVOICE TOTAL</th><th>TAX HELD</th><th>CREDIT</th><th>INTEREST</th><th>TO PAY</th></tr></thead><tbody>
+              ${rows.map((r) => `<tr><td class="cell-muted">${this.esc(r.invoice)}</td><td>${this.esc(r.supplier)}${r.msme ? ' <span class="badge badge-pending">small supplier</span>' : ""}</td><td>${formatDate(r.due_date)}</td>
+                <td>${formatCurrency(r.total)}</td><td>${formatCurrency(r.tds)}</td><td>${formatCurrency(r.credit)}</td><td>${formatCurrency(r.interest)}</td><td>${formatCurrency(r.net)}</td></tr>`).join("")}
+            </tbody></table>`
+          : `<div class="cell-muted" style="font-size:12.5px;">Nothing approved is due in this window.</div>`;
+      } catch { box.textContent = "Couldn't load what is due."; }
+    });
+    document.getElementById("planRun").addEventListener("click", async () => {
+      const res = await API.postJSON("/api/payment-runs", { run_date: date.value, window_days: document.getElementById("runWindow").value });
+      if (res.ok) { window.location.hash = `#/payments/${res.data.run}`; return; }
+      document.getElementById("planNote").textContent = res.data.detail || "The run was not planned.";
+    });
     try {
-      const rows = await API.listPayments();
+      const rows = await API.getJSON("/api/payment-runs");
       const wrap = document.getElementById("tableWrap");
-      if (!wrap) return; // the person has already gone to another page
-      if (!rows.length) {
-        wrap.innerHTML = `<div class="empty-state">No payments yet.</div>`;
-        return;
-      }
-      wrap.innerHTML = `
-        <table class="data-table">
-          <thead><tr><th>ID</th><th>VENDOR</th><th>PURCHASE ORDER</th><th>AMOUNT</th><th>STATUS</th><th>DATE</th></tr></thead>
-          <tbody>
-            ${rows.map((p) => `
-              <tr data-po="${escapeHtml(p.purchase_order_id)}">
-                <td class="cell-muted">#${escapeHtml(p.id)}</td>
-                <td>${p.vendor ? p.vendor.name : "\u2014"}</td>
-                <td class="cell-muted">PO #${escapeHtml(p.purchase_order_id)}</td>
-                <td>${formatCurrency(p.amount)}</td>
-                <td>${statusBadge(p.status)}</td>
-                <td class="cell-muted">${formatDate(p.created_at)}</td>
-              </tr>
-            `).join("")}
-          </tbody>
-        </table>
-      `;
-      wrap.querySelectorAll("tr[data-po]").forEach((tr) => {
-        tr.addEventListener("click", () => { window.location.hash = `#/purchase-orders/${tr.dataset.po}`; });
+      if (!wrap) return;
+      wrap.innerHTML = rows.length
+        ? `<table class="data-table"><thead><tr><th>RUN</th><th>DATE</th><th>PAYMENTS</th><th>TOTAL</th><th>STATUS</th></tr></thead><tbody>
+            ${rows.map((r) => `<tr data-id="${this.esc(r.id)}"><td class="cell-muted">${this.esc(r.id)}</td><td>${formatDate(r.run_date)}</td><td>${this.esc(r.payments)}</td><td>${formatCurrency(r.total)}</td>
+              <td><span class="badge ${this.BADGE[r.status] || ""}">${this.esc(this.STATUS[r.status] || r.status)}</span></td></tr>`).join("")}</tbody></table>`
+        : `<div class="empty-state">No payment runs yet.</div>`;
+      wrap.querySelectorAll("tr[data-id]").forEach((tr) => tr.addEventListener("click", () => { window.location.hash = `#/payments/${tr.dataset.id}`; }));
+    } catch {
+      const wrap = document.getElementById("tableWrap");
+      if (wrap) wrap.innerHTML = `<div class="empty-state">Couldn't load payment runs.</div>`;
+    }
+  },
+
+  async renderRun(container, id) {
+    container.innerHTML = `<div class="page-header"><h1>${this.esc(id)}</h1></div><div class="panel">Loading\\u2026</div>`;
+    try {
+      const r = await API.getJSON(`/api/payment-runs/${encodeURIComponent(id)}`);
+      container.innerHTML = `
+        <div class="page-header"><a href="#/payments" style="color:var(--text-muted);font-size:12px;text-decoration:none;">← Payments</a>
+          <h1 style="margin-top:6px;">${this.esc(r.id)}</h1>
+          <p><span class="badge ${this.BADGE[r.status] || ""}">${this.esc(this.STATUS[r.status] || r.status)}</span> · ${formatCurrency(r.total)} · run date ${formatDate(r.run_date)}</p></div>
+        ${r.status === "proposed" ? `<div class="panel" style="margin-bottom:12px;font-size:12.5px;">Waiting for the owner to approve${r.approval ? `: ${this.esc(r.approval.summary)}` : ""} (under Admin → Approvals). Nothing is paid until then.</div>` : ""}
+        ${r.payments.map((p) => `
+          <div class="panel" style="margin-bottom:10px;">
+            <div style="display:flex;justify-content:space-between;"><div><strong>${this.esc(p.supplier)}</strong> <span class="cell-muted">${this.esc(p.id)} · ${this.esc(p.mode.toUpperCase())}${p.utr ? ` · bank reference ${this.esc(p.utr)}` : ""}${p.paid_on ? ` · paid ${formatDate(p.paid_on)}` : ""}</span></div><div>${formatCurrency(p.amount)}</div></div>
+            <table class="data-table" style="margin-top:8px;"><tbody>${p.invoices.map((i) => `<tr><td class="cell-muted">${this.esc(i.id)}</td><td>${this.esc(i.number)}${i.type !== "invoice" ? ` <span class="badge badge-pending">${this.esc(i.type.replace("_", " "))}</span>` : ""}</td><td style="text-align:right;">${formatCurrency(i.amount)}</td></tr>`).join("")}</tbody></table>
+            ${Number(p.tds) ? `<div class="cell-muted" style="font-size:11.5px;margin-top:6px;">Tax held back ${formatCurrency(p.tds)}</div>` : ""}${Number(p.interest) ? `<div class="cell-muted" style="font-size:11.5px;">Interest to a small supplier ${formatCurrency(p.interest)}</div>` : ""}
+          </div>`).join("")}
+        <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:6px;">
+          ${r.can_file ? `<div class="btn btn-primary btn-sm" id="makeFile">Make the bank file</div>` : ""}
+          ${r.has_file ? `<div class="btn btn-secondary btn-sm" id="showFile">Show the bank file</div>` : ""}
+          ${r.can_mark_paid ? `<input id="paidOn" type="date" style="padding:6px;"><div class="btn btn-primary btn-sm" id="markPaid">The bank has paid this run</div>` : ""}
+        </div>
+        <pre id="fileText" style="display:none;margin-top:10px;font-size:11.5px;background:var(--surface-sunken);padding:10px;border-radius:8px;overflow:auto;"></pre>
+        <div id="runNote" style="font-size:12.5px;color:var(--warning-text);margin-top:8px;"></div>`;
+      const note = document.getElementById("runNote");
+      const on = (eid, fn) => { const el = document.getElementById(eid); if (el) el.addEventListener("click", fn); };
+      const paid = document.getElementById("paidOn");
+      if (paid) paid.value = new Date().toISOString().slice(0, 10);
+      on("makeFile", async () => {
+        const res = await API.postJSON(`/api/payment-runs/${encodeURIComponent(id)}/file`, {});
+        if (res.ok) return this.renderRun(container, id);
+        note.textContent = res.data.detail || "The file was not made.";
+      });
+      on("showFile", async () => {
+        const res = await API.getJSON(`/api/payment-runs/${encodeURIComponent(id)}/file`);
+        const pre = document.getElementById("fileText");
+        pre.textContent = res.file;
+        pre.style.display = "block";
+      });
+      on("markPaid", async () => {
+        const res = await API.postJSON(`/api/payment-runs/${encodeURIComponent(id)}/paid`, { paid_on: paid.value });
+        if (res.ok) return this.renderRun(container, id);
+        note.textContent = res.data.detail || "That did not work.";
       });
     } catch {
-      const gone = document.getElementById("tableWrap");
-      if (gone) gone.innerHTML = `<div class="empty-state">Couldn't load payments.</div>`;
+      container.innerHTML = `<div class="empty-state">Couldn't load this payment run.</div>`;
     }
   },
 };

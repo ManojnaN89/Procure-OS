@@ -89,12 +89,21 @@ const VendorsView = {
             <div class="panel-title">Risk breakdown</div>
             <div style="display:flex;gap:24px;font-size:12.5px;color:var(--text-secondary);margin-bottom:8px;">
               <span>Late deliveries: <strong style="color:var(--text-primary)">${risk.late_delivery_rate_pct}%</strong></span>
-              <span>Price volatility: <strong style="color:var(--text-primary)">${risk.price_volatility_pct}%</strong></span>
+              <span>Above the lowest price: <strong style="color:var(--text-primary)">${risk.price_volatility_pct}%</strong></span>
               <span>Flagged incidents: <strong style="color:var(--text-primary)">${risk.flagged_incidents}</strong></span>
             </div>
             <p style="color:var(--text-muted);font-size:11px;margin:0 0 12px;font-style:italic;">${escapeHtml(risk.basis || "")}</p>
           </div>
         ` : ""}
+        ${v.score ? `
+          <div class="panel" style="margin-bottom:16px;">
+            <div class="panel-title">Score ${escapeHtml(v.score.score)} of 100</div>
+            <div style="font-size:12.5px;color:var(--text-secondary);display:grid;grid-template-columns:repeat(3,1fr);gap:10px;">
+              <div>Price <strong style="color:var(--text-primary)">${escapeHtml(v.score.price)}</strong> <span class="cell-muted">(weight ${escapeHtml(v.score.weights.price)})</span><div class="cell-muted" style="font-size:11px;">${escapeHtml(v.score.price_items_compared)} item(s) compared; ${escapeHtml(v.score.price_gap_pct)}% above the lowest on average</div></div>
+              <div>Delivery <strong style="color:var(--text-primary)">${escapeHtml(v.score.delivery)}</strong> <span class="cell-muted">(weight ${escapeHtml(v.score.weights.delivery)})</span><div class="cell-muted" style="font-size:11px;">${escapeHtml(v.score.on_time)} of ${escapeHtml(v.score.receipts_judged)} deliveries on time${v.score.on_time_pct ? ` (${escapeHtml(v.score.on_time_pct)}%)` : ""}; ${escapeHtml(v.score.acknowledged_quickly)} of ${escapeHtml(v.score.acknowledged)} orders acknowledged quickly</div></div>
+              <div>Quality <strong style="color:var(--text-primary)">${escapeHtml(v.score.quality)}</strong> <span class="cell-muted">(weight ${escapeHtml(v.score.weights.quality)})</span><div class="cell-muted" style="font-size:11px;">${v.score.accepted_pct ? `${escapeHtml(v.score.accepted_pct)}% of what was delivered was accepted` : "no deliveries yet"}; ${escapeHtml(v.score.rejected_qty)} rejected of ${escapeHtml(v.score.received_qty)} received</div></div>
+            </div>
+          </div>` : ""}
         ${v.documents ? `
           <div class="panel" style="margin-bottom:16px;">
             <div class="panel-title">Documents ${v.documents.ok ? '<span class="badge badge-approved" style="font-size:10px;">complete</span>' : '<span class="badge badge-rejected" style="font-size:10px;">cannot be used until fixed</span>'}</div>

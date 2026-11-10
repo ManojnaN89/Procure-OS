@@ -11,7 +11,7 @@ from p2p.config import get_settings
 from p2p.platform import tenants
 from p2p.platform.routing import clear_engine_cache
 
-TEST_CONTROL_DB = "p2p_control_test"
+TEST_CONTROL_DB = os.environ.get("P2P_TEST_CONTROL_DB", "p2p_control_test")  # a parallel run sets its own
 
 # Tests run with their own secrets so they work on a machine without a .env file.
 os.environ.setdefault("HF_HUB_DISABLE_SYMLINKS_WARNING", "1")

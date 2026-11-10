@@ -31,6 +31,12 @@ const NAV: NavItem[] = [
 	},
 	{ to: "/rules", label: "Rules", show: any("admin.rules") },
 	{ to: "/users", label: "Users", show: any("admin.users") },
+	{
+		to: "/setup",
+		label: "Company setup",
+		show: any("admin.users", "admin.rules", "admin.settings"),
+	},
+	{ to: "/automation", label: "Automation", show: any("admin.settings") },
 	{ to: "/audit", label: "Audit", show: any("audit.view") },
 	{ to: "/runs", label: "Agent runs", show: any("audit.view") },
 	{ to: "/decisions", label: "Rule decisions", show: any("audit.view") },

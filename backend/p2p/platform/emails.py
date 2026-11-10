@@ -8,6 +8,7 @@ sent. A linked message that matches a case adds a case event.
 import json
 import re
 from datetime import UTC, datetime, timedelta
+from email.utils import parseaddr
 
 from sqlalchemy import text
 from sqlalchemy.orm import Session
@@ -174,7 +175,18 @@ def ingest(db: Session, tenant: str, incoming: IncomingMail) -> int | None:
         worker.enqueue(
             tenant, "read_supplier_reply", {"email_id": email_id}
         )  # a supplier's reply: read it into a draft
+    elif linked_type is None and _to_request_mailbox(db, incoming.to_addrs):
+        worker.enqueue(
+            tenant, "intake_email", {"email_id": email_id}
+        )  # a colleague's request: the intake agent drafts it
     return email_id
+
+
+def _to_request_mailbox(db: Session, to_addrs: list[str]) -> bool:
+    box = db.execute(text("select value from org_setting where key = 'request_mailbox'")).scalar()
+    if not box:
+        return False
+    return str(box).strip().lower() in {parseaddr(a)[1].strip().lower() for a in to_addrs}
 
 
 def poll(db: Session, tenant: str, mailbox: Mailbox) -> int:

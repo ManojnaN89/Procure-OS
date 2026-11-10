@@ -20,13 +20,14 @@ from fastapi.responses import StreamingResponse
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
-from p2p.agents import assistant
+from p2p.agents import assistant, intake
 from p2p.ai_steps.gateway import Gateway
 from p2p.approvals import rules as approval_rules
 from p2p.approvals import workflow as approvals
 from p2p.formulas.calendar import business_today
 from p2p.formulas.contracts import ContractUse
 from p2p.formulas.money import format_qty, round_money
+from p2p.formulas.scoring import risk_level
 from p2p.formulas.suppliers import LABELS
 from p2p.masters import supplier_status
 from p2p.orders import contracts as contract_usage
@@ -38,10 +39,11 @@ from p2p.platform.permissions import PermissionDenied, can_anywhere, require
 from p2p.platform.tokens import decode_access_token
 from p2p.receiving import goods
 from p2p.receiving.stock import stock_levels
-from p2p.requests import jobs, replenishment
+from p2p.requests import duplicates, jobs, replenishment
 from p2p.sourcing import documents as supplier_documents
 from p2p.sourcing import replies
 from p2p.sourcing import service as sourcing
+from p2p.suppliers import scoring
 
 router = APIRouter(prefix="/api", tags=["ui"])
 sockets = APIRouter(tags=["ui"])
@@ -61,9 +63,14 @@ DEFAULT_SETTINGS: dict[str, str] = {
     "replenishment_department": "",
     "rfq_supplier_count": "3",
     "assistant_enabled": "true",
+    "sourcing_mode": "compare",
+    "score_weight_price": "40",
+    "score_weight_delivery": "40",
+    "score_weight_quality": "20",
+    "duplicate_window_days": "14",
 }
 BOOLEAN_SETTINGS = {"launch_in_focus_mode", "auto_replenishment", "assistant_enabled"}
-TEXT_SETTINGS = {"replenishment_department"}
+TEXT_SETTINGS = {"replenishment_department", "sourcing_mode"}
 CURRENCIES = {"INR", "USD", "EUR", "GBP"}
 
 
@@ -102,6 +109,8 @@ def update_settings(
             return {"error": f"currency_preset must be one of {', '.join(sorted(CURRENCIES))}"}
         if key in BOOLEAN_SETTINGS and value not in ("true", "false"):
             return {"error": f"{key} must be true or false"}
+        if key == "sourcing_mode" and value not in ("compare", "best_vendor"):
+            return {"error": "sourcing_mode must be compare or best_vendor"}
         if (
             key == "replenishment_department"
             and value
@@ -364,6 +373,8 @@ def get_vendor(vendor_id: str, db: Db, ctx: Ctx) -> dict[str, Any]:
         "where supplier_code = :c order by doc_type, issued_on",
         c=vendor_id,
     )
+    score = scoring.score_supplier(db, vendor_id, today)
+    score_numbers = score.numbers()
     return {
         **_vendor(r),
         "documents": {
@@ -386,13 +397,23 @@ def get_vendor(vendor_id: str, db: Db, ctx: Ctx) -> dict[str, Any]:
         "pending_change": supplier_status.pending_change(db, vendor_id),
         "can_propose": can_anywhere(db, ctx.user_id, "supplier.propose"),
         "rfq_count": 0,
+        "score": score_numbers,
         "risk": {
-            "risk_score": 0,
-            "risk_level": "low",
-            "late_delivery_rate_pct": 0,
-            "price_volatility_pct": 0,
-            "flagged_incidents": 0,
-            "basis": "No orders yet, so there is no history to score.",
+            "risk_score": str(100 - score.total),
+            "risk_level": risk_level(
+                score.total,
+                Decimal(all_settings(db)["risk_score_medium_cutoff"]),
+                Decimal(all_settings(db)["risk_score_high_cutoff"]),
+            ),
+            "late_delivery_rate_pct": str(Decimal(100) - Decimal(score_numbers["on_time_pct"] or 100)),
+            "price_volatility_pct": score_numbers["price_gap_pct"],
+            "flagged_incidents": score.history.receipt_lines - int(score.history.accepted_shares)
+            if score.history.receipt_lines
+            else 0,
+            "basis": (
+                f"Score {score.total} of 100 from {score.history.receipts} delivery line(s), "
+                f"{score.history.receipt_lines} receipt line(s) and {score.price_items} item price(s) compared."
+            ),
         },
         "purchase_orders": [],
     }
@@ -504,6 +525,25 @@ def get_requisition(no: str, db: Db, ctx: Ctx) -> dict[str, Any]:
     )
     return {
         **_requisition(rows[0]),
+        "checks": {
+            "lines": [
+                {
+                    "line_no": c.line_no,
+                    "item_code": c.item_code,
+                    "name": c.name,
+                    "uom": c.uom,
+                    "on_hand": _qty(c.on_hand),
+                    "open_requests": _qty(c.open_requests),
+                    "open_po_balance": _qty(c.open_po_balance),
+                    "inbound": _qty(c.inbound),
+                    "suggested_net_qty": _qty(c.suggested_net_qty),
+                }
+                for c in duplicates.line_checks(db, no)
+            ],
+            "duplicates": [
+                _duplicate_json(d) for d in duplicates.with_overrides(db, no, duplicates.find_duplicates(db, no))
+            ],
+        },
         "description": rows[0]["justification"],
         "ship_to": rows[0]["ship_to_location"],
         "need_by": rows[0]["need_by"].isoformat() if rows[0]["need_by"] else None,
@@ -579,11 +619,50 @@ def _approval_action(call: Any) -> dict[str, str]:
         raise HTTPException(403, str(exc)) from None
 
 
+def _duplicate_json(d: duplicates.Duplicate) -> dict[str, Any]:
+    return {
+        "other_request": d.other_request,
+        "other_status": d.other_status,
+        "similarity": str(d.similarity),
+        "kind": d.kind,
+        "likely": d.likely,
+        "lines": d.lines,
+        "overridden": d.overridden,
+        "override_reason": d.override_reason,
+    }
+
+
 @router.post("/requisitions/{no}/submit")
 def submit_requisition(
-    no: str, db: Db, ctx: Annotated[routing.TenantContext, Depends(require("request.submit"))]
+    no: str,
+    db: Db,
+    ctx: Annotated[routing.TenantContext, Depends(require("request.submit"))],
+    payload: dict[str, Any] | None = None,
 ) -> dict[str, str]:
+    """Submit for approval. A request that looks like a repeat of another needs a reason to go ahead (override_reason)."""
+    try:
+        duplicates.gate(db, no, (payload or {}).get("override_reason"), ctx.user_id)
+    except duplicates.DuplicateError as exc:
+        db.rollback()
+        if "does not exist" in str(exc):
+            raise HTTPException(404, "Not found") from None
+        raise HTTPException(409, str(exc)) from None
     return _approval_action(lambda: approvals.submit(db, ctx.slug, no, sod.user(ctx.user_id)).status)
+
+
+@router.post("/requisitions/{no}/duplicate-override")
+def override_duplicate(
+    no: str,
+    payload: dict[str, Any],
+    db: Db,
+    ctx: Annotated[routing.TenantContext, Depends(require("request.submit"))],
+) -> dict[str, Any]:
+    try:
+        done = duplicates.override(db, no, str(payload.get("reason") or ""), ctx.user_id)
+    except duplicates.DuplicateError as exc:
+        db.rollback()
+        raise HTTPException(404 if "does not exist" in str(exc) else 409, str(exc)) from None
+    return {"overridden": [d.other_request for d in done]}
 
 
 @router.post("/requisitions/{no}/approve")
@@ -1441,6 +1520,8 @@ def _answer(slug: str, user_id: int, message: str) -> str:
     with Session(engine) as db:
         if all_settings(db).get("assistant_enabled") != "true":
             return "The assistant is switched off for this company."
+        if intake.wants(db, user_id, message):  # a request for goods: the intake agent drafts it (it never submits)
+            return intake.handle(db, slug, user_id, message, assistant_gateway()).message
         return assistant.ask(db, slug, user_id, message, assistant_gateway()).text
 
 

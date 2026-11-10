@@ -100,6 +100,7 @@ def test_the_menu_has_no_auctions_and_the_admin_link_is_only_for_people_who_may_
             "Inventory",
             "Purchase orders",
             "Goods receipt",
+            "Invoices",
             "Payments",
             "Contracts",
             "Assistant",

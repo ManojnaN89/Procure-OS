@@ -644,6 +644,8 @@ def test_a_draft_can_be_submitted_over_the_api_by_someone_allowed_to(db: Session
     assert client.post(f"/api/requisitions/{no}/submit", headers=keeper).status_code == 409  # already approved
 
     blocked = _request(db, "R-23", "50000.00", dept=None)
+    db.execute(text("update request_line set free_text = 'Hi-vis jackets size L' where request_no = 'R-23'"))
+    db.commit()  # worded differently, so it is not taken for a repeat of R-22
     refused = client.post(f"/api/requisitions/{blocked}/submit", headers=keeper)
     assert refused.status_code == 422 and "cannot find who" in refused.json()["detail"]
 

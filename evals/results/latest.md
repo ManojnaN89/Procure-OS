@@ -1,20 +1,24 @@
 # Evals report
 
-Run on 2026-11-10 14:53; AI evals used a scripted model.
+Run on 2026-11-10 17:17; AI evals used a scripted model.
 
 | ID | What it checks | Result | Seconds | Key figures |
 |---|---|---|---|---|
-| E18 | Goods receipt: tolerance, rejections, inspection, stock and order progress are right | **PASS** | 18.1 | order lines to receive 94; scenarios {'full': 17, 'over_limit': 15, 'partial_then_rest': 17, 'reject': 16, 'over_refused': 12, 'inspect': 17}; stock positions changed 94; receipts posted 111 |
+| E12 | No floats in money, exact amounts on the wire, India's calendar, no secrets, synthetic data stays synthetic | **PASS** | 19.1 | money modules scanned 6; float uses 0; money fields as JSON numbers 0; UTC dates in business logic 0 |
 
 **1 of 1 passed.**
 
 ## Details
 
-### E18 Goods receipt: tolerance, rejections, inspection, stock and order progress are right
+### E12 No floats in money, exact amounts on the wire, India's calendar, no secrets, synthetic data stays synthetic
 
-Checks: Plan: goods are received against a sent order; over-delivery is accepted up to the category's tolerance; rejected goods stay out of stock; items needing inspection wait; the order line and the stock follow what was accepted
+Checks: Rules 1, 9, 10 and the generated-data safety rule
 
-- order lines to receive: 94
-- scenarios: {'full': 17, 'over_limit': 15, 'partial_then_rest': 17, 'reject': 16, 'over_refused': 12, 'inspect': 17}
-- stock positions changed: 94
-- receipts posted: 111
+- money modules scanned: 6
+- float uses: 0
+- money fields as JSON numbers: 0
+- UTC dates in business logic: 0
+- tracked files scanned for secrets: 501
+- secret hits: 0
+- unsafe generated values: 0
+- note: money fields sent as numbers: []

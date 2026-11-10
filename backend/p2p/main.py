@@ -10,8 +10,12 @@ from sqlalchemy.exc import SQLAlchemyError
 from p2p.config import REPO_ROOT, get_settings
 from p2p.platform import logs, tenants
 from p2p.platform.admin_api import router as admin_router
+from p2p.platform.agent_api import router as agent_router
 from p2p.platform.auth import router as auth_router
 from p2p.platform.files import router as files_router
+from p2p.platform.invoice_api import router as invoice_router
+from p2p.platform.payment_api import router as payment_router
+from p2p.platform.setup_api import router as setup_router
 from p2p.platform.ui_api import router as ui_router
 from p2p.platform.ui_api import sockets as ui_sockets
 
@@ -22,7 +26,11 @@ for _module in filter(None, (m.strip() for m in get_settings().extra_modules.spl
 app.include_router(auth_router)
 app.include_router(admin_router)
 app.include_router(files_router)
+app.include_router(setup_router)
 app.include_router(ui_router)
+app.include_router(invoice_router)
+app.include_router(agent_router)
+app.include_router(payment_router)
 app.include_router(ui_sockets)
 
 
