@@ -13,10 +13,6 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]          # datagen/
 REPO = ROOT.parent
 REF = REPO / "data" / "reference"
-CAT = ROOT / "catalog"
-
-START = date(2024, 11, 1)    # first day of history
-CUTOFF = date(2026, 10, 31)  # "today" in the demo; later events are not recorded
 IST = "+05:30"
 
 
@@ -61,6 +57,11 @@ def ts(d, hour=10, minute=0):
     if isinstance(d, datetime):
         return d.strftime("%Y-%m-%dT%H:%M:00") + IST
     return f"{d.isoformat()}T{hour:02d}:{minute:02d}:00{IST}"
+
+
+def dt_at(d, hour=10.0):
+    """A date at a time of day (hours with a fraction)."""
+    return datetime(d.year, d.month, d.day, int(hour), int((hour % 1) * 60))
 
 
 def iso(d):

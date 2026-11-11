@@ -1,7 +1,7 @@
 """Synthetic documents from a generated dataset: supplier invoices (PDF and pictures) and supplier replies to requests for
 quotation (.eml), with a manifest that says what each document should be read as.
 
-    python -I datagen/generator/documents.py --dataset data/datasets/plant-small-v1-seed42 --seed 42 [--limit N]
+    python -I datagen/generator/documents.py --dataset data/datasets/apex-v1 --seed 42 [--limit N]
 
 Run it with the backend's Python (backend/.venv): it needs Pillow, numpy and zxing-cpp for the pictures and the QR codes.
 Output goes to <dataset>/documents/ (git-ignored with the rest of data/datasets/):

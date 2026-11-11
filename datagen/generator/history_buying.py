@@ -9,9 +9,8 @@ from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
 from decimal import Decimal
 from typing import Any
+from common import D, iso, money, q2, q3, qty_s, ts, dt_at
 
-from common import D, iso, money, q2, q3, qty_s, ts
-from simulate import dt_at
 
 ZERO = Decimal(0)
 
@@ -272,12 +271,15 @@ class Buying:
         ):
             slip = self.R.randint(*b["slip"])
             asked = self.later(ack, self.R.uniform(2, 9))
+            # within the company's tolerance (calendar days) the supplier agent applies it, else a buyer accepts it
+            limit = int(next(t["value"] for t in self.m["tolerance"] if t["key"] == "supplier_date_days"))
             for o in goods:
                 old = o.line["promised_date"]
                 o.line["promised_date"] = iso(self.plus(date.fromisoformat(old), slip))
+                moved = (date.fromisoformat(o.line["promised_date"]) - date.fromisoformat(old)).days
                 self.add("po_event", {"po_no": po["no"], "type": "date_change", "at": ts(asked), "field": "promised_date",
                                       "old_value": old, "new_value": o.line["promised_date"], "email_ref": "",
-                                      "applied_by": "buyer"}, asked)  # fmt: skip
+                                      "applied_by": "agent" if moved <= limit else "buyer"}, asked)  # fmt: skip
             self.case("supplier_date_change", po["no"], f"Supplier asked for a delivery {slip} working days later",
                       "Accepted by the buyer; the promised date moves and on-time is judged against the new date", asked.date())  # fmt: skip
         for o in lines:

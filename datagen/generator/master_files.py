@@ -1,7 +1,7 @@
 """The master folder every demo company has: the file set and headers, writing and reading the files, the supplier
 tables, and the checks every company must pass (safe identifiers, valid GSTINs, complete supplier documents).
 
-Shared by profile_flow.py (the `flow` company) and company_profile.py (companies described by a profile file).
+Used by company_profile.py (companies described by a profile file).
 """
 
 import csv

@@ -3,19 +3,19 @@ the cutoff, the answer keys are worked out, documents are numbered in date order
 formats of the older datasets (history/*.csv and truth/*.csv), plus the planning history in inputs/history/.
 """
 
+import hashlib
 from collections import defaultdict
 from datetime import date, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
 from typing import Any
-
-from common import D, iso, money, qty_s
+from common import D, iso, money, qty_s, dt_at
 from finance import renumber
 from history import History
 from history_buying import ZERO
 from history_money import Money
 from master_files import write_csv, write_table
-from simulate import dt_at
+
 
 # the files of history/ with their headers, as the older datasets have them, plus the suppliers' statements
 HISTORY = {
@@ -59,7 +59,9 @@ TRUTH = {
     "truth_supplier_selection": "rfq_no,rfq_line_no,item_code,qty,value_counted,quotes_required,suppliers_asked,options,selected,reason",
     "truth_grni": "month_end,receipt_no,po_no,po_line_no,item_code,qty_accepted,qty_invoiced,qty_not_invoiced,value_not_invoiced",
     "truth_payment": "invoice_no,supplier_code,total,tds_section,tds_amount,net_payable,due_date,msme,status_at_cutoff,paid_on",
+    "truth_supplier": "supplier_code,profile,on_time_prob,part_delivery_prob,rejection_rate,writing_style",
 }
+STYLES = ("formal", "terse", "chatty")
 # inputs/history/: the planning files of inputs/ over the year, each with a status; material requests are new
 PLANNING = {
     "sales_order": "order_no,customer,product_code,qty,need_date,status",
@@ -86,12 +88,55 @@ class Closing:
         self.statuses()
         self.grni()
         renumber(self.T)
+        self.emails()
+        self.supplier_truth()
         for n, r in enumerate(sorted(self.T["stock_movement"], key=lambda r: (r["date"], r["_t"], r["item_code"])), 1):
             r["id"] = f"SM-{n:07d}"
         self.T["truth_case"].sort(key=lambda r: (r["_t"], r["type"], r["documents"]))
         for n, r in enumerate(self.T["truth_case"], 1):
             r["case_id"] = f"CASE-{n:05d}"
         return self.T
+
+    def emails(self) -> None:
+        """The metadata of the RFQ emails: each invitation sent, and each quotation that came back, in date order (the
+        text of a reply is made by documents.py from the quote's own rows)."""
+        domain = self.s.m["company"][0]["email_domain"]
+        buyer = next(u["email"] for u in self.s.m["user"] if u["code"] == self.s.people["buyer"])
+        contact = {c["supplier_code"]: c["email"] for c in self.s.m["supplier_contact"] if c["is_primary"] == "true"}
+        mails: list[dict[str, Any]] = []
+        sent: dict[tuple[str, str], str] = {}
+
+        def mail(kind: str, rfq: str, sup: str, at: str, when: datetime, out: bool) -> dict[str, Any]:
+            mid = "<" + hashlib.sha256(f"{kind}|{rfq}|{sup}|{at}".encode()).hexdigest()[:16] + "@mail.example>"
+            style = style_of(sup)
+            ours, theirs = buyer, contact[sup]
+            return {"message_id": mid, "in_reply_to": "" if out else sent.get((rfq, sup), ""), "thread_id": f"THR-rfq-{rfq}",
+                    "mailbox": f"purchase@{domain}", "direction": "out" if out else "in",
+                    "from_addr": ours if out else theirs, "to_addr": theirs if out else ours, "subject": "", "body_ref": "",
+                    "attachments": "0", "at": at, "plus_tag": f"rfq-{rfq}", "linked_doc_type": "rfq", "linked_doc_no": rfq,
+                    "kind": kind, "style": style, "supplier_code": sup, "_t": when}  # fmt: skip
+
+        for r in self.T["rfq_supplier"]:
+            row = mail("rfq_send", r["rfq_no"], r["supplier_code"], r["invited_at"], r["_t"], True)
+            sent[(r["rfq_no"], r["supplier_code"])] = row["message_id"]
+            mails.append(row)
+        for q in self.T["quote"]:
+            mails.append(mail("quote_cover", q["rfq_no"], q["supplier_code"], q["received_at"], q["_t"], False))
+        mails.sort(key=lambda m: (m["_t"], m["direction"] == "in", m["linked_doc_no"], m["supplier_code"]))
+        for n, m in enumerate(mails, 1):
+            m["id"] = f"EML-{n:06d}"
+        self.T["email_message"] = mails
+
+    def supplier_truth(self) -> None:
+        """How each supplier was made to behave (the profile's `history.suppliers`), for checking the vendor scores: a
+        supplier on time at least 90% of the time is 'reliable', at least 70% 'average', else 'poor'. The rejection rate
+        is the share of inspected lots partly rejected."""
+        for code, b in sorted(self.s.behaviour.items()):
+            on_time = float(b["on_time"])
+            profile = "reliable" if on_time >= 0.9 else "average" if on_time >= 0.7 else "poor"
+            self.T["truth_supplier"].append({"supplier_code": code, "profile": profile, "on_time_prob": b["on_time"],
+                                             "part_delivery_prob": b["part"], "rejection_rate": b["reject"],
+                                             "writing_style": style_of(code), "_t": dt_at(self.s.start, 0)})  # fmt: skip
 
     def keys_before_cutoff(self) -> None:
         """The answer keys that follow invoices and material requests, and the tax deposits, before anything is cut."""
@@ -249,6 +294,11 @@ class Closing:
                                                 "qty_invoiced": qty_s(min(billed, qty)), "qty_not_invoiced": qty_s(left),
                                                 "value_not_invoiced": money(unit * left), "_t": dt_at(me, 23.9)})  # fmt: skip
             d = nxt
+
+
+def style_of(supplier: str) -> str:
+    """How a supplier writes its emails, the same in every run."""
+    return STYLES[int(hashlib.sha256(supplier.encode()).hexdigest(), 16) % len(STYLES)]
 
 
 def write(out: Path, tables: dict[str, list[dict[str, Any]]], opening: dict[str, Decimal], start: date, loc: str,

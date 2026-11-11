@@ -16,12 +16,11 @@ from datetime import date, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
 from typing import Any
-
-from common import Calendar, D, Numbering, daterange, iso, money, months_between, q2, q3, qty_s, sub_rng, ts
+from common import Calendar, D, Numbering, daterange, iso, money, months_between, q2, q3, qty_s, sub_rng, ts, dt_at
 from history_buying import ZERO, Buying, Need
 from history_plan import MaterialRequest, PlanMaker
 from master_files import read
-from simulate import dt_at
+
 
 WEEKDAYS = {"Mon": 0, "Tue": 1, "Wed": 2, "Thu": 3, "Fri": 4, "Sat": 5, "Sun": 6}
 
@@ -232,7 +231,7 @@ class History(Buying):
             if position <= D(plan["reorder_point"]):
                 qty = D(plan["max_qty"]) - position
                 self.requisition(
-                    dt_at(day, 9.5), [(item, qty)], "Stock at or below its reorder point", channel="system"
+                    dt_at(day, 9.5), [(item, qty)], "Stock at or below its reorder point", channel="planning"
                 )
 
     def consume(self, day: date) -> None:
@@ -328,7 +327,7 @@ class History(Buying):
         """A breakdown: bought at once from the usual supplier and issued as it arrives."""
         without_po = day in self.without_po
         req = self.requisition(dt_at(day, 11 if without_po else 9.25), [(item, qty)], "Breakdown: needed today",
-                               priority="emergency")  # fmt: skip
+                               priority="urgent")  # fmt: skip
         need = next(n for n in self.waiting if n.request_no == req)
         self.waiting.remove(need)
         supplier = min(self.pool(item), key=lambda s: self.list_price(s, item, day))
@@ -370,7 +369,7 @@ class History(Buying):
                              "status": "approved", "total_value": money(total)}, when)  # fmt: skip
         cats = {self.items[i]["category_code"] for i, _ in lines}
         approved = self.approve("request", no, total, when, dept, next(iter(cats)) if len(cats) == 1 else None,
-                                fast=priority == "emergency")  # fmt: skip
+                                fast=priority == "urgent")  # fmt: skip
         self.approved_at[no] = approved
         for n, (item, qty) in enumerate(lines, 1):
             est = q2(D(self.items[item]["standard_price"]) * share)

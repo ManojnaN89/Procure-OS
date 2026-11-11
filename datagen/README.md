@@ -1,52 +1,11 @@
 # Data generator
 
-Generates the synthetic dataset for the P2P platform: a fictional company (CBC Private Limited) buying for 24 months,
-with a hidden truth the platform never sees. Same seed and generator version give byte-identical files.
+Generates the synthetic demo companies for the P2P platform: each company is one profile file, and the generator writes its
+master data, its ERP input files and twelve months of history, with a hidden truth the platform never sees. Same profile and
+seed give byte-identical files. Everything is made up: PANs carry the digits 0000, phones are `+91 00000 ...`, emails end in
+`.example`.
 
-```
-python -I datagen/generator/cli.py --size demo --seed 42      # 24 months: 1 Nov 2024 to 31 Oct 2026
-python -I datagen/generator/cli.py --size small --seed 42     # last 3 months, for fast tests
-python -I datagen/generator/validate.py data/datasets/cbc-demo-v1-seed42
-```
-
-Output goes to `data/datasets/cbc-<size>-v1-seed<seed>/` (git-ignored; regenerate it any time):
-
-| Folder | Contents |
-|---|---|
-| `master/` | Organisation, users, approval rules, budgets, items, suppliers, contracts, price records, planning parameters, opening stock |
-| `history/` | Requests, approvals, RFQs, quotes, awards, POs, receipts, stock movements, invoices, TDS, payments, bank lines, email metadata |
-| `truth/` | Hidden: item demand patterns and stockouts, supplier behaviour profiles, every planted problem (`truth_case`). Read only by tests |
-| `reference/` | Tax and calendar reference tables copied from `data/reference` |
-| `manifest.json`, `splits.json`, `report.md` | Seed and counts, held-out suppliers, quality report |
-
-## The one-plant profile (the demo company)
-
-```
-python -I datagen/generator/profile_plant.py data/datasets/cbc-demo-v1-seed42    # -> plant-demo-v1-seed42
-python -I datagen/generator/profile_plant.py data/datasets/cbc-small-v1-seed42   # -> plant-small-v1-seed42
-```
-
-Cuts a generated dataset down to one plant that buys industrial spares and consumables (mechanical spares, electrical, tools,
-safety gear, packaging): 137 items, 25 suppliers, 11 people in 5 departments, and only the requests, quotations, orders, receipts,
-invoices and payments that are wholly about those items. Every row is a row of the source, or that row with a person's code replaced.
-The approval rules use only roles that exist in the small team (no CFO): the Managing Director is the last approver and approves payment runs.
-The evals use `plant-small` (set `P2P_EVAL_DATASET` to use another).
-
-## The small demo company (`flow`)
-
-```
-python -I datagen/generator/profile_flow.py            # -> data/datasets/flow-demo-v1
-python -I datagen/generator/profile_flow.py --check data/datasets/flow-demo-v1
-python -m p2p.cli demo reset flow                      # from backend/: drop and make the company, logins to .dev-credentials
-```
-
-One plant, four departments, eight people (one login each), twelve items in three categories, four suppliers (a micro enterprise,
-a rate-contract holder, two for quotations), one active contract, no history. Four items are below their reorder point, so the first
-click on **Check stock levels** makes three requests. Written by hand (not cut from another dataset); only the chart of accounts,
-banks, payment terms and number series are copied from `datagen/catalog/common/`. The walk-through is `docs/demo-script.md`; the
-eval `E33` runs it with the eight logins.
-
-## Companies from a profile file (`apex`, `brightwave`)
+## The companies (`apex`, `brightwave`)
 
 ```
 python -I datagen/generator/company_profile.py apex          # -> data/datasets/apex-v1
@@ -57,13 +16,14 @@ python -m p2p.cli demo reset apex                            # from backend/: dr
 
 Each company is one file, `datagen/catalog/<name>/company.yaml`: people and logins, approval rules and who the chain roles are,
 settings, budgets, categories, items with opening stock, suppliers, contracts, last prices paid, and its ERP input files. A new
-company is a new file. `master/` has the same files and headers as `flow` (`generator/master_files.py`); `inputs/` holds the
-company's planning files (see section F of `docs/data-dictionary.md`).
+company is a new file. `master/` has the files and headers agreed in `generator/master_files.py` (plain configuration every
+company shares, such as the chart of accounts, comes from `catalog/common/`); `inputs/` holds the company's planning files
+(see section F of `docs/data-dictionary.md`).
 
 Each also has twelve months of history (1 Nov 2025 to the cutoff, 31 Oct 2026; decisions D36 and D37), driven by the
 `history:` section of its profile (supplier behaviour, demand, buying days, planted problems). Same seed, same files.
-`history/` and `truth/` use the file names, headers and value formats of the older datasets, so `import stock` and the
-eval readers work unchanged; `inputs/history/` has the production orders, material requests and joiner plans of the year.
+`history/` (with the metadata of the RFQ emails) and `truth/` (with each supplier's behaviour in `truth_supplier`) are what
+`import stock` and the evals read; `inputs/history/` has the production orders, material requests and joiner plans of the year.
 The history ends exactly at the profile's opening stock (so the demo's MO-1 sees that stock, with nothing open for its
 materials): `master/stock_opening.csv` is the stock on 1 Nov 2025, worked out backwards from the movements, and
 `demo reset` loads the movements. New answer keys: `truth_shortfall`, `truth_combined_lines`, `truth_supplier_selection`,
@@ -78,7 +38,8 @@ materials): `master/stock_opening.csv` is the stock on 1 Nov 2025, worked out ba
 | `generator/history_check.py` | Checks from the files alone: references, GST, TDS (from `data/reference/tds_sections.csv`) and totals to the paisa, stock, working days, segregation of duties, every planted problem counted |
 
 A run that does not land on the profile's stock is drawn again (the attempt number is part of the seed). TDS rules, due
-dates, payment-run days and the numbering in date order are reused from `generator/finance.py`.
+dates, payment-run days and the numbering in date order are in `generator/finance.py`. `splits.json` names the suppliers
+whose documents are held out from tuning (the profile's `hold_out_suppliers`).
 
 - **Apex Pumps** (pump maker, plant at Chakan, Mon-Sat): 9 people, 16 items in four categories, 6 suppliers (one in Gujarat, one
   micro enterprise), a rate contract for castings. Inputs: two pumps, their bills of materials, a sales order, a demand plan and
@@ -91,17 +52,16 @@ dates, payment-run days and the numbering in date order are reused from `generat
 
 | File | Role |
 |---|---|
-| `catalog/` | Content authored once with Claude and kept as files: organisation, items, suppliers, text banks. No AI runs at generation time |
-| `generator/master.py` | Combines the content banks; adds price index, contracts, price records, demand truth, planning parameters, budgets |
-| `generator/streams.py`, `flow.py`, `flow2.py`, `simulate.py` | Day-by-day simulation: stock-driven and ad hoc requests, approvals, RFQs, POs, receipts, invoices, planted problems |
-| `generator/finance.py` | TDS in booking order, MSME due dates, weekly payment runs, bank lines, cut-off filter, statuses, chronological numbering (`tds_on`, `due_date`, `run_on_or_before`, `run_after`, `renumber` are shared with the profile companies) |
-| `generator/validate.py` | Quality checks and `report.md` |
+| `catalog/<name>/company.yaml` | One company: people, rules, items, suppliers, contracts, inputs and how its year goes. Authored once with Claude; no AI runs at generation time |
+| `catalog/common/`, `catalog/text/` | Configuration every company shares (chart of accounts, banks, payment terms, number series); text banks the evals use for requests and supplier emails |
+| `generator/company_profile.py`, `master_files.py` | Reads a profile, writes and checks `master/` and `inputs/` |
+| `generator/finance.py`, `common.py` | TDS, MSME due dates, payment-run days, numbering in date order; money, dates, the working-day calendar |
 | `generator/ids.py` | GSTIN/PAN helpers. Every generated PAN has the digits 0000, which are never issued, so none can belong to a real taxpayer |
 
 ## Documents (v1)
 
 ```
-backend/.venv/Scripts/python -I datagen/generator/documents.py --dataset data/datasets/plant-small-v1-seed42 --seed 42 [--limit N] [--out DIR]
+backend/.venv/Scripts/python -I datagen/generator/documents.py --dataset data/datasets/apex-v1 --seed 42 [--limit N] [--out DIR]
 ```
 
 Run it with the backend's Python (it needs Pillow, numpy and zxing-cpp). It writes `<dataset>/documents/`, git-ignored like the rest of `data/datasets/`:
@@ -109,7 +69,7 @@ Run it with the backend's Python (it needs Pillow, numpy and zxing-cpp). It writ
 | What | Files |
 |---|---|
 | Supplier invoices, one per invoice of the dataset | `invoices/<invoice no>.pdf`, `.png` or `.jpg`, in six looks: `text_pdf` (clean, text layer), `multipage_pdf` (text layer, rows split over pages, terms page), `scan_pdf` (picture only, slightly crooked, grain), `photo_png` (phone photo: tilt, uneven light, soft), `skewed_jpg` (put in several degrees crooked), `low_contrast_pdf` (faded print on grey). An invoice with an IRN carries the e-invoice QR code and prints its IRN; a credit note or an invoice without an IRN has none |
-| Supplier replies to RFQs, one per reply in the dataset | `quotes/<email id>_<rfq>_<supplier>.eml`: prices in the body as text or as a table, or in an attached quotation PDF, or a refusal with the dataset's reason. Some are messy on purpose (`quirks`): `partial` (not every line quoted), `unit_differs` (a price per box of 10), `incl_gst` (prices include GST), `relative_validity` ("valid for 15 days") |
+| Supplier replies to RFQs, one per reply in the dataset | `quotes/<email id>_<rfq>_<supplier>.eml`: prices in the body as text or as a table, or in an attached quotation PDF, or a refusal with the dataset's reason (the demo companies' suppliers always quote, so they have no refusals). Some are messy on purpose (`quirks`): `partial` (not every line quoted), `unit_differs` (a price per box of 10), `incl_gst` (prices include GST), `relative_validity` ("valid for 15 days") |
 | The answer key | `manifest.json`: for each file its look, whether it has a text layer and a QR code, and `expected`, the values a reader should find |
 | The hold-out slice | Each document has `split`: `hold_out` for two layouts of each kind (invoices: skewed photo, low-contrast scan; replies: table in the body, refusal) and for every document of the suppliers in `splits.json`, else `dev`. Tune on `dev`; report on `hold_out`. E31 prints both |
 
@@ -119,12 +79,10 @@ Safe by construction: every document is checked before it is written (a PAN or G
 
 Eval E31 reads them back with the platform's code readers (QR, text layer, arithmetic) and counts what still needs a model or a person.
 
-## Known simplifications (v0.2)
+## Known simplifications
 
-- Documents are generated separately by `documents.py` (above). The `document_file` table, our outgoing templates (RFQ, PO, reminder) and the text of the dataset's other emails are not generated; `email_message` rows hold metadata only.
+- The text of emails is not generated: `email_message` rows hold the metadata of the RFQ emails only; `documents.py` writes the replies.
 - `match_result` is not generated: it is the platform's own output. `truth/truth_match_expected.csv` says what a correct match must conclude for every invoice.
-- Advance payments exist only for the five suppliers on 30% advance terms. TDS is deducted on the advance at payment, and the invoice TDS base is reduced by the advanced amount.
-- Free-text request lines are not generated; the document step adds them.
+- No advance payments and no supplier refusals yet; services are received by service entries, which the platform does not have yet (the evals leave service orders out of the invoice match).
 - Tax values are for testing and are marked for confirmation by a tax adviser.
-- The planning parameters (reorder points) are deliberately imperfect, so stockouts and overstock exist.
 - Tables that only the running platform produces (tasks, notifications, audit, agent runs, proposals) are not generated.

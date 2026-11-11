@@ -251,7 +251,7 @@ task, notification, alert, proposal, audit_event, agent_run, agent_step, model_c
 
 **truth_case** · case_id, type, documents, cause, expected_result, planted_on
 
-The profile companies (`apex`, `brightwave`, written by `datagen/generator/company_profile.py`) add these answer keys:
+The profile companies (`apex`, `brightwave`, written by `datagen/generator/company_profile.py`) write `truth_supplier` with the columns supplier_code, profile, on_time_prob, part_delivery_prob, rejection_rate and writing_style (taken from the profile's supplier behaviour), have no `truth_item_demand`, and add these answer keys:
 
 | File | Columns | Meaning |
 |---|---|---|

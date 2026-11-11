@@ -11,12 +11,11 @@ from collections import defaultdict
 from datetime import date, datetime, timedelta
 from decimal import ROUND_HALF_UP, Decimal
 from typing import Any
-
-from common import D, fy, fy4, iso, money, q2, qty_s, sub_rng, ts
+from common import D, fy, fy4, iso, money, q2, qty_s, sub_rng, ts, dt_at
 from finance import due_date, quarter_of, run_after, run_on_or_before, section_label, tds_on
 from history import WEEKDAYS, History
 from history_buying import ZERO, Order
-from simulate import dt_at
+
 
 DAY_END = 23.99
 

@@ -5,6 +5,7 @@
 dataset: brightwave-v1
 description: One IT services office, nine people, sixteen items, five suppliers, a rate contract and a service contract, twelve months of history to 31 October 2026. New joiners as ERP input.
 tenant: brightwave
+hold_out_suppliers: [SUP-002]  # kept back from tuning the document readers (splits.json, used by generator/documents.py)
 
 company:
   code: BRIGHT

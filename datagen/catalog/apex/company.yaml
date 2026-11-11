@@ -4,6 +4,7 @@
 dataset: apex-v1
 description: One pump plant, nine people, sixteen items, six suppliers, one rate contract, twelve months of history to 31 October 2026. Production orders as ERP input.
 tenant: apex
+hold_out_suppliers: [SUP-005]  # kept back from tuning the document readers (splits.json, used by generator/documents.py)
 
 company:
   code: APEX
@@ -273,8 +274,8 @@ history:
     - {item: RM-08, qty: "112", day: "2026-02-09"}
   planted:  # each problem planted this many times; truth/truth_case lists every one
     duplicate_invoice: 3
-    price_mismatch: 4
-    qty_mismatch: 3
+    price_mismatch: 6
+    qty_mismatch: 4
     receipt_without_po: 2  # from the emergencies: goods first, the order raised afterwards
     invoice_not_received: 2  # on the supplier's statement, never received
     grni_month_end: 3  # invoice more than a month after the receipt

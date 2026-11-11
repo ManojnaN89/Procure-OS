@@ -5,8 +5,8 @@
     python -I datagen/generator/company_profile.py --check data/datasets/apex-v1
 
 A company is one file, datagen/catalog/<name>/company.yaml: who works there, what it buys, from whom, its rules and
-budgets, and its ERP input files. A new company is a new file. The master folder has the same files, headers and value
-formats as the `flow` company's (master_files.py); `inputs/` holds the company's own planning files. The history
+budgets, and its ERP input files. A new company is a new file. The master folder has the files, headers and value
+formats agreed in master_files.py; `inputs/` holds the company's own planning files. The history
 (history.py, history_money.py, history_close.py; checked by history_check.py) ends at the profile's opening stock, so
 master/stock_opening.csv holds the stock at the start of the history and history/stock_movement.csv the rest.
 Safety rules of this repo: PANs carry the digits 0000 (never issued), phones are +91 00000 ..., emails end in .example.
@@ -99,7 +99,7 @@ def _qty(value: Decimal) -> str:
 
 
 class MasterWriter:
-    """Writes master/*.csv for a profile, in the order and the formats of the flow company."""
+    """Writes master/*.csv for a profile, in the order and the formats of master_files.py."""
 
     def __init__(self, profile: CompanyProfile, out: Path) -> None:
         self.p, self.out = profile, out
@@ -455,6 +455,8 @@ def build(profile: CompanyProfile, out: Path) -> dict[str, dict[str, int]]:
         "history_rows": history,
     }
     (out / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
+    held = {"hold_out_suppliers": list(profile.data.get("hold_out_suppliers", []))}
+    (out / "splits.json").write_text(json.dumps(held, indent=2) + "\n", encoding="utf-8")
     return {"master": master, "inputs": inputs, "history": history}
 
 
