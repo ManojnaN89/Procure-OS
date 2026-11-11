@@ -86,16 +86,17 @@ def enqueue_unique(
     return enqueue(tenant, kind, payload, run_at)
 
 
-def _claim(now: datetime, limit: int) -> list[tuple[int, str, str, dict[str, Any]]]:
+def _claim(now: datetime, limit: int, tenant: str | None = None) -> list[tuple[int, str, str, dict[str, Any]]]:
     engine = tenants.control_engine()
     with engine.begin() as c:
         rows = c.execute(
             text(
                 "select id, tenant_slug, kind, payload from job "
-                "where (status = 'queued' and run_at <= :now) or (status = 'running' and locked_at < :stale) "
+                "where ((status = 'queued' and run_at <= :now) or (status = 'running' and locked_at < :stale)) "
+                "and (cast(:t as text) is null or tenant_slug = :t) "
                 "order by run_at, id limit :n for update skip locked"
             ),
-            {"now": now, "stale": now - LOCK_TIMEOUT, "n": limit},
+            {"now": now, "stale": now - LOCK_TIMEOUT, "n": limit, "t": tenant},
         ).all()
         ids = [r[0] for r in rows]
         if ids:
@@ -130,11 +131,12 @@ def _finish(job_id: int, now: datetime, error: str | None) -> None:
             )
 
 
-def run_once(now: datetime | None = None, limit: int = 10) -> int:
-    """Run the jobs that are due. Returns how many were taken. One failing job never stops the others."""
+def run_once(now: datetime | None = None, limit: int = 10, tenant: str | None = None) -> int:
+    """Run the jobs that are due (only one company's when `tenant` is given). Returns how many were taken. One failing
+    job never stops the others."""
     load_handlers()
     now = now or datetime.now(UTC)
-    taken = _claim(now, limit)
+    taken = _claim(now, limit, tenant)
     for job_id, tenant, kind, payload in taken:
         try:
             HANDLERS[kind](JobContext(job_id, tenant, payload, now))

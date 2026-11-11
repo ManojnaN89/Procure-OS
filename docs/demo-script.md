@@ -40,6 +40,22 @@ A one-plant company, eight people, twelve items, four suppliers, no history. Thi
 | 17 | approver@ | **Control tower**, **Dashboard → Where things stand** | While the shoes invoice was blocked the tower showed one blocked invoice and four waiting for payment; at the end nothing is left in any stage. The cycle KPIs count the four requests |
 | 18 | admin@ | **Admin** (in the menu) → **Company setup** → **Policies** → write a reason at the top, change **Days suppliers get to quote**, **Save**. Then **Audit** and **Company setup** → **History** | The change is in both, with its reason. Nobody else may change a policy |
 
+## Start with cases in flight
+
+`python -m p2p.cli demo reset flow`, then `python -m p2p.cli demo populate flow` (or both at once: `demo populate flow --reset`, about 15 seconds, local database only). It does what the people would do, through the real screens' API, so every figure, email (in Mailpit), notification and audit row is real. The company then has:
+
+| Where to look | What is there |
+|---|---|
+| buyer@ **Requests** → **Check stock levels** | Two low items with nothing on the way (V-belt, safety helmet), so it still has something to suggest |
+| buyer@ My work, **RFQs waiting to be sent** | The safety shoes quotation request (made from the stock check, request approved by itself), waiting for a buyer to approve the sending |
+| manager@ My work | Three requests waiting: contactor, bearing and seal (from the stock check) and hose (typed by requester@) |
+| approver@ My work | The grease request (Rs 1,26,000) for the plant head; the gloves order to approve; the blocked invoice to release; payment run PR-…-0003 to approve |
+| requester@ **Requests** | A draft (breakers) to submit |
+| buyer@ **Quotations** | Push buttons: sent, three quotes in, nothing awarded yet |
+| later stages | An order approved and waiting to be sent, one acknowledged, one part received (store@), one received and waiting for an invoice (ap@), an invoice not due yet, a blocked invoice, a payment run waiting, one approved with its bank file made, and one case paid and closed |
+
+It refuses to run on a company that already has requests. To go back to the empty company (what E34 and the 18-step journey above expect), run `demo reset flow` again.
+
 ## Things worth showing
 
 - **Someone else's button is missing.** Open any case as a person who must not act on it (requester@ on its own request, buyer@ on an order, finance@ on its own payment run): the button is not offered, and the server refuses it even if you try.

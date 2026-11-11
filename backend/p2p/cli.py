@@ -20,6 +20,8 @@ python -m p2p.cli order <tenant> [--request NO]
 python -m p2p.cli demo reset flow [--dataset DIR]
         drops and makes again the small demo company (8 people, 12 items, 4 suppliers, no history); the logins go to
         .dev-credentials and are not printed
+python -m p2p.cli demo populate [flow] [--reset]
+        fills the demo company with cases at every stage of the flow (needs a company with no requests, or --reset)
 python -m p2p.cli worker      runs the job worker (timers, escalations, email, mailbox polling) until stopped
 """
 
@@ -75,6 +77,9 @@ def main(argv: list[str] | None = None) -> int:
     reset = demo.add_parser("reset")
     reset.add_argument("name", choices=["flow"])
     reset.add_argument("--dataset")
+    fill = demo.add_parser("populate")
+    fill.add_argument("name", nargs="?", default="flow")
+    fill.add_argument("--reset", action="store_true")
     sub.add_parser("worker")
     args = p.parse_args(argv)
 
@@ -86,8 +91,26 @@ def main(argv: list[str] | None = None) -> int:
             pass
         return 0
     if args.group == "demo":
-        from p2p.platform.demo import DemoError, reset_flow
+        from p2p.platform.demo import CREDENTIALS, DemoError, reset_flow
 
+        if args.cmd == "populate":
+            from p2p.platform.demo_cases import populate
+
+            try:
+                if args.reset:
+                    reset_flow(slug=args.name, credentials=CREDENTIALS if args.name == "flow" else None)
+                filled = populate(args.name)
+            except DemoError as exc:
+                print(f"not made: {exc}")
+                return 1
+            print(f"company '{filled.slug}' now has cases at {len(filled.cases)} stages:")
+            for stage, number in filled.cases.items():
+                print(f"  {number:<14} {stage}")
+            print(f"still low with nothing on the way: {', '.join(filled.low_items_left) or 'none'}")
+            if filled.stopped:
+                print(f"the later stages stopped here (the earlier ones are in place): {filled.stopped}")
+                return 1
+            return 0
         try:
             company = reset_flow(Path(args.dataset) if args.dataset else None)
         except DemoError as exc:
