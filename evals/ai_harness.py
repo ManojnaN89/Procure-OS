@@ -48,7 +48,9 @@ def scripted_gateway() -> tuple[Gateway, Scripted]:
 
 def supplier_for_emails() -> tuple[str, str]:
     """A real supplier of the dataset with an email address, and that address."""
-    cats = {r["supplier_code"] for r in rows("master", "supplier_category") if r["category_code"] == "MRO"}
+    cats = {
+        r["supplier_code"] for r in rows("master", "supplier_category") if r["category_code"] == lib.busiest_category()
+    }
     for c in rows("master", "supplier_contact"):
         if c["supplier_code"] in cats and c["email"]:
             return c["supplier_code"], c["email"]
@@ -62,20 +64,20 @@ def setup_rfq(world: World, tag: str, items: list[Item]) -> tuple[str, str, str]
     req, rfq = f"EV-R-{tag}", f"EV-Q-{tag}"
     db.execute(
         text(
-            "insert into request (no, ship_to_location, type, channel, status, total_value) values (:n, 'WH-BLR', 'goods', 'planning', 'approved', 1)"
+            "insert into request (no, ship_to_location, type, channel, status, total_value) values (:n, :loc, 'goods', 'planning', 'approved', 1)"
         ),
-        {"n": req},
+        {"n": req, "loc": lib.location()},
     )
     db.execute(
-        text("insert into rfq (no, request_no, category_code, due_date, status) values (:r, :q, 'MRO', now(), 'sent')"),
-        {"r": rfq, "q": req},
+        text("insert into rfq (no, request_no, category_code, due_date, status) values (:r, :q, :c, now(), 'sent')"),
+        {"r": rfq, "q": req, "c": lib.busiest_category()},
     )
     for it in items:
         db.execute(
             text(
-                "insert into request_line (request_no, line_no, item_code, qty, uom, category_code, est_price, need_by, status) values (:r, :n, :i, :q, 'NOS', 'MRO', :e, '2026-12-01', 'sourcing')"
+                "insert into request_line (request_no, line_no, item_code, qty, uom, category_code, est_price, need_by, status) values (:r, :n, :i, :q, 'NOS', :c, :e, '2026-12-01', 'sourcing')"
             ),
-            {"r": req, "n": it.line_no, "i": it.code, "q": it.qty, "e": it.est},
+            {"r": req, "n": it.line_no, "i": it.code, "q": it.qty, "e": it.est, "c": lib.busiest_category()},
         )
         db.execute(
             text(

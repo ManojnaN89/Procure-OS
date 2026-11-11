@@ -21,7 +21,7 @@ def run(ctx) -> Outcome:
     out = Outcome(True)
     world = lib.build_world("e19", with_stock=False)
     db = world.db
-    r_ = replay(world)
+    r_ = replay(world, goods_only=True)  # the platform has no service entry yet, so service orders are left out
     entered, by_no, errors, truth = r_.entered, r_.by_no, r_.errors, r_.truth
     inv_lines, receipt_lines = r_.inv_lines, r_.receipt_lines
 

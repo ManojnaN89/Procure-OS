@@ -34,32 +34,43 @@ def _when(value: str) -> datetime:
 
 
 def replay(world: Any, *, limit_invoices: int | None = None) -> dict[str, Any]:
+    """The orders for services and their invoices are left out: the platform has no service entry yet to match them to."""
     from p2p.invoices import service as invoices
 
     db, ap = world.db, world.logins["AP"]
     history = lambda name: rows("history", name)  # noqa: E731
+    services = {i["code"] for i in rows("master", "item") if i["kind"] == "service"}
+    service_pos = {ln["po_no"] for ln in history("po_line") if ln["item_code"] in services}
     for r in history("po"):
+        if r["no"] in service_pos:
+            continue
         _insert(db, "po", r)
     for r in history("po_line"):
+        if r["po_no"] in service_pos:
+            continue
         _insert(
             db, "po_line", r,
             {"received_qty": 0, "invoiced_qty": 0, "source": "award", "request_no": r["po_no"], "request_line_no": int(r["line_no"]),
              "taxable": (D(r["qty"]) * D(r["unit_price"])).quantize(D("0.01"))},
         )  # fmt: skip
     for r in history("po_charge"):
-        _insert(db, "po_charge", r)
+        if r["po_no"] not in service_pos:
+            _insert(db, "po_charge", r)
     db.commit()
 
     receipts = {r["no"]: r for r in history("goods_receipt")}
     receipt_lines: dict[str, list[dict]] = defaultdict(list)
     for r in history("gr_line"):
         receipt_lines[r["gr_no"]].append(r)
-    all_invoices = history("invoice")
-    if limit_invoices:
-        all_invoices = all_invoices[:limit_invoices]
     inv_lines: dict[str, list[dict]] = defaultdict(list)
     for r in history("invoice_line"):
         inv_lines[r["invoice_no"]].append(r)
+    on_services = {n for n, ls in inv_lines.items() if any(ln["po_no"] in service_pos for ln in ls)}
+    all_invoices = [
+        r for r in history("invoice") if r["no"] not in on_services and r["ref_invoice_no"] not in on_services
+    ]
+    if limit_invoices:
+        all_invoices = all_invoices[:limit_invoices]
     inv_charges: dict[str, list[dict]] = defaultdict(list)
     for r in history("invoice_charge"):
         inv_charges[r["invoice_no"]].append(r)

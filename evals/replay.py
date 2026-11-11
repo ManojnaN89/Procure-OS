@@ -55,7 +55,7 @@ def replay(
     finance, owner = world.logins["Finance"], world.logins["Approver"]
     history = lambda name: rows("history", name, ds)  # noqa: E731
     if load_bank_rates:
-        for r in rows("reference", "rbi_bank_rate", ds):
+        for r in rows("reference", "rbi_bank_rate", lib.ROOT / "data"):  # the repo's reference tables
             world.db.execute(
                 text("insert into ref_rbi_bank_rate (effective_from, rate_pct) values (:d, :r) on conflict do nothing"),
                 {"d": r["effective_from"], "r": r["rate_pct"]},

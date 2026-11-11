@@ -84,7 +84,7 @@ def slug(prefix: str = "ev") -> str:
 
 
 def forget_tenants(prefix: str) -> None:
-    """Remove the companies an eval made under this prefix. The demo company's logins (buyer@flow.example and so on) are
+    """Remove the companies an eval made under this prefix. The demo company's logins (buyer@apexpumps.example and so on) are
     unique across the whole control database, so two evals that make it cannot leave their companies behind."""
     from p2p.platform import tenants
 

@@ -141,11 +141,11 @@ def make_cases(quick: bool, today: date) -> list[Case]:
             qtys = [rng.choice([2, 3, 5, 10, 12, 25, 40]) for _ in range(3)]
             names = [typo(p["name"], rng) if rng.random() < 0.3 else p["name"] for p in picks]
             need = today + timedelta(days=rng.randint(10, 40))
-            loc_code = rng.choice(["PLT-VAD", "WH-BLR"])
+            loc_code = rng.choice(sorted(locations))
             slots = {
                 "item": names[0], "item2": names[1], "item3": names[2], "qty": qtys[0], "qty2": qtys[1], "qty3": qtys[2],
                 "uom": rng.choice(["nos", "pcs", "NOS"]), "uom2": "nos", "uom3": "nos", "date": write_date(need, rng),
-                "dept": "Maintenance", "loc": locations[loc_code], "requester": "Deepa Menon", "reason": "Running short.",
+                "dept": "Maintenance", "loc": locations[loc_code], "requester": lib.requester()[1], "reason": "Running short.",
             }  # fmt: skip
             body = t["text"].format(**slots)
             n = t["expect"]["lines"]
@@ -181,8 +181,8 @@ def make_cases(quick: bool, today: date) -> list[Case]:
                     f"need a custom custom bracket drawing 77 not in catalogue - drawing attached, qty {qtys[0]}"
                 )
             if tid == "R008":
-                case.items.append(("", "bearings", 2))
-                case.text = "need bearings for the pump motor, 2 nos"
+                case.items.append(("", "impellers", 2))
+                case.text = "need impellers for the pump, 2 nos"  # two impellers in the catalogue: which one?
             if tid == "R009":
                 case.items.append(("", "laptop", 1))
                 case.text = "we need a laptop for the new joinee in Maintenance, 1 nos"
@@ -265,11 +265,12 @@ def run(ctx: lib.Ctx) -> Outcome:
     world = lib.build_world("e24", with_stock=False)
     db = world.db
     slug = world.slug
-    # a requester who is a person of the organisation (the maintenance engineer)
+    # a requester who is a person of the organisation (the production manager)
     email = f"intake{world.emails['Requester'].split('@')[0][-5:]}@eval.example"
-    db.execute(text("update org_user set email = :e where code = 'U015'"), {"e": email})
+    code, name = lib.requester()
+    db.execute(text("update org_user set email = :e where code = :c"), {"e": email, "c": code})
     db.commit()
-    uid = users.create_user(slug, email, lib.PASSWORD, "Deepa Menon", "Requester")
+    uid = users.create_user(slug, email, lib.PASSWORD, name, "Requester")
     today = business_today()
     cases = make_cases(ctx.quick, today)
     reader = Reader()
@@ -501,7 +502,10 @@ def run(ctx: lib.Ctx) -> Outcome:
         if r["silent"]:
             # a draft is always checked by the requester before it goes anywhere, so a real model's slip is a quality finding;
             # the careful and sloppy scripted readers above prove the code around it never lets a wrong draft past the checks it owns
-            out.find("low", f"the live model produced {r['silent']} draft(s) with a value the requester did not ask for: {r['wrong'][:2]}")
+            out.find(
+                "low",
+                f"the live model produced {r['silent']} draft(s) with a value the requester did not ask for: {r['wrong'][:2]}",
+            )
         if pct(r["lines right"], r["lines"]) < 90:
             out.find(
                 "medium", f"the live model mapped {pct(r['lines right'], r['lines'])}% of lines right (target 90%)"

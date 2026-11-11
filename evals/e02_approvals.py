@@ -68,16 +68,15 @@ def oracle_people(
     by_designation: dict[str, str] = {}
     for code in sorted(org):
         by_designation.setdefault(org[code]["designation"], code)
-    named = {
-        "director": "Managing Director",
-        "cfo": "Chief Financial Officer",
-        "finance_manager": "Finance Manager",
-    }
+    # how the company names its chain roles (its approver roles: a designation, the requester's manager, the head)
+    named = {role: value for role, source, value in ROLES if source == "designation"}
+    managers = {role for role, source, _ in ROLES if source == "requester_manager"} | {"manager"}
+    heads = {role for role, source, _ in ROLES if source == "department_head"} | {"dept_head"}
     people: list[tuple[str, str | None]] = []
     for role in chain:
-        if role == "manager":
+        if role in managers:
             who = org[requester]["manager_code"] if requester else depts.get(dept, "")
-        elif role == "dept_head":
+        elif role in heads:
             who = depts.get(dept, "") if dept else ""
         elif role == "procurement_head":
             who = depts.get("PUR", "")
@@ -105,10 +104,15 @@ def oracle_people(
     return people
 
 
+ROLES: list[tuple[str, str, str | None]] = []  # the company's approver roles: (role, source, value)
+
+
 def run(ctx) -> Outcome:
     from p2p.approvals import rules as platform
 
+    global ROLES
     out = Outcome(True)
+    ROLES = lib.demo_company().approver_roles
     world = lib.build_world("e02", with_stock=False)
     db = world.db
     rule_rows = rows("master", "approval_rule")
@@ -145,14 +149,14 @@ def run(ctx) -> Outcome:
     dates += [date(2024, 11, 1) + timedelta(days=rng.randint(0, 800)) for _ in range(40)]
     docs = sorted({r["document"] for r in rule_rows})
 
-    cases = rule_ok = rule_none_ok = chain_ok = chain_cases = 0
+    cases = rule_ok = rule_none_ok = chain_ok = chain_cases = chain_people = 0
     mismatches: list[str] = []
     for value in values:
         for on in rng.sample(dates, k=3):
             doc = rng.choice(docs)
             spend = rng.choice(["opex", "capex"])
             requester = rng.choice([None, *org]) if doc == "request" else None
-            dept = org[requester]["department_code"] if requester else rng.choice([None, "LOG", "PRD", "IT"])
+            dept = org[requester]["department_code"] if requester else rng.choice([None, *sorted(depts)])
             cases += 1
             try:
                 want = oracle_rule(rule_rows, doc, value, on, spend, None, dept)
@@ -184,6 +188,7 @@ def run(ctx) -> Outcome:
                 got_people = None
             if people == got_people:
                 chain_ok += 1
+                chain_people += people is not None
             else:
                 mismatches.append(
                     f"chain {want[2]} requester {requester} dept {dept} on {on}: platform {got_people}, oracle {people}"
@@ -194,7 +199,10 @@ def run(ctx) -> Outcome:
         "cases with no rule": rule_none_ok,
         "chain cases": chain_cases,
         "chain agreement %": pct(chain_ok, chain_cases),
+        "chains that name people": chain_people,
     }
+    if chain_cases and not chain_people:
+        out.find("high", "no approval chain resolved to a person: the chains were not really compared")
     if rule_ok != cases:
         out.find(
             "high",

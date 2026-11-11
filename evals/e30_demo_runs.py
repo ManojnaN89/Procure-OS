@@ -1,5 +1,6 @@
 """E30: scripted demo runs through the real screens, each person in their own browser, checked against answers worked
-out here from the raw dataset. The plan's three scenarios (a normal run, a part delivery, a price mismatch on the invoice)
+out here from the raw dataset (the main demo company, Apex Pumps; see `scenario()` for the three items it plans by stock
+level for these runs). The plan's three scenarios (a normal run, a part delivery, a price mismatch on the invoice)
 each run twice: with everything typed in at the screens, and with documents (the supplier's quotation arrives as an email
 and the supplier's invoice is uploaded as a PDF). A held order (a price above the estimate) is a fourth scenario."""
 
@@ -21,7 +22,7 @@ from typing import Any
 import lib
 from demo_ui import RESULTS, Demo, Site, api
 from e04_gst import half_up, oracle_line, oracle_net
-from lib import D, Outcome, rows
+from lib import D, Outcome
 from sqlalchemy import text
 
 sys.path.insert(0, str(lib.ROOT / "tests"))
@@ -41,6 +42,86 @@ REQUIREMENT = (
 
 TODAY = lib.TODAY
 SERVICE_LEVEL_NOTE = "stock at its reorder point"
+
+# Apex plans its raw materials by production order, not by stock level, so for these runs the eval gives three of them a
+# min/max plan in a copy of the dataset, with the stock at the maximum, and makes the shaft contract dearer than the
+# estimate. Everything the runs check is then worked out from that copy's files.
+PLANS = {  # item -> (reorder point, maximum): a quotation item, a contract item, and the dear contract item
+    "RM-09": ("10", "160"),
+    "RM-03": ("20", "60"),
+    "RM-05": ("10", "50"),
+}
+DEAR = ("RM-05", "225.00")  # the shaft's contract price, 25% above its estimate of 180
+QUOTE_WINNER, WIN_PRICE, WIN_DISCOUNT, OTHER_PRICE = "SUP-003", "88", "2", "92"
+SCENARIO: Path | None = None
+
+
+def scenario() -> Path:
+    """The copy of the dataset these runs use (made once per run of the eval)."""
+    import csv
+    import shutil
+    import tempfile
+
+    global SCENARIO
+    if SCENARIO is not None:
+        return SCENARIO
+    folder = Path(tempfile.mkdtemp(prefix="e30_")) / lib.DATASET.name
+    shutil.copytree(lib.DATASET, folder, ignore=shutil.ignore_patterns("documents"))
+    master = folder / "master"
+
+    def rewrite(name: str, change: Any) -> None:
+        with (master / f"{name}.csv").open(encoding="utf-8", newline="") as f:
+            reader = csv.DictReader(f)
+            fields, table = list(reader.fieldnames or []), list(reader)
+        change(table)
+        with (master / f"{name}.csv").open("w", encoding="utf-8", newline="") as f:
+            writer = csv.DictWriter(f, fieldnames=fields, lineterminator="\n")
+            writer.writeheader()
+            writer.writerows(table)
+
+    loc = lib.location()
+
+    def plans(table: list[dict[str, str]]) -> None:
+        table[:] = [r for r in table if r["item_code"] not in PLANS]
+        for item, (point, top) in PLANS.items():
+            table.append({"item_code": item, "location_code": loc, "reorder_policy": "minmax", "reorder_point": point,
+                          "safety_stock": "0", "min_qty": point, "max_qty": top, "order_qty": "",
+                          "service_level_pct": "95", "lead_days_override": ""})  # fmt: skip
+
+    def full(table: list[dict[str, str]]) -> None:  # every planned item starts at its maximum
+        top = {r["item_code"]: r["max_qty"] for r in rows("master", "item_location") if r["reorder_policy"] == "minmax"}
+        for r in table:
+            if r["item_code"] in top:
+                r["qty"] = top[r["item_code"]]
+
+    def dear(table: list[dict[str, str]]) -> None:
+        for r in table:
+            if r["item_code"] == DEAR[0] and r["contract_code"]:
+                r["price"] = DEAR[1]
+
+    SCENARIO = folder
+    rewrite("item_location", plans)
+    rewrite("stock_opening", full)
+    rewrite("price_record", dear)
+    return folder
+
+
+def rows(folder: str, name: str) -> list[dict[str, str]]:
+    """A file of the dataset copy these runs use."""
+    return lib.rows(folder, name, scenario())
+
+
+def po_route(taxable: Decimal, on: date = TODAY) -> str:
+    """The approval chain the rule table gives an order of this value ('auto' needs no person)."""
+    for r in rows("master", "approval_rule"):
+        if r["document"] == "po" and D(r["min_value"]) <= taxable <= D(r["max_value"]):
+            return r["approver_chain"]
+    raise AssertionError(f"no approval rule for an order of {taxable}")
+
+
+def person(key: str) -> str:
+    """The name of the person of the organisation behind a key."""
+    return next(u["name"] for u in rows("master", "user") if u["code"] == PEOPLE[key][0])
 
 
 # ---- the answers, worked out from the raw dataset -------------------------------------------------
@@ -152,14 +233,14 @@ def supplier_mails(d: Demo, **where: str) -> list[dict[str, Any]]:
 # ---- a company whose people are the dataset's people ----------------------------------------------
 
 PEOPLE = {  # key -> (organisation code, what to call them on the transcript)
-    "buyer": ("U008", "Rohan Mehta, Buyer"),
-    "store": ("U024", "Imran Pasha, Storekeeper"),
-    "ap": ("U004", "Sunita Patil, Accounts"),
-    "finance": ("U003", "Anil Deshpande, Finance Manager"),
-    "stores_head": ("U023", "Prakash Gowda, Head of Stores"),
-    "proc_head": ("U006", "Vikram Joshi, Head of Procurement"),
-    "owner": ("U001", "Rajesh Kulkarni, Managing Director"),
-    "plant_head": ("U010", "Suresh Bhatt, Plant Head"),
+    "buyer": ("U03", "Neha Kulkarni, Buyer"),
+    "store": ("U02", "Sunil Pawar, Storekeeper"),
+    "ap": ("U04", "Priya Shah, AP Executive"),
+    "finance": ("U05", "Anil Mehta, Finance Manager"),
+    "stores_head": ("U07", "Vikram Joshi, Plant Head (approves requests up to Rs 1,00,000)"),
+    "proc_head": ("U08", "Sanjay Rao, Purchase Manager"),
+    "owner": ("U09", "Meera Iyer, Director"),
+    "plant_head": ("U07", "Vikram Joshi, Plant Head"),
 }
 
 
@@ -177,12 +258,12 @@ def company(prefix: str) -> Company:
     finance role."""
     from p2p.platform import users
 
-    w = lib.build_world(prefix, with_stock=False)
+    w = lib.build_world(prefix, with_stock=False, dataset=scenario())
     db = w.db
     ids: dict[str, int] = {}
     emails: dict[str, str] = {}
     for key, (code, label) in PEOPLE.items():
-        generic = {"buyer": "Buyer", "store": "Store", "ap": "AP"}.get(key)
+        generic = {"buyer": "Buyer", "store": "Store", "ap": "AP", "finance": "Finance"}.get(key)
         if generic:
             emails[key] = w.emails[generic]
             ids[key] = w.logins[generic]
@@ -285,7 +366,7 @@ def pick_for(kind: str) -> Pick:
     for p in candidates():
         prices = contract_prices(p.item, p.qty)
         if kind == "quotation":
-            if not prices and p.loc == "PLT-VAD" and p.category == "MRO" and D("15000.01") <= p.value <= D("100000"):
+            if not prices and request_route(p.value) == "plant_head":
                 return p
             continue
         if not prices:
@@ -475,7 +556,7 @@ def check_order(
     pick: Pick,
     unit: Decimal,
     *,
-    status: str,
+    status: str | None = None,
 ) -> tuple[Decimal, Decimal, Decimal]:
     """The order's figures against the exact-fraction answer: price before tax, GST split, total. Returns the three."""
     sup, loc, qty = csv_suppliers()[supplier], pick.loc, pick.qty
@@ -497,6 +578,8 @@ def check_order(
     )
     c.same("order: total", D(h[5]), total)
     c.same("order: our GSTIN is the delivery place's", h[7], csv_locations()[loc]["gstin"])
+    if status is None:  # the rule table decides: an order within the band for no approval is approved at once
+        status = "approved" if po_route(taxable) == "auto" else "submitted"
     c.same("order status", h[6], status)
     return taxable, total, igst
 
@@ -504,6 +587,17 @@ def check_order(
 def approve_order(d: Demo, c: Checks, po: str, taxable: Decimal, total: Decimal, igst: Decimal) -> None:
     from playwright.sync_api import expect
 
+    if po_route(taxable) == "auto":
+        c.same(
+            f"the order of {money(taxable)} is within the band that needs no approver: approved by the rule",
+            one(d.db, "select status from po where no = :n", n=po),
+            "approved",
+        )
+        refused = api("POST", f"/api/purchase-orders/{po}/approve", d.w.headers("Buyer"), json={})
+        c.true(
+            "the buyer cannot approve an order (refused)", refused.status_code in (403, 409), str(refused.status_code)
+        )
+        return
     my_work(
         d,
         "proc_head",
@@ -517,7 +611,7 @@ def approve_order(d: Demo, c: Checks, po: str, taxable: Decimal, total: Decimal,
         if igst:
             expect(page.locator("#appContent")).not_to_contain_text("CGST")
         page.locator("#poApprove").click()
-        expect(page.locator("#appContent")).to_contain_text("Approved by Vikram Joshi under rule PO-01")
+        expect(page.locator("#appContent")).to_contain_text(f"Approved by {person('proc_head')} under rule")
     d.sync()
     c.same(
         "order status after approval",
@@ -834,6 +928,8 @@ def audit_trail(d: Demo, c: Checks, actions: tuple[str, ...]) -> None:
     """Every step that changes data left a row in the audit log."""
     d.sync()
     have = {r[0] for r in d.db.execute(text("select distinct action from audit_event"))}
+    if "po.auto_approve" in have:  # an order within the band for no approver is approved by the rule
+        have.add("po.approve")
     missing = [a for a in actions if a not in have]
     c.true(
         f"the audit log has a row for each of the {len(actions)} actions",
@@ -852,6 +948,12 @@ def audit_trail(d: Demo, c: Checks, actions: tuple[str, ...]) -> None:
         )
     ).all()
     c.facts.append("the audit log, in order, with who did it: " + "; ".join(f"{a} by {w}" for a, w in ordered))
+
+
+def order_approver(d: Demo) -> dict[str, str]:
+    """The audit action of the order's approval and who did it, when the rule named a person for it."""
+    taxable = D(one(d.db, "select taxable from po"))
+    return {} if po_route(taxable) == "auto" else {"po.approve": "proc_head"}
 
 
 def actors_of(d: Demo, action: str) -> set[str]:
@@ -1277,9 +1379,9 @@ def quotation_to_order(
     db = d.db
     with d.step("buyer", "signs in: the dashboard shows nothing waiting yet") as page:
         expect(page.locator("#myWork")).to_be_visible()
-    req = replenish(d, c, pick, "manager")
+    req = replenish(d, c, pick, "plant_head")
 
-    # the head of stores (who heads the department the replenishment is booked to) approves
+    # the plant head (the rule's approver for a request of this value) approves
     my_work(
         d,
         "stores_head",
@@ -1290,7 +1392,7 @@ def quotation_to_order(
     with d.step("stores_head", "approves the request") as page:
         expect(page.locator("#appContent")).to_contain_text(req)
         page.locator("#approveBtn").click()
-        expect(page.locator("#appContent")).to_contain_text("Approved by Prakash Gowda")
+        expect(page.locator("#appContent")).to_contain_text(f"Approved by {person('stores_head')}")
         page.get_by_text("How this was routed").click()  # the rule is kept with the request and shown on demand
         expect(page.locator("#appContent")).to_contain_text("Approval rule REQ-02")
     d.sync()
@@ -1344,12 +1446,12 @@ def quotation_to_order(
     )
 
     # quotes come in: the second supplier is the cheaper one after its discount
-    winner = "SUP-0006"
+    winner = QUOTE_WINNER
     c.true(f"{winner} is among those asked", winner in invited, str(invited))
     other = next(s for s in invited if s != winner)
     prices: dict[str, tuple[str, str | None]] = {
-        other: ("330", None),
-        winner: ("305", "2"),
+        other: (OTHER_PRICE, None),
+        winner: (WIN_PRICE, WIN_DISCOUNT),
     }
     if by_documents:
         for supplier, (price, discount) in prices.items():
@@ -1380,7 +1482,7 @@ def quotation_to_order(
                 row = page.locator("#quoteForm tbody tr").first
                 row.locator(".qPrice").fill(price)
                 row.locator(".qDisc").fill(discount or "0")
-                row.locator(".qGst").fill("18")
+                row.locator(".qGst").fill(f"{item_rate(pick.item):f}")
                 row.locator(".qDays").fill("5")
                 page.locator("#saveQuote").click()
                 expect(page.locator("#appContent")).to_contain_text("Quotes")
@@ -1397,8 +1499,8 @@ def quotation_to_order(
 
     d.work()  # the worker makes the order from the award
     po = str(one(db, "select no from po"))
-    unit = oracle_net(Decimal(305), Decimal(2))
-    taxable, total, igst = check_order(d, c, po, winner, pick, unit, status="submitted")
+    unit = oracle_net(Decimal(WIN_PRICE), Decimal(WIN_DISCOUNT))
+    taxable, total, igst = check_order(d, c, po, winner, pick, unit)
     approve_order(d, c, po, taxable, total, igst)
     send_and_acknowledge(d, c, po, winner, total)
     return po, winner, unit, taxable, total, igst
@@ -1486,7 +1588,7 @@ def run_straight_through(d: Demo, c: Checks, co: Company, pick: Pick, by_documen
         d, c, co,
         {
             "requester": {"request.submit": "buyer"},
-            "approver": {"request.approve": "stores_head", "po.approve": "proc_head", "payment_run.approve": "owner"},
+            "approver": {"request.approve": "stores_head", **order_approver(d), "payment_run.approve": "owner"},
             "receiver": {"grn.post": "store"},
             "payer": {"payment_run.propose": "finance", "payment_run.paid": "finance"},
         },
@@ -1713,7 +1815,7 @@ def run_part_delivery(d: Demo, c: Checks, co: Company, pick: Pick, by_documents:
         d, c, co,
         {
             "requester": {"request.submit": "buyer"},
-            "approver": {"request.approve": "stores_head", "po.approve": "proc_head", "payment_run.approve": "owner"},
+            "approver": {"request.approve": "stores_head", **order_approver(d), "payment_run.approve": "owner"},
             "receiver": {"grn.post": "store"},
             "payer": {"payment_run.propose": "finance", "payment_run.paid": "finance"},
         },
@@ -1777,7 +1879,7 @@ def run_blocked_invoice(d: Demo, c: Checks, co: Company, pick: Pick, by_document
     d.work()  # the request approved itself: the worker finds the contract price and makes the order
     supplier, price = sourced_from_contract(d, c, pick)
     po = str(one(db, "select no from po"))
-    taxable, total, igst = check_order(d, c, po, supplier, pick, price, status="submitted")
+    taxable, total, igst = check_order(d, c, po, supplier, pick, price)
     contract = pick.notes["contract"]
     c.same(
         "the order refers to the contract",
@@ -1948,7 +2050,7 @@ def run_blocked_invoice(d: Demo, c: Checks, co: Company, pick: Pick, by_document
         d, c, co,
         {
             "requester": {"request.submit": "buyer"},
-            "approver": {"po.approve": "proc_head", "payment_run.approve": "owner"},
+            "approver": {**order_approver(d), "payment_run.approve": "owner"},
             "receiver": {"grn.post": "store"},
             "invoice approver": {"invoice.release_block": "plant_head"},
             "payer": {"payment_run.propose": "finance", "payment_run.paid": "finance"},
@@ -1969,7 +2071,7 @@ def run_held_order(d: Demo, c: Checks, co: Company, pick: Pick) -> None:
     from playwright.sync_api import expect
 
     db = d.db
-    sign_in_all(d, co, ("buyer", "proc_head", "finance"))
+    sign_in_all(d, co, ("buyer", "proc_head"))
     replenish(d, c, pick, "auto")
     d.work()
     supplier, price = sourced_from_contract(d, c, pick)
@@ -2024,15 +2126,15 @@ def run_held_order(d: Demo, c: Checks, co: Company, pick: Pick) -> None:
 
     decide_in_approvals(
         d,
-        "finance",
+        "proc_head",
         "Orders held for a price or ceiling",
         po,
         what="reads the reason and accepts the price",
     )
     c.same(
-        "order status: accepted, so it goes for approval",
+        "order status: accepted, so it follows the approval band for its value",
         first(db, "select status from po where no = :n", n=po),
-        "submitted",
+        "approved" if po_route(taxable) == "auto" else "submitted",
     )
     c.same(
         "the hold is lifted",
@@ -2040,9 +2142,9 @@ def run_held_order(d: Demo, c: Checks, co: Company, pick: Pick) -> None:
         None,
     )
     c.same(
-        "the proposal was decided by the finance manager",
+        "the proposal was decided by the purchase manager (the rule for price variances)",
         first(db, "select decided_by from proposal where id = :i", i=held[1]),
-        co.ids["finance"],
+        co.ids["proc_head"],
     )
     c.true(
         "the acceptance is in the audit log",
@@ -2075,7 +2177,6 @@ def run_held_order(d: Demo, c: Checks, co: Company, pick: Pick) -> None:
         (
             "po.create",
             "po.variance_accepted",
-            "po.approve",
             "po.send",
             "proposal.approved",
         ),
@@ -2084,7 +2185,7 @@ def run_held_order(d: Demo, c: Checks, co: Company, pick: Pick) -> None:
         d, c, co,
         {
             "requester": {"request.submit": "buyer"},
-            "approver": {"po.variance_accepted": "finance", "po.approve": "proc_head"},
+            "approver": {"po.variance_accepted": "proc_head"},
         },
         also={"po.send": "buyer", "po.acknowledge": "buyer"},
     )  # fmt: skip
@@ -2158,6 +2259,8 @@ def run(ctx: Any) -> Outcome:
 
     with _tenants.control_engine().begin() as _conn:
         _conn.execute(_text("delete from job"))
+    global SCENARIO
+    SCENARIO = None
     wanted = [s for s in os.environ.get("P2P_E30_RUNS", "1,2,3,4,5,6,7").split(",") if s]
     # no screen of these runs calls a real model; anything that tried would find no provider and fail loudly
     total_steps = total_checks = 0

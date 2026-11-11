@@ -1,10 +1,14 @@
-"""E33: the small demo company (`flow`) completes the whole purchase flow with its eight logins, and nobody does two jobs of one case.
+"""E33: the main demo company (Apex Pumps, `apex`) completes the whole purchase flow with its role logins, and nobody
+does two jobs of one case.
 
-Not a replay of history: the company starts empty. Stock is low on four items; one click of "Check stock levels" starts a
-run that goes through approval, a contract price and two quotation requests, four orders, goods receipt, four invoices
-(each matched), one payment run approved by the plant head, the bank file, and "the bank has paid". Every figure that a
-decision used is checked against what the dataset's own files say (item prices, reorder lots, approval bands, GST by state,
-payment terms), not against the platform's formulas.
+Not a replay of history: the company starts with its master data and stock, and nothing open. One click of "Check
+stock levels" makes a request for the V-belts; the production manager asks for impellers, seals and copper wire. The run
+goes through approval by value (the request above Rs 1,00,000 to the director), a contract price and two quotation
+requests (one with a single quote, awarded with a reason), four orders with GST (one interstate, one above the purchase
+manager's threshold), receipt with an inspection, four matched invoices, one payment run approved by the director, the
+bank file and "the bank has paid". Every figure that a decision used is checked against what the dataset's own files say
+(stock, reorder levels, item prices, approval bands, the suppliers asked, GST by state, payment terms), not against the
+platform's formulas.
 """
 
 import re
@@ -19,16 +23,27 @@ import lib
 from lib import Outcome
 
 ID = "E33"
-TITLE = "The small demo company completes the whole flow, from low stock to a paid invoice, with separate people for each job"
+TITLE = "The main demo company completes the whole flow, from low stock to a paid invoice, with separate people for each job"
 REQUIREMENT = (
     "Phase 1: request, approval, price or quotation, order with GST, receipt, invoice match, payment run, closing; "
     "requester, approver, receiver, invoice enterer and payer differ for the same case; "
-    "Rs 10,000 approves itself, up to Rs 1,00,000 the maintenance manager, orders and payment runs the plant head"
+    "Rs 10,000 approves itself, up to Rs 1,00,000 the plant head, above that the director; orders above Rs 1,00,000 the "
+    "purchase manager; payment runs the director"
 )
 
 TODAY = date(2026, 11, 6)
 PAY_DAY = date(2026, 12, 21)  # the day the payment run is made: after every invoice of the run is due
 CENT = Decimal("0.01")
+ASKED = 3  # suppliers asked for a quotation (the platform's default `rfq_supplier_count`)
+# what the production manager asks for: impellers (on the castings contract), seals (inspected on arrival) and copper
+# winding wire (enough to go above the plant head's limit)
+WANTED = {"RM-03": Decimal(100), "RM-07": Decimal(100), "RM-08": Decimal(120)}
+QUOTES = {  # the buyer types these in: supplier -> item -> price
+    "SUP-002": {"RM-07": "94"},
+    "SUP-003": {"RM-07": "97", "RM-08": "915"},
+    "SUP-005": {"RM-07": "99", "RM-08": "905"},
+}
+BELT_QUOTE = ("SUP-006", "205")
 
 
 def money(value: Decimal | int | str) -> Decimal:
@@ -57,7 +72,7 @@ def _run(ctx: Any) -> Outcome:
     folder = Path(tempfile.mkdtemp(prefix="e33_"))
     dataset, credentials = folder / "dataset", folder / "credentials"
     slug = env.slug("e33")
-    made = demo.reset_flow(dataset, credentials=credentials, slug=slug)
+    made = demo.reset_company(demo.company("apex"), dataset, credentials=credentials, slug=slug)
     out.metrics["people / master rows loaded"] = f"{len(made.logins)} / {made.report.rows_loaded if made.report else 0}"
     db = Session(routing.engine_for(slug))
     checks = 0
@@ -68,13 +83,13 @@ def _run(ctx: Any) -> Outcome:
         if not ok:
             out.find(severity, message)
 
-    # ---- the eight logins, by their designation --------------------------------------------------
+    # ---- the logins, by their designation --------------------------------------------------------
     people: dict[str, tuple[str, str]] = {}
     for line in credentials.read_text(encoding="utf-8").splitlines():
         found = re.match(r"^(\S+@\S+)\s+(\S+)\s+#\s*(.+) \((\w+)\)$", line)
         if found:
             people[found.group(3)] = (found.group(1), found.group(2))
-    check(len(people) == 8, f"expected 8 logins, found {len(people)}")
+    check(len(people) == 9, f"expected 9 logins, found {len(people)}")
     tokens: dict[str, dict[str, str]] = {}
 
     def who(designation: str) -> dict[str, str]:
@@ -85,14 +100,15 @@ def _run(ctx: Any) -> Outcome:
             tokens[designation] = {"Authorization": "Bearer " + r.json()["access_token"]}
         return tokens[designation]
 
-    PLANT_HEAD, MAINT_MGR, ENGINEER = "Plant Head", "Maintenance Manager", "Maintenance Engineer"
-    STORE, BUYER, AP, FINANCE, ADMIN = (
+    REQUESTER, STORE, BUYER, AP, FINANCE, ADMIN = (
+        "Production Manager",
         "Storekeeper",
         "Buyer",
-        "Accounts Payable Executive",
+        "AP Executive",
         "Finance Manager",
         "System Administrator",
     )
+    PLANT_HEAD, PURCHASE_MANAGER, DIRECTOR = "Plant Head", "Purchase Manager", "Director"
 
     def call(
         designation: str, method: str, path: str, body: dict[str, Any] | None = None, *, expect: int | None = 200
@@ -125,71 +141,97 @@ def _run(ctx: Any) -> Outcome:
     # ---- what the dataset's own files say (the oracle) ---------------------------------------------
     items = {r["code"]: r for r in lib.rows("master", "item", dataset)}
     plan = {r["item_code"]: r for r in lib.rows("master", "item_location", dataset)}
-    opening = {r["item_code"]: lib.D(r["qty"]) for r in lib.rows("master", "stock_opening", dataset)}
     suppliers = {r["code"]: r for r in lib.rows("master", "supplier", dataset)}
     terms = {r["code"]: int(r["days"]) for r in lib.rows("master", "payment_terms", dataset)}
-    bands = [r for r in lib.rows("master", "approval_rule", dataset) if r["document"] == "request"]
+    rules = lib.rows("master", "approval_rule", dataset)
     plant_gstin = lib.rows("master", "gst_registration", dataset)[0]["gstin"]
+    prices = lib.rows("master", "price_record", dataset)
+    approved_for = lib.rows("master", "supplier_category", dataset)
+    on_hand = {r["item_code"]: lib.D(r["qty"]) for r in lib.rows("master", "stock_opening", dataset)}
+    for m in lib.rows("history", "stock_movement", dataset):  # the stock history, replayed
+        sign = 1 if m["type"] in ("receipt", "transfer_in", "adjust") else -1
+        on_hand[m["item_code"]] = on_hand.get(m["item_code"], Decimal(0)) + sign * lib.D(m["qty"])
 
-    def route_of(value: Decimal) -> str:
-        for band in bands:
-            if lib.D(band["min_value"]) <= value <= lib.D(band["max_value"]):
-                return band["approver_chain"]
+    def chain(document: str, value: Decimal) -> str:
+        for r in rules:
+            if r["document"] == document and lib.D(r["min_value"]) <= value <= lib.D(r["max_value"]):
+                return r["approver_chain"]
         return "?"
 
-    expect_requests: dict[str, Decimal] = {}
-    for code, p in plan.items():
-        if opening[code] <= lib.D(p["reorder_point"]):
-            qty = max(lib.D(p["order_qty"]), lib.D(items[code]["moq"]))
-            cat = items[code]["category_code"]
-            expect_requests[cat] = expect_requests.get(cat, Decimal(0)) + qty * lib.D(items[code]["standard_price"])
-    out.metrics["items at or below reorder point"] = sum(
-        1 for c, p in plan.items() if opening[c] <= lib.D(p["reorder_point"])
-    )
+    def rate(item: str) -> Decimal:
+        it = items[item]
+        changed = it["gst_rate_change_date"] and date.fromisoformat(it["gst_rate_change_date"]) <= TODAY
+        return Decimal(it["gst_rate_after"] if changed else it["gst_rate_before"])
+
+    def asked_for(category: str, codes: list[str]) -> list[str]:
+        """Suppliers approved for the category, those with prices for the items first, then by code."""
+        approved = sorted(s["supplier_code"] for s in approved_for if s["category_code"] == category)
+        with_prices = {
+            s: sum(1 for p in prices if p["supplier_code"] == s and p["item_code"] in codes) for s in approved
+        }
+        return sorted(approved, key=lambda s: (-with_prices[s], s))[:ASKED]
+
+    low = {
+        c: p for c, p in plan.items() if p["reorder_point"] and on_hand.get(c, Decimal(0)) <= lib.D(p["reorder_point"])
+    }
+    restock: dict[str, Decimal] = {}
+    for code, p in low.items():
+        need = lib.D(p["max_qty"]) - on_hand[code] if p["reorder_policy"] == "minmax" else lib.D(p["order_qty"])
+        restock[code] = max(need, lib.D(items[code]["moq"]))
+    out.metrics["items at or below reorder point"] = sorted(low)
 
     # ---- 1. check stock levels -------------------------------------------------------------------
     preview = call(BUYER, "POST", "/api/replenishment/run", {"dry_run": True}).json()
     check(
-        len(preview["requests"]) == 3 and all(r["no"] is None for r in preview["requests"]),
-        "the preview must show three requests and make none",
+        len(preview["requests"]) == len({items[c]["category_code"] for c in restock})
+        and all(r["no"] is None for r in preview["requests"]),
+        "the preview must show one request per category of the low items and make none",
     )
     check(q("select count(*) from request")[0][0] == 0, "a preview made a request")
     created = call(BUYER, "POST", "/api/replenishment/run", {"dry_run": False}).json()["requests"]
-    got = {r["category"]: r for r in created}
-    check(
-        sorted(got) == sorted(expect_requests),
-        f"requests by category {sorted(got)} differ from the dataset's {sorted(expect_requests)}",
-    )
-    for cat, value in expect_requests.items():
-        r = got.get(cat)
-        if r is None:
-            continue
+    check(len(created) == 1, f"one request for the low spares expected, made {len(created)}")
+    belts_value = sum((qty * lib.D(items[c]["standard_price"]) for c, qty in restock.items()), Decimal(0))
+    belts_request = created[0]["no"] if created else ""
+    if created:
         check(
-            money(r["total_value"]) == money(value),
-            f"{cat} request is {r['total_value']}, the dataset's reorder lots give {value}",
+            money(created[0]["total_value"]) == money(belts_value),
+            f"the stock request is {created[0]['total_value']}, the dataset's reorder levels give {belts_value}",
         )
-        chain = route_of(value)
-        want = "approved" if chain == "auto" else "submitted"
         check(
-            r["outcome"] == want, f"{cat} request of {value} should be {want} (rule says '{chain}'), is {r['outcome']}"
+            created[0]["outcome"] == ("approved" if chain("request", belts_value) == "auto" else "submitted"),
+            f"a stock request of {belts_value} should follow the rule '{chain('request', belts_value)}'",
         )
-    request_of = {r["category"]: r["no"] for r in created}
-    pending = q(
-        "select a.approver, r.no from approval_step a join request r on r.no = a.request_no where a.status = 'pending' order by r.no"
-    )
-    check(
-        [p[0] for p in pending] == ["U02", "U02"],
-        f"two requests should wait for the maintenance manager (U02): {[tuple(p) for p in pending]}",
-    )
 
-    # ---- 2. approval: the maintenance manager; nobody else may -----------------------------------
-    for no in (request_of["MRO"], request_of["ELE"]):
-        refused(ENGINEER, "POST", f"/api/requisitions/{no}/approve", {})
-        refused(BUYER, "POST", f"/api/requisitions/{no}/approve", {})
-        refused(ADMIN, "POST", f"/api/requisitions/{no}/approve", {})
-        refused(PLANT_HEAD, "POST", f"/api/requisitions/{no}/approve", {})  # not their step: the rule names the manager
-    for no in (request_of["MRO"], request_of["ELE"]):
-        call(MAINT_MGR, "POST", f"/api/requisitions/{no}/approve", {})
+    # ---- 2. the production manager's request, approved by the person the band names -------------
+    value = sum((qty * lib.D(items[c]["standard_price"]) for c, qty in WANTED.items()), Decimal(0))
+    raised = call(
+        REQUESTER,
+        "POST",
+        "/api/requisitions",
+        {
+            "lines": [{"item_code": c, "qty": str(qty)} for c, qty in WANTED.items()],
+            "need_by": (TODAY + timedelta(days=21)).isoformat(),
+            "location": plan["RM-03"]["location_code"],
+            "reason": "Materials for the November pumps",
+        },
+    ).json()
+    request_no = str(raised.get("id"))
+    call(REQUESTER, "POST", f"/api/requisitions/{request_no}/submit", {})
+    stored = q("select total_value, status from request where no = :n", n=request_no)
+    check(
+        bool(stored) and money(stored[0][0]) == money(value),
+        f"the request is worth {stored[0][0] if stored else '-'}, its lines at the item prices give {value}",
+    )
+    band = chain("request", value)
+    pending = q("select approver from approval_step where request_no = :n and status = 'pending'", n=request_no)
+    director_code = next(u["code"] for u in lib.rows("master", "user", dataset) if u["designation"] == DIRECTOR)
+    check(
+        band == "director" and [p[0] for p in pending] == [director_code],
+        f"a request of {value} (rule '{band}') should wait for the director only: {[p[0] for p in pending]}",
+    )
+    for designation in (REQUESTER, BUYER, ADMIN, PLANT_HEAD, PURCHASE_MANAGER):  # not their step
+        refused(designation, "POST", f"/api/requisitions/{request_no}/approve", {})
+    call(DIRECTOR, "POST", f"/api/requisitions/{request_no}/approve", {})
     check(
         all(r[0] in ("approved", "closed") for r in q("select status from request")),
         "every request should be approved by now",
@@ -197,132 +239,133 @@ def _run(ctx: Any) -> Outcome:
     work()  # the worker decides how each line is bought
 
     # ---- 3. sourcing: the contract line becomes an order; the rest are quotation requests ---------
-    contract_pos = q("select no, supplier_code, status, taxable, total from po where contract_code is not null")
+    contract = next(p for p in prices if p["item_code"] == "RM-03" and p["contract_code"])
+    contract_pos = q("select no, supplier_code, taxable from po where contract_code is not null")
     check(
-        len(contract_pos) == 1 and contract_pos[0][1] == "SUP-002",
-        f"the contactor should be ordered at the contract's supplier: {[tuple(c) for c in contract_pos]}",
+        [(c[1], money(c[2])) for c in contract_pos]
+        == [(contract["supplier_code"], money(100 * lib.D(contract["price"])))],
+        f"the impellers should be ordered from the contract supplier at its price: {[tuple(c) for c in contract_pos]}",
     )
-    if contract_pos:
-        contract_price = lib.D(lib.rows("master", "price_record", dataset)[0]["price"])
-        qty = max(lib.D(plan["ITM-006"]["order_qty"]), lib.D(items["ITM-006"]["moq"]))
-        check(
-            lib.D(contract_pos[0][3]) == money(qty * contract_price),
-            f"contract order taxable {contract_pos[0][3]} is not {qty} x {contract_price}",
-        )
-    rfqs = q("select no, request_no from rfq order by no")
-    check(len(rfqs) == 2, f"two quotation requests expected (safety shoes; bearing and seal), found {len(rfqs)}")
-    check(
-        q("select count(*) from rfq where status = 'sent'")[0][0] == 0,
-        "no quotation request may be sent before a buyer approves it ('rfq.send' is set to propose)",
-    )
-    check(
-        len(box.sent) == 0 or all("RFQ" not in (m.get("subject") or "") for m in box.sent),
-        "a quotation request was emailed before approval",
-    )
-
-    proposals = call(BUYER, "GET", "/api/admin/proposals?status=pending").json()
-    sends = [p for p in proposals if p["action"] == "rfq.send"]
+    rfqs = {r[1]: r[0] for r in q("select no, request_no from rfq order by no")}
+    check(sorted(rfqs) == sorted([belts_request, request_no]), f"one quotation request per request expected: {rfqs}")
+    check(q("select count(*) from rfq where status = 'sent'")[0][0] == 0, "an RFQ was sent before a buyer approved it")
+    sends = [p for p in call(BUYER, "GET", "/api/admin/proposals?status=pending").json() if p["action"] == "rfq.send"]
     check(len(sends) == 2, f"two 'send quotation request' proposals expected, found {len(sends)}")
     for p in sends:
-        refused(ENGINEER, "POST", f"/api/admin/proposals/{p['id']}/approve", {})
+        refused(REQUESTER, "POST", f"/api/admin/proposals/{p['id']}/approve", {})
         call(BUYER, "POST", f"/api/admin/proposals/{p['id']}/approve", {})
     work()
-    sent_rfqs = {r[0]: r[1] for r in q("select no, status from rfq")}
-    check(all(s == "sent" for s in sent_rfqs.values()), f"the quotation requests should be sent now: {sent_rfqs}")
+    sent = {r[0]: r[1] for r in q("select no, status from rfq")}
+    check(all(s == "sent" for s in sent.values()), f"the quotation requests should be sent now: {sent}")
+    raw_rfq, belts_rfq = rfqs.get(request_no, ""), rfqs.get(belts_request, "")
     invited = {
-        r[0]: sorted(x[0] for x in q("select supplier_code from rfq_supplier where rfq_no = :n", n=r[0])) for r in rfqs
+        n: [x[0] for x in q("select supplier_code from rfq_supplier where rfq_no = :n order by 1", n=n)]
+        for n in (raw_rfq, belts_rfq)
     }
-    shoes_rfq = next(r[0] for r in rfqs if r[1] == request_of["PPE"])
-    mro_rfq = next(r[0] for r in rfqs if r[1] == request_of["MRO"])
+    want_raw = sorted(asked_for("RAW", ["RM-07", "RM-08"]))
+    check(invited[raw_rfq] == want_raw, f"raw materials: asked {invited[raw_rfq]}, the dataset gives {want_raw}")
+    want_mro = sorted(asked_for("MRO", list(restock)))
+    check(invited[belts_rfq] == want_mro, f"spares: asked {invited[belts_rfq]}, the dataset gives {want_mro}")
+    contacts = {c["supplier_code"]: c["email"] for c in lib.rows("master", "supplier_contact", dataset)}
     check(
-        invited[shoes_rfq] == ["SUP-003", "SUP-004"],
-        f"safety gear: asked {invited[shoes_rfq]}, expected the two general suppliers",
-    )
-    check(invited[mro_rfq] == ["SUP-001", "SUP-003", "SUP-004"], f"mechanical spares: asked {invited[mro_rfq]}")
-    check(
-        sum(1 for m in box.sent if "sales@deccansupplies.example" == m.get("to")) >= 2,
-        "the general supplier should have two quotation emails",
+        all(any(m.get("to") == contacts[s] for m in box.sent) for s in want_raw + want_mro),
+        "every supplier asked should have its quotation email",
     )
 
     # ---- 4. quotes entered by the buyer, compared, awarded -----------------------------------------
-    def quote(rfq: str, supplier: str, prices: dict[int, str], gst: dict[int, int]) -> None:
+    lines_of = {
+        n: {r[1]: r[0] for r in q("select line_no, item_code from rfq_line where rfq_no = :n", n=n)}
+        for n in (raw_rfq, belts_rfq)
+    }
+
+    def quote(rfq: str, supplier: str, offer: dict[str, str]) -> None:
         body = {
             "supplier_code": supplier,
             "valid_until": "2026-12-31",
             "freight": "0",
             "lines": [
                 {
-                    "rfq_line_no": n,
+                    "rfq_line_no": lines_of[rfq][item],
                     "unit_price": price,
                     "discount_pct": "0",
-                    "gst_rate": str(gst[n]),
+                    "gst_rate": str(rate(item)),
                     "delivery_days": 7,
                 }
-                for n, price in prices.items()
+                for item, price in offer.items()
+                if item in lines_of[rfq]
             ],
         }
-        refused(ENGINEER, "POST", f"/api/rfqs/{rfq}/quotes", body)
+        refused(REQUESTER, "POST", f"/api/rfqs/{rfq}/quotes", body)
         call(BUYER, "POST", f"/api/rfqs/{rfq}/quotes", body)
 
-    quote(shoes_rfq, "SUP-003", {1: "1120"}, {1: 5})
-    quote(shoes_rfq, "SUP-004", {1: "1090"}, {1: 5})
-    quote(mro_rfq, "SUP-001", {1: "305", 2: "6450"}, {1: 18, 2: 18})
-    quote(mro_rfq, "SUP-003", {1: "315", 2: "6350"}, {1: 18, 2: 18})
-    quote(mro_rfq, "SUP-004", {1: "320", 2: "6400"}, {1: 18, 2: 18})
-    page = call(BUYER, "GET", f"/api/rfqs/{mro_rfq}").json()
-    rec = {ln["rfq_line_no"]: ln["recommended"] for ln in page["comparison"]["lines"]}
-    out.metrics["recommended by the comparison (bearing / seal)"] = f"{rec.get(1)} / {rec.get(2)}"
-    check(
-        str(rec.get(1)) == "SUP-001" and str(rec.get(2)) == "SUP-003",
-        f"the comparison should recommend the cheapest quote per line (SUP-001, SUP-003), says {rec}",
+    for supplier, offer in QUOTES.items():
+        quote(raw_rfq, supplier, offer)
+    quote(belts_rfq, BELT_QUOTE[0], {"SP-01": BELT_QUOTE[1]})
+    cheapest = {
+        item: min((s for s in QUOTES if item in QUOTES[s]), key=lambda s: Decimal(QUOTES[s][item]))
+        for item in ("RM-07", "RM-08")
+    }
+    page = call(BUYER, "GET", f"/api/rfqs/{raw_rfq}").json()
+    item_of = {n: i for i, n in lines_of[raw_rfq].items()}
+    rec = {item_of.get(ln["rfq_line_no"]): ln["recommended"] for ln in page["comparison"]["lines"]}
+    out.metrics["recommended by the comparison (seal / copper wire)"] = f"{rec.get('RM-07')} / {rec.get('RM-08')}"
+    check(rec == cheapest, f"the comparison should recommend the cheapest quote per line {cheapest}, says {rec}")
+    choices = {str(lines_of[raw_rfq][i]): s for i, s in cheapest.items()}
+    refused(REQUESTER, "POST", f"/api/rfqs/{raw_rfq}/award", {"choices": choices})
+    call(BUYER, "POST", f"/api/rfqs/{raw_rfq}/award", {"choices": choices})
+    belts_choice = {str(lines_of[belts_rfq]["SP-01"]): BELT_QUOTE[0]}
+    # one quote where two are wanted: an award needs the buyer's reason
+    refused(BUYER, "POST", f"/api/rfqs/{belts_rfq}/award", {"choices": belts_choice})
+    call(
+        BUYER,
+        "POST",
+        f"/api/rfqs/{belts_rfq}/award",
+        {"choices": belts_choice, "reason": "The only approved supplier of spares; the belts are needed"},
     )
-    refused(ENGINEER, "POST", f"/api/rfqs/{mro_rfq}/award", {"choices": {"1": "SUP-001", "2": "SUP-003"}})
-    call(BUYER, "POST", f"/api/rfqs/{mro_rfq}/award", {"choices": {"1": "SUP-001", "2": "SUP-003"}})
-    call(BUYER, "POST", f"/api/rfqs/{shoes_rfq}/award", {"choices": {"1": "SUP-004"}})
     work()
 
-    # ---- 5. orders: GST by state, approved by the plant head only -----------------------------------
+    # ---- 5. orders: GST by state, approved by whom the band names ------------------------------------
     orders = {
         r[1]: r for r in q("select no, supplier_code, status, taxable, cgst, sgst, igst, total from po order by no")
     }
-    check(
-        sorted(orders) == ["SUP-001", "SUP-002", "SUP-003", "SUP-004"],
-        f"one order per supplier expected, found {sorted(orders)}",
-    )
     expected_lines = {
-        "SUP-001": ("ITM-001", Decimal("305")),
-        "SUP-003": ("ITM-004", Decimal("6350")),
-        "SUP-004": ("ITM-011", Decimal("1090")),
+        contract["supplier_code"]: ("RM-03", WANTED["RM-03"], lib.D(contract["price"])),
+        cheapest["RM-07"]: ("RM-07", WANTED["RM-07"], Decimal(QUOTES[cheapest["RM-07"]]["RM-07"])),
+        cheapest["RM-08"]: ("RM-08", WANTED["RM-08"], Decimal(QUOTES[cheapest["RM-08"]]["RM-08"])),
+        BELT_QUOTE[0]: ("SP-01", restock.get("SP-01", Decimal(0)), Decimal(BELT_QUOTE[1])),
     }
-    for supplier, (item, price) in expected_lines.items():
+    check(sorted(orders) == sorted(expected_lines), f"one order per supplier expected, found {sorted(orders)}")
+    for supplier, (item, qty, price) in expected_lines.items():
         po = orders.get(supplier)
         if po is None:
             continue
-        qty = max(lib.D(plan[item]["order_qty"]), lib.D(items[item]["moq"]))
-        rate = Decimal(items[item]["gst_rate_after"])
         taxable = money(qty * price)
         interstate = suppliers[supplier]["state_code"] != plant_gstin[:2]
-        half = money(taxable * rate / 200)
-        want_total = taxable + (money(taxable * rate / 100) if interstate else 2 * half)
+        half = money(taxable * rate(item) / 200)
+        want_total = taxable + (money(taxable * rate(item) / 100) if interstate else 2 * half)
         check(lib.D(po[3]) == taxable, f"{po[0]}: taxable {po[3]}, expected {qty} x {price} = {taxable}")
         check(abs(lib.D(po[7]) - want_total) <= CENT * 2, f"{po[0]}: total {po[7]}, expected {want_total}")
         check(
             (lib.D(po[6]) > 0) == interstate,
             f"{po[0]}: {'IGST' if interstate else 'CGST and SGST'} expected for {suppliers[supplier]['state_code']} -> 27",
         )
-    order_nos = [r[0] for r in orders.values()]
-    check(
-        all(r[2] == "submitted" for r in orders.values()),
-        f"every order should wait for approval: {[r[2] for r in orders.values()]}",
-    )
-    for no in order_nos:
+        band = chain("po", taxable)
+        check(
+            po[2] == ("approved" if band == "auto" else "submitted"),
+            f"{po[0]} of {taxable} should be {'approved on the spot' if band == 'auto' else 'waiting'} (rule '{band}')",
+        )
+    waiting_pos = [r[0] for r in orders.values() if r[2] == "submitted"]
+    out.metrics["orders waiting for the purchase manager"] = len(waiting_pos)
+    check(len(waiting_pos) == 1, f"only the copper wire order is above Rs 1,00,000: {waiting_pos}")
+    for no in waiting_pos:
         refused(BUYER, "POST", f"/api/purchase-orders/{no}/approve", {})
-        refused(ENGINEER, "POST", f"/api/purchase-orders/{no}/approve", {})
+        refused(REQUESTER, "POST", f"/api/purchase-orders/{no}/approve", {})
         refused(BUYER, "POST", f"/api/purchase-orders/{no}/send")  # not approved yet
-        call(PLANT_HEAD, "POST", f"/api/purchase-orders/{no}/approve", {"comment": "ok"})
+        call(PURCHASE_MANAGER, "POST", f"/api/purchase-orders/{no}/approve", {"comment": "ok"})
     check(all(r[0] == "approved" for r in q("select status from po")), "every order should be approved")
+    order_nos = [r[0] for r in orders.values()]
     for no in order_nos:
-        refused(PLANT_HEAD, "POST", f"/api/purchase-orders/{no}/send")  # the approver does not send
+        refused(PURCHASE_MANAGER, "POST", f"/api/purchase-orders/{no}/send")  # the approver does not send
         call(BUYER, "POST", f"/api/purchase-orders/{no}/send")
         call(BUYER, "POST", f"/api/purchase-orders/{no}/acknowledge", {"promised_date": "2026-11-12"})
     check(all(r[0] == "acknowledged" for r in q("select status from po")), "every order should be acknowledged")
@@ -331,7 +374,7 @@ def _run(ctx: Any) -> Outcome:
         "each supplier should have been sent its order",
     )
 
-    # ---- 6. goods receipt by the storekeeper -------------------------------------------------------
+    # ---- 6. goods receipt by the storekeeper; the seals wait for inspection --------------------------
     for no in order_nos:
         lines = q("select line_no, qty from po_line where po_no = :n order by line_no", n=no)
         body = {
@@ -342,17 +385,27 @@ def _run(ctx: Any) -> Outcome:
         refused(BUYER, "POST", f"/api/purchase-orders/{no}/receive", body)
         refused(AP, "POST", f"/api/purchase-orders/{no}/receive", body)
         call(STORE, "POST", f"/api/purchase-orders/{no}/receive", body)
+    inspected = [c for c, it in items.items() if it["inspection_required"] == "true" and c in WANTED]
+    waiting_gr = q("select no, po_no from goods_receipt where inspection_status = 'pending'")
+    check(
+        len(waiting_gr) == len(inspected),
+        f"the receipts of items that need inspection should wait ({inspected}): {[tuple(g) for g in waiting_gr]}",
+    )
+    for gr, po_no in waiting_gr:
+        lines = q("select line_no, qty from po_line where po_no = :n order by line_no", n=po_no)
+        decisions = [{"line_no": ln[0], "qty_accepted": str(ln[1]), "qty_rejected": "0"} for ln in lines]
+        refused(AP, "POST", f"/api/receipts/{gr}/inspect", {"lines": decisions})
+        call(STORE, "POST", f"/api/receipts/{gr}/inspect", {"lines": decisions})
     check(q("select count(*) from goods_receipt")[0][0] == 4, "four goods receipts expected")
     check(
         all(r[0] == "received" for r in q("select status from po")),
         f"every order should be fully received: {[r[0] for r in q('select status from po')]}",
     )
     stock_after = {r[0]: lib.D(r[1]) for r in q("select item_code, on_hand from stock_level")}
-    for code in ("ITM-001", "ITM-004", "ITM-006", "ITM-011"):
-        qty = max(lib.D(plan[code]["order_qty"]), lib.D(items[code]["moq"]))
+    for code, qty, _ in expected_lines.values():
         check(
-            stock_after.get(code) == opening[code] + qty,
-            f"{code}: stock {stock_after.get(code)}, expected {opening[code]} + {qty}",
+            stock_after.get(code) == on_hand[code] + qty,
+            f"{code}: stock {stock_after.get(code)}, expected {on_hand[code]} + {qty}",
         )
 
     # ---- 7. invoices entered by AP and matched ------------------------------------------------------
@@ -369,7 +422,7 @@ def _run(ctx: Any) -> Outcome:
         }
         if suppliers[supplier]["e_invoice_applicable"] == "true":
             body["irn"] = "A" * 64
-        for designation in (STORE, BUYER, ENGINEER):
+        for designation in (STORE, BUYER, REQUESTER):
             refused(designation, "POST", "/api/invoices", body)
         r = call(AP, "POST", "/api/invoices", body)
         if r.status_code == 200:
@@ -380,25 +433,25 @@ def _run(ctx: Any) -> Outcome:
             )
             invoice_nos[supplier] = result["invoice"]
     for supplier, no in invoice_nos.items():
-        inv = q("select taxable, total, due_date, entered_by, status from invoice where no = :n", n=no)[0]
+        inv = q("select taxable, total, due_date from invoice where no = :n", n=no)[0]
         po = orders[supplier]
         check(lib.D(inv[0]) == lib.D(po[3]), f"{no}: invoice taxable {inv[0]} differs from the order's {po[3]}")
         check(
             abs(lib.D(inv[1]) - lib.D(po[7])) <= Decimal("0.50"),
             f"{no}: invoice total {inv[1]} differs from the order's {po[7]} by more than the rupee round-off",
         )
-        days = terms[suppliers[supplier]["payment_terms_code"]]
-        due = TODAY + timedelta(days=days)
+        due = TODAY + timedelta(days=terms[suppliers[supplier]["payment_terms_code"]])
         if suppliers[supplier]["msme_category"] in ("micro", "small") and suppliers[supplier]["agreed_payment_days"]:
             due = min(due, TODAY + timedelta(days=min(45, int(suppliers[supplier]["agreed_payment_days"]))))
         check(
             inv[2] == due,
             f"{no}: due date {inv[2]}, expected {due} from the supplier's terms ({suppliers[supplier]['payment_terms_code']})",
         )
-    micro_due = q("select due_date from invoice where supplier_code = 'SUP-001'")
-    out.metrics["micro supplier: due date (60-day terms, 45-day rule)"] = str(micro_due[0][0]) if micro_due else "-"
+    micro = next(c for c, s in suppliers.items() if s["msme_category"] == "micro")
+    micro_due = q("select due_date from invoice where supplier_code = :s", s=micro)
+    out.metrics["micro supplier: due date (45-day terms and agreement)"] = str(micro_due[0][0]) if micro_due else "-"
 
-    # ---- 8. the payment run: planned by finance, approved by the plant head ---------------------------
+    # ---- 8. the payment run: planned by finance, approved by the director -----------------------------
     pin_today(PAY_DAY)
     refused(AP, "POST", "/api/payment-runs", {"run_date": PAY_DAY.isoformat(), "window_days": 7})
     plan_run = call(FINANCE, "POST", "/api/payment-runs", {"run_date": PAY_DAY.isoformat(), "window_days": 7}).json()
@@ -406,24 +459,25 @@ def _run(ctx: Any) -> Outcome:
     check(bool(run_no), f"no run number in {plan_run}")
     rows = q("select supplier_code, amount from payment where run_no = :r order by supplier_code", r=run_no)
     check(
-        [r[0] for r in rows] == ["SUP-001", "SUP-002", "SUP-003", "SUP-004"],
+        [r[0] for r in rows] == sorted(orders),
         f"one payment per supplier expected: {[tuple(r) for r in rows]}",
+    )
+    check(
+        chain("payment_run", Decimal(1)) == "director", "the dataset's rule for payment runs should name the director"
     )
     refused(FINANCE, "POST", f"/api/payment-runs/{run_no}/file")  # not approved yet
     waiting = [
         p
-        for p in call(PLANT_HEAD, "GET", "/api/admin/proposals?status=pending").json()
+        for p in call(DIRECTOR, "GET", "/api/admin/proposals?status=pending").json()
         if p["action"].startswith("payment_run")
     ]
-    check(len(waiting) == 1, f"one payment run proposal should wait for the plant head, found {len(waiting)}")
+    check(len(waiting) == 1, f"one payment run proposal should wait for the director, found {len(waiting)}")
     if waiting:
         proposal = waiting[0]["id"]
-        refused(
-            FINANCE, "POST", f"/api/admin/proposals/{proposal}/approve", {}
-        )  # the proposer does not approve their own run
+        refused(FINANCE, "POST", f"/api/admin/proposals/{proposal}/approve", {})  # the proposer does not approve it
         refused(AP, "POST", f"/api/admin/proposals/{proposal}/approve", {})
         refused(ADMIN, "POST", f"/api/admin/proposals/{proposal}/approve", {})
-        call(PLANT_HEAD, "POST", f"/api/admin/proposals/{proposal}/approve", {})
+        call(DIRECTOR, "POST", f"/api/admin/proposals/{proposal}/approve", {})
     refused(AP, "POST", f"/api/payment-runs/{run_no}/file")
     bank_file = call(FINANCE, "POST", f"/api/payment-runs/{run_no}/file").json()
     lines = [ln for ln in bank_file["file"].splitlines() if ln.strip()]

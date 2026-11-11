@@ -2,7 +2,7 @@
 
 Part A replays the dataset's goods orders from the suppliers who are paid 30% in advance, pays the advances on the days the
 dataset paid them, and compares advance payments, tax at source, what each invoice takes off, and what is paid for it with
-the dataset's own answers. Part B gives every supplier discount terms and checks the discount with a calculation written
+the dataset's own answers (skipped when the dataset has no advances; the demo companies have none yet). Part B gives every supplier discount terms and checks the discount with a calculation written
 here in exact fractions, on and around the edge of every window, and checks a payment run built around the discount.
 Part C checks who is told when a run closes an order."""
 
@@ -23,8 +23,13 @@ REQUIREMENT = (
     "a cash discount for paying inside the window, the requester told when the order is paid and closed"
 )
 
-ADVANCE_SUPPLIERS = {"SUP-0038", "SUP-0025", "SUP-0029", "SUP-0057", "SUP-0059"}  # terms ADV30N30
-BIG = lib.ROOT / "data" / "datasets" / "cbc-demo-v1-seed42"
+DATASET = lib.DATASET
+
+
+def advance_suppliers() -> set[str]:
+    """The suppliers on terms with an advance (such as ADV30N30)."""
+    advance = {t["code"] for t in rows("master", "payment_terms", DATASET) if D(t["advance_pct"]) > 0}
+    return {s["code"] for s in rows("master", "supplier", DATASET) if s["payment_terms_code"] in advance}
 
 
 def half_up(x: Fraction) -> Decimal:
@@ -52,13 +57,13 @@ def run(ctx) -> Outcome:
 def _advances(out: Outcome) -> None:
     from p2p.invoices import payment
 
-    if not BIG.exists():
-        out.notes.append("the cbc-demo dataset is not generated: the advance part was skipped")
+    if not any(p["type"] == "advance" for p in rows("history", "payment", DATASET)):
+        out.notes.append(f"{DATASET.name} has no advance payments in its history: part A (advances) was skipped")
         return
-    world = lib.build_world("e26a", with_stock=False, dataset=BIG)
+    world = lib.build_world("e26a", with_stock=False, dataset=DATASET)
     db = world.db
     r = replay(
-        world, dataset=BIG, suppliers=ADVANCE_SUPPLIERS, goods_only=True, advances=True, release_blocked=True,
+        world, dataset=DATASET, suppliers=advance_suppliers(), goods_only=True, advances=True, release_blocked=True,
         load_bank_rates=True,
     )  # fmt: skip
     db.commit()
@@ -97,7 +102,7 @@ def _advances(out: Outcome) -> None:
         for x in db.execute(text("select advance_payment_no, invoice_no, amount from advance_adjustment"))
     }
     want: dict[tuple[str, str], Decimal] = {}
-    for a in rows("history", "advance_adjustment", BIG):
+    for a in rows("history", "advance_adjustment", DATASET):
         plat_pay = r.advance_payment.get(a["advance_payment_no"])
         plat_inv = r.platform_no.get(a["invoice_no"])
         if plat_pay and plat_inv:
@@ -115,7 +120,7 @@ def _advances(out: Outcome) -> None:
     back = {v: k for k, v in r.advance_payment.items()}
     # the dataset notes an adjustment when the invoice is paid; the platform takes the advance off when the invoice is
     # approved. So an adjustment the dataset lacks is fine on an invoice the dataset had not paid by its cut-off.
-    paid_in_dataset = {a["invoice_no"] for a in rows("history", "payment_allocation", BIG)}
+    paid_in_dataset = {a["invoice_no"] for a in rows("history", "payment_allocation", DATASET)}
     extra = []
     not_yet_paid = 0
     for k in platform_adj:
@@ -143,7 +148,7 @@ def _advances(out: Outcome) -> None:
             deliveries[(g["po_no"], g["po_line_no"])] += 1
     net_ok = net_bad = 0
     wrong = []
-    for p in rows("history", "payment", BIG):
+    for p in rows("history", "payment", DATASET):
         if p["type"] != "invoice" or p["reference"] not in r.platform_no:
             continue
         plat = r.platform_no[p["reference"]]
@@ -237,22 +242,20 @@ def _advances(out: Outcome) -> None:
 
 
 def _threshold(out: Outcome) -> None:
-    """With the 50-lakh limit lowered to 5 lakh the advance suppliers cross it. A supplier's tax bases over the year, on its
+    """With the 50-lakh limit lowered to 5 lakh the suppliers cross it. A supplier's tax bases over the year, on its
     advances and its invoices together, must add up to what it bought above the limit (an advance's taxable value is counted
     once, on the advance, and not again on the invoice that takes it off), whatever order things were booked in."""
     from p2p.formulas import payment as rules
 
-    if not BIG.exists():
-        return
     limit = Decimal("500000")
-    world = lib.build_world("e26c", with_stock=False, dataset=BIG)
+    world = lib.build_world("e26c", with_stock=False, dataset=DATASET)
     db = world.db
     kept = rules.TDS_194Q_THRESHOLD
     rules.TDS_194Q_THRESHOLD = limit
     try:
         replay(
-            world, dataset=BIG, suppliers=ADVANCE_SUPPLIERS, goods_only=True, advances=True, release_blocked=True,
-            load_bank_rates=True,
+            world, dataset=DATASET, suppliers=advance_suppliers() or None, goods_only=True, advances=True,
+            release_blocked=True, load_bank_rates=True,
         )  # fmt: skip
     finally:
         rules.TDS_194Q_THRESHOLD = kept

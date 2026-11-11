@@ -387,7 +387,12 @@ def run(ctx) -> Outcome:
             "high", f"{len(replies) - routed} replies are not routed to their RFQ by address, thread and attachments"
         )
     if limit is None:
-        absent = {"partial", "unit_differs", "incl_gst", "relative_validity"} - set(quirks)
+        wanted = {"partial", "unit_differs", "incl_gst", "relative_validity"}
+        lines = Counter(r["quote_no"] for r in rows("history", "quote_line"))
+        if max(lines.values(), default=0) < 2:  # a reply can leave a line out only when the quote has two
+            wanted.discard("partial")
+            out.notes.append("no quotation in the dataset has two lines, so no reply can be partial")
+        absent = wanted - set(quirks)
         if absent:
             out.find("medium", f"no reply shows the quirk(s) {sorted(absent)}")
 

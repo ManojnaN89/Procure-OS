@@ -398,9 +398,10 @@ def intake_section(world: Any, results: list[Result], seen: list[Obeyer]) -> Non
 
     db, slug = world.db, world.slug
     email = f"sec{uuid.uuid4().hex[:5]}@eval.example"
-    db.execute(text("update org_user set email = :e where code = 'U015'"), {"e": email})
+    code, person = lib.requester()
+    db.execute(text("update org_user set email = :e where code = :c"), {"e": email, "c": code})
     db.commit()
-    uid = users.create_user(slug, email, lib.PASSWORD, "Deepa Menon", "Requester")
+    uid = users.create_user(slug, email, lib.PASSWORD, person, "Requester")
     item = db.execute(text("select code, name from item order by code limit 1")).one()
     name = str(item[1])
     attacks = [

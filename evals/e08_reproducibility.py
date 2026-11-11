@@ -110,15 +110,16 @@ def run(ctx) -> Outcome:
                 lib.TODAY,
                 spend_type="opex",
                 category=None,
-                department="LOG",
+                department=lib.department(),
             )
         except rules.ApprovalRuleError:
             continue
         reproduced += (again.code, again.version) == (code, ver)
     db.execute(
         text(
-            "insert into request (no, department_code, ship_to_location, type, channel, status, total_value) values ('EV-NEW', 'LOG', 'WH-BLR', 'goods', 'planning', 'draft', 20000)"
-        )
+            "insert into request (no, department_code, ship_to_location, type, channel, status, total_value) values ('EV-NEW', :d, :loc, 'goods', 'planning', 'draft', 20000)"
+        ),
+        {"d": lib.department(), "loc": lib.location()},
     )
     db.execute(
         text(

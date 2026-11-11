@@ -305,7 +305,12 @@ def reminders(ctx, world, out: Outcome) -> None:
     it = Item(1, pool[0].code, pool[0].name, pool[0].qty, pool[0].est, pool[0].gst)
     rfq, supplier, email = h.setup_rfq(world, "rem", [it])
     cats = sorted(
-        {r["supplier_code"] for r in rows("master", "supplier_category") if r["category_code"] == "MRO"} - {supplier}
+        {
+            r["supplier_code"]
+            for r in rows("master", "supplier_category")
+            if r["category_code"] == lib.busiest_category()
+        }
+        - {supplier}
     )[:3]
     contacts = {c["supplier_code"]: c["email"] for c in rows("master", "supplier_contact") if c["email"]}
     silent = [supplier, cats[0]]

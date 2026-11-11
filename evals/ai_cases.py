@@ -53,7 +53,10 @@ def items_for_cases(n: int = 3) -> list[Item]:
     cat = [
         r
         for r in rows("master", "item")
-        if r["category_code"] == "MRO" and r["stocked"] == "true" and r["standard_price"]
+        if r["category_code"] == lib.busiest_category()
+        and r["stocked"] == "true"
+        and r["standard_price"]
+        and r["base_uom"] == "NOS"
     ]
     out = []
     for i, r in enumerate(cat[: n * 6]):

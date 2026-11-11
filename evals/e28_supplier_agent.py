@@ -112,8 +112,9 @@ def deltas() -> list[tuple[int, bool]]:
     """(days later, applied by the agent) from the dataset's own date-change events, so the oracle is the data's."""
     seen: dict[int, bool] = {}
     for e in rows("history", "po_event"):
-        if e["type"] == "date_change" and e["new_value"].startswith("+") and e["new_value"].endswith("d"):
-            seen[int(e["new_value"][1:-1])] = e["applied_by"] == "agent"
+        if e["type"] == "date_change" and e["old_value"] and e["new_value"]:
+            later = (date.fromisoformat(e["new_value"]) - date.fromisoformat(e["old_value"])).days
+            seen[later] = e["applied_by"] == "agent"
     return sorted(seen.items())
 
 

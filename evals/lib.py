@@ -2,6 +2,7 @@
 raw dataset (so the oracles never touch the platform's own code), and a few small helpers."""
 
 import csv
+import json
 import os
 import time
 import uuid
@@ -18,9 +19,9 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 ROOT = env.ROOT
-DATASET = ROOT / "data" / "datasets" / os.environ.get("P2P_EVAL_DATASET", "plant-small-v1-seed42")
+DATASET = ROOT / "data" / "datasets" / os.environ.get("P2P_EVAL_DATASET", "apex-v1")  # the main demo company
 PASSWORD = "correct horse battery"
-TODAY = date(2026, 11, 6)  # a Friday inside the small dataset's calendar
+TODAY = date(2026, 11, 6)  # a Friday, a working day a week after the datasets' cutoff
 
 
 # ---- results ----------------------------------------------------------------------------------
@@ -61,6 +62,38 @@ class Ctx:
 def rows(folder: str, name: str, dataset: Path = DATASET) -> list[dict[str, str]]:
     with (dataset / folder / f"{name}.csv").open(encoding="utf-8-sig", newline="") as f:
         return list(csv.DictReader(f))
+
+
+def location(dataset: Path = DATASET) -> str:
+    """The company's first location (the demo companies each have one)."""
+    return rows("master", "location", dataset)[0]["code"]
+
+
+def demo_company(dataset: Path = DATASET) -> Any:
+    """The demo company whose profile made the dataset (its chain roles and settings that are not master data)."""
+    from p2p.platform import demo
+
+    return demo.company(json.loads((dataset / "manifest.json").read_text(encoding="utf-8"))["profile"])
+
+
+def department(dataset: Path = DATASET) -> str:
+    """The department whose head approves the requests made from stock levels."""
+    return str(demo_company(dataset).replenishment_department)
+
+
+def requester(dataset: Path = DATASET) -> tuple[str, str]:
+    """(code, name) of the first person whose only job is to ask for things."""
+    roles: dict[str, set[str]] = {}
+    for r in rows("master", "user_role", dataset):
+        roles.setdefault(r["user_code"], set()).add(r["role"])
+    code = min(c for c, held in roles.items() if held == {"requester"})
+    return code, next(u["name"] for u in rows("master", "user", dataset) if u["code"] == code)
+
+
+def busiest_category(dataset: Path = DATASET) -> str:
+    """The category with the most approved suppliers, so that a quotation request can ask several."""
+    approved = [r["category_code"] for r in rows("master", "supplier_category", dataset)]
+    return max(sorted(set(approved)), key=approved.count)
 
 
 def D(value: str | float | Decimal | None, default: str = "0") -> Decimal:
@@ -142,12 +175,9 @@ def build_world(prefix: str = "ev", *, with_stock: bool = True, dataset: Path = 
                 {"e": own, "c": person["code"]},
             )
             org_logins[person["code"]] = users.create_user(name, own, PASSWORD, person["name"], "Approver")
-    db.execute(
-        text(
-            "insert into app_setting (key, value) values ('replenishment_department', 'LOG') on conflict (key) do nothing"
-        )
-    )
-    db.commit()
+    from p2p.platform import demo
+
+    demo.configure(db, demo_company(dataset), name)  # who the chain roles are, and who approves planned requests
     return World(name, db, logins, emails, org_logins, round(time.monotonic() - started, 2))
 
 

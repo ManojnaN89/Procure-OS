@@ -29,7 +29,7 @@ def run(ctx) -> Outcome:
     db = world.db
     rng = random.Random(55)
     items = {r["code"]: r for r in rows("master", "item") if r["stocked"] == "true"}
-    category = "MRO"
+    category = lib.busiest_category()
     category_items = [c for c, r in items.items() if r["category_code"] == category][:30]
     suppliers = [r["supplier_code"] for r in rows("master", "supplier_category") if r["category_code"] == category][:6]
     min_quotes = int(next(r["min_quotes"] for r in rows("master", "category") if r["code"] == category) or 2)
@@ -51,9 +51,9 @@ def run(ctx) -> Outcome:
         need_in = rng.randint(5, 25)
         db.execute(
             text(
-                "insert into request (no, ship_to_location, type, channel, status, total_value) values (:n, 'WH-BLR', 'goods', 'planning', 'approved', 1)"
+                "insert into request (no, ship_to_location, type, channel, status, total_value) values (:n, :loc, 'goods', 'planning', 'approved', 1)"
             ),
-            {"n": req_no},
+            {"n": req_no, "loc": lib.location()},
         )
         db.execute(
             text("insert into rfq (no, request_no, category_code, due_date, status) values (:r, :q, :c, :d, 'sent')"),

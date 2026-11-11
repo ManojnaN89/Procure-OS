@@ -33,9 +33,9 @@ def run(ctx) -> Outcome:
     )
     da.execute(
         text(
-            "insert into request (no, ship_to_location, type, channel, status, total_value, justification) values ('EV-A-REQ', 'WH-BLR', 'goods', 'planning', 'draft', 1, :s)"
+            "insert into request (no, ship_to_location, type, channel, status, total_value, justification) values ('EV-A-REQ', :loc, 'goods', 'planning', 'draft', 1, :s)"
         ),
-        {"s": SECRET},
+        {"s": SECRET, "loc": lib.location()},
     )
     da.execute(
         text(
@@ -44,8 +44,9 @@ def run(ctx) -> Outcome:
     )
     da.execute(
         text(
-            "insert into po (no, supplier_code, ship_to_location, request_no, status, total) values ('EV-A-PO', 'EV-A-SUP', 'WH-BLR', 'EV-A-REQ', 'draft', 1)"
-        )
+            "insert into po (no, supplier_code, ship_to_location, request_no, status, total) values ('EV-A-PO', 'EV-A-SUP', :loc, 'EV-A-REQ', 'draft', 1)"
+        ),
+        {"loc": lib.location()},
     )
     da.execute(
         text(
@@ -55,8 +56,9 @@ def run(ctx) -> Outcome:
     )
     da.execute(
         text(
-            "insert into stock_opening (item_code, location_code, qty, as_of) values ('EV-A-ITEM', 'WH-BLR', 7, '2026-01-01')"
-        )
+            "insert into stock_opening (item_code, location_code, qty, as_of) values ('EV-A-ITEM', :loc, 7, '2026-01-01')"
+        ),
+        {"loc": lib.location()},
     )
     da.execute(
         text("insert into notification (user_id, kind, title, severity) values (null, 'x', :s, 'low')"),

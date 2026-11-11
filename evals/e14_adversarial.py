@@ -154,7 +154,7 @@ def run(ctx) -> Outcome:
         others = [
             r["supplier_code"]
             for r in lib.rows("master", "supplier_category")
-            if r["category_code"] == "MRO" and r["supplier_code"] != supplier
+            if r["category_code"] == lib.busiest_category() and r["supplier_code"] != supplier
         ][:2]
         for o in others:
             db.execute(
