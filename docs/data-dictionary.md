@@ -240,6 +240,11 @@ task, notification, alert, proposal, audit_event, agent_run, agent_step, model_c
 | purchase_case | The case that follows one purchase through its stages (state, title, data) |
 | item_category | Item categories: parent, default account, whether stocked or capex, minimum quotes, buyer, required documents, inspection, default TDS section |
 | ref_gst_state, ref_gst_rate, ref_hsn_sac, ref_uom, ref_holiday, ref_tds_section, ref_load | Reference data loaded into each company's database: states, GST rates with dates, HSN and SAC codes, units, holidays, TDS sections (rate, no-PAN rate, thresholds, validity) and a record of each load. Rates are data (rule 8) |
+| production_order | A production order from the ERP (`order_no` is the ERP's number): product, quantity, need-by date, reason (sales order or plan), location (the company's only stock location when the file names none), status, the import it came with |
+| material_requirement | Material still wanted, one row per ERP document line: a production order's component (`source_kind` production_order, `line_key` the item) or an MRP result (`source_kind` mrp, `line_key` its line number); quantity and unit as the ERP gave them, `base_qty` in the item's unit, need-by, location, status. Unique on (source_kind, source_doc_no, line_key), so the same ERP line never loads twice. The next step reserves stock for the open ones, earliest need-by first |
+| product_demand | Sales orders and demand plan lines (finished products): why production orders exist; kept for reference |
+| demand_import | One ERP import: source file or folder, per file what loaded, what was loaded before, what was left out and the mapping version used, who and when |
+| erp_column_map | The client's column names for each kind of ERP file (`columns`: our column -> theirs), versioned; an import uses the latest version and records which |
 | alembic_version | The migration revision of the database |
 | tenant, tenant_database, tenant_setting, feature_flag, app_user, refresh_token | Control database: the companies, where each one's database is (the connection string is encrypted) and its migration revision, per-company settings, feature flags, logins (with failed-attempt lock) and refresh tokens |
 
@@ -277,7 +282,9 @@ Each line holds: file, layout, hold_out, the true values, and for planted cases 
 ## F. ERP input files (G, in a dataset's `inputs/` folder)
 
 Our own simple CSV templates (decision D36) for what a company's ERP or planning sheet tells purchasing. They are not
-loaded by `import masters`. Quantities are in the item's unit.
+loaded by `import masters`; `import demand` (and the upload `POST /api/demand/import/<kind>`) loads production orders,
+their lines, MRP results, sales orders and the demand plan, as CSV or Excel. A client's own column names are mapped to
+ours by `erp_column_map`. Quantities are in the item's unit unless `unit` names another one with a conversion.
 
 | File | Columns | Meaning |
 |---|---|---|
@@ -286,7 +293,8 @@ loaded by `import masters`. Quantities are in the item's unit.
 | sales_order.csv | order_no, customer, product_code, qty, need_date | A customer order |
 | demand_plan.csv | plan_no, product_code, qty, period, status | Planned sales for a month (`YYYY-MM`) |
 | production_order.csv | order_no, product_code, qty, need_by, reason | What to make by when; reason is the sales order or demand plan |
-| production_order_line.csv | order_no, item_code, qty, unit, need_by | The materials an order needs: the bill of materials times the order quantity |
+| production_order_line.csv | order_no, item_code, qty, unit, need_by | The materials an order needs: the bill of materials times the order quantity (unit and need_by may be blank: the item's unit, the order's date) |
+| mrp_result.csv | plan_no, line_no, item_code, qty, unit, need_by, location_code | What the ERP's material planning says is needed, per plan line (not in the demo datasets) |
 | joiner_kit.csv | kit, item_code, qty | An office's "materials per joiner": what each kind of new joiner gets |
 | joiner_plan.csv | plan_no, department, kit, count, start_date | How many people join a department, with which kit, from when |
 

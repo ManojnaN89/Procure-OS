@@ -62,6 +62,8 @@ MATRIX = [
     ("POST", "/api/contracts/NOPE/prices", {"item_code": "A", "price": "1"}, {"Buyer", "Approver"}),
     ("POST", "/api/contracts/NOPE/activate", {}, {"Approver"}),
     ("POST", "/api/alerts/run", None, {"Admin", "Buyer"}),
+    ("PUT", "/api/demand/mappings/NOPE", {"columns": {}}, {"Store", "Admin"}),
+    ("POST", "/api/demand/import/NOPE", None, {"Store", "Admin"}),
     ("POST", "/api/supplier-agent/chase", {}, {"Buyer"}),
     ("POST", "/api/invoice-drafts/1/confirm", {}, {"AP"}),
     ("POST", "/api/invoice-drafts/1/dismiss", {}, {"AP"}),

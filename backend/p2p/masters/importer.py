@@ -59,9 +59,18 @@ def _cast(value: str, sql_type: str) -> Any:
     if base in ("integer", "bigint"):
         return int(value)
     if base == "numeric":
-        return Decimal(value)
+        try:
+            number = Decimal(value)
+        except InvalidOperation:
+            raise ValueError(f"'{value}' is not a number") from None
+        if not number.is_finite():
+            raise ValueError(f"'{value}' is not a number")
+        return number
     if base == "date":
-        return date.fromisoformat(value)
+        try:
+            return date.fromisoformat(value)
+        except ValueError:
+            raise ValueError(f"'{value}' is not a date like 2026-12-05") from None
     if base == "timestamptz":
         return datetime.fromisoformat(value)
     raise ValueError(f"unknown column type {sql_type}")
@@ -171,8 +180,16 @@ def _read_csv(path: Path) -> tuple[list[str], list[dict[str, str]]]:
         return list(reader.fieldnames or []), list(reader)
 
 
-def read_table(path: Path, spec: Table, report: ImportReport) -> list[tuple[int, dict[str, Any]]]:
-    """Read one table into typed rows: the csv file, or an Excel file of the same name. Unreadable rows go to the report."""
+def read_table(
+    path: Path,
+    spec: Table,
+    report: ImportReport,
+    *,
+    rename: dict[str, str] | None = None,
+    optional: frozenset[str] = frozenset(),
+) -> list[tuple[int, dict[str, Any]]]:
+    """Read one table into typed rows: the csv file, or an Excel file of the same name. Unreadable rows go to the report.
+    `rename` maps a client's own column names to ours (a saved column mapping); `optional` columns may be left out."""
     excel = path.with_suffix(".xlsx")
     if not path.is_file() and excel.is_file():
         path = excel
@@ -180,7 +197,10 @@ def read_table(path: Path, spec: Table, report: ImportReport) -> list[tuple[int,
         report.rejected.append(Problem(spec.name, 0, f"file {path.name} is missing"))
         return []
     fieldnames, raw_rows = _read_xlsx(path) if path.suffix == ".xlsx" else _read_csv(path)
-    missing = [c for c, _ in spec.columns if c not in fieldnames]
+    if rename:
+        fieldnames = [rename.get(c, c) for c in fieldnames]
+        raw_rows = [{rename.get(k, k): v for k, v in r.items()} for r in raw_rows]
+    missing = [c for c, _ in spec.columns if c not in fieldnames and c not in optional]
     if missing:
         report.rejected.append(Problem(spec.name, 1, f"column(s) missing in {path.name}: {', '.join(missing)}"))
         return []

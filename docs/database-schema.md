@@ -27,7 +27,7 @@ Reading a line: `name*` is part of the primary key, `name?` may be empty, then t
 
 ## Tenant database (one per company)
 
-105 tables.
+110 tables.
 
 **advance** · payment_no* text, po_no text, gross num, taxable num, used_gross num, used_taxable num, paid_on? date
 
@@ -75,11 +75,15 @@ Reading a line: `name*` is part of the primary key, `name?` may be empty, then t
 
 **delegation** · id* bigint, from_user? text, to_user? text, start_date? date, end_date? date, reason? text
 
+**demand_import** · id* bigint, source text, files jsonb, loaded int, already_loaded int, rejected int, imported_by? text, imported_at timestamptz
+
 **department** · code* text, name? text, head_user? text
 
 **document** · id* int, doc_type text, filename text, content_type text, size bigint, sha256 text, storage_key text, linked_type? text, linked_id? text, uploaded_by? int, created_at timestamptz
 
 **email_message** · id* int, message_id text, in_reply_to? text, direction text, from_addr? text, to_addr? text, subject? text, body_text? text, sent_at? timestamptz, plus_tag? text, linked_type? text, linked_id? text, case_id? int, raw_document_id? int, attachment_ids jsonb, created_at timestamptz
+
+**erp_column_map** · kind* text, version* int, columns jsonb, created_by? text, created_at timestamptz
 
 **gl_account** · code* text, name? text, type? text, is_capex? bool, is_tax_account? bool, parent_code? text
 
@@ -112,6 +116,8 @@ Reading a line: `name*` is part of the primary key, `name?` may be empty, then t
 **location** · code* text, name? text, type? text, gstin? text, address? text, city? text, state_code? text, pincode? text, is_stock_location? bool, working_days? text, receiving_hours? text, holiday_scope? text, loc_short? text
 
 **match_result** · id* bigint, invoice_no text, invoice_line_no? int, result text, reason_codes? text, price_var? num, qty_var? num, detail? text, created_at timestamptz, resolved_by? text, resolved_at? timestamptz, resolution? text
+
+**material_requirement** · id* bigint, source_kind text, source_doc_no text, line_key text, production_order_id? bigint, item_code text, qty num, unit text, base_qty num, need_by date, location_code text, status text, import_id bigint, created_at timestamptz
 
 **model_cache** · request_hash* text, response jsonb, created_at timestamptz
 
@@ -150,6 +156,10 @@ Reading a line: `name*` is part of the primary key, `name?` may be empty, then t
 **po_revision** · id* bigint, po_no text, version int, changed_by? text, changed_at timestamptz, reason text, changes jsonb, total_before num, total_after num, reapproval bool
 
 **price_record** · id* bigint, supplier_code? text, item_code? text, contract_code? text, uom? text, price? num, min_qty? int, price_basis? text, freight_included? bool, valid_from? date, valid_to? date, lead_days? int
+
+**product_demand** · id* bigint, kind text, doc_no text, product_code text, customer? text, qty num, need_by? date, period? text, status? text, import_id bigint, created_at timestamptz
+
+**production_order** · id* bigint, order_no text, product_code text, qty num, need_by date, reason? text, location_code text, status text, import_id bigint, created_at timestamptz
 
 **project** · code* text, name? text, type? text, cost_centre_code? text, budget_amount? num, start_date? date, end_date? date, status? text
 

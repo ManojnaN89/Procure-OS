@@ -18,7 +18,7 @@ Each company is one file, `datagen/catalog/<name>/company.yaml`: people and logi
 settings, budgets, categories, items with opening stock, suppliers, contracts, last prices paid, and its ERP input files. A new
 company is a new file. `master/` has the files and headers agreed in `generator/master_files.py` (plain configuration every
 company shares, such as the chart of accounts, comes from `catalog/common/`); `inputs/` holds the company's planning files
-(see section F of `docs/data-dictionary.md`).
+(see section F of `docs/data-dictionary.md`), loaded by `python -m p2p.cli import demand <tenant> <dataset>`.
 
 Each also has twelve months of history (1 Nov 2025 to the cutoff, 31 Oct 2026; decisions D36 and D37), driven by the
 `history:` section of its profile (supplier behaviour, demand, buying days, planted problems). Same seed, same files.

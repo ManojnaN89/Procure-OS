@@ -62,6 +62,7 @@ PERMISSIONS: dict[str, str] = {
     "stock.issue": "Issue stock for use",
     "stock.adjust": "Correct stock after a count",
     "replenishment.run": "Run automatic replenishment",
+    "demand.import": "Load production orders and other demand from the ERP",
     "invoice.view": "See invoices",
     "invoice.book": "Enter invoices",
     "invoice.match": "Work on blocked invoices",

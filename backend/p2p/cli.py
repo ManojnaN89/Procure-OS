@@ -9,6 +9,9 @@ python -m p2p.cli import masters <tenant> <dataset folder> [--dry-run]
         reads the master data of a dataset into a company and reports every row it left out and why
 python -m p2p.cli import stock <tenant> <dataset folder> [--dry-run]
         reads the stock movement history of a dataset (after the masters are in)
+python -m p2p.cli import demand <tenant> <dataset folder or file> [--dry-run] [--kind KIND]
+        reads the ERP's demand (production orders and their materials, MRP results, sales orders, demand plan);
+        rows loaded before are skipped, changed ones are listed
 python -m p2p.cli replenish <tenant> [--dry-run] [--no-submit] [--schedule]
         creates purchase requests for stock at its reorder point and sends them for approval; --schedule queues the daily morning run
 python -m p2p.cli source <tenant> [--request NO] [--no-send]
@@ -52,11 +55,13 @@ def main(argv: list[str] | None = None) -> int:
     ucreate.add_argument("--name", required=True)
     ucreate.add_argument("--role", default="Requester", choices=users.ROLES)
     imp = sub.add_parser("import").add_subparsers(dest="cmd", required=True)
-    for name in ("masters", "stock"):
+    for name in ("masters", "stock", "demand"):
         one = imp.add_parser(name)
         one.add_argument("tenant")
         one.add_argument("dataset")
         one.add_argument("--dry-run", action="store_true")
+        if name == "demand":
+            one.add_argument("--kind", help="what the file holds, when its name does not say")
     rep = sub.add_parser("replenish")
     rep.add_argument("tenant")
     rep.add_argument("--dry-run", action="store_true")
@@ -214,16 +219,26 @@ def main(argv: list[str] | None = None) -> int:
     if args.group == "import":
         from sqlalchemy.orm import Session
 
-        from p2p.masters.importer import import_masters
+        from p2p.masters.importer import ImportReport, import_masters
         from p2p.receiving.stock import import_movements
+        from p2p.requests import demand
 
-        load = import_masters if args.cmd == "masters" else import_movements
+        report: ImportReport
         with Session(routing.engine_for(args.tenant)) as db:
-            report = load(db, Path(args.dataset), dry_run=args.dry_run)
-        verb = "would load" if args.dry_run else "loaded"
-        print(
-            f"{verb} {report.rows_loaded} rows in {report.seconds} s; {len(report.rejected)} left out, {len(report.warnings)} warnings"
-        )
+            if args.cmd == "demand":
+                report = demand.import_demand(db, Path(args.dataset), dry_run=args.dry_run, kind=args.kind)
+            else:
+                load = import_masters if args.cmd == "masters" else import_movements
+                report = load(db, Path(args.dataset), dry_run=args.dry_run)
+        if isinstance(report, demand.DemandReport):
+            print(f"{demand.summary(report)} ({report.seconds} s)")
+            for kind, count in report.loaded.items():
+                print(f"  {kind}: {count} new, {report.already[kind]} loaded before")
+        else:
+            verb = "would load" if args.dry_run else "loaded"
+            print(
+                f"{verb} {report.rows_loaded} rows in {report.seconds} s; {len(report.rejected)} left out, {len(report.warnings)} warnings"
+            )
         for problem in report.rejected[:25]:
             print(f"  left out  {problem.table} line {problem.line}: {problem.reason}")
         for problem in report.warnings[:10]:
