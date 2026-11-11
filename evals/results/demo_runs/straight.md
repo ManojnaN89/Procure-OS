@@ -4,98 +4,95 @@ Result: **passed**
 
 | # | Who | Did | The screen then showed | Picture |
 |---|---|---|---|---|
-| 1 | Rohan Mehta, Buyer | signs in: the dashboard shows nothing waiting yet | Good afternoon, Rohan Mehta What needs you today, and where the purchases in progress stand. My work · Buyer Stock to reorder, nothing requested yet 1 See all Ball bearing 6205-2RS · On hand 104 NOS is at or below the reorder point 104; order up to the maximu… | [01-buyer-signs-in-the-dashboard-shows-nothing-waiting-yet.jpg](straight/01-buyer-signs-in-the-dashboard-shows-nothing-waiting-yet.jpg) |
-| 2 | Rohan Mehta, Buyer | checks the stock levels (a preview, nothing is created yet) | Requests What people have asked for, and where each request is in approval Check stock levels Export Stock check 1 item at or below their reorder point would become 1 request, about ₹41,280 in all. Of these: 1 needs a person's approval. Create and submit Clos… | [02-buyer-checks-the-stock-levels-a-preview-nothing-is-cre.jpg](straight/02-buyer-checks-the-stock-levels-a-preview-nothing-is-cre.jpg) |
-| 3 | Rohan Mehta, Buyer | creates the request and sends it for approval | Requests What people have asked for, and where each request is in approval Check stock levels Export Created 1 request: 0 approved automatically, 1 waiting for approval. Waiting for approval1 All1 REQUEST AMOUNT REQUESTED BY STATUS Ball bearing 6205-2RS REQ-V… | [03-buyer-creates-the-request-and-sends-it-for-approval.jpg](straight/03-buyer-creates-the-request-and-sends-it-for-approval.jpg) |
-| 4 | Prakash Gowda, Head of Stores | finds the request in the work waiting for them | ← Requests Ball bearing 6205-2RS REQ-VAD-2627-00001 · ₹41,280 · Automatic restock · Pending · deliver to PLT-VAD · needed by 13 Nov 2026 ✓ Request 2 Approval 3 Price 4 Order 5 Receipt 6 Invoice 7 Payment Now: Waiting for Prakash Gowda to approve Approval Wait… | [04-stores_head-finds-the-request-in-the-work-waiting-for-them.jpg](straight/04-stores_head-finds-the-request-in-the-work-waiting-for-them.jpg) |
-| 5 | Prakash Gowda, Head of Stores | approves the request | ← Requests Ball bearing 6205-2RS REQ-VAD-2627-00001 · ₹41,280 · Automatic restock · Approved · deliver to PLT-VAD · needed by 13 Nov 2026 ✓ Request ✓ Approval 3 Price 4 Order 5 Receipt 6 Invoice 7 Payment Now: Approved: a buyer finds a price (a contract price… | [05-stores_head-approves-the-request.jpg](straight/05-stores_head-approves-the-request.jpg) |
-| 6 | Rohan Mehta, Buyer | finds 'RFQ-2627-00001' in the work waiting for them | Approvals Actions an agent or service proposed. Nothing runs until you approve it. Send RFQ-2627-00001 to 3 suppliers ('rfq.send' is set to propose, not auto) Proposed by service sourcing · 11 Nov 2026, 12:25 pm low { "rfq_no": "RFQ-2627-00001" } Note (option… | [06-buyer-finds-rfq-2627-00001-in-the-work-waiting-for-the.jpg](straight/06-buyer-finds-rfq-2627-00001-in-the-work-waiting-for-the.jpg) |
-| 7 | Rohan Mehta, Buyer | approves sending the quotation request to the suppliers | Approvals Actions an agent or service proposed. Nothing runs until you approve it. Nothing is waiting for you. | [07-buyer-approves-sending-the-quotation-request-to-the-su.jpg](straight/07-buyer-approves-sending-the-quotation-request-to-the-su.jpg) |
-| 8 | Rohan Mehta, Buyer | opens the quotation request: no quotes yet | ← Quotations MRO spares (mechanical): 1 item(s) for REQ-VAD-2627-00001 RFQ-2627-00001 · Sent · for REQ-VAD-2627-00001 · reply by 18 Nov 2026 · sent 11 Nov 2026 ✓ Request ✓ Approval 3 Price 4 Order 5 Receipt 6 Invoice 7 Payment Now: Waiting for the suppliers' … | [08-buyer-opens-the-quotation-request-no-quotes-yet.jpg](straight/08-buyer-opens-the-quotation-request-no-quotes-yet.jpg) |
-| 9 | Rohan Mehta, Buyer | enters the quote of Pinnacle Bearings & Tools: 330 less 0% | ← Quotations MRO spares (mechanical): 1 item(s) for REQ-VAD-2627-00001 RFQ-2627-00001 · Sent · for REQ-VAD-2627-00001 · reply by 18 Nov 2026 · sent 11 Nov 2026 ✓ Request ✓ Approval 3 Price 4 Order 5 Receipt 6 Invoice 7 Payment Now: Waiting for the suppliers' … | [09-buyer-enters-the-quote-of-pinnacle-bearings-tools-330-.jpg](straight/09-buyer-enters-the-quote-of-pinnacle-bearings-tools-330-.jpg) |
-| 10 | Rohan Mehta, Buyer | enters the quote of Western Industrial Supplies: 305 less 2% | ← Quotations MRO spares (mechanical): 1 item(s) for REQ-VAD-2627-00001 RFQ-2627-00001 · Sent · for REQ-VAD-2627-00001 · reply by 18 Nov 2026 · sent 11 Nov 2026 ✓ Request ✓ Approval 3 Price 4 Order 5 Receipt 6 Invoice 7 Payment Now: Waiting for the suppliers' … | [10-buyer-enters-the-quote-of-western-industrial-supplies-.jpg](straight/10-buyer-enters-the-quote-of-western-industrial-supplies-.jpg) |
-| 11 | Rohan Mehta, Buyer | compares the quotes: the cheaper one after discount is recommended; awards it | ← Quotations MRO spares (mechanical): 1 item(s) for REQ-VAD-2627-00001 RFQ-2627-00001 · Awarded · for REQ-VAD-2627-00001 · reply by 18 Nov 2026 · sent 11 Nov 2026 ✓ Request ✓ Approval ✓ Price 4 Order 5 Receipt 6 Invoice 7 Payment Now: Awarded: the order is ma… | [11-buyer-compares-the-quotes-the-cheaper-one-after-discou.jpg](straight/11-buyer-compares-the-quotes-the-cheaper-one-after-discou.jpg) |
-| 12 | Vikram Joshi, Head of Procurement | finds the order in the work waiting for them | ← Purchase orders PO-VAD-2627-00001 · Western Industrial Supplies Pending · ₹45,498.56 · for REQ-VAD-2627-00001 · RFQ-2627-00001 ✓ Request ✓ Approval ✓ Price 4 Order 5 Receipt 6 Invoice 7 Payment Now: Waiting for Vikram Joshi to approve the order Approval Wai… | [12-proc_head-finds-the-order-in-the-work-waiting-for-them.jpg](straight/12-proc_head-finds-the-order-in-the-work-waiting-for-them.jpg) |
-| 13 | Vikram Joshi, Head of Procurement | checks the order's figures and approves it | ← Purchase orders PO-VAD-2627-00001 · Western Industrial Supplies Approved · ₹45,498.56 · for REQ-VAD-2627-00001 · RFQ-2627-00001 ✓ Request ✓ Approval ✓ Price 4 Order 5 Receipt 6 Invoice 7 Payment Now: Approved: a buyer sends it to the supplier Approval Appro… | [13-proc_head-checks-the-order-s-figures-and-approves-it.jpg](straight/13-proc_head-checks-the-order-s-figures-and-approves-it.jpg) |
-| 14 | Rohan Mehta, Buyer | finds the approved order to send | ← Purchase orders PO-VAD-2627-00001 · Western Industrial Supplies Approved · ₹45,498.56 · for REQ-VAD-2627-00001 · RFQ-2627-00001 ✓ Request ✓ Approval ✓ Price 4 Order 5 Receipt 6 Invoice 7 Payment Now: Approved: a buyer sends it to the supplier Approval Appro… | [14-buyer-finds-the-approved-order-to-send.jpg](straight/14-buyer-finds-the-approved-order-to-send.jpg) |
-| 15 | Rohan Mehta, Buyer | sends the order to the supplier | ← Purchase orders PO-VAD-2627-00001 · Western Industrial Supplies Sent · ₹45,498.56 · for REQ-VAD-2627-00001 · RFQ-2627-00001 ✓ Request ✓ Approval ✓ Price 4 Order 5 Receipt 6 Invoice 7 Payment Now: Sent: waiting for the supplier to confirm and give a delivery… | [15-buyer-sends-the-order-to-the-supplier.jpg](straight/15-buyer-sends-the-order-to-the-supplier.jpg) |
-| 16 | Rohan Mehta, Buyer | records the supplier's acknowledgement, delivery promised 2026-11-11 | ← Purchase orders PO-VAD-2627-00001 · Western Industrial Supplies Acknowledged · ₹45,498.56 · for REQ-VAD-2627-00001 · RFQ-2627-00001 ✓ Request ✓ Approval ✓ Price ✓ Order 5 Receipt 6 Invoice 7 Payment Now: Confirmed: waiting for the goods to arrive at the sto… | [16-buyer-records-the-supplier-s-acknowledgement-delivery-.jpg](straight/16-buyer-records-the-supplier-s-acknowledgement-delivery-.jpg) |
-| 17 | Imran Pasha, Storekeeper | sees the order in the work waiting for them and posts the goods receipt | ← Goods receipt GRN-VAD-2627-00001 for PO-VAD-2627-00001 · 11 Nov 2026 · received by U024 Challan DC/2611/0412 · deliver to PLT-VAD ITEM RECEIVED ACCEPTED REJECTED Ball bearing 6205-2RS ITM-00068 129 NOS 129 0 | [17-store-sees-the-order-in-the-work-waiting-for-them-and-.jpg](straight/17-store-sees-the-order-in-the-work-waiting-for-them-and-.jpg) |
-| 18 | Sunita Patil, Accounts | sees the goods waiting for an invoice and enters the supplier's invoice | ← Invoices PI-2627-000001 · Western Industrial Supplies Approved for payment · ₹45,499 · supplier's number WIS/26-27/0412 · 6 Nov 2026 ✓ Request ✓ Approval ✓ Price ✓ Order ✓ Receipt ✓ Invoice 7 Payment Now: Matched and approved: finance puts it in the next pa… | [18-ap-sees-the-goods-waiting-for-an-invoice-and-enters.jpg](straight/18-ap-sees-the-goods-waiting-for-an-invoice-and-enters.jpg) |
-| 19 | Anil Deshpande, Finance Manager | on 14 Dec 2026 finds the invoice that falls due in the work waiting for them | Payments Pay what is due: plan a run, the owner approves it, then it goes to the bank Export Plan a payment run pays everything due within days; small suppliers first include advances on orders See what is due Send the run for approval No payment runs yet. Ne… | [19-finance-on-14-dec-2026-finds-the-invoice-that-falls-due-.jpg](straight/19-finance-on-14-dec-2026-finds-the-invoice-that-falls-due-.jpg) |
-| 20 | Anil Deshpande, Finance Manager | previews what is due and sends a payment run for the owner's approval | ← Payments PR-2627-0001 Waiting for approval · ₹45,499 · run date 14 Dec 2026 ✓ Request ✓ Approval ✓ Price ✓ Order ✓ Receipt ✓ Invoice 7 Payment Now: Waiting for the owner to approve the run Waiting for the owner to approve: Pay 1 invoice(s) to 1 supplier(s),… | [20-finance-previews-what-is-due-and-sends-a-payment-run-for.jpg](straight/20-finance-previews-what-is-due-and-sends-a-payment-run-for.jpg) |
-| 21 | Rajesh Kulkarni, Managing Director | finds 'Pay ' in the work waiting for them | Approvals Actions an agent or service proposed. Nothing runs until you approve it. Pay 1 invoice(s) to 1 supplier(s), 45,499.00 in all, on 14 Dec 2026 Proposed by user 389 · 11 Nov 2026, 12:25 pm high { "run_no": "PR-2627-0001" } Note (optional) Approve Edit … | [21-owner-finds-pay-in-the-work-waiting-for-them.jpg](straight/21-owner-finds-pay-in-the-work-waiting-for-them.jpg) |
-| 22 | Rajesh Kulkarni, Managing Director | approves the payment run | Approvals Actions an agent or service proposed. Nothing runs until you approve it. Nothing is waiting for you. | [22-owner-approves-the-payment-run.jpg](straight/22-owner-approves-the-payment-run.jpg) |
-| 23 | Anil Deshpande, Finance Manager | sees the approved run waiting for its bank file | ← Payments PR-2627-0001 Approved · ₹45,499 · run date 14 Dec 2026 ✓ Request ✓ Approval ✓ Price ✓ Order ✓ Receipt ✓ Invoice 7 Payment Now: Approved: finance makes the bank file Western Industrial Supplies PAY-2627-000001 · NEFT ₹45,499 PI-2627-000001 WIS/26-27… | [23-finance-sees-the-approved-run-waiting-for-its-bank-file.jpg](straight/23-finance-sees-the-approved-run-waiting-for-its-bank-file.jpg) |
-| 24 | Anil Deshpande, Finance Manager | makes the bank file for the approved run | ← Payments PR-2627-0001 Bank file made · ₹45,499 · run date 14 Dec 2026 ✓ Request ✓ Approval ✓ Price ✓ Order ✓ Receipt ✓ Invoice 7 Payment Now: Bank file made: finance marks the run paid once the bank has paid Western Industrial Supplies PAY-2627-000001 · NEF… | [24-finance-makes-the-bank-file-for-the-approved-run.jpg](straight/24-finance-makes-the-bank-file-for-the-approved-run.jpg) |
-| 25 | Anil Deshpande, Finance Manager | records that the bank has paid, on 2026-12-14 | ← Payments PR-2627-0001 Paid · ₹45,499 · run date 14 Dec 2026 ✓ Request ✓ Approval ✓ Price ✓ Order ✓ Receipt ✓ Invoice ✓ Payment Done: The bank has paid; the suppliers have their payment advice Western Industrial Supplies PAY-2627-000001 · NEFT · bank referen… | [25-finance-records-that-the-bank-has-paid-on-2026-12-14.jpg](straight/25-finance-records-that-the-bank-has-paid-on-2026-12-14.jpg) |
-| 26 | Rohan Mehta, Buyer | sees that the order is paid and closed in the notifications | Good afternoon, Rohan Mehta What needs you today, and where the purchases in progress stand. My work · Buyer Nothing needs you. Next: check which stock is at its reorder point. Check stock levels Where things stand 0 Waiting for approval 0 Being priced 0 Orde… | [26-buyer-sees-that-the-order-is-paid-and-closed-in-the-no.jpg](straight/26-buyer-sees-that-the-order-is-paid-and-closed-in-the-no.jpg) |
+| 1 | Neha Kulkarni, Buyer | signs in: the dashboard shows nothing waiting yet | Good morning, Neha Kulkarni What needs you today, and where the purchases in progress stand. My work · Buyer Stock to reorder, nothing requested yet 1 See all Run capacitor · On hand 10 NOS is at or below the reorder point 10; order up to the maximum 160 · or… | [01-buyer-signs-in-the-dashboard-shows-nothing-waiting-yet.jpg](straight/01-buyer-signs-in-the-dashboard-shows-nothing-waiting-yet.jpg) |
+| 2 | Neha Kulkarni, Buyer | checks the stock levels (a preview, nothing is created yet) | Requests What people have asked for, and where each request is in approval Check stock levels Export Stock check 1 item at or below their reorder point would become 1 request, about ₹12,750 in all. Of these: 1 needs a person's approval. Left out: 1 — Nothing … | [02-buyer-checks-the-stock-levels-a-preview-nothing-is-cre.jpg](straight/02-buyer-checks-the-stock-levels-a-preview-nothing-is-cre.jpg) |
+| 3 | Neha Kulkarni, Buyer | creates the request and sends it for approval | Requests What people have asked for, and where each request is in approval Check stock levels Export Created 1 request: 0 approved automatically, 1 waiting for approval. Waiting for approval1 All1 REQUEST AMOUNT REQUESTED BY STATUS Run capacitor REQ-CKN-2627-… | [03-buyer-creates-the-request-and-sends-it-for-approval.jpg](straight/03-buyer-creates-the-request-and-sends-it-for-approval.jpg) |
+| 4 | Vikram Joshi, Plant Head (approves requests up to Rs 1,00,000) | finds the request in the work waiting for them | ← Requests Run capacitor REQ-CKN-2627-00001 · ₹12,750 · Automatic restock · Pending · deliver to PLT-CKN · needed by 13 Nov 2026 ✓ Request 2 Approval 3 Price 4 Order 5 Receipt 6 Invoice 7 Payment Now: Waiting for Vikram Joshi to approve Approval Waiting for a… | [04-stores_head-finds-the-request-in-the-work-waiting-for-them.jpg](straight/04-stores_head-finds-the-request-in-the-work-waiting-for-them.jpg) |
+| 5 | Vikram Joshi, Plant Head (approves requests up to Rs 1,00,000) | approves the request | ← Requests Run capacitor REQ-CKN-2627-00001 · ₹12,750 · Automatic restock · Approved · deliver to PLT-CKN · needed by 13 Nov 2026 ✓ Request ✓ Approval 3 Price 4 Order 5 Receipt 6 Invoice 7 Payment Now: Approved: a buyer finds a price (a contract price, or quo… | [05-stores_head-approves-the-request.jpg](straight/05-stores_head-approves-the-request.jpg) |
+| 6 | Neha Kulkarni, Buyer | finds 'RFQ-2627-00001' in the work waiting for them | Approvals Actions an agent or service proposed. Nothing runs until you approve it. Send RFQ-2627-00001 to 3 suppliers ('rfq.send' is set to propose, not auto) Proposed by service sourcing · 12 Nov 2026, 03:16 am low { "rfq_no": "RFQ-2627-00001" } Note (option… | [06-buyer-finds-rfq-2627-00001-in-the-work-waiting-for-the.jpg](straight/06-buyer-finds-rfq-2627-00001-in-the-work-waiting-for-the.jpg) |
+| 7 | Neha Kulkarni, Buyer | approves sending the quotation request to the suppliers | Approvals Actions an agent or service proposed. Nothing runs until you approve it. Nothing is waiting for you. | [07-buyer-approves-sending-the-quotation-request-to-the-su.jpg](straight/07-buyer-approves-sending-the-quotation-request-to-the-su.jpg) |
+| 8 | Neha Kulkarni, Buyer | opens the quotation request: no quotes yet | ← Quotations Raw materials: 1 item(s) for REQ-CKN-2627-00001 RFQ-2627-00001 · Sent · for REQ-CKN-2627-00001 · reply by 19 Nov 2026 · sent 12 Nov 2026 ✓ Request ✓ Approval 3 Price 4 Order 5 Receipt 6 Invoice 7 Payment Now: Waiting for the suppliers' quotations… | [08-buyer-opens-the-quotation-request-no-quotes-yet.jpg](straight/08-buyer-opens-the-quotation-request-no-quotes-yet.jpg) |
+| 9 | Neha Kulkarni, Buyer | enters the quote of Deccan Castings Pvt Ltd: 92 less 0% | RFQ-2627-00001 Loading… | [09-buyer-enters-the-quote-of-deccan-castings-pvt-ltd-92-l.jpg](straight/09-buyer-enters-the-quote-of-deccan-castings-pvt-ltd-92-l.jpg) |
+| 10 | Neha Kulkarni, Buyer | enters the quote of Shree Wires and Electricals Pvt Ltd: 88 less 2% | RFQ-2627-00001 Loading… | [10-buyer-enters-the-quote-of-shree-wires-and-electricals-.jpg](straight/10-buyer-enters-the-quote-of-shree-wires-and-electricals-.jpg) |
+| 11 | Neha Kulkarni, Buyer | compares the quotes: the cheaper one after discount is recommended; awards it | ← Quotations Raw materials: 1 item(s) for REQ-CKN-2627-00001 RFQ-2627-00001 · Awarded · for REQ-CKN-2627-00001 · reply by 19 Nov 2026 · sent 12 Nov 2026 ✓ Request ✓ Approval ✓ Price 4 Order 5 Receipt 6 Invoice 7 Payment Now: Awarded: the order is made from th… | [11-buyer-compares-the-quotes-the-cheaper-one-after-discou.jpg](straight/11-buyer-compares-the-quotes-the-cheaper-one-after-discou.jpg) |
+| 12 | Neha Kulkarni, Buyer | finds the approved order to send | ← Purchase orders PO-CKN-2627-00001 · Shree Wires and Electricals Pvt Ltd Approved · ₹15,264.48 · for REQ-CKN-2627-00001 · RFQ-2627-00001 ✓ Request ✓ Approval ✓ Price 4 Order 5 Receipt 6 Invoice 7 Payment Now: Approved: a buyer sends it to the supplier Approv… | [12-buyer-finds-the-approved-order-to-send.jpg](straight/12-buyer-finds-the-approved-order-to-send.jpg) |
+| 13 | Neha Kulkarni, Buyer | sends the order to the supplier | ← Purchase orders PO-CKN-2627-00001 · Shree Wires and Electricals Pvt Ltd Sent · ₹15,264.48 · for REQ-CKN-2627-00001 · RFQ-2627-00001 ✓ Request ✓ Approval ✓ Price 4 Order 5 Receipt 6 Invoice 7 Payment Now: Sent: waiting for the supplier to confirm and give a … | [13-buyer-sends-the-order-to-the-supplier.jpg](straight/13-buyer-sends-the-order-to-the-supplier.jpg) |
+| 14 | Neha Kulkarni, Buyer | records the supplier's acknowledgement, delivery promised 2026-11-11 | ← Purchase orders PO-CKN-2627-00001 · Shree Wires and Electricals Pvt Ltd Acknowledged · ₹15,264.48 · for REQ-CKN-2627-00001 · RFQ-2627-00001 ✓ Request ✓ Approval ✓ Price ✓ Order 5 Receipt 6 Invoice 7 Payment Now: Confirmed: waiting for the goods to arrive at… | [14-buyer-records-the-supplier-s-acknowledgement-delivery-.jpg](straight/14-buyer-records-the-supplier-s-acknowledgement-delivery-.jpg) |
+| 15 | Sunil Pawar, Storekeeper | sees the order in the work waiting for them and posts the goods receipt | ← Goods receipt GRN-CKN-2627-00001 for PO-CKN-2627-00001 · 12 Nov 2026 · received by U02 Challan DC/2611/0412 · deliver to PLT-CKN ITEM RECEIVED ACCEPTED REJECTED Run capacitor RM-09 150 NOS 150 0 | [15-store-sees-the-order-in-the-work-waiting-for-them-and-.jpg](straight/15-store-sees-the-order-in-the-work-waiting-for-them-and-.jpg) |
+| 16 | Priya Shah, AP Executive | sees the goods waiting for an invoice and enters the supplier's invoice | ← Invoices PI-2627-000001 · Shree Wires and Electricals Pvt Ltd Approved for payment · ₹15,264 · supplier's number WIS/26-27/0412 · 6 Nov 2026 ✓ Request ✓ Approval ✓ Price ✓ Order ✓ Receipt ✓ Invoice 7 Payment Now: Matched and approved: finance puts it in the… | [16-ap-sees-the-goods-waiting-for-an-invoice-and-enters.jpg](straight/16-ap-sees-the-goods-waiting-for-an-invoice-and-enters.jpg) |
+| 17 | Anil Mehta, Finance Manager | on 29 Nov 2026 finds the invoice that falls due in the work waiting for them | Payments Pay what is due: plan a run, the owner approves it, then it goes to the bank Export Plan a payment run pays everything due within days; small suppliers first include advances on orders See what is due Send the run for approval No payment runs yet. Ne… | [17-finance-on-29-nov-2026-finds-the-invoice-that-falls-due-.jpg](straight/17-finance-on-29-nov-2026-finds-the-invoice-that-falls-due-.jpg) |
+| 18 | Anil Mehta, Finance Manager | previews what is due and sends a payment run for the owner's approval | ← Payments PR-2627-0001 Waiting for approval · ₹15,264 · run date 29 Nov 2026 ✓ Request ✓ Approval ✓ Price ✓ Order ✓ Receipt ✓ Invoice 7 Payment Now: Waiting for the owner to approve the run Waiting for the owner to approve: Pay 1 invoice(s) to 1 supplier(s),… | [18-finance-previews-what-is-due-and-sends-a-payment-run-for.jpg](straight/18-finance-previews-what-is-due-and-sends-a-payment-run-for.jpg) |
+| 19 | Meera Iyer, Director | finds 'Pay ' in the work waiting for them | Approvals Actions an agent or service proposed. Nothing runs until you approve it. Pay 1 invoice(s) to 1 supplier(s), 15,264.00 in all, on 29 Nov 2026 Proposed by user 279 · 12 Nov 2026, 03:16 am high { "run_no": "PR-2627-0001" } Note (optional) Approve Edit … | [19-owner-finds-pay-in-the-work-waiting-for-them.jpg](straight/19-owner-finds-pay-in-the-work-waiting-for-them.jpg) |
+| 20 | Meera Iyer, Director | approves the payment run | Approvals Actions an agent or service proposed. Nothing runs until you approve it. Nothing is waiting for you. | [20-owner-approves-the-payment-run.jpg](straight/20-owner-approves-the-payment-run.jpg) |
+| 21 | Anil Mehta, Finance Manager | sees the approved run waiting for its bank file | ← Payments PR-2627-0001 Approved · ₹15,264 · run date 29 Nov 2026 ✓ Request ✓ Approval ✓ Price ✓ Order ✓ Receipt ✓ Invoice 7 Payment Now: Approved: finance makes the bank file Shree Wires and Electricals Pvt Ltd PAY-2627-000001 · NEFT ₹15,264 PI-2627-000001 W… | [21-finance-sees-the-approved-run-waiting-for-its-bank-file.jpg](straight/21-finance-sees-the-approved-run-waiting-for-its-bank-file.jpg) |
+| 22 | Anil Mehta, Finance Manager | makes the bank file for the approved run | ← Payments PR-2627-0001 Bank file made · ₹15,264 · run date 29 Nov 2026 ✓ Request ✓ Approval ✓ Price ✓ Order ✓ Receipt ✓ Invoice 7 Payment Now: Bank file made: finance marks the run paid once the bank has paid Shree Wires and Electricals Pvt Ltd PAY-2627-0000… | [22-finance-makes-the-bank-file-for-the-approved-run.jpg](straight/22-finance-makes-the-bank-file-for-the-approved-run.jpg) |
+| 23 | Anil Mehta, Finance Manager | records that the bank has paid, on 2026-11-29 | PR-2627-0001 Loading\u2026 | [23-finance-records-that-the-bank-has-paid-on-2026-11-29.jpg](straight/23-finance-records-that-the-bank-has-paid-on-2026-11-29.jpg) |
+| 24 | Neha Kulkarni, Buyer | sees that the order is paid and closed in the notifications | Good morning, Neha Kulkarni What needs you today, and where the purchases in progress stand. My work · Buyer Nothing needs you. Next: check which stock is at its reorder point. Check stock levels Where things stand 0 Waiting for approval 0 Being priced 0 Orde… | [24-buyer-sees-that-the-order-is-paid-and-closed-in-the-no.jpg](straight/24-buyer-sees-that-the-order-is-paid-and-closed-in-the-no.jpg) |
 
 ## What the data showed at the end
 
 - no request exists after the preview: 0
-- the request is for the item that fell to its reorder point: ITM-00068
-- quantity: up to the maximum, not below the minimum order: 129.0000
-- estimate: the item's standard price: 320.0000
-- the request's value: 41280.00
-- how the rule table routes a request of this value: manager
-- delivery place: PLT-VAD
+- the request is for the item that fell to its reorder point: RM-09
+- quantity: up to the maximum, not below the minimum order: 150.0000
+- estimate: the item's standard price: 85.0000
+- the request's value: 12750.00
+- how the rule table routes a request of this value: plant_head
+- delivery place: PLT-CKN
 - request status straight after the check: submitted
 - request status: approved
 - nothing was sent to a supplier yet: sending needs a buyer's approval: 0
 - no contract price is in force for the item, so quotations were asked for
-- the suppliers asked (SUP-0005, SUP-0006, SUP-0008) are active, approved for MRO and have an email address
-- one quotation request mail per supplier asked: ['hetal.jadhav@pinnaclebearingstools.example', 'jignesh.gaikwad@westernindustrialsupplies.example', 'komal.kulkarni@vishwakarmahardwaretraders.example']
-- SUP-0006 is among those asked
+- the suppliers asked (SUP-001, SUP-002, SUP-003) are active, approved for RAW and have an email address
+- one quotation request mail per supplier asked: ['sales@deccancastings.example', 'sales@gujaratbearings.example', 'sales@shreewires.example']
+- SUP-003 is among those asked
 - RFQ status: awarded
-- order: supplier: SUP-0006
-- order: price before tax (quantity x net price): 38558.10
-- order: GST split (CGST, SGST, IGST: supplier in state 27, delivery in 24): (Decimal('0.00'), Decimal('0.00'), Decimal('6940.46'))
-- order: total: 45498.56
-- order: our GSTIN is the delivery place's: 24AXQCC0000M1ZM
-- order status: submitted
-- order status after approval: approved
+- order: supplier: SUP-003
+- order: price before tax (quantity x net price): 12936.00
+- order: GST split (CGST, SGST, IGST: supplier in state 27, delivery in 27): (Decimal('1164.24'), Decimal('1164.24'), Decimal('0.00'))
+- order: total: 15264.48
+- order: our GSTIN is the delivery place's: 27APXCA0000P1ZL
+- order status: approved
+- the order of 12,936 is within the band that needs no approver: approved by the rule: approved
 - the buyer cannot approve an order (refused)
-- the order mail goes to the supplier's main contact, once: ['jignesh.gaikwad@westernindustrialsupplies.example']
-- the order mail states the order total: 45498.56
+- the order mail goes to the supplier's main contact, once: ['sales@shreewires.example']
+- the order mail states the order total: 15264.48
 - order status after the acknowledgement: acknowledged
-- goods received on the order line: 129.0000
+- goods received on the order line: 150.0000
 - order status after the receipt: received
-- stock at the delivery place: the reorder point plus what arrived is the maximum: 233.0000
+- stock at the delivery place: the reorder point plus what arrived is the maximum: 160.0000
 - the store person is not the buyer, an approver or the requester
 - invoice: status (price and quantity agree with the order and what was received): approved
-- invoice: price before tax and GST are the order's, the total is rounded to the rupee: (Decimal('38558.10'), Decimal('0.00'), Decimal('0.00'), Decimal('6940.46'), Decimal('45499.00'))
-- invoice: the round-off line: 0.44
-- invoice: due date from the supplier's payment terms, the day the goods were accepted (2026-11-06): 2026-12-21
+- invoice: price before tax and GST are the order's, the total is rounded to the rupee: (Decimal('12936.00'), Decimal('1164.24'), Decimal('1164.24'), Decimal('0.00'), Decimal('15264.00'))
+- invoice: the round-off line: -0.48
+- invoice: due date from the supplier's payment terms, the day the goods were accepted (2026-11-06): 2026-12-06
 - invoice: tax held back at source (far below the yearly limit): 0.00
-- invoice was entered by the accounts clerk: 386
-- invoice: total of the order, to the rupee: 45499
+- invoice was entered by the accounts clerk: 278
+- invoice: total of the order, to the rupee: 15264
 - payment run status: proposed
-- the payment: the invoice total less tax held back, no interest: (Decimal('45499.00'), 'SUP-0006', Decimal('0.00'), Decimal('0.00'))
+- the payment: the invoice total less tax held back, no interest: (Decimal('15264.00'), 'SUP-003', Decimal('0.00'), Decimal('0.00'))
 - the person who proposed the run cannot approve it (refused): 403
 - no bank file before the owner approves (refused): 409
 - payment run status after the owner approves: approved
 - the bank file has one payment line: 2
-- bank file line: the supplier's verified account and exactly the approved amount: ('000774658904', 'UBIN0962150', Decimal('45499.00'))
+- bank file line: the supplier's verified account and exactly the approved amount: ('000100000003', 'HDFC0900003', Decimal('15264.00'))
 - invoice status: paid
 - order status: closed
-- budget actual booked: the price before tax: 38558.10
+- budget actual booked: the price before tax: 12936.00
 - the supplier was told what was paid, with the bank reference (mails): 1
 - the audit log has a row for each of the 12 actions
-- the audit log holds 53 rows in all, for 32 kinds of action
-- the audit log, in order, with who did it: masters.import by service:system; user.create by service:system; role.grant by service:system; request.create by user:383; replenishment.run by user:383; request.submit by user:383; task.create by service:system; request.approve by user:393; request.approved by user:393; task.complete by user:390,user:393; rfq.create by service:sourcing; sourcing.decide by service:sourcing; proposal.create by service:sourcing,user:389; email.send by service:system; rfq.send by user:383; proposal.approved by user:383,user:388; quote.enter by user:383; rfq.award by user:383; po.create by service:ordering; po.submit by service:ordering; po.approve by user:390; po.approved by user:390; po.send by user:383; po.acknowledge by user:383; grn.post by user:385; invoice.enter by user:386; invoice.match by user:386; payment_run.propose by user:389; payment_run.approve by user:388; payment_run.file by user:389; po.close by user:389; payment_run.paid by user:389
-- audit: 'request.submit' (requester) was done by Rohan Mehta, Buyer: {'user:383'}
-- audit: 'request.approve' (approver) was done by Prakash Gowda, Head of Stores: {'user:393'}
-- audit: 'po.approve' (approver) was done by Vikram Joshi, Head of Procurement: {'user:390'}
-- audit: 'payment_run.approve' (approver) was done by Rajesh Kulkarni, Managing Director: {'user:388'}
-- audit: 'grn.post' (receiver) was done by Imran Pasha, Storekeeper: {'user:385'}
-- audit: 'payment_run.propose' (payer) was done by Anil Deshpande, Finance Manager: {'user:389'}
-- audit: 'payment_run.paid' (payer) was done by Anil Deshpande, Finance Manager: {'user:389'}
-- audit: 'rfq.send' was done by Rohan Mehta, Buyer: {'user:383'}
-- audit: 'quote.enter' was done by Rohan Mehta, Buyer: {'user:383'}
-- audit: 'rfq.award' was done by Rohan Mehta, Buyer: {'user:383'}
-- audit: 'po.send' was done by Rohan Mehta, Buyer: {'user:383'}
-- audit: 'invoice.enter' was done by Sunita Patil, Accounts: {'user:386'}
-- audit: 'invoice.match' was done by Sunita Patil, Accounts: {'user:386'}
-- audit: 'payment_run.file' was done by Anil Deshpande, Finance Manager: {'user:389'}
+- the audit log holds 49 rows in all, for 33 kinds of action
+- the audit log, in order, with who did it: masters.import by service:system; user.create by service:system; demo.configure by service:system; role.grant by service:system; request.create by user:275; replenishment.run by user:275; request.submit by user:275; task.create by service:system; request.approve by user:280; request.approved by user:280; task.complete by user:280; rfq.create by service:sourcing; sourcing.decide by service:sourcing; proposal.create by service:sourcing,user:279; email.send by service:system; rfq.send by user:275; proposal.approved by user:275,user:282; quote.enter by user:275; rfq.award by user:275; po.create by service:ordering; po.submit by service:ordering; po.auto_approve by rule:PO-01; po.send by user:275; po.acknowledge by user:275; grn.post by user:277; invoice.enter by user:278; invoice.match by user:278; payment_run.propose by user:279; payment_run.approve by user:282; payment_run.file by user:279; po.close by user:279; payment_run.paid by user:279
+- audit: 'request.submit' (requester) was done by Neha Kulkarni, Buyer: {'user:275'}
+- audit: 'request.approve' (approver) was done by Vikram Joshi, Plant Head (approves requests up to Rs 1,00,000): {'user:280'}
+- audit: 'payment_run.approve' (approver) was done by Meera Iyer, Director: {'user:282'}
+- audit: 'grn.post' (receiver) was done by Sunil Pawar, Storekeeper: {'user:277'}
+- audit: 'payment_run.propose' (payer) was done by Anil Mehta, Finance Manager: {'user:279'}
+- audit: 'payment_run.paid' (payer) was done by Anil Mehta, Finance Manager: {'user:279'}
+- audit: 'rfq.send' was done by Neha Kulkarni, Buyer: {'user:275'}
+- audit: 'quote.enter' was done by Neha Kulkarni, Buyer: {'user:275'}
+- audit: 'rfq.award' was done by Neha Kulkarni, Buyer: {'user:275'}
+- audit: 'po.send' was done by Neha Kulkarni, Buyer: {'user:275'}
+- audit: 'invoice.enter' was done by Priya Shah, AP Executive: {'user:278'}
+- audit: 'invoice.match' was done by Priya Shah, AP Executive: {'user:278'}
+- audit: 'payment_run.file' was done by Anil Mehta, Finance Manager: {'user:279'}
 - separation of duties: requester, approver, receiver, payer are different people in this case
