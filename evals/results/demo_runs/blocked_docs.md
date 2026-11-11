@@ -21,12 +21,12 @@ Result: **passed**
 | 15 | Suresh Bhatt, Plant Head | reads the reason and approves paying the invoice | Approvals Actions an agent or service proposed. Nothing runs until you approve it. Nothing is waiting for you. | [15-plant_head-reads-the-reason-and-approves-paying-the-invoice.jpg](blocked_docs/15-plant_head-reads-the-reason-and-approves-paying-the-invoice.jpg) |
 | 16 | Anil Deshpande, Finance Manager | on 29 Nov 2026 finds the invoice that falls due in the work waiting for them | Payments Pay what is due: plan a run, the owner approves it, then it goes to the bank Export Plan a payment run pays everything due within days; small suppliers first include advances on orders See what is due Send the run for approval No payment runs yet. Ne… | [16-finance-on-29-nov-2026-finds-the-invoice-that-falls-due-.jpg](blocked_docs/16-finance-on-29-nov-2026-finds-the-invoice-that-falls-due-.jpg) |
 | 17 | Anil Deshpande, Finance Manager | previews what is due and sends a payment run for the owner's approval | ← Payments PR-2627-0001 Waiting for approval · ₹9,653 · run date 29 Nov 2026 ✓ Request ✓ Approval ✓ Price ✓ Order ✓ Receipt ✓ Invoice 7 Payment Now: Waiting for the owner to approve the run Waiting for the owner to approve: Pay 1 invoice(s) to 1 supplier(s), … | [17-finance-previews-what-is-due-and-sends-a-payment-run-for.jpg](blocked_docs/17-finance-previews-what-is-due-and-sends-a-payment-run-for.jpg) |
-| 18 | Rajesh Kulkarni, Managing Director | finds 'Pay ' in the work waiting for them | Approvals Actions an agent or service proposed. Nothing runs until you approve it. Pay 1 invoice(s) to 1 supplier(s), 9,653.00 in all, on 29 Nov 2026 Proposed by user 87 · 11 Nov 2026, 04:37 am high { "run_no": "PR-2627-0001" } Note (optional) Approve Edit fi… | [18-owner-finds-pay-in-the-work-waiting-for-them.jpg](blocked_docs/18-owner-finds-pay-in-the-work-waiting-for-them.jpg) |
+| 18 | Rajesh Kulkarni, Managing Director | finds 'Pay ' in the work waiting for them | Approvals Actions an agent or service proposed. Nothing runs until you approve it. Pay 1 invoice(s) to 1 supplier(s), 9,653.00 in all, on 29 Nov 2026 Proposed by user 467 · 11 Nov 2026, 12:28 pm high { "run_no": "PR-2627-0001" } Note (optional) Approve Edit f… | [18-owner-finds-pay-in-the-work-waiting-for-them.jpg](blocked_docs/18-owner-finds-pay-in-the-work-waiting-for-them.jpg) |
 | 19 | Rajesh Kulkarni, Managing Director | approves the payment run | Approvals Actions an agent or service proposed. Nothing runs until you approve it. Nothing is waiting for you. | [19-owner-approves-the-payment-run.jpg](blocked_docs/19-owner-approves-the-payment-run.jpg) |
 | 20 | Anil Deshpande, Finance Manager | sees the approved run waiting for its bank file | ← Payments PR-2627-0001 Approved · ₹9,653 · run date 29 Nov 2026 ✓ Request ✓ Approval ✓ Price ✓ Order ✓ Receipt ✓ Invoice 7 Payment Now: Approved: finance makes the bank file Rajdhani Safety Equipments PAY-2627-000001 · NEFT ₹9,653 PI-2627-000001 PIS/26-27/77… | [20-finance-sees-the-approved-run-waiting-for-its-bank-file.jpg](blocked_docs/20-finance-sees-the-approved-run-waiting-for-its-bank-file.jpg) |
 | 21 | Anil Deshpande, Finance Manager | makes the bank file for the approved run | ← Payments PR-2627-0001 Bank file made · ₹9,653 · run date 29 Nov 2026 ✓ Request ✓ Approval ✓ Price ✓ Order ✓ Receipt ✓ Invoice 7 Payment Now: Bank file made: finance marks the run paid once the bank has paid Rajdhani Safety Equipments PAY-2627-000001 · NEFT … | [21-finance-makes-the-bank-file-for-the-approved-run.jpg](blocked_docs/21-finance-makes-the-bank-file-for-the-approved-run.jpg) |
 | 22 | Anil Deshpande, Finance Manager | records that the bank has paid, on 2026-11-29 | ← Payments PR-2627-0001 Paid · ₹9,653 · run date 29 Nov 2026 ✓ Request ✓ Approval ✓ Price ✓ Order ✓ Receipt ✓ Invoice ✓ Payment Done: The bank has paid; the suppliers have their payment advice Rajdhani Safety Equipments PAY-2627-000001 · NEFT · bank reference… | [22-finance-records-that-the-bank-has-paid-on-2026-11-29.jpg](blocked_docs/22-finance-records-that-the-bank-has-paid-on-2026-11-29.jpg) |
-| 23 | Rohan Mehta, Buyer | sees that the order is paid and closed in the notifications | Good morning, Rohan Mehta What needs you today, and where the purchases in progress stand. My work · Buyer Nothing needs you. Next: check which stock is at its reorder point. Check stock levels Where things stand 0 Waiting for approval 0 Being priced 0 Orders… | [23-buyer-sees-that-the-order-is-paid-and-closed-in-the-no.jpg](blocked_docs/23-buyer-sees-that-the-order-is-paid-and-closed-in-the-no.jpg) |
+| 23 | Rohan Mehta, Buyer | sees that the order is paid and closed in the notifications | Good afternoon, Rohan Mehta What needs you today, and where the purchases in progress stand. My work · Buyer Nothing needs you. Next: check which stock is at its reorder point. Check stock levels Where things stand 0 Waiting for approval 0 Being priced 0 Orde… | [23-buyer-sees-that-the-order-is-paid-and-closed-in-the-no.jpg](blocked_docs/23-buyer-sees-that-the-order-is-paid-and-closed-in-the-no.jpg) |
 
 ## What the data showed at the end
 
@@ -64,7 +64,7 @@ Result: **passed**
 - invoice status: the price is above what the order and the tolerance allow: blocked
 - the block reason names the price
 - the match of the invoice line: blocked for the price: [('blocked', 'price_variance')]
-- the explanation: cause, advice, written by the agent and kept for the audit, asked for by the clerk: [('price_mismatch', 'corrected_invoice', 'agent', 84)]
+- the explanation: cause, advice, written by the agent and kept for the audit, asked for by the clerk: [('price_mismatch', 'corrected_invoice', 'agent', 464)]
 - the explaining changed nothing: the invoice is still blocked: blocked
 - nothing can be paid while it is blocked: the payment run has nothing due
 - the invoice is still blocked until someone else decides: blocked
@@ -73,7 +73,7 @@ Result: **passed**
 - invoice status after the release: approved
 - the invoice is paid at the price it carries: before tax and total: (Decimal('9193.50'), Decimal('9653.00'))
 - due date worked out when the block was released (small supplier: terms and the 45-day rule): 2026-12-06
-- the match result records who resolved it: 89
+- the match result records who resolved it: 469
 - the release is in the audit log with its reason
 - payment run status: proposed
 - the payment: the invoice total less tax held back, no interest: (Decimal('9653.00'), 'SUP-0048', Decimal('0.00'), Decimal('0.00'))
@@ -89,16 +89,16 @@ Result: **passed**
 - the invoices left by the documents have the same status, amounts and due dates as the ones typed in: [('paid', Decimal('9193.50'), Decimal('0.00'), Decimal('0.00'), Decimal('459.68'), Decimal('9653.00'), datetime.date(2026, 12, 6))]
 - the audit log has a row for each of the 10 actions
 - the audit log holds 48 rows in all, for 33 kinds of action
-- the audit log, in order, with who did it: masters.import by service:system; user.create by service:system; role.grant by service:system; request.create by user:81; replenishment.run by user:81; request.submit by user:81; request.auto_approve by rule:REQ-01; sourcing.decide by service:sourcing; po.create by service:ordering; po.submit by service:ordering; task.create by service:system; po.approve by user:88; po.approved by user:88; task.complete by user:88; email.send by service:system; po.send by user:81; po.acknowledge by user:81; grn.post by user:83; file.upload by user:84; ai_step.accepted by service:invoice_reading; invoice_draft.create by service:invoice_reading; invoice.enter by user:84; invoice.match by user:84; invoice_draft.confirm by user:84; invoice.diagnose by agent:invoice_exceptions; proposal.create by user:84,user:87; invoice.release_block by user:89; proposal.approved by user:86,user:89; payment_run.propose by user:87; payment_run.approve by user:86; payment_run.file by user:87; po.close by user:87; payment_run.paid by user:87
-- audit: 'request.submit' (requester) was done by Rohan Mehta, Buyer: {'user:81'}
-- audit: 'po.approve' (approver) was done by Vikram Joshi, Head of Procurement: {'user:88'}
-- audit: 'payment_run.approve' (approver) was done by Rajesh Kulkarni, Managing Director: {'user:86'}
-- audit: 'grn.post' (receiver) was done by Imran Pasha, Storekeeper: {'user:83'}
-- audit: 'invoice.release_block' (invoice approver) was done by Suresh Bhatt, Plant Head: {'user:89'}
-- audit: 'payment_run.propose' (payer) was done by Anil Deshpande, Finance Manager: {'user:87'}
-- audit: 'payment_run.paid' (payer) was done by Anil Deshpande, Finance Manager: {'user:87'}
-- audit: 'po.send' was done by Rohan Mehta, Buyer: {'user:81'}
-- audit: 'invoice.enter' was done by Sunita Patil, Accounts: {'user:84'}
-- audit: 'payment_run.file' was done by Anil Deshpande, Finance Manager: {'user:87'}
+- the audit log, in order, with who did it: masters.import by service:system; user.create by service:system; role.grant by service:system; request.create by user:461; replenishment.run by user:461; request.submit by user:461; request.auto_approve by rule:REQ-01; sourcing.decide by service:sourcing; po.create by service:ordering; po.submit by service:ordering; task.create by service:system; po.approve by user:468; po.approved by user:468; task.complete by user:468; email.send by service:system; po.send by user:461; po.acknowledge by user:461; grn.post by user:463; file.upload by user:464; ai_step.accepted by service:invoice_reading; invoice_draft.create by service:invoice_reading; invoice.enter by user:464; invoice.match by user:464; invoice_draft.confirm by user:464; invoice.diagnose by agent:invoice_exceptions; proposal.create by user:464,user:467; invoice.release_block by user:469; proposal.approved by user:466,user:469; payment_run.propose by user:467; payment_run.approve by user:466; payment_run.file by user:467; po.close by user:467; payment_run.paid by user:467
+- audit: 'request.submit' (requester) was done by Rohan Mehta, Buyer: {'user:461'}
+- audit: 'po.approve' (approver) was done by Vikram Joshi, Head of Procurement: {'user:468'}
+- audit: 'payment_run.approve' (approver) was done by Rajesh Kulkarni, Managing Director: {'user:466'}
+- audit: 'grn.post' (receiver) was done by Imran Pasha, Storekeeper: {'user:463'}
+- audit: 'invoice.release_block' (invoice approver) was done by Suresh Bhatt, Plant Head: {'user:469'}
+- audit: 'payment_run.propose' (payer) was done by Anil Deshpande, Finance Manager: {'user:467'}
+- audit: 'payment_run.paid' (payer) was done by Anil Deshpande, Finance Manager: {'user:467'}
+- audit: 'po.send' was done by Rohan Mehta, Buyer: {'user:461'}
+- audit: 'invoice.enter' was done by Sunita Patil, Accounts: {'user:464'}
+- audit: 'payment_run.file' was done by Anil Deshpande, Finance Manager: {'user:467'}
 - separation of duties: requester, approver, receiver, invoice approver, payer are different people in this case
 - the request was approved by the rule, not by a person: 0

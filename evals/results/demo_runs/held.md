@@ -8,7 +8,7 @@ Result: **passed**
 | 2 | Rohan Mehta, Buyer | creates the request and sends it for approval | Requests What people have asked for, and where each request is in approval Check stock levels Export Created 1 request: 1 approved automatically, 0 waiting for approval. Approved1 All1 REQUEST AMOUNT REQUESTED BY STATUS RCCB 40 A 30 mA 4 pole REQ-BLR-2627-000… | [02-buyer-creates-the-request-and-sends-it-for-approval.jpg](held/02-buyer-creates-the-request-and-sends-it-for-approval.jpg) |
 | 3 | Rohan Mehta, Buyer | sees the new order in the list, held: the price is above the estimate | Purchase orders What has been ordered from suppliers, and where each order is Export NUMBER SUPPLIER FOR REQUEST AMOUNT STATUS PO-BLR-2627-00001 Mahalaxmi Electricals SUP-0007 REQ-BLR-2627-00001 ₹7,197.29 Draft held: price above the estimate | [03-buyer-sees-the-new-order-in-the-list-held-the-price-is.jpg](held/03-buyer-sees-the-new-order-in-the-list-held-the-price-is.jpg) |
 | 4 | Rohan Mehta, Buyer | opens the order: it says why it is on hold, and offers nothing to send | ← Purchase orders PO-BLR-2627-00001 · Mahalaxmi Electricals Draft · ₹7,197.29 · for REQ-BLR-2627-00001 · contract CNT-0018 ✓ Request ✓ Approval ✓ Price 4 Order 5 Receipt 6 Invoice 7 Payment Now: Held until an approver accepts the price or contract limit Appro… | [04-buyer-opens-the-order-it-says-why-it-is-on-hold-and-of.jpg](held/04-buyer-opens-the-order-it-says-why-it-is-on-hold-and-of.jpg) |
-| 5 | Vikram Joshi, Head of Procurement | has no such order to approve: it is not yet up for approval | Good morning, Vikram Joshi What needs you today, and where the purchases in progress stand. My work · Approver Orders held for a price or ceiling 1 See all Accept a price above the estimate on PO-BLR-2627-00001: Price above the estimate by more t Decide › Whe… | [05-proc_head-has-no-such-order-to-approve-it-is-not-yet-up-fo.jpg](held/05-proc_head-has-no-such-order-to-approve-it-is-not-yet-up-fo.jpg) |
+| 5 | Vikram Joshi, Head of Procurement | has no such order to approve: it is not yet up for approval | Good afternoon, Vikram Joshi What needs you today, and where the purchases in progress stand. My work · Approver Orders held for a price or ceiling 1 See all Accept a price above the estimate on PO-BLR-2627-00001: Price above the estimate by more t Decide › W… | [05-proc_head-has-no-such-order-to-approve-it-is-not-yet-up-fo.jpg](held/05-proc_head-has-no-such-order-to-approve-it-is-not-yet-up-fo.jpg) |
 | 6 | Anil Deshpande, Finance Manager | finds 'PO-BLR-2627-00001' in the work waiting for them | Approvals Actions an agent or service proposed. Nothing runs until you approve it. Accept a price above the estimate on PO-BLR-2627-00001: Price above the estimate by more than 15%: RCCB 40 A 30 mA 4 pole: ₹ 3,049.70 is 24.48% above the estimate ₹ 2,450.00 Pr… | [06-finance-finds-po-blr-2627-00001-in-the-work-waiting-for-.jpg](held/06-finance-finds-po-blr-2627-00001-in-the-work-waiting-for-.jpg) |
 | 7 | Anil Deshpande, Finance Manager | reads the reason and accepts the price | Approvals Actions an agent or service proposed. Nothing runs until you approve it. Nothing is waiting for you. | [07-finance-reads-the-reason-and-accepts-the-price.jpg](held/07-finance-reads-the-reason-and-accepts-the-price.jpg) |
 | 8 | Vikram Joshi, Head of Procurement | finds the order in the work waiting for them | ← Purchase orders PO-BLR-2627-00001 · Mahalaxmi Electricals Pending · ₹7,197.29 · for REQ-BLR-2627-00001 · contract CNT-0018 ✓ Request ✓ Approval ✓ Price 4 Order 5 Receipt 6 Invoice 7 Payment Now: Waiting for Vikram Joshi to approve the order Approval Waiting… | [08-proc_head-finds-the-order-in-the-work-waiting-for-them.jpg](held/08-proc_head-finds-the-order-in-the-work-waiting-for-them.jpg) |
@@ -43,7 +43,7 @@ Result: **passed**
 - no mail went to the supplier: 0
 - order status: accepted, so it goes for approval: submitted
 - the hold is lifted: None
-- the proposal was decided by the finance manager: 35
+- the proposal was decided by the finance manager: 415
 - the acceptance is in the audit log
 - order status after approval: approved
 - the buyer cannot approve an order (refused)
@@ -53,10 +53,10 @@ Result: **passed**
 - the price on the order is the contract price, not the estimate: 3049.7000
 - the audit log has a row for each of the 5 actions
 - the audit log holds 32 rows in all, for 20 kinds of action
-- the audit log, in order, with who did it: masters.import by service:system; user.create by service:system; role.grant by service:system; request.create by user:29; replenishment.run by user:29; request.submit by user:29; request.auto_approve by rule:REQ-01; sourcing.decide by service:sourcing; po.create by service:ordering; proposal.create by service:ordering; po.variance_accepted by user:35; po.submit by user:35; task.create by service:system; proposal.approved by user:35; po.approve by user:36; po.approved by user:36; task.complete by user:36; email.send by service:system; po.send by user:29; po.acknowledge by user:29
-- audit: 'request.submit' (requester) was done by Rohan Mehta, Buyer: {'user:29'}
-- audit: 'po.variance_accepted' (approver) was done by Anil Deshpande, Finance Manager: {'user:35'}
-- audit: 'po.approve' (approver) was done by Vikram Joshi, Head of Procurement: {'user:36'}
-- audit: 'po.send' was done by Rohan Mehta, Buyer: {'user:29'}
-- audit: 'po.acknowledge' was done by Rohan Mehta, Buyer: {'user:29'}
+- the audit log, in order, with who did it: masters.import by service:system; user.create by service:system; role.grant by service:system; request.create by user:409; replenishment.run by user:409; request.submit by user:409; request.auto_approve by rule:REQ-01; sourcing.decide by service:sourcing; po.create by service:ordering; proposal.create by service:ordering; po.variance_accepted by user:415; po.submit by user:415; task.create by service:system; proposal.approved by user:415; po.approve by user:416; po.approved by user:416; task.complete by user:416; email.send by service:system; po.send by user:409; po.acknowledge by user:409
+- audit: 'request.submit' (requester) was done by Rohan Mehta, Buyer: {'user:409'}
+- audit: 'po.variance_accepted' (approver) was done by Anil Deshpande, Finance Manager: {'user:415'}
+- audit: 'po.approve' (approver) was done by Vikram Joshi, Head of Procurement: {'user:416'}
+- audit: 'po.send' was done by Rohan Mehta, Buyer: {'user:409'}
+- audit: 'po.acknowledge' was done by Rohan Mehta, Buyer: {'user:409'}
 - separation of duties: requester, approver are different people in this case

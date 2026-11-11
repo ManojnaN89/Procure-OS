@@ -40,7 +40,7 @@ Walk the whole flow with `docs/demo-script.md`. Start as the buyer: **Requests**
 | `docs/demo-script.md` | The nine-step walk-through, as run by eval E34 |
 | `docs/data-dictionary.md`, `docs/database-schema.md` | What the data means, and every table and column as built (generated) |
 | `docs/capability-matrix.md` | Every function of the plan, with the evidence that it works |
-| `docs/security-review.md`, `docs/dependencies.md`, `docs/structure-report.md` | Security findings, packages and licences, code structure |
+| `docs/security-review.md`, `docs/dependencies.md` | Security findings, packages and licences |
 | `CLAUDE.md` | Working rules and the map of modules |
 | `evals/README.md`, `datagen/README.md` | The evals against the plan, and the synthetic data |
 
@@ -50,4 +50,4 @@ Walk the whole flow with `docs/demo-script.md`. Start as the buyer: **Requests**
 
 ## Repository
 
-The platform is `backend/`, `ui/`, `frontend/`, `datagen/`, `docs/`, `tests/`, `evals/`. The original Procure-OS code is in `legacy/procure-os-v1/` as a reference only; nothing in it is run, tested or imported. Work happens on branches and reaches `main` by pull request; nothing is pushed unless the owner does it.
+The platform is `backend/`, `ui/`, `frontend/`, `datagen/`, `docs/`, `tests/`, `evals/`. Work happens on branches and reaches `main` by pull request; nothing is pushed unless the owner does it.
