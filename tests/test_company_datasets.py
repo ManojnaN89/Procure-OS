@@ -1,5 +1,5 @@
-"""The demo companies described by a profile file (Apex Pumps, Brightwave Technologies): their master data has the flow
-company's shape, passes its checks, and loads into a new company with nothing left out; their ERP input files add up;
+"""The demo companies described by a profile file (Apex Pumps, Brightwave Technologies): their master data has the agreed
+shape, passes its checks, and loads into a new company with nothing left out; their ERP input files add up;
 their twelve months of history end at the profile's stock, with every planted problem in the answer keys."""
 
 import csv
@@ -39,8 +39,7 @@ def datasets(tmp_path_factory: pytest.TempPathFactory) -> dict[str, Path]:
     folder = tmp_path_factory.mktemp("companies")
     for name in COMPANIES:
         gen.build(gen.CompanyProfile.named(name), folder / name)
-    demo._generator().build(folder / "flow")
-    return {name: folder / name for name in (*COMPANIES, "flow")}
+    return {name: folder / name for name in COMPANIES}
 
 
 def _rows(path: Path) -> list[dict[str, str]]:
@@ -54,14 +53,12 @@ def _header(path: Path) -> str:
 
 
 @pytest.mark.parametrize("name", COMPANIES)
-def test_each_company_has_the_flow_company_master_files_with_the_same_headers(
-    datasets: dict[str, Path], name: str
-) -> None:
-    flow, mine = datasets["flow"] / "master", datasets[name] / "master"
+def test_each_company_has_every_master_file_with_the_agreed_headers(datasets: dict[str, Path], name: str) -> None:
+    mine = datasets[name] / "master"
 
-    assert sorted(p.name for p in mine.glob("*.csv")) == sorted(p.name for p in flow.glob("*.csv"))
-    for path in flow.glob("*.csv"):
-        assert _header(mine / path.name) == _header(path), path.name
+    assert sorted(p.stem for p in mine.glob("*.csv")) == sorted(gen.HEADERS)
+    for table, header in gen.HEADERS.items():
+        assert _header(mine / f"{table}.csv").strip() == header, table
 
 
 @pytest.mark.parametrize("name", COMPANIES)

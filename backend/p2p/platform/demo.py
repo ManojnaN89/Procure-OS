@@ -1,7 +1,7 @@
 """The demo companies, made again from nothing with one command.
 
-    python -m p2p.cli demo reset flow          # the small demo company (datagen/generator/profile_flow.py)
-    python -m p2p.cli demo reset apex          # a company described by datagen/catalog/apex/company.yaml
+    python -m p2p.cli demo reset apex          # the main demo company, described by datagen/catalog/apex/company.yaml
+    python -m p2p.cli demo reset brightwave    # the second one
 
 Drops the company (if it is there), makes it again, loads its generated dataset (the master data, then the stock history
 when the dataset has one), sets who approves what, and gives each
@@ -25,28 +25,16 @@ from p2p.platform import audit, routing, tenants, users
 from p2p.receiving import stock
 
 # A throwaway DEVELOPMENT password for the synthetic demo company only (fake people, fake suppliers, fake data). It is
-# the same for all eight logins so a walk-through is quick. The platform needs at least 10 characters, which is why it
-# is not shorter. `reset_flow` refuses to run unless the control database is on this machine, so these accounts can
+# the same for every login so a walk-through is quick. The platform needs at least 10 characters, which is why it
+# is not shorter. `reset_company` refuses to run unless the control database is on this machine, so these accounts can
 # never be created on a real server.
 DEV_PASSWORD = "flow123456"  # noqa: S105 - deliberate: see the comment above
 LOCAL_HOSTS = ("127.0.0.1", "localhost", "::1")
 
-SLUG = "flow"
-NAME = "Flow Engineering Pvt Ltd"
-DATASET = REPO_ROOT / "data" / "datasets" / "flow-demo-v1"
+MAIN = "apex"  # the main demo company; `brightwave` is the second
 CREDENTIALS = REPO_ROOT / ".dev-credentials"
 GENERATORS = REPO_ROOT / "datagen" / "generator"
-GENERATOR = GENERATORS / "profile_flow.py"
 CATALOG = REPO_ROOT / "datagen" / "catalog"
-
-# The roles an approval chain can name in this company. `manager` is the requester's own manager; `plant_head` is
-# whoever holds that designation. Everything else the platform ships with (CFO, director, ...) is not used here.
-APPROVER_ROLES = [
-    ("manager", "requester_manager", None),
-    ("dept_head", "department_head", None),
-    ("plant_head", "designation", "Plant Head"),
-]
-REPLENISHMENT_DEPARTMENT = "MNT"
 
 
 class DemoError(Exception):
@@ -54,7 +42,7 @@ class DemoError(Exception):
 
 
 @dataclass
-class FlowResult:
+class DemoResult:
     slug: str
     logins: list[tuple[str, str, str]] = field(default_factory=list)  # email, role, designation (no passwords)
     report: ImportReport | None = None
@@ -74,7 +62,7 @@ class DemoCompany:
     build: Callable[[Path], list[str]]  # writes the dataset into a folder and returns what is wrong with it
 
 
-def _generator(path: Path = GENERATOR) -> Any:
+def _generator(path: Path) -> Any:
     spec = importlib.util.spec_from_file_location(path.stem, path)
     if spec is None or spec.loader is None:
         raise DemoError(f"cannot load {path}")
@@ -83,27 +71,15 @@ def _generator(path: Path = GENERATOR) -> Any:
     return module
 
 
-def _build_flow(folder: Path) -> list[str]:
-    gen = _generator()
-    gen.build(folder)
-    problems: list[str] = gen.check(folder)
-    return problems
-
-
-FLOW = DemoCompany(SLUG, NAME, DATASET, APPROVER_ROLES, REPLENISHMENT_DEPARTMENT, _build_flow)
-
-
 def profiled_companies() -> list[str]:
     """The companies described by a profile file in the catalogue."""
     return sorted(p.parent.name for p in CATALOG.glob("*/company.yaml"))
 
 
 def company(name: str) -> DemoCompany:
-    """`flow`, or a company with a profile file datagen/catalog/<name>/company.yaml."""
-    if name == SLUG:
-        return FLOW
+    """A company with a profile file datagen/catalog/<name>/company.yaml."""
     if name not in profiled_companies():
-        raise DemoError(f"no demo company '{name}'; there are {', '.join([SLUG, *profiled_companies()])}")
+        raise DemoError(f"no demo company '{name}'; there are {', '.join(profiled_companies())}")
     gen = _generator(GENERATORS / "company_profile.py")
     profile = gen.CompanyProfile.named(name)
 
@@ -122,7 +98,7 @@ def company(name: str) -> DemoCompany:
     )
 
 
-def ensure_dataset(dataset: Path = DATASET, demo: DemoCompany = FLOW) -> Path:
+def ensure_dataset(dataset: Path, demo: DemoCompany) -> Path:
     """The dataset folder, made first when it is not there."""
     if not (dataset / "master" / "user.csv").is_file():
         problems = demo.build(dataset)
@@ -146,7 +122,7 @@ def login_role(held: set[str]) -> str:
     return next((login for org, login in ROLE_ORDER if org in held), "Requester")
 
 
-def _configure(db: Session, demo: DemoCompany, slug: str) -> None:
+def configure(db: Session, demo: DemoCompany, slug: str) -> None:
     """The settings the flow needs that are not master data: who the chain roles are, and who approves planned requests."""
     db.execute(text("delete from approver_role"))
     for role, source, value in demo.approver_roles:
@@ -210,14 +186,9 @@ def require_local_database() -> None:
         )
 
 
-def reset_flow(dataset: Path | None = None, *, credentials: Path | None = CREDENTIALS, slug: str = SLUG) -> FlowResult:
-    """Make the small demo company from nothing. Raises DemoError if the dataset does not load cleanly."""
-    return reset_company(FLOW, dataset, credentials=credentials, slug=slug)
-
-
 def reset_company(
     demo: DemoCompany, dataset: Path | None = None, *, credentials: Path | None = CREDENTIALS, slug: str | None = None
-) -> FlowResult:
+) -> DemoResult:
     """Make a demo company from nothing. Raises DemoError if the dataset does not load cleanly."""
     require_local_database()
     slug = slug or demo.slug
@@ -226,7 +197,7 @@ def reset_company(
     created = tenants.create_tenant(slug, demo.name)
     if not created.ok:
         raise DemoError(f"the company could not be created: {created.error}")
-    result = FlowResult(slug)
+    result = DemoResult(slug)
     with Session(routing.engine_for(slug)) as db:
         result.report = import_masters(db, folder)
         if result.report.rejected:
@@ -241,7 +212,7 @@ def reset_company(
                 raise DemoError(
                     f"{len(result.stock.rejected)} stock movement(s) left out; first: line {first.line}: {first.reason}"
                 )
-        _configure(db, demo, slug)
+        configure(db, demo, slug)
         people = db.execute(text("select code, name, designation, email from org_user order by code")).all()
         held: dict[str, set[str]] = {}
         for code, role in db.execute(text("select user_code, role from org_user_role")):

@@ -18,18 +18,16 @@ from p2p.masters.schema import TABLES
 from p2p.platform import routing, tenants
 
 ROOT = Path(__file__).resolve().parents[1]
-SMALL = ROOT / "data" / "datasets" / "cbc-small-v1-seed42"
+APEX = ROOT / "data" / "datasets" / "apex-v1"  # the main demo company
 
 
 @pytest.fixture(scope="module")
 def dataset() -> Path:
-    if not SMALL.is_dir():
+    if not (APEX / "manifest.json").is_file():
         subprocess.run(
-            [sys.executable, "-I", str(ROOT / "datagen/generator/cli.py"), "--size", "small", "--seed", "42"],
-            check=True,
-            cwd=ROOT,
+            [sys.executable, "-I", str(ROOT / "datagen/generator/company_profile.py"), "apex"], check=True, cwd=ROOT
         )
-    return SMALL
+    return APEX
 
 
 @pytest.fixture(scope="module")

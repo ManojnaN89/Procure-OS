@@ -1,4 +1,4 @@
-"""`demo populate`: the small company is filled with cases at every stage, made by the real services, and is safe to run."""
+"""`demo populate`: the main demo company (Apex Pumps) is filled with cases at every stage, made by the real services, and is safe to run."""
 
 import uuid
 from collections.abc import Iterator
@@ -24,11 +24,11 @@ class Filled:
 @pytest.fixture(scope="module")
 def filled(control_db: str, tmp_path_factory: pytest.TempPathFactory) -> Iterator[Filled]:
     folder = tmp_path_factory.mktemp("populate")
-    slug = "flowp" + uuid.uuid4().hex[:8]
+    slug = "apexp" + uuid.uuid4().hex[:8]
     previous = mail.send_email
     mail.send_email = lambda to, subject, body, **kw: str(kw.get("message_id"))
     try:
-        demo.reset_flow(folder / "dataset", credentials=None, slug=slug)
+        demo.reset_company(demo.company("apex"), folder / "dataset", credentials=None, slug=slug)
         result = populate(slug)
         with Session(routing.engine_for(slug)) as session:
             yield Filled(slug, session, result)
@@ -54,32 +54,31 @@ def test_every_stage_has_a_case_and_nothing_stopped(filled: Filled) -> None:
     assert set(filled.result.cases) == set(STAGES)
 
 
-def test_the_stock_check_made_a_quotation_request_that_waits_and_requests_for_the_manager(filled: Filled) -> None:
+def pending_approver(f: Filled, no: str) -> tuple[object, ...]:
+    return one(
+        f,
+        "select r.status, s.approver from request r join approval_step s on s.request_no = r.no "
+        "where r.no = :n and s.status = 'pending'",
+        n=no,
+    )
+
+
+def test_the_stock_check_made_a_quotation_request_that_waits_for_a_buyer(filled: Filled) -> None:
     rfq = first_number(filled, EARLY[0])
     status, proposal_status = one(
         filled, "select r.status, p.status from rfq r join proposal p on p.id = r.proposal_id where r.no = :n", n=rfq
     )
     assert (status, proposal_status) == ("draft", "pending")  # nothing is sent until a buyer approves it
-    for no in filled.result.cases[EARLY[1]].split(", "):
-        waiting = one(filled, "select r.status, s.approver from request r join approval_step s on s.request_no = r.no "
-                              "where r.no = :n and s.status = 'pending'", n=no)  # fmt: skip
-        assert waiting == ("submitted", "U02")  # the maintenance manager
 
 
-def test_the_new_requests_are_a_draft_one_for_the_manager_and_one_for_the_plant_head(filled: Filled) -> None:
-    assert one(filled, "select status from request where no = :n", n=filled.result.cases[EARLY[2]]) == ("draft",)
-    for stage, approver in ((EARLY[3], "U02"), (EARLY[4], "U01")):
-        no = filled.result.cases[stage]
-        assert one(
-            filled,
-            "select r.status, s.approver from request r join approval_step s on s.request_no = r.no "
-            "where r.no = :n and s.status = 'pending'",
-            n=no,
-        ) == ("submitted", approver)
+def test_the_new_requests_are_a_draft_one_for_the_plant_head_and_one_for_the_director(filled: Filled) -> None:
+    assert one(filled, "select status from request where no = :n", n=filled.result.cases[EARLY[1]]) == ("draft",)
+    assert pending_approver(filled, filled.result.cases[EARLY[2]]) == ("submitted", "U07")  # the plant head
+    assert pending_approver(filled, filled.result.cases[EARLY[3]]) == ("submitted", "U09")  # the director
 
 
 def test_one_quotation_request_is_sent_with_quotes_in_and_not_awarded(filled: Filled) -> None:
-    rfq = filled.result.cases[EARLY[5]]
+    rfq = filled.result.cases[EARLY[4]]
     status, quotes, orders = one(
         filled,
         "select r.status, (select count(*) from quote q where q.rfq_no = r.no), "
@@ -120,9 +119,8 @@ def test_invoices_and_payment_runs_are_at_the_stages_they_are_named_for(filled: 
     assert one(filled, "select count(*) from po where status = 'closed'") == (1,)  # the paid case
 
 
-def test_two_low_items_are_left_for_the_stock_check_to_suggest(filled: Filled) -> None:
-    assert len(filled.result.low_items_left) >= 2
-    assert {"ITM-002", "ITM-010"} <= set(filled.result.low_items_left)
+def test_the_two_spares_used_up_are_left_for_the_stock_check_to_suggest(filled: Filled) -> None:
+    assert filled.result.low_items_left == ["SP-02", "SP-03"]
 
 
 def test_what_was_made_was_made_by_the_people_and_left_audit_rows(filled: Filled) -> None:

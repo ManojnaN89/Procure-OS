@@ -1,21 +1,23 @@
-"""Fill the small demo company with cases at every stage of the flow, so a walk-through can start in the middle.
+"""Fill the main demo company (Apex Pumps) with cases at every stage of the flow, so a walk-through can start in the
+middle.
 
-    python -m p2p.cli demo populate flow          (after `demo reset flow`; `--reset` does both)
+    python -m p2p.cli demo populate apex          (after `demo reset apex`; `--reset` does both)
 
-It works the way the people do: each step is a call to the real API as one of the eight role logins, and the worker runs
-the jobs that follow, so every number, audit row, notification and email is the real thing. Nothing is written straight
-to the database. The company must have no requests yet, and the database must be on this machine.
+It works the way the people do: each step is a call to the real API as one of the role logins, and the worker runs the
+jobs that follow, so every number, audit row, notification and email is the real thing. Nothing is written straight to
+the database. The company must have no requests yet, and the database must be on this machine.
 
 What it leaves behind (dates are relative to today):
 
-    a draft, a request waiting for the maintenance manager, one waiting for the plant head,
-    a quotation request waiting to be sent, one sent with quotes in and waiting for an award,
-    an order made from an award and waiting for the plant head, an approved order waiting to be sent,
+    a quotation request from the stock check waiting to be sent,
+    a draft, a request waiting for the plant head, one waiting for the director,
+    a quotation request sent with quotes in and waiting for an award,
+    an order made from an award and waiting for the purchase manager, an approved order waiting to be sent,
     a sent and acknowledged order, a part-received order, a fully received order waiting for an invoice,
     an invoice approved and not due yet, a blocked invoice waiting for release,
-    a payment run waiting for approval, an approved run with its bank file made, and one case paid and closed.
+    a payment run waiting for the director, an approved run with its bank file made, and one case paid and closed.
 
-Two low items are left without any request, so "Check stock levels" still has something to suggest.
+Two spares are used up and left without any request, so "Check stock levels" still has something to suggest.
 """
 
 import hashlib
@@ -28,14 +30,15 @@ from fastapi.testclient import TestClient
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
-import p2p.platform.demo as flow_demo
+import p2p.platform.demo as demo
 from p2p.formulas.calendar import business_today
 from p2p.main import app
 from p2p.platform import routing, tenants, worker
 from p2p.requests import replenishment
 
-PLANT_HEAD, MAINT_MGR, ENGINEER = "Plant Head", "Maintenance Manager", "Maintenance Engineer"
-STORE, BUYER, AP, FINANCE = "Storekeeper", "Buyer", "Accounts Payable Executive", "Finance Manager"
+REQUESTER, STORE, BUYER = "Production Manager", "Storekeeper", "Buyer"
+AP, FINANCE = "AP Executive", "Finance Manager"
+PURCHASE_MANAGER, DIRECTOR = "Purchase Manager", "Director"
 LOCATION = "PLT-CKN"
 GAP = 14  # an order of the same item a fortnight apart is not taken for a repeat
 
@@ -44,21 +47,20 @@ GAP = 14  # an order of the same item a fortnight apart is not taken for a repea
 # leaves the first group in place.
 EARLY = (
     "stock check: quotation request waiting to be sent",
-    "stock check: requests waiting for the maintenance manager",
     "new request: draft",
-    "new request: waiting for the maintenance manager",
     "new request: waiting for the plant head",
+    "new request: waiting for the director",
     "quotation request sent, quotes in, waiting for an award",
 )
 LATER = (
-    "order from an award, waiting for the plant head",
+    "order from an award, waiting for the purchase manager",
     "approved order, waiting to be sent",
     "order sent and acknowledged",
     "order part received",
     "order received, waiting for an invoice",
     "invoice approved, not due yet",
     "invoice blocked, waiting for release",
-    "payment run waiting for approval",
+    "payment run waiting for the director",
     "payment run approved, bank file made",
     "paid and closed",
 )
@@ -84,9 +86,9 @@ class _Run:
         self.db = Session(routing.engine_for(slug))
         self.today = business_today()
         self._tokens: dict[str, dict[str, str]] = {}
-        self._email: dict[str, str] = {
-            r[0]: r[1] for r in self.db.execute(text("select designation, email from org_user"))
-        }
+        people = self.db.execute(text("select code, designation, email from org_user")).all()
+        self._email: dict[str, str] = {r[1]: r[2] for r in people}
+        self._designation: dict[str, str] = {r[0]: r[1] for r in people}
         self._invoice_seq = 0
         self._used: dict[str, int] = {}
         self.out = Populated(slug)
@@ -97,12 +99,10 @@ class _Run:
         if designation not in self._tokens:
             email = self._email.get(designation)
             if email is None:
-                raise flow_demo.DemoError(f"the company has nobody with the designation '{designation}'")
-            r = self.client.post("/api/auth/login", json={"email": email, "password": flow_demo.DEV_PASSWORD})
+                raise demo.DemoError(f"the company has nobody with the designation '{designation}'")
+            r = self.client.post("/api/auth/login", json={"email": email, "password": demo.DEV_PASSWORD})
             if r.status_code != 200:
-                raise flow_demo.DemoError(
-                    f"{email} cannot sign in with the demo password (run `demo reset flow` first)"
-                )
+                raise demo.DemoError(f"{email} cannot sign in with the demo password (run `demo reset` first)")
             self._tokens[designation] = {"Authorization": "Bearer " + r.json()["access_token"]}
         return self._tokens[designation]
 
@@ -111,7 +111,7 @@ class _Run:
         r = self.client.request(method, path, json=body, headers=self.who(designation))
         self.db.rollback()
         if r.status_code != 200:
-            raise flow_demo.DemoError(f"{designation}: {method} {path} gave {r.status_code}: {r.text[:200]}")
+            raise demo.DemoError(f"{designation}: {method} {path} gave {r.status_code}: {r.text[:200]}")
         return r.json()
 
     def q(self, sql: str, **params: Any) -> list[Any]:
@@ -133,7 +133,7 @@ class _Run:
 
     def request(self, lines: list[tuple[str, int]], why: str, *, submit: bool = True, gap: int = 0) -> str:
         made = self.call(
-            ENGINEER,
+            REQUESTER,
             "POST",
             "/api/requisitions",
             {
@@ -145,22 +145,21 @@ class _Run:
         )
         no = str(made["id"])
         if submit:
-            self.call(ENGINEER, "POST", f"/api/requisitions/{no}/submit", {"override_reason": "A separate job"})
+            self.call(REQUESTER, "POST", f"/api/requisitions/{no}/submit", {"override_reason": "A separate job"})
         return no
 
-    def approve_request(self, no: str) -> None:
-        """Whoever the rules name for it approves (nothing to do when it approved itself)."""
+    def waiting_on(self, no: str) -> str | None:
+        """The designation of whoever the request waits for, or None."""
         waiting = self.q(
             "select approver from approval_step where request_no = :n and status = 'pending' order by step limit 1",
             n=no,
         )
-        while waiting:
-            who = MAINT_MGR if waiting[0][0] == "U02" else PLANT_HEAD
+        return self._designation[waiting[0][0]] if waiting else None
+
+    def approve_request(self, no: str) -> None:
+        """Whoever the rules name for it approves (nothing to do when it approved itself)."""
+        while (who := self.waiting_on(no)) is not None:
             self.call(who, "POST", f"/api/requisitions/{no}/approve", {})
-            waiting = self.q(
-                "select approver from approval_step where request_no = :n and status = 'pending' order by step limit 1",
-                n=no,
-            )
 
     def orders_of(self, request_no: str) -> list[str]:
         return [
@@ -176,7 +175,7 @@ class _Run:
         self.work()
         orders = self.orders_of(no)
         if len(orders) != 1:
-            raise flow_demo.DemoError(f"request {no} for {item} should give one order from the contract, gave {orders}")
+            raise demo.DemoError(f"request {no} for {item} should give one order from the contract, gave {orders}")
         return no, orders[0]
 
     # ---- quotation requests ---------------------------------------------------------------------------
@@ -184,12 +183,12 @@ class _Run:
     def rfq_of(self, request_no: str) -> tuple[str, int | None]:
         rows = self.q("select no, proposal_id from rfq where request_no = :r order by no", r=request_no)
         if len(rows) != 1:
-            raise flow_demo.DemoError(f"request {request_no} should have one quotation request, has {len(rows)}")
+            raise demo.DemoError(f"request {request_no} should have one quotation request, has {len(rows)}")
         return str(rows[0][0]), rows[0][1]
 
     def send_rfq(self, rfq: str, proposal: int | None) -> None:
         if proposal is None:
-            raise flow_demo.DemoError(f"{rfq} has no 'send' decision waiting")
+            raise demo.DemoError(f"{rfq} has no 'send' decision waiting")
         self.call(BUYER, "POST", f"/api/admin/proposals/{proposal}/approve", {})
         self.work()
 
@@ -221,7 +220,9 @@ class _Run:
     # ---- orders ---------------------------------------------------------------------------------------
 
     def approve_order(self, po: str) -> None:
-        self.call(PLANT_HEAD, "POST", f"/api/purchase-orders/{po}/approve", {"comment": "Approved"})
+        """The purchase manager approves an order that waits; one within the limit for no approval is approved already."""
+        if self.q("select status from po where no = :n", n=po)[0][0] == "submitted":
+            self.call(PURCHASE_MANAGER, "POST", f"/api/purchase-orders/{po}/approve", {"comment": "Approved"})
 
     def send_order(self, po: str, *, acknowledge: bool = True) -> None:
         self.call(BUYER, "POST", f"/api/purchase-orders/{po}/send")
@@ -286,25 +287,23 @@ class _Run:
 
     def approve_run(self, run: str) -> None:
         proposal = self.q("select proposal_id from payment_run where no = :r", r=run)[0][0]
-        self.call(PLANT_HEAD, "POST", f"/api/admin/proposals/{proposal}/approve", {})
+        self.call(DIRECTOR, "POST", f"/api/admin/proposals/{proposal}/approve", {})
 
 
 def _stage(run: _Run, label: str, number: str) -> None:
     run.out.cases[label] = number
 
 
-def populate(slug: str = flow_demo.SLUG) -> Populated:
+def populate(slug: str = demo.MAIN) -> Populated:
     """Make the cases. Raises DemoError when it is not safe to, or when the first group of stages cannot be made; a
     failure in the later stages is reported in `stopped` and leaves everything made so far."""
-    flow_demo.require_local_database()
+    demo.require_local_database()
     with tenants.control_session() as control:
         if control.execute(text("select 1 from tenant where slug = :s"), {"s": slug}).first() is None:
-            raise flow_demo.DemoError(f"there is no company '{slug}'; make it with `demo reset flow` first")
+            raise demo.DemoError(f"there is no company '{slug}'; make it with `demo reset` first")
     with Session(routing.engine_for(slug)) as check:
         if check.execute(text("select count(*) from request")).scalar_one():
-            raise flow_demo.DemoError(
-                f"'{slug}' already has requests; use `demo populate {slug} --reset` to start over"
-            )
+            raise demo.DemoError(f"'{slug}' already has requests; use `demo populate {slug} --reset` to start over")
 
     run = _Run(slug)
     try:
@@ -322,21 +321,17 @@ def populate(slug: str = flow_demo.SLUG) -> Populated:
 
 def _early(run: _Run) -> None:
     """Stock check, new requests, approvals and quotation requests."""
-    # "Check stock levels": the buyer's click. Four items are low; the shoes request is small and approves itself,
-    # the other two wait for the maintenance manager.
+    # "Check stock levels": the buyer's click. The V-belts are below their reorder point; the request is small and
+    # approves itself, and its quotation request waits for a buyer to send it.
     made = run.call(BUYER, "POST", "/api/replenishment/run", {"dry_run": False})["requests"]
-    by_category = {r["category"]: r for r in made}
-    if sorted(by_category) != ["ELE", "MRO", "PPE"]:
-        raise flow_demo.DemoError(
-            f"the stock check should make requests for ELE, MRO and PPE, made {sorted(by_category)}"
-        )
-    run.work()  # the approved shoes request is sourced: a quotation request that waits for a buyer to send it
-    shoes_rfq, _ = run.rfq_of(by_category["PPE"]["no"])
-    _stage(run, EARLY[0], shoes_rfq)
-    _stage(run, EARLY[1], ", ".join(by_category[c]["no"] for c in ("MRO", "ELE")))
+    if [r["category"] for r in made] != ["MRO"]:
+        raise demo.DemoError(f"the stock check should make one request for spares (MRO), made {made}")
+    run.work()
+    belts_rfq, _ = run.rfq_of(made[0]["no"])
+    _stage(run, EARLY[0], belts_rfq)
 
-    # Two items people have used up since, left alone so "Check stock levels" still has something to suggest.
-    for item in ("ITM-002", "ITM-010"):
+    # Two spares people have used up since, left alone so "Check stock levels" still has something to suggest.
+    for item in ("SP-02", "SP-03"):
         run.call(
             STORE,
             "POST",
@@ -344,59 +339,60 @@ def _early(run: _Run) -> None:
             {"item_code": item, "location": LOCATION, "qty": "22", "reference": "Used on the line"},
         )
 
-    # New requests by the engineer: one kept as a draft, one for each approver
-    _stage(run, EARLY[2], run.request([("ITM-007", 40)], "Breakers for the new line", submit=False))
-    _stage(run, EARLY[3], run.request([("ITM-003", 50)], "Hose for the press line"))
-    _stage(run, EARLY[4], run.request([("ITM-005", 30)], "Grease for the annual service"))
+    # New requests by the production manager: one kept as a draft, one for each approver
+    _stage(run, EARLY[1], run.request([("RM-06", 100)], "Bearings for the 1 HP pumps", submit=False))
+    _stage(run, EARLY[2], run.request([("RM-08", 20)], "Winding wire for the rewinding job"))
+    _stage(run, EARLY[3], run.request([("RM-01", 200)], "Motor bodies for the next quarter"))
 
-    # A small request approves itself; its quotation request is sent, two suppliers answer, nobody has awarded it yet
-    no = run.request([("ITM-009", 20)], "Push buttons for the new panel")
+    # A small request approves itself; its quotation request is sent, suppliers answer, nobody has awarded it yet
+    no = run.request([("RM-09", 50)], "Capacitors for the 1 HP pumps")
     run.work()
     rfq, proposal = run.rfq_of(no)
     run.send_rfq(rfq, proposal)
-    for supplier, price in zip(run.invited(rfq), ("176", "171", "174"), strict=False):
+    for supplier, price in zip(run.invited(rfq), ("86", "84", "88"), strict=False):
         run.quote(rfq, supplier, {1: price}, 18)
-    _stage(run, EARLY[5], rfq)
+    _stage(run, EARLY[4], rfq)
 
 
 def _later(run: _Run) -> None:
-    # Gloves: a small request, a quotation request sent, quotes from the suppliers asked, the cheapest awarded; the order
-    # waits for the plant head
-    no = run.request([("ITM-012", 10)], "Gloves for the shift")
+    # Copper wire: a large request the director approves, a quotation request sent, quotes from the suppliers asked,
+    # one awarded; the order is above the purchase manager's threshold and waits for her
+    no = run.request([("RM-08", 120)], "Winding wire for the December production")
+    run.approve_request(no)
     run.work()
     rfq, proposal = run.rfq_of(no)
     run.send_rfq(rfq, proposal)
     asked = run.invited(rfq)
-    for supplier, price in zip(asked, ("216", "209", "213"), strict=False):
-        run.quote(rfq, supplier, {1: price}, 5)
+    for supplier, price in zip(asked, ("925", "910", "918"), strict=False):
+        run.quote(rfq, supplier, {1: price}, 18)
     run.call(BUYER, "POST", f"/api/rfqs/{rfq}/award", {"choices": {"1": asked[1]}})
     run.work()
     orders = run.orders_of(no)
     if len(orders) != 1:
-        raise flow_demo.DemoError(f"the awarded quotation request should give one order, gave {orders}")
+        raise demo.DemoError(f"the awarded quotation request should give one order, gave {orders}")
     _stage(run, LATER[0], orders[0])
 
-    # Orders on the contract price, each one step further along
-    _, po = run.contract_order("ITM-008", 2, "Cable for the new motor")
+    # Orders on the castings rate contract, each one step further along (small enough to need no approval)
+    _, po = run.contract_order("RM-05", 10, "Shafts for the 0.5 HP pumps")
     run.approve_order(po)
     _stage(run, LATER[1], po)
 
-    _, po = run.contract_order("ITM-007", 20, "Breakers for the spare panels")
+    _, po = run.contract_order("RM-03", 20, "Impellers for the 1 HP pumps")
     run.approve_order(po)
     run.send_order(po)
     _stage(run, LATER[2], po)
 
-    _, po = run.contract_order("ITM-006", 4, "Contactors for the compressor")
+    _, po = run.contract_order("RM-04", 20, "Impellers for the 0.5 HP pumps")
     run.approve_order(po)
     run.send_order(po)
     run.receive(po, Decimal("0.5"))
     _stage(run, LATER[3], po)
 
-    po = run.received_order("ITM-008", 2, "Cable for the control room")
+    po = run.received_order("RM-05", 10, "Shafts for the spares stock")
     _stage(run, LATER[4], po)
 
     # Three invoices, each planned into its own payment run straight away, so each run holds one
-    po = run.received_order("ITM-007", 6, "Breakers for the packing line")
+    po = run.received_order("RM-03", 10, "Impellers for a customer's spares")
     first = run.invoice(po)
     _expect(first, "approved", "the first invoice")
     paid_run = run.payment_run()
@@ -406,27 +402,27 @@ def _later(run: _Run) -> None:
     run.work()
     _stage(run, LATER[9], first["invoice"])
 
-    po = run.received_order("ITM-006", 2, "Contactors for the lift")
+    po = run.received_order("RM-04", 10, "Impellers for the service centre")
     _expect(run.invoice(po), "approved", "the invoice of the second run")
     filed_run = run.payment_run()
     run.approve_run(filed_run)
     run.call(FINANCE, "POST", f"/api/payment-runs/{filed_run}/file")
     _stage(run, LATER[8], filed_run)
 
-    po = run.received_order("ITM-008", 2, "Cable for the workshop")
+    po = run.received_order("RM-05", 5, "Shafts for the test bench")
     _expect(run.invoice(po), "approved", "the invoice of the third run")
     _stage(run, LATER[7], run.payment_run())
 
-    # An invoice that is fine and not due yet, and one billed 12% above the order, which is blocked
-    po = run.received_order("ITM-007", 6, "Breakers for the stores")
+    # An invoice that is fine and not due yet, and one billed 12% above the order (beyond the tolerances), which is blocked
+    po = run.received_order("RM-03", 5, "Impellers for the stores")
     good = run.invoice(po)
     _expect(good, "approved", "the invoice that is not due yet")
     _stage(run, LATER[5], good["invoice"])
 
-    po = run.received_order("ITM-006", 2, "Contactors for the crane")
+    po = run.received_order("RM-04", 50, "Impellers for the rework")
     blocked = run.invoice(po, price_factor=Decimal("1.12"))
     if blocked.get("status") != "blocked":
-        raise flow_demo.DemoError(f"the invoice billed above the order should be blocked, is {blocked.get('status')}")
+        raise demo.DemoError(f"the invoice billed above the order should be blocked, is {blocked.get('status')}")
     reason = "The supplier's price rose and the stock is needed"
     run.call(AP, "POST", f"/api/invoices/{blocked['invoice']}/release", {"reason": reason})
     _stage(run, LATER[6], blocked["invoice"])
@@ -434,7 +430,7 @@ def _later(run: _Run) -> None:
 
 def _expect(result: dict[str, Any], status: str, what: str) -> None:
     if result.get("status") != status:
-        raise flow_demo.DemoError(f"{what} should be {status}, is {result.get('status')}: {result}")
+        raise demo.DemoError(f"{what} should be {status}, is {result.get('status')}: {result}")
 
 
 def _still_low(run: _Run) -> list[str]:

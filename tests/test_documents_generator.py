@@ -19,7 +19,7 @@ from p2p.invoices import einvoice, reading
 from p2p.platform import emails, mailbox
 
 ROOT = Path(__file__).resolve().parents[1]
-DATASET = ROOT / "data" / "datasets" / "plant-small-v1-seed42"
+DATASET = ROOT / "data" / "datasets" / "apex-v1"
 GENERATOR = ROOT / "datagen" / "generator"
 
 _spec = importlib.util.spec_from_file_location("datagen_documents", GENERATOR / "documents.py")
@@ -29,7 +29,7 @@ sys.modules["datagen_documents"] = gen
 _spec.loader.exec_module(gen)
 pk = gen.pk
 
-needs_dataset = pytest.mark.skipif(not DATASET.is_dir(), reason="the plant dataset is not generated")
+needs_dataset = pytest.mark.skipif(not DATASET.is_dir(), reason="the apex dataset is not generated")
 D = Decimal
 
 
@@ -318,21 +318,24 @@ def test_the_messy_replies_say_in_the_key_what_a_careful_reader_must_not_guess(
 
 @needs_dataset
 def test_a_refusal_carries_the_datasets_reason() -> None:
-    refusals = {
-        (r["rfq_no"], r["supplier_code"]): r["decline_reason"]
-        for r in _csv("history", "rfq_supplier")
-        if r["declined"] == "true"
-    }
-    declines = [r for r in _csv("history", "email_message") if r["kind"] == "decline_rfq" and r["direction"] == "in"]
+    # the demo companies' suppliers always quote, so one invitation is turned into a refusal here
     ctx = gen.Ctx(DATASET)
+    sent = next(m for m in ctx.emails if m["kind"] == "rfq_send")
+    key = (sent["linked_doc_no"], sent["supplier_code"])
+    ctx.rfq_supplier[key] = {**ctx.rfq_supplier[key], "declined": "true", "decline_reason": "Not in our product range"}
+    mail = {
+        **sent,
+        "id": "EML-999999",
+        "message_id": "<decline@mail.example>",
+        "direction": "in",
+        "kind": "decline_rfq",
+    }
 
-    assert 0 < len(declines) <= len(refusals)  # one refusal in the dataset has no email
-    for mail in declines:
-        data, entry, _ = gen.make_quote_mail(ctx, mail, 0, 42)
+    data, entry, _ = gen.make_quote_mail(ctx, mail, 0, 42)
 
-        reason = refusals[(mail["linked_doc_no"], mail["supplier_code"])]
-        assert entry["variant"] == "decline" and entry["expected"] == {"intent": "decline", "decline_reason": reason}
-        assert reason in mailbox.parse_rfc822(data).body
+    assert entry["variant"] == "decline"
+    assert entry["expected"] == {"intent": "decline", "decline_reason": "Not in our product range"}
+    assert "Not in our product range" in mailbox.parse_rfc822(data).body
 
 
 @needs_dataset
