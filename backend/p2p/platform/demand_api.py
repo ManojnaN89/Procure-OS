@@ -91,6 +91,7 @@ async def import_file(kind: str, file: UploadFile, db: Db, ctx: Importer, dry_ru
         "loaded": report.rows_loaded,
         "already_loaded": report.already_loaded,
         "mapping_version": report.mappings.get(kind, 0),
+        "material_requests": report.material_requests,
         "rejected": [{"line": p.line, "reason": p.reason} for p in report.rejected],
     }
 

@@ -156,6 +156,50 @@ def test_the_store_issues_stock_and_corrects_it_after_a_count_and_nobody_else_is
         clear_stock_and_approvals(company)
 
 
+def test_the_store_checks_a_production_order_buys_the_shortfall_and_issues_the_rest(
+    company: Company, browser: Any, tmp_path: Any
+) -> None:  # noqa: F811
+    from p2p.requests import demand
+
+    seed_stock_and_approvals(company, price=100)  # 5 on hand of item A
+    (tmp_path / "production_order.csv").write_text("order_no,product_code,qty,need_by\nMO-1,FG-01,8,2026-12-05\n")
+    (tmp_path / "production_order_line.csv").write_text("order_no,item_code,qty\nMO-1,A,8\n")
+    try:
+        assert demand.import_demand(company.db, tmp_path).material_requests
+        store = open_app(browser, LAPTOP)
+        sign_in(store, company.emails["Store"])
+        store.goto(f"{URL}/#/material-requests")
+        expect(store.locator("#mrList")).to_contain_text("MO-1")
+
+        # the check sets the 5 on the shelf aside and buys the 3 missing (Rs 300 approves itself)
+        store.locator("#mrCheck").click()
+        expect(store.locator("#mrNote")).to_contain_text("approved at once")
+        row = store.locator("#mrList tbody tr").first
+        expect(row.locator("td").nth(2)).to_have_text("5")
+        expect(row.locator("td").nth(4)).to_have_text("3")
+        expect(row.locator("td").nth(5)).to_contain_text("3 on REQ-")
+
+        # production starts: the 5 are issued
+        store.get_by_text("Issue for production", exact=True).click()
+        store.locator("#mrSave").click()
+        expect(store.locator("#mrNote")).to_contain_text("Issued: A 5")
+        expect(store.locator("#mrList tbody tr").first.locator("td").nth(3)).to_have_text("5")
+        assert store.problems == []  # type: ignore[attr-defined]
+
+        # a requester has no material requests in the menu
+        requester = open_app(browser, LAPTOP)
+        sign_in(requester, company.emails["Requester"])
+        expect(requester.locator('.nav-item[data-route="material-requests"]')).to_be_hidden()
+    finally:
+        company.db.rollback()
+        for table in ("material_request_buy", "material_request_line", "material_request", "material_requirement"):
+            company.db.execute(text(f"delete from {table}"))  # noqa: S608
+        for table in ("production_order", "demand_import", "stock_movement"):
+            company.db.execute(text(f"delete from {table}"))  # noqa: S608
+        company.db.commit()
+        clear_stock_and_approvals(company)
+
+
 def test_the_requester_reminds_the_approver_who_approves_less_and_then_several_at_once(
     company: Company, browser: Any
 ) -> None:  # noqa: F811

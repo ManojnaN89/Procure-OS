@@ -116,7 +116,16 @@ MENUS = {
         "Help",
         "Admin",
     ],  # fmt: skip
-    "Store": ["Dashboard", "Requests", "Purchase orders", "Goods receipt", "Inventory", "Assistant", "Help"],
+    "Store": [
+        "Dashboard",
+        "Material requests",
+        "Requests",
+        "Purchase orders",
+        "Goods receipt",
+        "Inventory",
+        "Assistant",
+        "Help",
+    ],
     "Finance": [
         "Dashboard",
         "Purchase orders",

@@ -12,6 +12,11 @@ python -m p2p.cli import stock <tenant> <dataset folder> [--dry-run]
 python -m p2p.cli import demand <tenant> <dataset folder or file> [--dry-run] [--kind KIND]
         reads the ERP's demand (production orders and their materials, MRP results, sales orders, demand plan);
         rows loaded before are skipped, changed ones are listed
+python -m p2p.cli material make <tenant>
+        makes material requests for imported production orders that have none (the import does this by itself)
+python -m p2p.cli material check <tenant> [--no-submit]
+        the store check: sets free stock aside for open material requests, earliest need-by first, and sends what is
+        short for approval as purchase requests
 python -m p2p.cli replenish <tenant> [--dry-run] [--no-submit] [--schedule]
         creates purchase requests for stock at its reorder point and sends them for approval; --schedule queues the daily morning run
 python -m p2p.cli source <tenant> [--request NO] [--no-send]
@@ -21,7 +26,8 @@ python -m p2p.cli remind <tenant> [--dry-run] [--schedule]
 python -m p2p.cli order <tenant> [--request NO]
         makes purchase orders from the lines that are ready (contract prices and awarded quotations) and sends them for approval
 python -m p2p.cli demo reset apex|brightwave [--dataset DIR]
-        drops and makes again a demo company from its profile in datagen/catalog (master data and stock history);
+        drops and makes again a demo company from its profile in datagen/catalog (master data, stock history and the
+        ERP's production orders, each with its material request);
         the logins go to .dev-credentials
 python -m p2p.cli demo populate [apex] [--reset]
         fills the demo company with cases at every stage of the flow (needs a company with no requests, or --reset)
@@ -62,6 +68,12 @@ def main(argv: list[str] | None = None) -> int:
         one.add_argument("--dry-run", action="store_true")
         if name == "demand":
             one.add_argument("--kind", help="what the file holds, when its name does not say")
+    mat = sub.add_parser("material").add_subparsers(dest="cmd", required=True)
+    for name in ("make", "check"):
+        one = mat.add_parser(name)
+        one.add_argument("tenant")
+        if name == "check":
+            one.add_argument("--no-submit", action="store_true")
     rep = sub.add_parser("replenish")
     rep.add_argument("tenant")
     rep.add_argument("--dry-run", action="store_true")
@@ -123,10 +135,36 @@ def main(argv: list[str] | None = None) -> int:
             return 1
         loaded = built.report.rows_loaded if built.report else 0
         moves = f", {built.stock.rows_loaded} stock movements" if built.stock else ""
+        if built.demand:
+            moves += (
+                f", {built.demand.rows_loaded} demand rows ({len(built.demand.material_requests)} material requests)"
+            )
         print(f"company '{built.slug}' made: {loaded} master rows{moves}, {len(built.logins)} logins")
         for email, role, designation in built.logins:
             print(f"  {email}  {role}  ({designation})")
         print(f"passwords are in {built.credentials_file}")
+        return 0
+    if args.group == "material":
+        from sqlalchemy.orm import Session
+
+        from p2p.requests import material
+
+        with Session(routing.engine_for(args.tenant)) as db:
+            if args.cmd == "make":
+                numbers = material.make_requests(db)
+                print(f"{len(numbers)} material request(s) made or added to: {', '.join(numbers) or '-'}")
+                return 0
+            checked = material.store_check(db, tenant=args.tenant, submit=not args.no_submit)
+        for c in checked.requests:
+            short = ", ".join(f"{ln.item_code} {ln.short}" for ln in c.lines if ln.short) or "nothing"
+            req = c.request
+            bought = f"; {req.no} {req.total_value} {req.outcome or req.submit_error or 'draft'}" if req else ""
+            print(f"  {c.mr_no} ({c.order_no}): short {short}{bought}")
+            if c.unpriced:
+                print(f"    no price to estimate: {', '.join(c.unpriced)}")
+        print(
+            f"{len(checked.requests)} material request(s) checked, {len(checked.purchase_requests)} purchase request(s)"
+        )
         return 0
     if args.group == "replenish":
         from sqlalchemy.orm import Session

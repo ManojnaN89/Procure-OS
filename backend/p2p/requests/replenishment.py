@@ -18,50 +18,19 @@ from typing import Any
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
-from p2p.approvals import rules as approval_rules
-from p2p.approvals import workflow
 from p2p.formulas.money import format_qty, round_money
 from p2p.formulas.replenishment import purchase_quantity, shortfall
 from p2p.formulas.stock import BELOW_SAFETY, COVERED, NEGATIVE, REORDER, STOCKOUT
-from p2p.platform import audit, numbering, reference
+from p2p.platform import audit, reference
 from p2p.platform.sod import Actor
 from p2p.receiving.stock import StockLine, stock_levels
+from p2p.requests import drafts
+from p2p.requests.drafts import DraftLine, DraftRequest
 
 NEEDS_ORDER = {STOCKOUT, BELOW_SAFETY, REORDER}
 URGENT = {STOCKOUT, BELOW_SAFETY}
 
-
-@dataclass
-class DraftLine:
-    item_code: str
-    item_name: str
-    qty: Decimal
-    uom: str
-    base_qty: Decimal
-    est_price: Decimal
-    value: Decimal
-    need_by: date
-    gl_code: str | None
-    reason: str
-    stock_status: str
-
-
-@dataclass
-class DraftRequest:
-    location_code: str
-    category_code: str
-    priority: str
-    lines: list[DraftLine]
-    no: str | None = None  # a dry run does not take a number
-    department: str | None = None
-    route_kind: str = ""  # auto (approves itself), approval (needs people) or blocked (the rules cannot route it)
-    route: str = ""  # in words
-    outcome: str | None = None  # after submitting: approved or submitted
-    submit_error: str | None = None
-
-    @property
-    def total_value(self) -> Decimal:
-        return sum((line.value for line in self.lines), Decimal(0))
+__all__ = ["DraftLine", "DraftRequest", "RunResult", "Skipped", "plan", "run", "summary"]
 
 
 @dataclass
@@ -86,16 +55,6 @@ class RunResult:
     @property
     def total_value(self) -> Decimal:
         return sum((r.total_value for r in self.requests), Decimal(0))
-
-
-_ITEMS = """
-    select i.code, i.active, i.stocked, i.moq, i.purchase_uom, i.base_uom, i.pack_size, i.standard_price,
-           i.default_lead_days, i.category_code, coalesce(i.default_gl, c.default_gl) as gl,
-           (select u.factor from uom_conversion u
-             where u.item_code = i.code and u.from_uom = i.purchase_uom and u.to_uom = i.base_uom) as factor
-    from item i join item_category c on c.code = i.category_code
-    where i.code = any(:codes)
-"""
 
 
 def _open_requests(db: Session) -> dict[tuple[str, str], str]:
@@ -125,39 +84,11 @@ def _reason(line: StockLine) -> str:
         if line.policy == "minmax"
         else f"the standard lot {format_qty(line.order_qty)}"
     )
+    held = f" ({format_qty(line.reserved)} of {format_qty(line.on_hand)} set aside)" if line.reserved else ""
     return (
-        f"On hand {format_qty(line.on_hand)} {line.uom} is at or below the reorder point "
+        f"On hand {format_qty(line.free)} {line.uom}{held} is at or below the reorder point "
         f"{format_qty(line.reorder_point)}; order {plan}"
     )
-
-
-def _department(db: Session) -> str | None:
-    """The department a planning request is raised for (a company setting): its head is the nearest manager."""
-    value = db.execute(text("select value from app_setting where key = 'replenishment_department'")).scalar()
-    return str(value) if value else None
-
-
-def _route(db: Session, req: DraftRequest, as_of: date) -> None:
-    """Say, without writing anything, what the approval rules will do with this request."""
-    try:
-        rule = approval_rules.find_rule(
-            db,
-            "request",
-            req.total_value,
-            as_of,
-            spend_type="opex",
-            category=req.category_code,
-            department=req.department,
-        )
-        steps = approval_rules.resolve_chain(db, rule.roles, requester=None, department=req.department, on_date=as_of)
-    except approval_rules.ApprovalRuleError as exc:
-        req.route_kind, req.route = "blocked", str(exc)
-        return
-    if rule.is_automatic:
-        req.route_kind, req.route = "auto", f"Approved automatically ({rule.code} v{rule.version})"
-    else:
-        who = " then ".join(workflow.name_of(db, st.approver) for st in steps)
-        req.route_kind, req.route = "approval", f"Approval by {who} ({rule.code} v{rule.version})"
 
 
 def plan(db: Session, as_of: date, *, location: str | None = None) -> tuple[list[DraftRequest], list[Skipped]]:
@@ -178,9 +109,7 @@ def plan(db: Session, as_of: date, *, location: str | None = None) -> tuple[list
     if not candidates:
         return [], skipped
 
-    info = {
-        r["code"]: r for r in db.execute(text(_ITEMS), {"codes": sorted({c.item_code for c in candidates})}).mappings()
-    }
+    info = drafts.item_info(db, [c.item_code for c in candidates])
     lead_override = {
         (r[0], r[1]): r[2]
         for r in db.execute(
@@ -199,9 +128,9 @@ def plan(db: Session, as_of: date, *, location: str | None = None) -> tuple[list
         if not item["standard_price"] or item["standard_price"] <= 0:
             skipped.append(Skipped(*key, "No standard price to estimate the request with"))
             continue
-        purchase_uom = item["purchase_uom"] or item["base_uom"]
-        factor = item["factor"] or (Decimal(item["pack_size"] or 1) if purchase_uom != item["base_uom"] else Decimal(1))
-        need = shortfall(line.policy, line.on_hand + line.on_order, max_qty=line.max_qty, order_qty=line.order_qty)
+        purchase_uom, factor = drafts.purchase_unit(item)
+        # stock set aside for material requests is not free, and what is on order for them is not on order for stock
+        need = shortfall(line.policy, line.free + line.free_on_order, max_qty=line.max_qty, order_qty=line.order_qty)
         qty = purchase_quantity(need, base_per_purchase_unit=factor, moq=Decimal(item["moq"] or 0))
         if qty == 0:
             skipped.append(Skipped(*key, "Nothing to order"))
@@ -223,13 +152,13 @@ def plan(db: Session, as_of: date, *, location: str | None = None) -> tuple[list
                 stock_status=line.status,
             )
         )
-    department = _department(db)
+    department = drafts.planning_department(db)
     requests = [
         DraftRequest(loc, cat, prio, sorted(lines, key=lambda x: x.item_code), department=department)
         for (loc, cat, prio), lines in sorted(groups.items())
     ]
     for req in requests:
-        _route(db, req, as_of)
+        drafts.route(db, req, as_of)
     return requests, skipped
 
 
@@ -259,62 +188,14 @@ def run(
         return result
 
     for req in requests:
-        req.no = numbering.next_number(db, "request", as_of, location_code=req.location_code)
-        db.execute(
-            text(
-                "insert into request (no, ship_to_location, type, priority, need_by, channel, source_ref, justification, "
-                "status, total_value, department_code) values (:no, :loc, 'goods', :prio, :need, 'planning', :src, :why, 'draft', "
-                ":total, :dep)"
-            ),
-            {
-                "no": req.no,
-                "loc": req.location_code,
-                "prio": req.priority,
-                "need": min(line.need_by for line in req.lines),
-                "src": f"replenishment:{as_of}:{result.run_id}",
-                "why": f"Automatic replenishment: {len(req.lines)} item(s) at or below their reorder point",
-                "total": req.total_value,
-                "dep": req.department,
-            },
-        )
-        for n, line in enumerate(req.lines, start=1):
-            db.execute(
-                text(
-                    "insert into request_line (request_no, line_no, item_code, qty, uom, base_qty, est_price, need_by, "
-                    "delivery_location, gl_code, category_code, reason, status) values (:no, :n, :item, :qty, :uom, "
-                    ":base, :price, :need, :loc, :gl, :cat, :why, 'open')"
-                ),
-                {
-                    "no": req.no,
-                    "n": n,
-                    "item": line.item_code,
-                    "qty": line.qty,
-                    "uom": line.uom,
-                    "base": line.base_qty,
-                    "price": line.est_price,
-                    "need": line.need_by,
-                    "loc": req.location_code,
-                    "gl": line.gl_code,
-                    "cat": req.category_code,
-                    "why": line.reason,
-                },
-            )
-        audit.record(
+        drafts.write(
             db,
             actor,
-            "request.create",
-            "request",
-            req.no,
-            after={
-                "status": "draft",
-                "channel": "planning",
-                "location": req.location_code,
-                "category": req.category_code,
-                "priority": req.priority,
-                "lines": len(req.lines),
-                "total_value": str(req.total_value),
-                "run": result.run_id,
-            },
+            req,
+            as_of=as_of,
+            source_ref=f"replenishment:{as_of}:{result.run_id}",
+            justification=f"Automatic replenishment: {len(req.lines)} item(s) at or below their reorder point",
+            audit_extra={"run": result.run_id},
         )
     audit.record(
         db,
@@ -337,13 +218,7 @@ def run(
     )
     db.commit()
     if submit and tenant:
-        for req in requests:
-            assert req.no is not None
-            try:
-                req.outcome = workflow.submit(db, tenant, req.no, actor, today=as_of).status
-            except (approval_rules.ApprovalRuleError, workflow.ApprovalError) as exc:
-                db.rollback()
-                req.submit_error = str(exc)
+        drafts.submit(db, tenant, requests, actor, as_of)
     return result
 
 

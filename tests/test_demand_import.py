@@ -26,7 +26,10 @@ from p2p.requests.demand_files import KINDS
 
 ROOT = Path(__file__).resolve().parents[1]
 APEX = ROOT / "data" / "datasets" / "apex-v1"
-DEMAND_TABLES = ("material_requirement", "production_order", "product_demand", "demand_import", "erp_column_map")
+DEMAND_TABLES = (
+    *("material_request_buy", "material_request_line", "material_request"),  # made from the demand
+    *("material_requirement", "production_order", "product_demand", "demand_import", "erp_column_map"),
+)
 client = TestClient(app)
 D = Decimal
 

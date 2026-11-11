@@ -73,7 +73,7 @@ const InventoryView = {
               <tr>
                 <td>${this.esc(l.item_name)}<div class="cell-muted" style="font-size:11px;">${this.esc(l.item_code)} · ${this.esc(l.category)}</div></td>
                 <td class="cell-muted">${this.esc(l.location_code)}</td>
-                <td>${this.esc(l.on_hand)} <span class="cell-muted">${this.esc(l.uom)}</span></td>
+                <td>${this.esc(l.on_hand)} <span class="cell-muted">${this.esc(l.uom)}</span>${l.reserved && l.reserved !== "0" ? `<div class="cell-muted" style="font-size:11px;">${this.esc(l.reserved)} set aside for production</div>` : ""}</td>
                 <td class="cell-muted">${this.esc(l.reorder_point ?? "—")}</td>
                 <td class="cell-muted">${this.esc(l.max_qty ?? "—")}</td>
                 <td><span class="badge ${this.BADGE[l.status] || ""}">${this.esc(this.LABELS[l.status] || l.status)}</span></td>

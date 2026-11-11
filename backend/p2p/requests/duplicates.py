@@ -19,7 +19,7 @@ from typing import Any
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
-from p2p.platform import audit
+from p2p.platform import audit, numbering
 from p2p.platform.sod import user
 
 D = Decimal
@@ -168,10 +168,22 @@ def _close(a: date | None, b: date | None, window: int) -> bool:
     return a is None or b is None or abs((a - b).days) <= window
 
 
+def _material_requests(source_ref: str | None, prefix: str | None) -> set[str]:
+    """The material requests a purchase request buys for, from its source reference (MR-... numbers, comma-separated)."""
+    if not source_ref or not prefix:
+        return set()
+    refs = {r.strip() for r in source_ref.split(",") if r.strip()}
+    return refs if all(r.startswith(f"{prefix}-") for r in refs) else set()
+
+
 def find_duplicates(db: Session, request_no: str) -> list[Duplicate]:
-    """The other requests this one looks like a repeat of, most alike first (it does not write anything)."""
+    """The other requests this one looks like a repeat of, most alike first (it does not write anything).
+
+    Two requests that each buy the shortfall of different material requests are not repeats: each production order needs
+    its own material, and the store check already counted what was on the shelf and on order.
+    """
     me = db.execute(
-        text("select (created_at at time zone 'Asia/Kolkata')::date as day from request where no = :n"),
+        text("select (created_at at time zone 'Asia/Kolkata')::date as day, source_ref from request where no = :n"),
         {"n": request_no},
     ).first()
     if me is None:
@@ -182,7 +194,7 @@ def find_duplicates(db: Session, request_no: str) -> list[Duplicate]:
         return []
     others = db.execute(
         text(
-            "select o.no, o.status, ol.line_no, ol.item_code, coalesce(i.name, ol.free_text) as name, ol.qty, "
+            "select o.no, o.status, o.source_ref, ol.line_no, ol.item_code, coalesce(i.name, ol.free_text) as name, ol.qty, "
             "coalesce(ol.need_by, o.need_by) as need_by, coalesce(ol.delivery_location, o.ship_to_location) as loc "
             "from request o join request_line ol on ol.request_no = o.no left join item i on i.code = ol.item_code "
             "where o.no <> :n and o.status not in ('cancelled', 'rejected') and ol.status <> 'cancelled' "
@@ -194,8 +206,13 @@ def find_duplicates(db: Session, request_no: str) -> list[Duplicate]:
     by_request: dict[str, list[dict[str, Any]]] = {}
     for r in others:
         by_request.setdefault(r["no"], []).append(dict(r))
+    prefix = numbering.prefix(db, "material_request")
+    mine_for = _material_requests(me[1], prefix)
     found: list[Duplicate] = []
     for no, lines in by_request.items():
+        theirs_for = _material_requests(lines[0]["source_ref"], prefix)
+        if mine_for and theirs_for and not mine_for & theirs_for:
+            continue
         pairs: list[dict[str, Any]] = []
         used: set[int] = set()
         for ln in mine:

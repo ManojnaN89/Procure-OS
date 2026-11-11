@@ -1,6 +1,8 @@
 """Demand from the client's ERP: loading its files (production orders and their materials, MRP results, sales orders, the
 demand plan), the saved column mapping per kind of file, and the material still wanted for the next step to act on.
 
+Each production order loaded gets a material request (requests/material.py) with a line per component.
+
 A file is read with the company's column mapping for its kind (the latest version), every row is checked and a row that
 fails is listed with its line and reason. A row is known by its ERP document number and line: one already loaded is
 counted and skipped, so loading the same file again loads nothing; one already loaded with other values is listed as
@@ -23,6 +25,7 @@ from sqlalchemy.orm import Session
 from p2p.masters.importer import ImportReport, Problem, read_table
 from p2p.platform import audit
 from p2p.platform.sod import Actor
+from p2p.requests import material
 from p2p.requests.demand_files import KINDS, DemandFile, Reference, check_qty
 
 
@@ -35,6 +38,7 @@ class DemandReport(ImportReport):
     already: dict[str, int] = field(default_factory=dict)  # kind -> rows loaded before and unchanged
     mappings: dict[str, int] = field(default_factory=dict)  # kind -> column mapping version used (0: our template)
     import_id: int | None = None
+    material_requests: list[str] = field(default_factory=list)  # made or added to for the production orders loaded
 
     @property
     def already_loaded(self) -> int:
@@ -228,6 +232,7 @@ def import_demand(
         audit.record(db, actor, "demand.import", "demand_import", import_id, after={"source": source.name, **counts})
         db.commit()
         report.import_id = import_id
+        report.material_requests = material.make_requests(db, actor)
     report.seconds = round(time.monotonic() - started, 2)
     return report
 

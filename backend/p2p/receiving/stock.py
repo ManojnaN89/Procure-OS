@@ -13,6 +13,7 @@ from sqlalchemy.orm import Session
 
 from p2p.formulas import stock as rules
 from p2p.formulas.calendar import business_today
+from p2p.formulas.material import earmarked
 from p2p.masters.importer import ImportReport, Problem, read_table
 from p2p.masters.schema import Table
 from p2p.platform import audit
@@ -61,6 +62,12 @@ _LEVELS = """
     ) o on o.item_code = l.item_code and o.loc = l.location_code
 """
 
+# stock set aside for open material requests, per item-location
+_RESERVED = (
+    "select coalesce(sum(reserved_qty), 0) from material_request_line "
+    "where status = 'open' and item_code = :i and location_code = :l"
+)
+
 
 @dataclass
 class StockLine:
@@ -79,11 +86,38 @@ class StockLine:
     max_qty: Decimal | None
     order_qty: Decimal | None
     last_movement: str | None
-    status: str
+    status: str  # judged on the free stock: what is set aside for material requests is not there for anything else
+    reserved: Decimal = Decimal(0)  # set aside for open material requests
+    for_requests: Decimal = Decimal(0)  # of on_order, what is bought for material requests
+
+    @property
+    def free(self) -> Decimal:
+        return self.on_hand - self.reserved
+
+    @property
+    def free_on_order(self) -> Decimal:
+        return self.on_order - self.for_requests
+
+
+def _material_held(db: Session) -> dict[tuple[str, str], tuple[Decimal, Decimal]]:
+    """Per item-location: stock set aside for open material requests, and what is still on order for them."""
+    held: dict[tuple[str, str], tuple[Decimal, Decimal]] = {}
+    for r in db.execute(
+        text(
+            "select item_code, location_code, need_qty, issued_qty, reserved_qty, requested_qty "
+            "from material_request_cover where status = 'open'"
+        )
+    ).mappings():
+        key = (r["item_code"], r["location_code"])
+        res, ear = held.get(key, (Decimal(0), Decimal(0)))
+        coming = earmarked(r["need_qty"], r["issued_qty"], r["reserved_qty"], r["requested_qty"])
+        held[key] = (res + r["reserved_qty"], ear + coming)
+    return held
 
 
 def stock_levels(db: Session, *, location: str | None = None, item: str | None = None) -> list[StockLine]:
-    """Every item-location with its status. On order is what open requests still ask for (purchase orders will add to it)."""
+    """Every item-location with its status. On order is what open requests still ask for and orders still bring. Stock
+    set aside for material requests, and what is on order for them, are shown apart and do not count as free."""
     sql = _LEVELS
     params: dict[str, Any] = {}
     clauses = []
@@ -96,8 +130,11 @@ def stock_levels(db: Session, *, location: str | None = None, item: str | None =
     if clauses:
         sql += " where " + " and ".join(clauses)
     out = []
+    held = _material_held(db)
     for r in db.execute(text(sql + " order by l.location_code, l.item_code"), params).mappings():
         on_order = r["on_order"]
+        reserved, coming = held.get((r["item_code"], r["location_code"]), (Decimal(0), Decimal(0)))
+        for_requests = min(coming, on_order)  # what was requested for them and has not arrived is still on order
         out.append(
             StockLine(
                 item_code=r["item_code"],
@@ -115,9 +152,11 @@ def stock_levels(db: Session, *, location: str | None = None, item: str | None =
                 max_qty=r["max_qty"],
                 order_qty=r["order_qty"],
                 last_movement=r["last_movement"].isoformat() if r["last_movement"] else None,
+                reserved=reserved,
+                for_requests=for_requests,
                 status=rules.stock_status(
-                    r["on_hand"],
-                    on_order,
+                    r["on_hand"] - reserved,
+                    on_order - for_requests,
                     policy=r["policy"],
                     reorder_point=r["reorder_point"],
                     safety_stock=r["safety_stock"],
@@ -237,6 +276,41 @@ def _post(db: Session, kind: str, item: str, location: str, qty: Decimal, on: da
     return movement
 
 
+def reserved(db: Session, item: str, location: str) -> Decimal:
+    """Stock of an item-location set aside for open material requests."""
+    return Decimal(db.execute(text(_RESERVED), {"i": item, "l": location}).scalar_one())
+
+
+def issue_movement(
+    db: Session, actor: Actor, item: str, location: str, qty: Decimal, *, reference: str | None, today: date
+) -> str:
+    """Write an issue and its audit row in the caller's transaction (the caller commits or rolls back).
+
+    It may not take more than is free: on hand less what is set aside for material requests. An issue for a material
+    request releases its own reservation first, so its stock counts as free here.
+    """
+    qty = Decimal(qty).quantize(rules.QTY)
+    if qty <= 0:
+        raise StockError("the quantity must be more than zero")
+    _check_place(db, item, location)
+    have = _on_hand(db, item, location)
+    held = reserved(db, item, location)
+    if qty > have - held:
+        if held:
+            raise StockError(
+                f"only {max(have - held, Decimal(0)).normalize():f} is free ({held.normalize():f} of "
+                f"{have.normalize():f} is set aside for material requests), so {qty.normalize():f} cannot be issued"
+            )
+        raise StockError(f"only {have.normalize():f} is on the shelf, so {qty.normalize():f} cannot be issued")
+    ref = (reference or "").strip() or None
+    movement = _post(db, "issue", item, location, qty, today, ref)
+    audit.record(
+        db, actor, "stock.issue", "stock", f"{item}@{location}",
+        after={"movement": movement, "qty": str(qty), "on_hand": str(have - qty), "reference": ref},
+    )  # fmt: skip
+    return movement
+
+
 def post_issue(
     db: Session,
     user_id: int,
@@ -247,21 +321,15 @@ def post_issue(
     reference: str | None = None,
     today: date | None = None,
 ) -> str:
-    """Take stock out for use (to a department, a machine, a job). It may not take more than is on the shelf."""
-    today = today or business_today()
-    qty = Decimal(qty).quantize(rules.QTY)
-    if qty <= 0:
-        raise StockError("the quantity must be more than zero")
-    _check_place(db, item, location)
-    have = _on_hand(db, item, location)
-    if qty > have:
+    """Take stock out for use (to a department, a machine, a job). It may not take more than is on the shelf and not set
+    aside for a material request."""
+    try:
+        movement = issue_movement(
+            db, user(user_id), item, location, qty, reference=reference, today=today or business_today()
+        )
+    except StockError:
         db.rollback()
-        raise StockError(f"only {have.normalize():f} is on the shelf, so {qty.normalize():f} cannot be issued")
-    movement = _post(db, "issue", item, location, qty, today, (reference or "").strip() or None)
-    audit.record(
-        db, user(user_id), "stock.issue", "stock", f"{item}@{location}",
-        after={"movement": movement, "qty": str(qty), "on_hand": str(have - qty), "reference": (reference or "").strip() or None},
-    )  # fmt: skip
+        raise
     db.commit()
     return movement
 

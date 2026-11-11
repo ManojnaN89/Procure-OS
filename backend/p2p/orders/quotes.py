@@ -245,7 +245,7 @@ def _org_setting(db: Session, key: str, default: str) -> str:
     return str(value) if value not in (None, "") else default
 
 
-def _last_prices(db: Session, item_codes: list[str]) -> dict[str, Decimal]:
+def last_prices(db: Session, item_codes: list[str]) -> dict[str, Decimal]:
     """What we last paid per unit, net of discount, for each item that has been ordered before."""
     if not item_codes:
         return {}
@@ -317,7 +317,7 @@ def comparison(db: Session, rfq_no: str, as_of: date) -> Comparison:
     }
     weighted = _org_setting(db, "comparison_mode", "price") == "weighted"
     threshold = Decimal(_org_setting(db, "low_price_flag_pct", "40"))
-    last = _last_prices(db, sorted({line["item_code"] for line in lines if line["item_code"]}))
+    last = last_prices(db, sorted({line["item_code"] for line in lines if line["item_code"]}))
     per_line: dict[int, list[Offer]] = {}
     of_quote: dict[str, list[Offer]] = defaultdict(list)  # a quote's offers, in line order
     for line in lines:

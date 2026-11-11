@@ -480,6 +480,7 @@ def inventory(db: Db, ctx: Ctx, location: str | None = None, status: str | None 
                 "location_name": line.location_name,
                 "on_hand": _qty(line.on_hand),
                 "on_order": _qty(line.on_order),
+                "reserved": _qty(line.reserved),
                 "reorder_point": _qty(line.reorder_point),
                 "safety_stock": _qty(line.safety_stock),
                 "max_qty": _qty(line.max_qty),

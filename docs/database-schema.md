@@ -27,7 +27,7 @@ Reading a line: `name*` is part of the primary key, `name?` may be empty, then t
 
 ## Tenant database (one per company)
 
-110 tables.
+113 tables.
 
 **advance** · payment_no* text, po_no text, gross num, taxable num, used_gross num, used_taxable num, paid_on? date
 
@@ -116,6 +116,12 @@ Reading a line: `name*` is part of the primary key, `name?` may be empty, then t
 **location** · code* text, name? text, type? text, gstin? text, address? text, city? text, state_code? text, pincode? text, is_stock_location? bool, working_days? text, receiving_hours? text, holiday_scope? text, loc_short? text
 
 **match_result** · id* bigint, invoice_no text, invoice_line_no? int, result text, reason_codes? text, price_var? num, qty_var? num, detail? text, created_at timestamptz, resolved_by? text, resolved_at? timestamptz, resolution? text
+
+**material_request** · no* text, production_order_id bigint, order_no text, product_code text, location_code text, need_by date, status text, cancel_reason? text, created_by? text, created_at timestamptz
+
+**material_request_buy** · id* bigint, mr_line_id bigint, request_no text, request_line_no int, qty num, created_at timestamptz
+
+**material_request_line** · id* bigint, mr_no text, line_no int, requirement_id bigint, item_code text, location_code text, uom text, need_qty num, reserved_qty num, issued_qty num, need_by date, status text
 
 **material_requirement** · id* bigint, source_kind text, source_doc_no text, line_key text, production_order_id? bigint, item_code text, qty num, unit text, base_qty num, need_by date, location_code text, status text, import_id bigint, created_at timestamptz
 

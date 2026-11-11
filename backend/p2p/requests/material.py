@@ -1,0 +1,542 @@
+"""Material requests: what a production order needs from the store, the stock set aside for it, the issue at production
+start, and the shortfall that becomes a purchase request.
+
+A material request is made for each imported production order, one line per component. The store check sets stock aside
+for the open lines, earliest need-by first: a line takes only stock that is free (on hand less what is already set
+aside), so the free stock never goes below zero, and what earlier checks set aside stays where it is. What a line still
+lacks, and no live purchase request already asks for, becomes one draft purchase request per material request, priced
+at the estimate (contract, else last price paid, else standard price) and sent into approval. At production start the
+store issues what is set aside; cancelling a material request releases its stock.
+
+The store check and issues hold the same per item-location lock as every stock posting, and the store check runs one at
+a time per company, so two people pressing at once cannot set aside the same stock twice.
+"""
+
+from dataclasses import dataclass, field
+from datetime import date
+from decimal import Decimal
+from typing import Any
+
+from sqlalchemy import text
+from sqlalchemy.orm import Session
+
+from p2p.formulas import material as rules
+from p2p.formulas.calendar import business_today
+from p2p.formulas.estimate import estimated_price
+from p2p.formulas.money import format_qty, round_money
+from p2p.formulas.replenishment import purchase_quantity
+from p2p.formulas.sourcing import pick_contract_price
+from p2p.orders.quotes import last_prices
+from p2p.platform import audit, numbering
+from p2p.platform.sod import Actor, user
+from p2p.receiving import stock
+from p2p.requests import drafts
+from p2p.sourcing.service import contract_options
+
+QTY = Decimal("0.0001")
+
+
+class MaterialError(Exception):
+    """The action makes no sense (no such request, nothing set aside, already closed)."""
+
+
+# ---- making material requests from the imported production orders --------------------------------
+
+
+def make_requests(db: Session, actor: Actor = audit.SYSTEM, *, today: date | None = None) -> list[str]:
+    """A material request for every open production order whose components have none yet; components loaded later are
+    added to the order's open material request. Returns the numbers made or added to. Commits."""
+    today = today or business_today()
+    rows = db.execute(
+        text(
+            "select r.id, r.item_code, r.unit, r.base_qty, r.need_by, r.location_code, p.id as order_id, p.order_no, "
+            "p.product_code, p.need_by as order_need_by, i.base_uom "
+            "from material_requirement r join production_order p on p.id = r.production_order_id "
+            "join item i on i.code = r.item_code "
+            "where r.source_kind = 'production_order' and r.status = 'open' and p.status = 'open' "
+            "and not exists (select 1 from material_request_line l where l.requirement_id = r.id) "
+            "order by p.need_by, p.id, r.id"
+        )
+    ).mappings()
+    by_order: dict[int, list[dict[str, Any]]] = {}
+    for r in rows:
+        by_order.setdefault(r["order_id"], []).append(dict(r))
+    touched: list[str] = []
+    for order_id, lines in by_order.items():
+        head = lines[0]
+        existing = db.execute(
+            text("select no, status from material_request where production_order_id = :o order by created_at desc"),
+            {"o": order_id},
+        ).first()
+        if existing is not None and existing.status != "open":
+            continue  # issued or cancelled: new lines for it are the ERP's business, not a new request
+        if existing is None:
+            no = numbering.next_number(db, "material_request", today, location_code=head["location_code"])
+            db.execute(
+                text(
+                    "insert into material_request (no, production_order_id, order_no, product_code, location_code, "
+                    "need_by, created_by) values (:no, :o, :ord, :prod, :loc, :need, :by)"
+                ),
+                {
+                    "no": no,
+                    "o": order_id,
+                    "ord": head["order_no"],
+                    "prod": head["product_code"],
+                    "loc": head["location_code"],
+                    "need": head["order_need_by"],
+                    "by": actor.identity,
+                },
+            )
+        else:
+            no = existing.no
+        last = db.execute(
+            text("select coalesce(max(line_no), 0) from material_request_line where mr_no = :n"), {"n": no}
+        ).scalar_one()
+        for n, ln in enumerate(lines, start=int(last) + 1):
+            db.execute(
+                text(
+                    "insert into material_request_line (mr_no, line_no, requirement_id, item_code, location_code, uom, "
+                    "need_qty, need_by) values (:no, :n, :req, :item, :loc, :uom, :qty, :need)"
+                ),
+                {
+                    "no": no,
+                    "n": n,
+                    "req": ln["id"],
+                    "item": ln["item_code"],
+                    "loc": ln["location_code"],
+                    "uom": ln["base_uom"],
+                    "qty": ln["base_qty"],
+                    "need": ln["need_by"],
+                },
+            )
+        audit.record(
+            db,
+            actor,
+            "material_request.create" if existing is None else "material_request.add_lines",
+            "material_request",
+            no,
+            after={
+                "order": head["order_no"],
+                "lines": [f"{ln['item_code']} {format_qty(ln['base_qty'])}" for ln in lines],
+            },
+        )
+        touched.append(no)
+    db.commit()
+    return touched
+
+
+# ---- the store check -----------------------------------------------------------------------------
+
+
+@dataclass
+class LineView:
+    id: int
+    line_no: int
+    item_code: str
+    uom: str
+    need: Decimal
+    reserved: Decimal
+    issued: Decimal
+    requested: Decimal
+    reserved_now: Decimal = Decimal(0)  # set aside by this check
+
+    @property
+    def short(self) -> Decimal:
+        """Still lacking after what is issued and set aside (some of it may already be requested)."""
+        return max(self.need - self.issued - self.reserved, Decimal(0))
+
+
+@dataclass
+class Checked:
+    mr_no: str
+    order_no: str
+    lines: list[LineView] = field(default_factory=list)
+    request: drafts.DraftRequest | None = None  # the purchase request made for what is short
+    unpriced: list[str] = field(default_factory=list)  # items short with no price to estimate them with
+
+
+@dataclass
+class CheckResult:
+    as_of: date
+    requests: list[Checked] = field(default_factory=list)
+
+    @property
+    def purchase_requests(self) -> list[drafts.DraftRequest]:
+        return [c.request for c in self.requests if c.request is not None]
+
+
+_OPEN_LINES = """
+    select l.id, l.mr_no, l.line_no, l.item_code, l.location_code, l.uom, l.need_qty, l.reserved_qty, l.issued_qty,
+           l.need_by, l.requested_qty, m.order_no
+    from material_request_cover l join material_request m on m.no = l.mr_no
+    where l.status = 'open' and m.status = 'open' {where}
+    order by l.need_by, m.created_at, m.no, l.line_no
+"""
+
+
+def _lock_stock(db: Session, places: list[tuple[str, str]]) -> None:
+    """The same per item-location lock stock postings take, in a fixed order so two callers never wait on each other."""
+    for item, loc in sorted(set(places)):
+        db.execute(text("select pg_advisory_xact_lock(hashtext(:k))"), {"k": f"stock:{item}:{loc}"})
+
+
+def _on_hand(db: Session, places: list[tuple[str, str]]) -> dict[tuple[str, str], Decimal]:
+    rows = db.execute(
+        text("select item_code, location_code, on_hand from stock_level where item_code = any(:i)"),
+        {"i": sorted({i for i, _ in places})},
+    )
+    return {(r[0], r[1]): Decimal(r[2]) for r in rows}
+
+
+def _reserved(db: Session, places: list[tuple[str, str]]) -> dict[tuple[str, str], Decimal]:
+    rows = db.execute(
+        text(
+            "select item_code, location_code, sum(reserved_qty) from material_request_line "
+            "where status = 'open' and item_code = any(:i) group by item_code, location_code"
+        ),
+        {"i": sorted({i for i, _ in places})},
+    )
+    return {(r[0], r[1]): Decimal(r[2]) for r in rows}
+
+
+def _shortfall_request(
+    db: Session, checked: Checked, short: list[tuple[dict[str, Any], Decimal]], as_of: date, department: str | None
+) -> list[tuple[int, Decimal]]:
+    """The draft purchase request for what a material request lacks (in memory), and per line the material request
+    line it buys for and how much of it. Items with no price at all are left out and listed."""
+    info = drafts.item_info(db, [ln["item_code"] for ln, _ in short])
+    paid = last_prices(db, sorted(info))
+    lines: list[drafts.DraftLine] = []
+    links: list[tuple[int, Decimal]] = []
+    for ln, qty_short in short:
+        item = info[ln["item_code"]]
+        unit, factor = drafts.purchase_unit(item)
+        qty = purchase_quantity(qty_short, base_per_purchase_unit=factor, moq=Decimal(item["moq"] or 0))
+        contract = pick_contract_price(contract_options(db, ln["item_code"], unit, as_of), qty)
+        estimate = estimated_price(
+            contract.price if contract else None, paid.get(ln["item_code"]), item["standard_price"]
+        )
+        if estimate is None:
+            checked.unpriced.append(ln["item_code"])
+            continue
+        price, basis = estimate
+        lines.append(
+            drafts.DraftLine(
+                item_code=ln["item_code"],
+                item_name=item["name"],
+                qty=qty,
+                uom=unit,
+                base_qty=qty * factor,
+                est_price=price,
+                value=round_money(qty * price),
+                need_by=ln["need_by"],
+                gl_code=str(item["gl"]) if item["gl"] is not None else None,
+                reason=(
+                    f"Short for {ln['order_no']} ({ln['mr_no']}): needs {format_qty(ln['need_qty'])} {ln['uom']}, "
+                    f"{format_qty(ln['need_qty'] - qty_short)} covered; priced at the {basis}"
+                ),
+                category_code=item["category_code"],
+            )
+        )
+        links.append((ln["id"], qty_short))
+    if lines:
+        categories = {line.category_code for line in lines}
+        checked.request = drafts.DraftRequest(
+            location_code=short[0][0]["location_code"],
+            category_code=categories.pop() if len(categories) == 1 else None,
+            priority="normal",
+            lines=lines,
+            department=department,
+        )
+        drafts.route(db, checked.request, as_of)
+    return links
+
+
+def store_check(
+    db: Session,
+    actor: Actor = audit.SYSTEM,
+    *,
+    tenant: str | None = None,
+    location: str | None = None,
+    today: date | None = None,
+    submit: bool = True,
+) -> CheckResult:
+    """Set free stock aside for every open material request line, earliest need-by first, and ask to buy what is still
+    short. With submit (and the company), each new purchase request is sent into approval."""
+    as_of = today or business_today()
+    db.execute(text("select pg_advisory_xact_lock(hashtext('store_check'))"))  # one check at a time per company
+    where, params = ("and l.location_code = :loc", {"loc": location}) if location else ("", {})
+    rows = [dict(r) for r in db.execute(text(_OPEN_LINES.format(where=where)), params).mappings()]
+    result = CheckResult(as_of)
+    if not rows:
+        db.commit()
+        return result
+    places = [(r["item_code"], r["location_code"]) for r in rows]
+    _lock_stock(db, places)
+    db.execute(
+        text("select id from material_request_line where id = any(:ids) for update"), {"ids": [r["id"] for r in rows]}
+    )
+    on_hand, held = _on_hand(db, places), _reserved(db, places)
+    free = {p: on_hand.get(p, Decimal(0)) - held.get(p, Decimal(0)) for p in set(places)}
+    by_request: dict[str, Checked] = {}
+    short: dict[str, list[tuple[dict[str, Any], Decimal]]] = {}
+    for r in rows:
+        place = (r["item_code"], r["location_code"])
+        want = r["need_qty"] - r["issued_qty"] - r["reserved_qty"]
+        take = rules.to_reserve(want, free[place])
+        if take:
+            free[place] -= take
+            r["reserved_qty"] += take
+            db.execute(
+                text("update material_request_line set reserved_qty = :q where id = :i"),
+                {"q": r["reserved_qty"], "i": r["id"]},
+            )
+        checked = by_request.setdefault(r["mr_no"], Checked(r["mr_no"], r["order_no"]))
+        checked.lines.append(
+            LineView(
+                r["id"], r["line_no"], r["item_code"], r["uom"], r["need_qty"], r["reserved_qty"], r["issued_qty"],
+                r["requested_qty"], take,
+            )
+        )  # fmt: skip
+        lacking = rules.still_short(r["need_qty"], r["issued_qty"], r["reserved_qty"], r["requested_qty"])
+        if lacking:
+            short.setdefault(r["mr_no"], []).append((r, lacking))
+    department = drafts.planning_department(db)
+    for mr_no, checked in by_request.items():
+        links = _shortfall_request(db, checked, short[mr_no], as_of, department) if mr_no in short else []
+        if checked.request is not None:
+            no = drafts.write(
+                db,
+                actor,
+                checked.request,
+                as_of=as_of,
+                source_ref=mr_no,
+                justification=f"Short for {checked.order_no} ({mr_no}): {len(checked.request.lines)} item(s) not in stock",
+                audit_extra={"material_request": mr_no},
+            )
+            for n, (line_id, qty) in enumerate(links, start=1):
+                db.execute(
+                    text(
+                        "insert into material_request_buy (mr_line_id, request_no, request_line_no, qty) "
+                        "values (:l, :r, :n, :q)"
+                    ),
+                    {"l": line_id, "r": no, "n": n, "q": qty},
+                )
+        added = dict(links) if checked.request is not None else {}
+        for line in checked.lines:
+            line.requested += added.get(line.id, Decimal(0))
+        audit.record(
+            db,
+            actor,
+            "material_request.check",
+            "material_request",
+            mr_no,
+            after={
+                "reserved_now": {ln.item_code: str(ln.reserved_now) for ln in checked.lines if ln.reserved_now},
+                "short": {ln.item_code: str(ln.short) for ln in checked.lines if ln.short},
+                "purchase_request": checked.request.no if checked.request else None,
+                "unpriced": checked.unpriced,
+            },
+        )
+        result.requests.append(checked)
+    db.commit()
+    if submit and tenant:
+        drafts.submit(db, tenant, result.purchase_requests, actor, as_of)
+    return result
+
+
+# ---- issue at production start, and cancelling ---------------------------------------------------
+
+
+def _head(db: Session, mr_no: str) -> dict[str, Any]:
+    row = (
+        db.execute(
+            text("select no, status, order_no, production_order_id from material_request where no = :n for update"),
+            {"n": mr_no},
+        )
+        .mappings()
+        .first()
+    )
+    if row is None:
+        db.rollback()
+        raise MaterialError(f"there is no material request {mr_no}")
+    if row["status"] != "open":
+        db.rollback()
+        raise MaterialError(f"material request {mr_no} is {row['status']}")
+    return dict(row)
+
+
+def _open_lines(db: Session, mr_no: str) -> list[dict[str, Any]]:
+    rows = db.execute(
+        text(
+            "select id, line_no, item_code, location_code, need_qty, reserved_qty, issued_qty, requirement_id "
+            "from material_request_line where mr_no = :n and status = 'open' order by line_no for update"
+        ),
+        {"n": mr_no},
+    ).mappings()
+    return [dict(r) for r in rows]
+
+
+def _issue_line(db: Session, actor: Actor, mr_no: str, ln: dict[str, Any], qty: Decimal, today: date) -> None:
+    """One line: its reservation goes down by what is issued, the stock leaves the shelf. The caller commits."""
+    if qty <= 0:
+        raise MaterialError(f"line {ln['line_no']}: the quantity must be more than zero")
+    if qty > ln["reserved_qty"]:
+        raise MaterialError(
+            f"line {ln['line_no']} ({ln['item_code']}): only {format_qty(ln['reserved_qty'])} is set aside, "
+            f"so {format_qty(qty)} cannot be issued; run the store check when more stock is in"
+        )
+    done = ln["issued_qty"] + qty == ln["need_qty"]
+    db.execute(
+        text(
+            "update material_request_line set reserved_qty = reserved_qty - :q, issued_qty = issued_qty + :q, "
+            "status = :s where id = :i"
+        ),
+        {"q": qty, "s": "issued" if done else "open", "i": ln["id"]},
+    )
+    if done:
+        db.execute(text("update material_requirement set status = 'issued' where id = :r"), {"r": ln["requirement_id"]})
+    stock.issue_movement(db, actor, ln["item_code"], ln["location_code"], qty, reference=mr_no, today=today)
+
+
+def issue(
+    db: Session,
+    user_id: int,
+    mr_no: str,
+    quantities: dict[int, Decimal] | None = None,
+    *,
+    today: date | None = None,
+) -> dict[str, Decimal]:
+    """At production start: issue what is set aside for the request (all of it, or the given quantity per line number,
+    each no more than is set aside). The reservation goes with the stock. All or nothing. Returns item -> issued."""
+    today = today or business_today()
+    _head(db, mr_no)
+    lines = _open_lines(db, mr_no)
+    unknown = sorted(set(quantities or {}) - {ln["line_no"] for ln in lines})
+    if unknown:
+        db.rollback()
+        raise MaterialError(f"{mr_no} has no open line {', '.join(map(str, unknown))}")
+    actor = user(user_id)
+    issued: dict[str, Decimal] = {}
+    try:
+        for ln in lines:
+            if quantities is not None and ln["line_no"] not in quantities:
+                continue
+            qty = Decimal(quantities[ln["line_no"]] if quantities is not None else ln["reserved_qty"]).quantize(QTY)
+            if quantities is None and qty == 0:
+                continue  # nothing set aside for this line yet
+            _issue_line(db, actor, mr_no, ln, qty, today)
+            issued[ln["item_code"]] = qty
+        if not issued:
+            raise MaterialError(f"nothing is set aside for {mr_no} yet; run the store check first")
+    except (MaterialError, stock.StockError):
+        db.rollback()
+        raise
+    left = db.execute(
+        text("select count(*) from material_request_line where mr_no = :n and status = 'open'"), {"n": mr_no}
+    ).scalar_one()
+    if left == 0:
+        db.execute(text("update material_request set status = 'issued' where no = :n"), {"n": mr_no})
+    audit.record(
+        db,
+        actor,
+        "material_request.issue",
+        "material_request",
+        mr_no,
+        after={"issued": {k: str(v) for k, v in issued.items()}, "status": "issued" if left == 0 else "open"},
+    )
+    db.commit()
+    return issued
+
+
+def cancel(db: Session, user_id: int, mr_no: str, reason: str) -> list[str]:
+    """The production order is called off: its open lines release their stock and the order stops being demand. Purchase
+    requests already made for it stay for the buyer to cancel or keep; their numbers are returned."""
+    if not (reason or "").strip():
+        raise MaterialError("say why the material request is cancelled")
+    head = _head(db, mr_no)
+    lines = _open_lines(db, mr_no)
+    released = {ln["item_code"]: str(ln["reserved_qty"]) for ln in lines if ln["reserved_qty"]}
+    db.execute(
+        text("update material_request_line set reserved_qty = 0, status = 'cancelled' where id = any(:i)"),
+        {"i": [ln["id"] for ln in lines]},
+    )
+    db.execute(
+        text("update material_requirement set status = 'cancelled' where id = any(:r)"),
+        {"r": [ln["requirement_id"] for ln in lines]},
+    )
+    db.execute(
+        text("update material_request set status = 'cancelled', cancel_reason = :why where no = :n"),
+        {"why": reason.strip(), "n": mr_no},
+    )
+    db.execute(
+        text("update production_order set status = 'cancelled' where id = :o"), {"o": head["production_order_id"]}
+    )
+    still = [
+        str(r[0])
+        for r in db.execute(
+            text(
+                "select distinct b.request_no from material_request_buy b "
+                "join material_request_line l on l.id = b.mr_line_id join request r on r.no = b.request_no "
+                "where l.mr_no = :n and r.status not in ('cancelled', 'rejected', 'closed') order by 1"
+            ),
+            {"n": mr_no},
+        )
+    ]
+    audit.record(
+        db,
+        user(user_id),
+        "material_request.cancel",
+        "material_request",
+        mr_no,
+        before={"status": "open"},
+        after={"status": "cancelled", "released": released, "purchase_requests_left": still},
+        reason=reason.strip(),
+    )
+    db.commit()
+    return still
+
+
+# ---- for the screen -------------------------------------------------------------------------------
+
+
+def listing(db: Session, *, status: str | None = None) -> list[dict[str, Any]]:
+    """Material requests, earliest need-by first, each with its lines and the purchase requests buying for them."""
+    heads = [
+        dict(h)
+        for h in db.execute(
+            text(
+                "select no, order_no, product_code, location_code, need_by, status, created_at, cancel_reason "
+                "from material_request where (cast(:s as text) is null or status = :s) order by need_by, no"
+            ),
+            {"s": status},
+        ).mappings()
+    ]
+    if not heads:
+        return heads
+    nos = [h["no"] for h in heads]
+    buys: dict[int, list[str]] = {}
+    for line_id, request_no in db.execute(
+        text(
+            "select b.mr_line_id, b.request_no from material_request_buy b "
+            "join material_request_line l on l.id = b.mr_line_id where l.mr_no = any(:n) order by b.id"
+        ),
+        {"n": nos},
+    ):
+        buys.setdefault(line_id, []).append(request_no)
+    by_no: dict[str, list[dict[str, Any]]] = {}
+    for ln in db.execute(
+        text(
+            "select c.id, c.mr_no, c.line_no, c.item_code, i.name as item_name, c.uom, c.need_qty, c.reserved_qty, "
+            "c.issued_qty, c.requested_qty, c.need_by, c.status from material_request_cover c "
+            "join item i on i.code = c.item_code where c.mr_no = any(:n) order by c.mr_no, c.line_no"
+        ),
+        {"n": nos},
+    ).mappings():
+        row = dict(ln)
+        row["short"] = max(row["need_qty"] - row["issued_qty"] - row["reserved_qty"], Decimal(0))
+        row["requests"] = sorted(set(buys.get(row.pop("id"), [])))
+        by_no.setdefault(row.pop("mr_no"), []).append(row)
+    for h in heads:
+        h["lines"] = by_no.get(h["no"], [])
+    return heads

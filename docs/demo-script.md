@@ -16,7 +16,7 @@ Apex Pumps is the main demo company: one pump plant at Chakan, nine people, sixt
 | finance@ | Finance (Finance Manager) | Plans and pays |
 | admin@ | Admin | Setup only |
 
-**What is in the company.** The V-belts (SP-01) are below their reorder point. Suppliers include Deccan Castings (rate contract for castings, impellers and shafts), Gujarat Bearings and Seals (micro enterprise in another state: IGST, 45 days by agreement), Shree Wires (issues e-invoices), Pune Copper and Western Industrial Supplies (the only spares supplier). Rules: up to Rs 10,000 a request approves itself, then the plant head, above Rs 1,00,000 the director. Orders up to Rs 1,00,000 need no approval, above that the purchase manager. Payment runs go to the director. Production orders and material requests (the MO-1 example) come in later plan steps.
+**What is in the company.** The V-belts (SP-01) are below their reorder point. Suppliers include Deccan Castings (rate contract for castings, impellers and shafts), Gujarat Bearings and Seals (micro enterprise in another state: IGST, 45 days by agreement), Shree Wires (issues e-invoices), Pune Copper and Western Industrial Supplies (the only spares supplier). Rules: up to Rs 10,000 a request approves itself, then the plant head, above Rs 1,00,000 the director. Orders up to Rs 1,00,000 need no approval, above that the purchase manager. Payment runs go to the director. The ERP's production orders are loaded too: MO-1 (50 pumps of 1 HP by 5 December) and MO-2 (100 pumps of 0.5 HP by 15 December), each with its material request waiting for the store check (see [Production orders](#production-orders-the-store-check) below; the journey does not need it).
 
 ## The journey
 
@@ -40,6 +40,17 @@ Apex Pumps is the main demo company: one pump plant at Chakan, nine people, sixt
 | 16 | director@, then finance@ | director@: **My work → Payment runs to approve** → **Approve**. finance@: **Make the bank file** → **Show the bank file**; then **Import the bank statement** | Invoices paid, orders closed, payment advice with the bank reference to each supplier |
 | 17 | director@ | **Control tower**, **Dashboard → Where things stand** | Nothing left in any stage; the cycle KPIs count the four requests |
 | 18 | admin@ | **Admin** → **Company setup** → **Policies** → reason, change **Days suppliers get to quote**, **Save**; then **Audit** and **History** | The change is in both, with its reason |
+
+## Production orders: the store check
+
+Steps 1 to 3 of the flow, on their own (after `demo reset apex`; they add two requests, so do them after the journey or on a fresh reset):
+
+| # | Who | Where and what | You should see |
+|---|---|---|---|
+| 1 | store@ | **Material requests** | MO-1 and MO-2, each with its materials and nothing set aside yet |
+| 2 | store@ | **Run store check** | MO-1 (needed first) gets its stock first: all 50 impellers, shafts, terminal boxes and paint, 40 of 100 bearings, 50 of 90 kg copper wire, 20 of 50 cartons, 20 of 50 seals. One request for what is short goes to Vikram Joshi (plant head): castings 50 (contract ₹650), bearings 60, copper wire 40 kg, cartons 30, seals 30, capacitors 50, ₹80,030 in all. The plan's example has only the first four items (₹72,930); Apex's bill of materials also has seals and capacitors. MO-2 gets what is left; its request (₹2,11,500) goes to Meera Iyer (director) |
+| 3 | store@ | **Inventory** | The impellers show 50 of 60 set aside for production; the free 10 are all that can be issued |
+| 4 | store@ | **Material requests** → MO-1 → **Issue for production** | Everything set aside is issued; what is short stays on the request until it arrives (run the store check again, then issue) |
 
 ## Start with cases in flight
 

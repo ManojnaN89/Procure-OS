@@ -20,6 +20,7 @@ from p2p.platform.guides_api import router as guides_router
 from p2p.platform.invoice_api import router as invoice_router
 from p2p.platform.invoice_intake_api import router as invoice_intake_router
 from p2p.platform.master_api import router as master_router
+from p2p.platform.material_api import router as material_router
 from p2p.platform.order_api import router as order_router
 from p2p.platform.payment_api import router as payment_router
 from p2p.platform.setup_api import router as setup_router
@@ -37,6 +38,7 @@ app.include_router(admin_router)
 app.include_router(files_router)
 app.include_router(export_router)
 app.include_router(demand_router)
+app.include_router(material_router)
 app.include_router(setup_router)
 app.include_router(ui_router)
 app.include_router(workspace_router)

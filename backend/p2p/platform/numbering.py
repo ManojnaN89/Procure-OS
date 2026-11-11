@@ -14,14 +14,25 @@ class NoSuchSeries(Exception):
     pass
 
 
+# Series a company's master data may not have yet (it came later than its number_series file); a row in the table wins.
+DEFAULT_SERIES: dict[str, dict[str, str]] = {
+    "material_request": {
+        "prefix": "MR",
+        "scope": "location",
+        "format": "{prefix}-{loc}-{fy4}-{seq:05d}",
+        "reset": "fy",
+    },
+}
+
+
 def fy4(d: date) -> str:
     """'2627' for any date in the financial year 2026-27."""
     y = fy_start_year(d)
     return f"{y % 100:02d}{(y + 1) % 100:02d}"
 
 
-def next_number(db: Session, document_type: str, on_date: date, *, location_code: str | None = None) -> str:
-    series = (
+def _series(db: Session, document_type: str) -> dict[str, str] | None:
+    row = (
         db.execute(
             text("select prefix, scope, format, reset from number_series where document_type = :t"),
             {"t": document_type},
@@ -29,6 +40,17 @@ def next_number(db: Session, document_type: str, on_date: date, *, location_code
         .mappings()
         .first()
     )
+    return dict(row) if row else DEFAULT_SERIES.get(document_type)
+
+
+def prefix(db: Session, document_type: str) -> str | None:
+    """The prefix of a series (MR for material requests), or None when there is no such series."""
+    series = _series(db, document_type)
+    return str(series["prefix"]) if series else None
+
+
+def next_number(db: Session, document_type: str, on_date: date, *, location_code: str | None = None) -> str:
+    series = _series(db, document_type)
     if series is None:
         raise NoSuchSeries(f"no number series for {document_type}")
     if series["scope"] == "location" and not location_code:
