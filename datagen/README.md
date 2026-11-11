@@ -43,8 +43,29 @@ python -m p2p.cli demo reset flow                      # from backend/: drop and
 One plant, four departments, eight people (one login each), twelve items in three categories, four suppliers (a micro enterprise,
 a rate-contract holder, two for quotations), one active contract, no history. Four items are below their reorder point, so the first
 click on **Check stock levels** makes three requests. Written by hand (not cut from another dataset); only the chart of accounts,
-banks, payment terms and number series are copied from `datagen/catalog/flow/`. The walk-through is `docs/demo-script.md`; the
+banks, payment terms and number series are copied from `datagen/catalog/common/`. The walk-through is `docs/demo-script.md`; the
 eval `E33` runs it with the eight logins.
+
+## Companies from a profile file (`apex`, `brightwave`)
+
+```
+python -I datagen/generator/company_profile.py apex          # -> data/datasets/apex-v1
+python -I datagen/generator/company_profile.py brightwave    # -> data/datasets/brightwave-v1
+python -I datagen/generator/company_profile.py --check data/datasets/apex-v1
+python -m p2p.cli demo reset apex                            # from backend/: drop and make the company, logins to .dev-credentials
+```
+
+Each company is one file, `datagen/catalog/<name>/company.yaml`: people and logins, approval rules and who the chain roles are,
+settings, budgets, categories, items with opening stock, suppliers, contracts, last prices paid, and its ERP input files. A new
+company is a new file. `master/` has the same files and headers as `flow` (`generator/master_files.py`); `inputs/` holds the
+company's planning files (see section F of `docs/data-dictionary.md`). Master data only, no history yet.
+
+- **Apex Pumps** (pump maker, plant at Chakan, Mon-Sat): 9 people, 16 items in four categories, 6 suppliers (one in Gujarat, one
+  micro enterprise), a rate contract for castings. Inputs: two pumps, their bills of materials, a sales order, a demand plan and
+  two production orders whose material lines are worked out from the bills of materials.
+- **Brightwave Technologies** (IT services, office in Bengaluru, Mon-Fri): 9 people, 16 items (laptops, licences, cloud, office
+  supplies, facility services), 5 suppliers (one in Tamil Nadu, one micro enterprise), a rate contract and a service contract.
+  IT hardware and software always need the IT head. Inputs: joiner kits and the joiners planned for December.
 
 ## How it is built
 

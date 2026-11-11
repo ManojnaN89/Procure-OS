@@ -17,9 +17,9 @@ python -m p2p.cli remind <tenant> [--dry-run] [--schedule]
         reminds suppliers who have not answered a quotation request; --schedule queues the daily morning run
 python -m p2p.cli order <tenant> [--request NO]
         makes purchase orders from the lines that are ready (contract prices and awarded quotations) and sends them for approval
-python -m p2p.cli demo reset flow [--dataset DIR]
-        drops and makes again the small demo company (8 people, 12 items, 4 suppliers, no history); the logins go to
-        .dev-credentials and are not printed
+python -m p2p.cli demo reset flow|apex|brightwave [--dataset DIR]
+        drops and makes again a demo company (flow: 8 people, 12 items, 4 suppliers; apex and brightwave from their
+        profiles in datagen/catalog; no history); the logins go to .dev-credentials and are not printed
 python -m p2p.cli demo populate [flow] [--reset]
         fills the demo company with cases at every stage of the flow (needs a company with no requests, or --reset)
 python -m p2p.cli worker      runs the job worker (timers, escalations, email, mailbox polling) until stopped
@@ -75,7 +75,7 @@ def main(argv: list[str] | None = None) -> int:
     ordr.add_argument("--request")
     demo = sub.add_parser("demo").add_subparsers(dest="cmd", required=True)
     reset = demo.add_parser("reset")
-    reset.add_argument("name", choices=["flow"])
+    reset.add_argument("name", help="flow, or a company with a profile in datagen/catalog (apex, brightwave)")
     reset.add_argument("--dataset")
     fill = demo.add_parser("populate")
     fill.add_argument("name", nargs="?", default="flow")
@@ -91,7 +91,7 @@ def main(argv: list[str] | None = None) -> int:
             pass
         return 0
     if args.group == "demo":
-        from p2p.platform.demo import CREDENTIALS, DemoError, reset_flow
+        from p2p.platform.demo import CREDENTIALS, DemoError, company, reset_company, reset_flow
 
         if args.cmd == "populate":
             from p2p.platform.demo_cases import populate
@@ -112,15 +112,15 @@ def main(argv: list[str] | None = None) -> int:
                 return 1
             return 0
         try:
-            company = reset_flow(Path(args.dataset) if args.dataset else None)
+            built = reset_company(company(args.name), Path(args.dataset) if args.dataset else None)
         except DemoError as exc:
-            print(f"not made: {exc}")
+            print(f"not built: {exc}")
             return 1
-        loaded = company.report.rows_loaded if company.report else 0
-        print(f"company '{company.slug}' made: {loaded} master rows, {len(company.logins)} logins")
-        for email, role, designation in company.logins:
+        loaded = built.report.rows_loaded if built.report else 0
+        print(f"company '{built.slug}' made: {loaded} master rows, {len(built.logins)} logins")
+        for email, role, designation in built.logins:
             print(f"  {email}  {role}  ({designation})")
-        print(f"passwords are in {company.credentials_file}")
+        print(f"passwords are in {built.credentials_file}")
         return 0
     if args.group == "replenish":
         from sqlalchemy.orm import Session

@@ -8,39 +8,38 @@ low on four items, so "Check stock levels" on the Requisitions page creates thre
 go to the maintenance manager).
 
 Everything here is written out by hand (nothing is cut from another dataset), except four tables of plain configuration
-that live in datagen/catalog/flow: the chart of accounts, the banks, the payment terms and the document number series.
+that every demo company shares (datagen/catalog/common): the chart of accounts, the banks, the payment terms and the
+document number series. The file set, the supplier tables and the common checks are in master_files.py.
 Safety rules of this repo: PANs carry the digits 0000 (never issued), phones are +91 00000 ..., emails end in .example.
 """
 
 import argparse
 import csv
 import json
-import re
-import shutil
 import sys
 from datetime import date
 from decimal import Decimal
 from pathlib import Path
 
-REPO = Path(__file__).resolve().parents[2]
-CATALOG = REPO / "datagen" / "catalog" / "flow"
+sys.path.insert(0, str(Path(__file__).parent))
+from master_files import (  # noqa: E402
+    EMPTY_TABLES,
+    REPO,
+    Supplier,
+    common_problems,
+    copy_common,
+    gstin,
+    read,
+    supplier_tables,
+    write_table,
+)
+
 DEFAULT_OUT = REPO / "data" / "datasets" / "flow-demo-v1"
 VERSION = "flow-demo-v1"
 
 PLANT = "PLT-CKN"
 ASOF = "2026-11-01"  # opening stock date
 FY_START, FY_END = "2026-04-01", "2027-03-31"
-ALPHABET = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ"
-
-
-def gstin(state: str, pan: str, entity: str = "1") -> str:
-    """State code, PAN, entity number, Z and the check character (the same rule the platform checks)."""
-    first14 = f"{state}{pan}{entity}Z"
-    total = 0
-    for i, ch in enumerate(first14):
-        product = ALPHABET.index(ch) * (1 if i % 2 == 0 else 2)
-        total += product // 36 + product % 36
-    return first14 + ALPHABET[(36 - total % 36) % 36]
 
 
 COMPANY_PAN = "FLWCP0000K"
@@ -445,26 +444,6 @@ CONTRACT_PRICES = [("ITM-006", "NOS", "2950.00", 7), ("ITM-007", "NOS", "295.00"
 
 # ---- writing ----------------------------------------------------------------------------------
 
-EMPTY_TABLES = {
-    "delegation": "from_user,to_user,start_date,end_date,reason",
-    "item_substitute": "item_code,substitute_code,note",
-    "uom_conversion": "item_code,from_uom,to_uom,factor",
-    "project": "code,name,type,cost_centre_code,budget_amount,start_date,end_date,status",
-    "sanction_entry": "name,country,list_name,listed_on,aliases",
-}
-
-
-def write(path: Path, header: list[str], rows: list[dict[str, object]]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("w", encoding="utf-8", newline="") as f:
-        w = csv.DictWriter(f, fieldnames=header, lineterminator="\n")
-        w.writeheader()
-        w.writerows(rows)
-
-
-def table(out: Path, name: str, header: str, rows: list[dict[str, object]]) -> None:
-    write(out / "master" / f"{name}.csv", header.split(","), rows)
-
 
 def months() -> list[str]:
     return [f"2026-{m:02d}" for m in range(4, 13)] + [f"2027-{m:02d}" for m in range(1, 4)]
@@ -474,21 +453,16 @@ def build(out: Path) -> dict[str, int]:
     out.mkdir(parents=True, exist_ok=True)
     counts: dict[str, int] = {}
 
-    def put(name: str, header: str, rows: list[dict[str, object]]) -> None:
-        table(out, name, header, rows)
-        counts[name] = len(rows)
+    def put(name: str, rows: list[dict[str, object]]) -> None:
+        counts[name] = write_table(out, name, rows)
 
-    (out / "master").mkdir(parents=True, exist_ok=True)
-    for name in ("gl_account", "bank", "payment_terms", "number_series"):
-        shutil.copyfile(CATALOG / f"{name}.csv", out / "master" / f"{name}.csv")
-        counts[name] = len(read(CATALOG / f"{name}.csv"))
+    counts.update(copy_common(out))
 
-    put("company", ",".join(COMPANY), [COMPANY])
-    put("location", ",".join(LOCATION), [LOCATION])
-    put("department", "code,name,head_user", [{"code": c, "name": n, "head_user": h} for c, n, h in DEPARTMENTS])
+    put("company", [COMPANY])
+    put("location", [LOCATION])
+    put("department", [{"code": c, "name": n, "head_user": h} for c, n, h in DEPARTMENTS])
     put(
         "cost_centre",
-        "code,name,department_code,location_code,owner_user,active",
         [
             {
                 "code": f"CC-{c}",
@@ -503,7 +477,6 @@ def build(out: Path) -> dict[str, int]:
     )
     put(
         "user",
-        "code,employee_no,name,designation,email,phone,department_code,location_code,manager_code,approval_limit,notify_by,active",
         [
             {
                 "code": code,
@@ -524,23 +497,17 @@ def build(out: Path) -> dict[str, int]:
     )
     put(
         "user_role",
-        "user_code,role,scope_location,scope_department",
         [
             {"user_code": code, "role": role, "scope_location": "ANY", "scope_department": "ANY"}
             for code, _n, _d, _dept, _m, _l, _r, roles in PEOPLE
             for role in roles
         ],
     )
-    put("approval_rule", RULES.splitlines()[0], list(csv.DictReader(RULES.splitlines())))
-    put("setting", "key,value,description", [{"key": k, "value": v, "description": d} for k, v, d in SETTINGS])
-    put(
-        "tolerance",
-        "key,value,category_code,note",
-        [{"key": k, "value": v, "category_code": "ANY", "note": n} for k, v, n in TOLERANCES],
-    )
+    put("approval_rule", list(csv.DictReader(RULES.splitlines())))
+    put("setting", [{"key": k, "value": v, "description": d} for k, v, d in SETTINGS])
+    put("tolerance", [{"key": k, "value": v, "category_code": "ANY", "note": n} for k, v, n in TOLERANCES])
     put(
         "company_bank_account",
-        "code,bank_code,account_no,ifsc,purpose,payment_file_format",
         [
             {
                 "code": "CBA-01",
@@ -554,7 +521,6 @@ def build(out: Path) -> dict[str, int]:
     )
     put(
         "gst_registration",
-        "gstin,state_code,legal_address,pincode,is_default",
         [
             {
                 "gstin": PLANT_GSTIN,
@@ -567,7 +533,6 @@ def build(out: Path) -> dict[str, int]:
     )
     put(
         "budget",
-        "cost_centre_code,gl_code,project_code,period,amount,version,policy",
         [
             {
                 "cost_centre_code": "CC-MNT",
@@ -584,7 +549,6 @@ def build(out: Path) -> dict[str, int]:
     )
     put(
         "category",
-        "code,name,parent_code,kind,default_gl,stocked,capex,min_quotes,buyer_user,approval_category,required_attributes,required_supplier_docs,inspection_required,default_tds_section,reverse_charge_default",
         [
             {
                 "code": c,
@@ -666,158 +630,16 @@ def build(out: Path) -> dict[str, int]:
         stock.append(
             {"item_code": code, "location_code": PLANT, "qty": f"{on_hand}.000", "unit_cost": price, "as_of": ASOF}
         )
-    put("item", ",".join(items[0]), items)
-    put("item_location", ",".join(plan[0]), plan)
-    put("stock_opening", ",".join(stock[0]), stock)
+    put("item", items)
+    put("item_location", plan)
+    put("stock_opening", stock)
 
-    sup, addr, bank, cat_rows, contacts, docs, history = [], [], [], [], [], [], []
-    for i, (
-        code,
-        name,
-        form,
-        pan,
-        state,
-        einv,
-        hsn_d,
-        msme,
-        udyam,
-        agreed,
-        terms,
-        turnover,
-        bank_code,
-        contact,
-        domain,
-        cats,
-        city,
-        pin,
-    ) in enumerate(SUPPLIERS, start=1):
-        g = gstin(state, pan)
-        sup.append(
-            {
-                "code": code,
-                "legal_name": name,
-                "trade_name": name,
-                "legal_form": form,
-                "pan": pan,
-                "pan_status": "operative",
-                "gst_reg_type": "regular",
-                "gstin": g,
-                "state_code": state,
-                "e_invoice_applicable": str(einv).lower(),
-                "hsn_digits": hsn_d,
-                "msme_category": msme,
-                "udyam_no": udyam,
-                "msme_agreement": str(agreed is not None).lower(),
-                "agreed_payment_days": "" if agreed is None else agreed,
-                "payment_terms_code": terms,
-                "tds_section_default": "194Q",
-                "lower_tds_rate": "",
-                "lower_tds_valid_to": "",
-                "lower_tds_limit": "",
-                "reverse_charge": "no",
-                "status": "active",
-                "turnover_band": turnover,
-            }
-        )
-        addr.append(
-            {
-                "supplier_code": code,
-                "type": "registered",
-                "gstin": g,
-                "address": f"{10 + i}, Industrial Area",
-                "city": city,
-                "state_code": state,
-                "pincode": pin,
-            }
-        )
-        bank.append(
-            {
-                "supplier_code": code,
-                "bank_code": bank_code,
-                "account_no": f"00010000{i:04d}",
-                "ifsc": f"{bank_code[:4].ljust(4, 'X')}0900{i:03d}",
-                "verified": "true",
-                "verified_on": "2024-09-15",
-            }
-        )
-        cat_rows += [{"supplier_code": code, "category_code": c, "approved_from": "2024-04-01"} for c in cats]
-        contacts.append(
-            {
-                "supplier_code": code,
-                "name": contact,
-                "role": "sales",
-                "email": f"sales@{domain}.example",
-                "phone": f"+91 00000 9{i:04d}",
-                "is_primary": "true",
-            }
-        )
-        docs += [
-            {
-                "supplier_code": code,
-                "doc_type": "gst_cert",
-                "number": g,
-                "issued_on": "2019-10-07",
-                "expires_on": "",
-                "verified": "true",
-            },
-            {
-                "supplier_code": code,
-                "doc_type": "pan",
-                "number": pan,
-                "issued_on": "2015-04-01",
-                "expires_on": "",
-                "verified": "true",
-            },
-            {
-                "supplier_code": code,
-                "doc_type": "cancelled_cheque",
-                "number": f"CHQ-{i:04d}",
-                "issued_on": "2024-09-10",
-                "expires_on": "",
-                "verified": "true",
-            },
-        ]
-        if msme != "none":
-            docs += [
-                {
-                    "supplier_code": code,
-                    "doc_type": "udyam",
-                    "number": udyam,
-                    "issued_on": "2022-03-17",
-                    "expires_on": "",
-                    "verified": "true",
-                },
-                {
-                    "supplier_code": code,
-                    "doc_type": "msme_agreement",
-                    "number": f"AGR-{code}",
-                    "issued_on": "2024-05-28",
-                    "expires_on": "2027-07-31",
-                    "verified": "true",
-                },
-            ]
-        history.append(
-            {
-                "supplier_code": code,
-                "at": "2024-09-20T10:00:00+05:30",
-                "from_status": "draft",
-                "to_status": "active",
-                "reason": "Onboarding complete",
-                "by_user": "U05",
-            }
-        )
-    put("supplier", ",".join(sup[0]), sup)
-    put("supplier_address", ",".join(addr[0]), addr)
-    put("supplier_bank_account", ",".join(bank[0]), bank)
-    put("supplier_category", ",".join(cat_rows[0]), cat_rows)
-    put("supplier_contact", ",".join(contacts[0]), contacts)
-    put("supplier_document", ",".join(docs[0]), docs)
-    put("supplier_status_history", ",".join(history[0]), history)
+    for name, rows in supplier_tables([Supplier(*row, onboarded_by="U05") for row in SUPPLIERS]).items():
+        put(name, rows)
 
     code, supplier, kind, valid_from, valid_to, ceiling, terms = CONTRACT
     put(
         "contract",
-        "code,supplier_code,type,valid_from,valid_to,max_value,payment_terms_code,delivery_terms,freight_terms,warranty_months,sla_text,status",
         [
             {
                 "code": code,
@@ -837,7 +659,6 @@ def build(out: Path) -> dict[str, int]:
     )
     put(
         "price_record",
-        "supplier_code,item_code,contract_code,uom,price,min_qty,price_basis,freight_included,valid_from,valid_to,lead_days",
         [
             {
                 "supplier_code": supplier,
@@ -855,8 +676,8 @@ def build(out: Path) -> dict[str, int]:
             for item, uom, price, lead in CONTRACT_PRICES
         ],
     )
-    for name, header in EMPTY_TABLES.items():
-        put(name, header, [])
+    for name in EMPTY_TABLES:
+        put(name, [])
 
     manifest = {
         "dataset": VERSION,
@@ -869,11 +690,6 @@ def build(out: Path) -> dict[str, int]:
 
 
 # ---- checks -----------------------------------------------------------------------------------
-
-
-def read(path: Path) -> list[dict[str, str]]:
-    with path.open(encoding="utf-8", newline="") as f:
-        return list(csv.DictReader(f))
 
 
 def check(out: Path) -> list[str]:
@@ -904,37 +720,9 @@ def check(out: Path) -> list[str]:
             healthy += 1
     if (below, above, healthy) != (4, 2, 6):
         problems.append(f"stock: {below} below reorder, {above} just above, {healthy} healthy; expected 4, 2, 6")
-    pan_ok = re.compile(r"^[A-Z]{5}0000[A-Z]$")
-    for table_name, column in (("company", "pan"), ("supplier", "pan")):
-        for r in rows(table_name):
-            if not pan_ok.match(r[column]):
-                problems.append(f"{table_name} {r.get('code')}: PAN {r[column]} does not carry 0000")
-    for r in rows("user") + rows("supplier_contact"):
-        if not r["email"].endswith(".example"):
-            problems.append(f"{r.get('name')}: email {r['email']} does not end in .example")
-        if not r["phone"].startswith("+91 00000 "):
-            problems.append(f"{r.get('name')}: phone {r['phone']} is not a +91 00000 number")
-    for r in rows("supplier") + rows("location") + rows("gst_registration"):
-        g = r["gstin"]
-        if len(g) != 15 or gstin(g[:2], g[2:12], g[12])[14] != g[14]:
-            problems.append(f"GSTIN {g} fails its check character")
-    ids = [r["code"] for r in rows("user")]
-    if len(set(ids)) != len(ids):
-        problems.append("two people share a code")
-    for r in rows("user"):
-        if r["manager_code"] and r["manager_code"] not in ids:
-            problems.append(f"{r['code']}'s manager {r['manager_code']} is not a person")
+    problems += common_problems(out)
     if len([r for r in rows("contract") if r["status"] == "active"]) != 1:
         problems.append("expected one active contract")
-    for r in rows("supplier"):
-        have = {
-            d["doc_type"]
-            for d in rows("supplier_document")
-            if d["supplier_code"] == r["code"] and d["verified"] == "true"
-        }
-        need = {"pan", "cancelled_cheque", "gst_cert"} | ({"udyam"} if r["msme_category"] != "none" else set())
-        if need - have:
-            problems.append(f"{r['code']} lacks verified {sorted(need - have)}")
     return problems
 
 

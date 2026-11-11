@@ -1,0 +1,209 @@
+# Brightwave Technologies Private Limited: a fictional IT services company with one office and no production.
+# Read by datagen/generator/company_profile.py.
+# Safety rules of this repo: PANs carry 0000 (never issued), phones are +91 00000 ..., emails end in .example.
+
+dataset: brightwave-v1
+description: One IT services office, nine people, sixteen items, five suppliers, a rate contract and a service contract, no history. New joiners as ERP input.
+tenant: brightwave
+
+company:
+  code: BRIGHT
+  legal_name: Brightwave Technologies Private Limited
+  short_name: Brightwave Technologies
+  pan: BRTCB0000T
+  cin: U62011KA2016PTC000003
+  registered_address: 4th Floor, Tech Park Road, Bellandur, Bengaluru, Karnataka 560103
+  turnover_band: 10-500cr
+  currency: INR
+  email_domain: brightwave.example
+
+location:
+  code: OFF-BLR
+  name: Office, Bengaluru
+  type: office
+  address: 4th Floor, Tech Park Road, Bellandur
+  city: Bengaluru
+  state_code: "29"
+  pincode: "560103"
+  working_days: Mon-Fri
+  receiving_hours: "09:30-18:00"
+  loc_short: BLR
+
+company_bank_account: {bank_code: ICICI, account_no: "000000000301", ifsc: ICIC0009993}
+opening_stock_date: "2026-11-01"
+price_list_dates: ["2026-10-01", "2026-12-30"]  # last prices paid: the date paid, and 90 days on
+replenishment_department: ADM  # office supplies are planned for Admin and Facilities
+
+# code, name, head
+departments:
+  - [ENG, Engineering, U07]
+  - [ITO, IT Operations, U08]
+  - [ADM, Admin and Facilities, U09]
+  - [FIN, Finance, U05]
+  - [MGT, Management, U09]
+
+# login is the part of the email before the @; roles are the jobs held in the organisation's own table
+people:
+  - {code: U01, name: Kiran Nair, designation: Software Engineer, department: ENG, manager: U07, limit: "0.00", login: employee, roles: [requester]}
+  - {code: U02, name: Lakshmi Menon, designation: Facilities Executive, department: ADM, manager: U09, limit: "0.00", login: facilities, roles: [requester, store]}
+  - {code: U03, name: Arjun Reddy, designation: Buyer, department: ADM, manager: U09, limit: "0.00", login: buyer, roles: [requester, buyer]}
+  - {code: U04, name: Deepa Iyengar, designation: AP Executive, department: FIN, manager: U05, limit: "0.00", login: ap, roles: [requester, ap]}
+  - {code: U05, name: Rohan Kapoor, designation: Finance Manager, department: FIN, manager: U09, limit: "0.00", login: finance, roles: [requester, finance]}
+  - {code: U06, name: Admin, designation: System Administrator, department: ITO, manager: U08, limit: "0.00", login: admin, roles: [requester, admin]}
+  - {code: U07, name: Kavya Rao, designation: Head of Engineering, department: ENG, manager: U09, limit: "100000.00", login: depthead, roles: [requester, approver]}
+  - {code: U08, name: Vivek Menon, designation: IT Head, department: ITO, manager: U09, limit: "100000.00", login: ithead, roles: [requester, approver]}
+  - {code: U09, name: Farah Khan, designation: Chief Financial Officer, department: MGT, manager: "", limit: "99999999.00", login: cfo, roles: [requester, approver]}
+
+# how a role named in an approval chain becomes a person (the approver_role table)
+approver_roles:
+  - [dept_head, department_head, null]
+  - [it_head, designation, IT Head]
+  - [cfo, designation, Chief Financial Officer]
+
+# code, name, department, owner
+cost_centres:
+  - [CC-ENG, Engineering, ENG, U07]
+  - [CC-ITO, IT Operations, ITO, U08]
+  - [CC-ADM, Admin and Facilities, ADM, U09]
+
+# Up to Rs 10,000 approves itself, up to Rs 1 lakh the department head, above that the CFO. IT hardware and software
+# always need the IT head as well (rules for one category beat the ANY rules).
+approval_rules: |
+  rule_code,document,min_value,max_value,category_code,department_code,spend_type,approver_chain,version,effective_from,effective_to
+  REQ-01,request,0.00,10000.00,ANY,ANY,ANY,auto,1,2025-04-01,
+  REQ-02,request,10000.01,100000.00,ANY,ANY,ANY,dept_head,1,2025-04-01,
+  REQ-03,request,100000.01,999999999.00,ANY,ANY,ANY,cfo,1,2025-04-01,
+  REQ-04,request,0.00,10000.00,ITH,ANY,ANY,it_head,1,2025-04-01,
+  REQ-05,request,10000.01,100000.00,ITH,ANY,ANY,dept_head>it_head,1,2025-04-01,
+  REQ-06,request,100000.01,999999999.00,ITH,ANY,ANY,it_head>cfo,1,2025-04-01,
+  REQ-07,request,0.00,10000.00,SWS,ANY,ANY,it_head,1,2025-04-01,
+  REQ-08,request,10000.01,100000.00,SWS,ANY,ANY,dept_head>it_head,1,2025-04-01,
+  REQ-09,request,100000.01,999999999.00,SWS,ANY,ANY,it_head>cfo,1,2025-04-01,
+  PO-01,po,0.00,100000.00,ANY,ANY,ANY,auto,1,2025-04-01,
+  PO-02,po,100000.01,999999999.00,ANY,ANY,ANY,cfo,1,2025-04-01,
+  POA-01,po_amendment,0.00,100000.00,ANY,ANY,ANY,auto,1,2025-04-01,
+  POA-02,po_amendment,100000.01,999999999.00,ANY,ANY,ANY,cfo,1,2025-04-01,
+  VAR-01,price_variance,0.00,999999999.00,ANY,ANY,ANY,cfo,1,2025-04-01,
+  PAY-01,payment_run,0.00,999999999.00,ANY,ANY,ANY,cfo,1,2025-04-01,
+  SUP-01,supplier_activation,0.00,999999999.00,ANY,ANY,ANY,cfo,1,2025-04-01,
+
+settings:
+  - [budget_policy, block, Budget check result when a request exceeds the available budget (warn or block)]
+  - [duplicate_window_days, "14", A request for the same item and location within this many days is flagged as a possible duplicate]
+  - [split_order_window_days, "7", Requests to the same supplier or category within this window are summed to detect split orders]
+  - [default_rfq_response_days, "5", Working days suppliers get to respond to an RFQ]
+  - [rfq_reminder_after_days, "2", Working days after which a silent supplier is reminded]
+  - [supplier_ack_due_days, "2", Working days within which a PO acknowledgement is expected]
+  - [price_band_pct, "15", A quote deviating more than this percent from the benchmark price is flagged]
+  - [cost_of_capital_pct, "12", Used for early-payment discount decisions]
+  - [min_quotes_default, "2", Minimum quotes when the category does not say]
+  - [working_saturdays, none, Company rule for Saturdays at head office (none or 1st-3rd-5th)]
+  - [approval_reminder_hours, "24", Hours before an approver is reminded (one working day)]
+  - [approval_escalation_hours, "48", Hours before a pending approval escalates to the next level (two working days)]
+  - [auto_approve_requires_budget, "true", Auto-approval only when budget is available]
+  - [po_send_requires_confirmation, "true", A person confirms before a PO is sent to a supplier]
+  - [grn_edit_window_days, "3", Days a goods receipt can be corrected after posting]
+  - [invoice_receipt_mailbox, invoices@brightwave.example, Mailbox where supplier invoices arrive]
+  - [request_mailbox, requests@brightwave.example, Mailbox where staff email requests]
+  - [purchase_mailbox, purchase@brightwave.example, Mailbox buyers use for supplier correspondence]
+  - [tds_applicable_on_goods, "true", Buyer turnover is above Rs 10 crore so TDS on purchase of goods applies]
+
+tolerances:
+  - [price_pct, "2.00", Invoice price above PO price by this percent is within tolerance]
+  - [price_abs, "500.00", Or by this many rupees per line]
+  - [qty_pct, "0.00", Invoiced quantity above received quantity is not allowed]
+  - [small_diff_abs, "100.00", Total invoice difference up to this amount is accepted]
+  - [receipt_over_pct, "0.00", Receipt above ordered quantity is not accepted]
+  - [supplier_change_pct, "5.00", Supplier quantity or price change accepted by the agent up to this percent]
+  - [supplier_date_days, "3", Supplier delivery date slip accepted by the agent up to this many days]
+
+budgets:
+  periods: ["2025-11", "2027-03"]
+  policy: block
+  per_month:  # cost centre: total, then the total split by GL account (budgets are kept per GL)
+    CC-ENG: {total: "600000.00", gl: {"1230": "400000.00", "5320": "50000.00", "5440": "150000.00"}}
+    CC-ITO: {total: "900000.00", gl: {"1230": "250000.00", "5320": "50000.00", "5440": "600000.00"}}
+    CC-ADM: {total: "450000.00", gl: {"1230": "100000.00", "5320": "100000.00", "5340": "100000.00", "5350": "120000.00", "5260": "30000.00"}}
+
+categories:
+  - {code: ITH, name: IT hardware, kind: goods, gl: 1230, stocked: true, approval_category: capex_it, tds: 194Q}
+  - {code: SWS, name: Software and cloud, kind: service, gl: 5440, stocked: false, approval_category: software, tds: 194J(a)}
+  - {code: OFS, name: Office supplies, kind: goods, gl: 5320, stocked: true, approval_category: office, tds: 194Q}
+  - {code: FAC, name: Facility services, kind: service, gl: 5340, stocked: false, approval_category: services, tds: 194C}
+
+# gst: [rate before 22 Sep 2025, rate from then]; on_hand: opening stock at the office (a stocked item);
+# reorder: [reorder point, order up to] (min-max planning); gl overrides the category's account.
+items:
+  - {code: LP-01, name: Standard laptop 14 inch, description: Business laptop 14 inch, 16 GB RAM, 512 GB SSD, category: ITH, unit: NOS, hsn: "847130", gst: [18, 18], price: "62000.00", lead: 5, capex: true, on_hand: 3}
+  - {code: LP-02, name: Developer laptop 16 inch, description: Developer laptop 16 inch, 32 GB RAM, 1 TB SSD, category: ITH, unit: NOS, hsn: "847130", gst: [18, 18], price: "105000.00", lead: 5, capex: true, on_hand: 1}
+  - {code: MN-01, name: Monitor 24 inch, description: 24 inch full HD IPS monitor, category: ITH, gl: 5320, unit: NOS, hsn: "852852", gst: [18, 18], price: "12500.00", lead: 5, on_hand: 2}
+  - {code: DK-01, name: Docking station, description: USB-C docking station with power delivery, category: ITH, gl: 5320, unit: NOS, hsn: "847180", gst: [18, 18], price: "9800.00", lead: 5, on_hand: 2}
+  - {code: HS-01, name: Headset, description: USB headset with noise-cancelling microphone, category: ITH, gl: 5320, unit: NOS, hsn: "851830", gst: [18, 18], price: "2400.00", lead: 4, on_hand: 5}
+  - {code: KB-01, name: Keyboard and mouse set, description: Wireless keyboard and mouse set, category: ITH, gl: 5320, unit: NOS, hsn: "847160", gst: [18, 18], price: "1800.00", lead: 4, on_hand: 6}
+  - {code: SW-01, name: Office suite licence, description: Office suite licence, annual, per user, category: SWS, kind: service, unit: OTH, hsn: "997331", gst: [18, 18], gst_confidence: SECONDARY, price: "8400.00", lead: 1}
+  - {code: SW-02, name: Design tool licence, description: Design tool licence, annual, category: SWS, kind: service, unit: OTH, hsn: "997331", gst: [18, 18], gst_confidence: SECONDARY, price: "32000.00", lead: 1}
+  - {code: CL-01, name: Cloud hosting, description: Cloud hosting, monthly usage, category: SWS, kind: service, unit: OTH, hsn: "998315", gst: [18, 18], gst_confidence: SECONDARY, price: "120000.00", lead: 1}
+  - {code: OS-01, name: A4 paper ream, description: A4 copier paper 75 GSM, ream of 500 sheets, category: OFS, unit: PAC, hsn: "480256", gst: [12, 18], price: "280.00", lead: 2, on_hand: 30, reorder: [40, 120]}
+  - {code: OS-02, name: Printer toner, description: Black toner cartridge for the office laser printer, category: OFS, unit: NOS, hsn: "844399", gst: [18, 18], price: "3200.00", lead: 2, on_hand: 2, reorder: [3, 10]}
+  - {code: OS-03, name: Pantry coffee, description: Roasted coffee beans for the pantry, per kg, category: OFS, unit: KGS, hsn: "090121", gst: [5, 5], price: "900.00", lead: 2, on_hand: 6, reorder: [5, 15]}
+  - {code: OS-04, name: Drinking water jar 20 L, description: Packaged drinking water, 20 litre jar, category: OFS, unit: NOS, hsn: "220110", gst: [12, 5], price: "90.00", lead: 2, on_hand: 25, reorder: [20, 60]}
+  - {code: SV-01, name: Housekeeping, description: Office housekeeping, per month, category: FAC, kind: service, unit: OTH, hsn: "998533", gst: [18, 18], gst_confidence: SECONDARY, price: "85000.00", lead: 1}
+  - {code: SV-02, name: Security guard service, description: Security guards for the office, per month, category: FAC, kind: service, gl: 5350, unit: OTH, hsn: "998525", gst: [18, 18], gst_confidence: SECONDARY, price: "110000.00", lead: 1}
+  - {code: SV-03, name: AC maintenance, description: Air conditioner maintenance, per quarter, category: FAC, kind: service, gl: 5260, unit: OTH, hsn: "998719", gst: [18, 18], gst_confidence: SECONDARY, price: "24000.00", lead: 1}
+
+# hsn_digits follows turnover (6 digits above Rs 5 crore); agreed_days is the written MSME agreement
+suppliers:
+  - {code: SUP-001, name: Bangalore IT Distributors Pvt Ltd, form: pvt_ltd, pan: BANCB0000D, state: "29", city: Bengaluru, pincode: "560058", e_invoice: true, hsn_digits: "6", msme: none, terms: NET30, turnover: 20-100cr, bank: HDFC, domain: bangaloreit, categories: [ITH]}
+  - {code: SUP-002, name: Chennai Tech Resellers Pvt Ltd, form: pvt_ltd, pan: CHECC0000R, state: "33", city: Chennai, pincode: "600032", e_invoice: false, hsn_digits: "6", msme: none, terms: NET30, turnover: 5-20cr, bank: CANARA, domain: chennaitech, categories: [ITH]}
+  - {code: SUP-003, name: Cloudline Software Pvt Ltd, form: pvt_ltd, pan: CLOCC0000S, state: "29", city: Bengaluru, pincode: "560037", e_invoice: false, hsn_digits: "6", msme: none, terms: NET30, turnover: 5-20cr, bank: ICICI, domain: cloudline, categories: [SWS], tds: 194J(a)}
+  - {code: SUP-004, name: Sri Office Supplies, form: proprietorship, pan: SRIPS0000O, state: "29", city: Bengaluru, pincode: "560068", e_invoice: false, hsn_digits: "4", msme: micro, udyam: UDYAM-KR-00-1000004, agreed_days: 45, terms: NET45, turnover: 1.5-5cr, bank: SBI, domain: srioffice, categories: [OFS]}
+  - {code: SUP-005, name: Clean and Secure Facility Services Pvt Ltd, form: pvt_ltd, pan: CLECC0000F, state: "29", city: Bengaluru, pincode: "560100", e_invoice: false, hsn_digits: "6", msme: none, terms: NET30, turnover: 5-20cr, bank: AXIS, domain: cleansecure, categories: [FAC], tds: 194C}
+
+contracts:
+  - code: CNT-0001
+    supplier: SUP-001
+    type: rate_contract
+    valid_from: "2026-04-01"
+    valid_to: "2027-03-31"
+    max_value: "4000000.00"
+    terms: NET30
+    lead: 5
+    prices: {LP-01: "62000.00", LP-02: "105000.00", MN-01: "12500.00", DK-01: "9800.00"}
+  - code: CNT-0002
+    supplier: SUP-005
+    type: service_contract
+    valid_from: "2026-04-01"
+    valid_to: "2027-03-31"
+    max_value: "2500000.00"  # twelve months of housekeeping and guards, four AC services: Rs 24.36 lakh
+    terms: NET30
+    lead: 1
+    prices: {SV-01: "85000.00", SV-02: "110000.00", SV-03: "24000.00"}
+
+# last prices paid (a price list, no contract)
+price_records:
+  - {supplier: SUP-002, lead: 4, prices: {MN-01: "12200.00", HS-01: "2400.00", KB-01: "1800.00", DK-01: "9900.00"}}
+  - {supplier: SUP-003, lead: 1, prices: {SW-01: "8400.00", SW-02: "32000.00", CL-01: "120000.00"}}
+  - {supplier: SUP-004, lead: 2, prices: {OS-01: "280.00", OS-02: "3200.00", OS-03: "900.00", OS-04: "90.00"}}
+
+# ERP input files, written to inputs/ as they are: what each new joiner gets, and who joins when
+inputs:
+  joiner_kit:
+    columns: [kit, item_code, qty]
+    rows:
+      - [standard, LP-01, "1"]
+      - [standard, MN-01, "1"]
+      - [standard, DK-01, "1"]
+      - [standard, HS-01, "1"]
+      - [standard, KB-01, "1"]
+      - [standard, SW-01, "1"]
+      - [developer, LP-02, "1"]
+      - [developer, MN-01, "1"]
+      - [developer, DK-01, "1"]
+      - [developer, HS-01, "1"]
+      - [developer, KB-01, "1"]
+      - [developer, SW-01, "1"]
+  joiner_plan:
+    columns: [plan_no, department, kit, count, start_date]
+    rows:
+      - [JP-2026-12, ENG, developer, "4", "2026-12-01"]
+      - [JP-2026-12, ADM, standard, "2", "2026-12-01"]

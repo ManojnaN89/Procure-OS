@@ -257,6 +257,22 @@ quotes.jsonl · invoices.jsonl · credit_notes.jsonl · emails.jsonl · requests
 
 Each line holds: file, layout, hold_out, the true values, and for planted cases the true cause.
 
+## F. ERP input files (G, in a dataset's `inputs/` folder)
+
+Our own simple CSV templates (decision D36) for what a company's ERP or planning sheet tells purchasing. They are not
+loaded by `import masters`. Quantities are in the item's unit.
+
+| File | Columns | Meaning |
+|---|---|---|
+| product.csv | product_code, name, unit | What the company makes |
+| bom.csv | product_code, item_code, qty, unit | Materials for one product (optional; used to work out the production order lines) |
+| sales_order.csv | order_no, customer, product_code, qty, need_date | A customer order |
+| demand_plan.csv | plan_no, product_code, qty, period, status | Planned sales for a month (`YYYY-MM`) |
+| production_order.csv | order_no, product_code, qty, need_by, reason | What to make by when; reason is the sales order or demand plan |
+| production_order_line.csv | order_no, item_code, qty, unit, need_by | The materials an order needs: the bill of materials times the order quantity |
+| joiner_kit.csv | kit, item_code, qty | An office's "materials per joiner": what each kind of new joiner gets |
+| joiner_plan.csv | plan_no, department, kit, count, start_date | How many people join a department, with which kit, from when |
+
 
 ---
 

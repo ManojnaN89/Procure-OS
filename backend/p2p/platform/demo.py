@@ -1,13 +1,16 @@
-"""The small demo company, made again from nothing with one command.
+"""The demo companies, made again from nothing with one command.
 
-    python -m p2p.cli demo reset flow
+    python -m p2p.cli demo reset flow          # the small demo company (datagen/generator/profile_flow.py)
+    python -m p2p.cli demo reset apex          # a company described by datagen/catalog/apex/company.yaml
 
-Drops the company `flow` (if it is there), makes it again, loads the dataset made by datagen/generator/profile_flow.py,
-sets who approves what, and gives each of the eight people a login with the same throwaway development password. The logins are
-written to `.dev-credentials` (git-ignored). It refuses to run against any database that is not on this machine. Running it twice leaves one company and one set of logins.
+Drops the company (if it is there), makes it again, loads its generated dataset, sets who approves what, and gives each
+person a login with the same throwaway development password. The logins are written to `.dev-credentials`
+(git-ignored). It refuses to run against any database that is not on this machine. Running it twice leaves one company
+and one set of logins.
 """
 
 import importlib.util
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -30,7 +33,9 @@ SLUG = "flow"
 NAME = "Flow Engineering Pvt Ltd"
 DATASET = REPO_ROOT / "data" / "datasets" / "flow-demo-v1"
 CREDENTIALS = REPO_ROOT / ".dev-credentials"
-GENERATOR = REPO_ROOT / "datagen" / "generator" / "profile_flow.py"
+GENERATORS = REPO_ROOT / "datagen" / "generator"
+GENERATOR = GENERATORS / "profile_flow.py"
+CATALOG = REPO_ROOT / "datagen" / "catalog"
 
 # The roles an approval chain can name in this company. `manager` is the requester's own manager; `plant_head` is
 # whoever holds that designation. Everything else the platform ships with (CFO, director, ...) is not used here.
@@ -54,21 +59,70 @@ class FlowResult:
     credentials_file: Path | None = None
 
 
-def _generator() -> Any:
-    spec = importlib.util.spec_from_file_location("profile_flow", GENERATOR)
+@dataclass(frozen=True)
+class DemoCompany:
+    """A demo company: its tenant, its dataset and how to write it, and the settings that are not master data."""
+
+    slug: str
+    name: str
+    dataset: Path
+    approver_roles: list[tuple[str, str, str | None]]
+    replenishment_department: str
+    build: Callable[[Path], list[str]]  # writes the dataset into a folder and returns what is wrong with it
+
+
+def _generator(path: Path = GENERATOR) -> Any:
+    spec = importlib.util.spec_from_file_location(path.stem, path)
     if spec is None or spec.loader is None:
-        raise DemoError(f"cannot load {GENERATOR}")
+        raise DemoError(f"cannot load {path}")
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
 
 
-def ensure_dataset(dataset: Path = DATASET) -> Path:
+def _build_flow(folder: Path) -> list[str]:
+    gen = _generator()
+    gen.build(folder)
+    problems: list[str] = gen.check(folder)
+    return problems
+
+
+FLOW = DemoCompany(SLUG, NAME, DATASET, APPROVER_ROLES, REPLENISHMENT_DEPARTMENT, _build_flow)
+
+
+def profiled_companies() -> list[str]:
+    """The companies described by a profile file in the catalogue."""
+    return sorted(p.parent.name for p in CATALOG.glob("*/company.yaml"))
+
+
+def company(name: str) -> DemoCompany:
+    """`flow`, or a company with a profile file datagen/catalog/<name>/company.yaml."""
+    if name == SLUG:
+        return FLOW
+    if name not in profiled_companies():
+        raise DemoError(f"no demo company '{name}'; there are {', '.join([SLUG, *profiled_companies()])}")
+    gen = _generator(GENERATORS / "company_profile.py")
+    profile = gen.CompanyProfile.named(name)
+
+    def build(folder: Path) -> list[str]:
+        gen.build(profile, folder)
+        problems: list[str] = gen.check(folder, profile)
+        return problems
+
+    return DemoCompany(
+        slug=profile.tenant,
+        name=profile["company"]["legal_name"],
+        dataset=REPO_ROOT / "data" / "datasets" / profile.dataset,
+        approver_roles=profile.approver_roles,
+        replenishment_department=profile["replenishment_department"],
+        build=build,
+    )
+
+
+def ensure_dataset(dataset: Path = DATASET, demo: DemoCompany = FLOW) -> Path:
     """The dataset folder, made first when it is not there."""
     if not (dataset / "master" / "user.csv").is_file():
-        gen = _generator()
-        gen.build(dataset)
-        problems = gen.check(dataset)
+        problems = demo.build(dataset)
         if problems:
             raise DemoError("the generated dataset is not as designed: " + "; ".join(problems))
     return dataset
@@ -89,22 +143,27 @@ def login_role(held: set[str]) -> str:
     return next((login for org, login in ROLE_ORDER if org in held), "Requester")
 
 
-def _configure(db: Session) -> None:
+def _configure(db: Session, demo: DemoCompany, slug: str) -> None:
     """The settings the flow needs that are not master data: who the chain roles are, and who approves planned requests."""
     db.execute(text("delete from approver_role"))
-    for role, source, value in APPROVER_ROLES:
+    for role, source, value in demo.approver_roles:
         db.execute(
             text("insert into approver_role (role, source, value) values (:r, :s, :v)"),
             {"r": role, "s": source, "v": value},
         )
     audit.record(
-        db, audit.SYSTEM, "demo.configure", "approver_role", SLUG, after={"roles": [r for r, _, _ in APPROVER_ROLES]}
+        db,
+        audit.SYSTEM,
+        "demo.configure",
+        "approver_role",
+        slug,
+        after={"roles": [r for r, _, _ in demo.approver_roles]},
     )
     db.execute(
         text(
             "insert into app_setting (key, value) values ('replenishment_department', :d) on conflict (key) do update set value = :d"
         ),
-        {"d": REPLENISHMENT_DEPARTMENT},
+        {"d": demo.replenishment_department},
     )
     audit.record(
         db,
@@ -112,14 +171,14 @@ def _configure(db: Session) -> None:
         "demo.configure",
         "app_setting",
         "replenishment_department",
-        after={"value": REPLENISHMENT_DEPARTMENT},
+        after={"value": demo.replenishment_department},
     )
     db.commit()
 
 
 def _write_credentials(path: Path, slug: str, rows: list[tuple[str, str, str, str]]) -> None:
     """Replace the section of this company in the credentials file (other companies' sections stay as they are)."""
-    header = f"# local logins for tenant '{slug}' (the small demo company; git-ignored)"
+    header = f"# local logins for tenant '{slug}' (a demo company; git-ignored)"
     kept: list[str] = []
     if path.is_file():
         skipping = False
@@ -150,10 +209,18 @@ def require_local_database() -> None:
 
 def reset_flow(dataset: Path | None = None, *, credentials: Path | None = CREDENTIALS, slug: str = SLUG) -> FlowResult:
     """Make the small demo company from nothing. Raises DemoError if the dataset does not load cleanly."""
+    return reset_company(FLOW, dataset, credentials=credentials, slug=slug)
+
+
+def reset_company(
+    demo: DemoCompany, dataset: Path | None = None, *, credentials: Path | None = CREDENTIALS, slug: str | None = None
+) -> FlowResult:
+    """Make a demo company from nothing. Raises DemoError if the dataset does not load cleanly."""
     require_local_database()
-    folder = ensure_dataset(dataset or DATASET)
+    slug = slug or demo.slug
+    folder = ensure_dataset(dataset or demo.dataset, demo)
     tenants.drop_tenant(slug)
-    created = tenants.create_tenant(slug, NAME)
+    created = tenants.create_tenant(slug, demo.name)
     if not created.ok:
         raise DemoError(f"the company could not be created: {created.error}")
     result = FlowResult(slug)
@@ -164,7 +231,7 @@ def reset_flow(dataset: Path | None = None, *, credentials: Path | None = CREDEN
             raise DemoError(
                 f"{len(result.report.rejected)} row(s) left out; first: {first.table} line {first.line}: {first.reason}"
             )
-        _configure(db)
+        _configure(db, demo, slug)
         people = db.execute(text("select code, name, designation, email from org_user order by code")).all()
         held: dict[str, set[str]] = {}
         for code, role in db.execute(text("select user_code, role from org_user_role")):
