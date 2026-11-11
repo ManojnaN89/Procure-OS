@@ -598,3 +598,30 @@ def test_the_key_figures_are_worked_out_from_the_cases(ledger: Session, outbox: 
     }
     assert body["cycle_time"]["total"]["cases"] == 0  # nothing has been paid yet
     assert client.get("/api/kpis").status_code == 401
+
+
+def test_the_administrator_sees_every_step_and_every_waiting_approval_but_can_act_on_none(
+    store: Session,
+    outbox: Outbox,  # noqa: F811
+) -> None:
+    people = _roles(store)
+    admin = users.create_user(store.info["slug"], f"admin{store.info['sfx']}@w.example", PASSWORD, "An Admin", "Admin")
+    proposals.propose(
+        store, __import__("p2p.platform.sod", fromlist=["user"]).user(people["Approver"]), action="supplier.set_status",
+        summary="Block: Alpha Traders (S1) is active. Reason: x", payload={"supplier": "S1", "to": "blocked", "reason": "x"},
+        required_permission="supplier.activate",
+    )  # fmt: skip
+    po_no, _ = _sent(store, qty="10", price="100")
+
+    body = client.get("/api/workspace", headers=_headers(store.info["slug"], admin, "Admin")).json()
+    sections = {s["key"]: s for s in body["sections"]}
+    steps = {f["key"]: f["count"] for f in body["flow"]}
+
+    assert sections["suppliers"]["count"] == 1  # an approval waiting for someone else is visible to the administrator
+    assert sections["to_acknowledge"]["rows"][0]["id"] == po_no
+    assert steps["po_sent"] == 1 and list(steps)[0] == "restock" and list(steps)[-1] == "closed"  # every step, in order
+    assert "rfq_unsent" in steps
+    me = client.get("/api/auth/me", headers=_headers(store.info["slug"], admin, "Admin")).json()
+    assert not {"request.approve", "po.approve", "payment.approve", "grn.create", "invoice.book"} & set(
+        me["permissions"]
+    )

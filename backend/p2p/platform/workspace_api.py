@@ -11,13 +11,14 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
-from p2p.approvals.workflow import org_code_of
+from p2p.approvals.workflow import name_of, org_code_of
 from p2p.formulas.calendar import business_today
 from p2p.formulas.kpis import BUCKETS, working_days_between
 from p2p.invoices import payment
 from p2p.platform import alerts, control_tower, reference, routing
 from p2p.platform.permissions import can_anywhere
 from p2p.platform.rows import rows as _rows
+from p2p.requests import replenishment
 
 router = APIRouter(prefix="/api", tags=["workspace"])
 Db = Annotated[Session, Depends(routing.tenant_session)]
@@ -308,6 +309,117 @@ def _finance(db: Session, today: date) -> list[dict[str, Any]]:
     return out
 
 
+def _restock(db: Session, today: date) -> dict[str, Any]:
+    """Stock at its reorder point with no request or order yet: what "Check stock levels" would raise, shown up front."""
+    drafts, skipped = replenishment.plan(db, today)
+    rows = [
+        _row(
+            f"{d.location_code}-{ln.item_code}",
+            f"{ln.item_name}",
+            "#/requisitions",
+            f"{ln.reason} · order {ln.qty:,.0f} {ln.uom}",
+        )
+        for d in drafts
+        for ln in d.lines
+    ]
+    return _section("restock", "Stock to reorder, nothing requested yet", "#/requisitions", rows)
+
+
+def _admin(db: Session, today: date) -> list[dict[str, Any]]:
+    """Everything in the flow at once, read only: every approval that is waiting and on whom, then each stage in order."""
+    out = [_restock(db, today)]
+    rows = _rows(
+        db,
+        "select r.no, r.total_value, s.approver, s.delegate from approval_step s join request r on r.no = s.request_no "
+        "where s.status = 'pending' and s.round = r.approval_round and r.status = 'submitted' order by r.submitted_at nulls last, r.no",
+    )
+    out.append(
+        _section(
+            "requests",
+            "Requests waiting for approval",
+            "#/requisitions",
+            [
+                _row(
+                    r["no"],
+                    r["no"],
+                    f"#/requisitions/{r['no']}",
+                    f"{r['total_value']:,.2f} · waits for {name_of(db, r['delegate'] or r['approver'])}",
+                )
+                for r in rows
+            ],
+        )
+    )
+    rows = _rows(
+        db,
+        "select p.no, p.total, s.approver, s.delegate from po_approval_step s join po p on p.no = s.po_no where s.status = 'pending' "
+        "and s.round = p.approval_round and p.status = 'submitted' order by p.created_at, p.no",
+    )
+    out.append(
+        _section(
+            "orders",
+            "Orders waiting for approval",
+            "#/purchase-orders",
+            [
+                _row(
+                    r["no"],
+                    r["no"],
+                    f"#/purchase-orders/{r['no']}",
+                    f"{r['total']:,.2f} · waits for {name_of(db, r['delegate'] or r['approver'])}",
+                )
+                for r in rows
+            ],
+        )
+    )
+    titles = {
+        "rfq.send": ("rfq_sends", "RFQs waiting to be approved and sent"),
+        "po.accept_variance": ("variances", "Orders held for a price or ceiling"),
+        "invoice.release_block": ("releases", "Blocked invoices waiting for release"),
+        "payment_run.approve": ("payment_runs", "Payment runs waiting for approval"),
+        "supplier.set_status": ("suppliers", "Supplier changes waiting for approval"),
+    }
+    grouped: dict[str, list[dict[str, Any]]] = {}
+    for p in _rows(
+        db, "select id, action, summary, required_permission from proposal where status = 'pending' order by id"
+    ):
+        grouped.setdefault(p["action"], []).append(p)
+    for action, (key, title) in titles.items():
+        found = grouped.get(action, [])
+        out.append(
+            _section(
+                key,
+                title,
+                "/admin/approvals",
+                [
+                    _row(str(p["id"]), p["summary"][:90], "/admin/approvals", f"needs {p['required_permission']}")
+                    for p in found
+                ],
+            )
+        )
+    out += _buyer(db)
+    out += _store(db)
+    out += _ap(db)
+    out += _finance(db, today)
+    return out
+
+
+def _flow(db: Session, today: date, restock_count: int) -> list[dict[str, Any]]:
+    """The steps of the purchase flow in order with how many cases sit in each, for the administrator's strip."""
+    stages = control_tower.tower(db, today, reference.calendar_for(db))["stages"]
+    closed = db.execute(text("select count(*) from po where status = 'closed'")).scalar() or 0
+    steps = [{"key": "restock", "title": "Stock to reorder", "count": restock_count, "link": "#/requisitions"}]
+    unsent = (
+        db.execute(text("select count(*) from proposal where status = 'pending' and action = 'rfq.send'")).scalar() or 0
+    )
+    for s in stages:
+        steps.append({"key": s["stage"], "title": s["title"], "count": s["count"], "link": "#/control-tower"})
+        if s["stage"] == "sourcing":  # the quotation request is made, and waits for approval before it is sent
+            steps.append(
+                {"key": "rfq_unsent", "title": "RFQ waiting to be sent", "count": int(unsent), "link": "#/rfqs"}
+            )
+    steps.append({"key": "closed", "title": "Paid and closed", "count": int(closed), "link": "#/payments"})
+    return steps
+
+
 # ---- the endpoints ----------------------------------------------------------------------------
 
 
@@ -329,7 +441,10 @@ def workspace(db: Db, ctx: Ctx) -> dict[str, Any]:
         sections += _requester(db, org)
     if "Approver" in roles:
         sections += _approver(db, ctx.user_id, org)
+    if "Admin" in roles and not {"Approver", "Buyer", "Finance"} & set(roles):
+        sections += _admin(db, today)
     if "Buyer" in roles:
+        sections.append(_restock(db, today))
         sections += _buyer(db)
         sections += _approver_proposals_only(db, ctx.user_id, "Buyer", roles)
     if "Store" in roles:
@@ -348,7 +463,11 @@ def workspace(db: Db, ctx: Ctx) -> dict[str, Any]:
         unique.append(s)
     shown = [s for s in unique if s["count"] > 0]
     mine = alerts.open_alerts(db, roles)
+    flow = (
+        _flow(db, today, next((x["count"] for x in unique if x["key"] == "restock"), 0)) if "Admin" in roles else None
+    )
     return {
+        "flow": flow,
         "roles": roles,
         "as_of": today.isoformat(),
         "sections": shown,

@@ -124,3 +124,11 @@ details.more[open] > summary::before { transform: rotate(90deg); }
   #ctTower, #ctDrill, #ctKpis { overflow-x: auto; max-width: 100%; }
   #ctTower table, #ctDrill table { min-width: 640px; }
 }
+
+/* ---------- the administrator's strip: every step of the flow with its count ---------- */
+.flow-steps { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 8px; margin-bottom: 18px; }
+.flow-step { display: flex; align-items: center; gap: 10px; padding: 10px 12px; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); text-decoration: none; color: var(--text-secondary); font-size: 12.5px; line-height: 1.3; }
+.flow-step:hover { background: var(--surface-raised); }
+.flow-step .n { min-width: 26px; text-align: center; font-weight: 600; font-size: 15px; color: var(--text-muted); }
+.flow-step.has { color: var(--text-primary); border-color: var(--accent); }
+.flow-step.has .n { color: var(--accent-tint); }

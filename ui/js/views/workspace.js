@@ -10,7 +10,7 @@ const WorkspaceView = {
     drafts: "Submit", returned: "Change", requests: "Review", orders: "Review", payment_runs: "Approve", releases: "Review",
     suppliers: "Review", variances: "Decide", rfq_sends: "Approve", to_source: "Find suppliers", to_send: "Send",
     to_acknowledge: "Record", supplier_messages: "Read", to_receive: "Receive", inspections: "Inspect",
-    to_invoice: "Enter invoice", blocked: "Fix", due: "Plan payment",
+    to_invoice: "Enter invoice", blocked: "Fix", due: "Plan payment", restock: "Raise",
   },
 
   // What to suggest when nothing is waiting: the usual first move of each role.
@@ -41,8 +41,9 @@ const WorkspaceView = {
             <div class="sub">${this.esc(a.detail)}</div></span>
           <span class="go">Open ›</span>
         </a>`).join("");
+      const viewing = (w.roles || []).join() === "Admin" && !!w.flow; // the administrator only watches
       const sections = (w.sections || []).filter((s) => s.count > 0).map((s) => {
-        const verb = this.VERBS[s.key] || "Open";
+        const verb = viewing ? "View" : this.VERBS[s.key] || "Open";
         return `
         <div class="todo-group">
           <div class="todo-head">
@@ -60,8 +61,12 @@ const WorkspaceView = {
       const empty = !sections && !alerts
         ? `<div class="next-up"><strong>Nothing needs you.</strong><br>${next ? `Next: ${this.esc(next.text)}.<br><a class="btn btn-primary" href="${this.href(next.link)}">${this.esc(next.label)}</a>` : "Everything in your area is up to date."}</div>`
         : "";
+      const strip = w.flow
+        ? `<div class="flow-steps">${w.flow.map((f, i) => `<a class="flow-step${f.count ? " has" : ""}" href="${this.href(f.link)}"><span class="n">${this.esc(f.count)}</span><span class="t">${i + 1}. ${this.esc(f.title)}</span></a>`).join("")}</div>`
+        : "";
       container.innerHTML = `
-        <h2 class="section-title">My work${(w.roles || []).length ? ` <span class="cell-muted" style="font-weight:400;">· ${this.esc(w.roles.join(", "))}</span>` : ""}</h2>
+        ${strip}
+        <h2 class="section-title">${viewing ? "Everything in the flow" : "My work"}${(w.roles || []).length ? ` <span class="cell-muted" style="font-weight:400;">· ${this.esc(w.roles.join(", "))}</span>` : ""}</h2>
         ${alerts ? `<div class="todo-group"><div class="todo-head"><h2>Alerts <span class="todo-count">${this.esc((w.alerts || []).length)}</span></h2></div>${alerts}</div>` : ""}
         ${sections}${empty}`;
     } catch {
