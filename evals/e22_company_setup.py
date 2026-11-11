@@ -352,7 +352,7 @@ def run(ctx) -> Outcome:
     admin_gain += r.status_code == 200  # would lock everybody out of the setup
     db.rollback()
     now = {r[0] for r in db.execute(text("select action from role_permission where role = 'Admin'"))}
-    if any(not a.startswith(("admin.", "audit.")) for a in now) or not set(ADMIN_ACTIONS) <= now:
+    if any(not a.startswith(("admin.", "audit.")) and not a.endswith(".view") for a in now) or not set(ADMIN_ACTIONS) <= now:
         admin_gain += 1
         findings.append(f"Admin now holds {sorted(now)}")
     out.metrics["Admin or other roles given what they must not have"] = admin_gain + other_gain

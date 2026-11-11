@@ -87,7 +87,20 @@ def test_the_main_interface_asks_for_a_login_and_shows_who_is_signed_in(company:
 
 MENUS = {
     # each person's menu holds what their role can use, in the order of the flow, with the records and setup after it
-    "Admin": ["Dashboard", "Control tower", "Assistant", "Settings", "Help", "Admin"],
+    "Admin": [
+        "Dashboard",
+        "Requests",
+        "Purchase orders",
+        "Invoices",
+        "Payments",
+        "Vendors",
+        "Inventory",
+        "Control tower",
+        "Assistant",
+        "Settings",
+        "Help",
+        "Admin",
+    ],  # sees the flow, read only
     "Requester": ["Dashboard", "Requests", "Assistant", "Help"],
     "Buyer": [
         "Dashboard",

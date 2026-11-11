@@ -28,9 +28,10 @@ from fastapi.testclient import TestClient
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
+import p2p.platform.demo as flow_demo
 from p2p.formulas.calendar import business_today
 from p2p.main import app
-from p2p.platform import demo, routing, tenants, worker
+from p2p.platform import routing, tenants, worker
 from p2p.requests import replenishment
 
 PLANT_HEAD, MAINT_MGR, ENGINEER = "Plant Head", "Maintenance Manager", "Maintenance Engineer"
@@ -96,10 +97,12 @@ class _Run:
         if designation not in self._tokens:
             email = self._email.get(designation)
             if email is None:
-                raise demo.DemoError(f"the company has nobody with the designation '{designation}'")
-            r = self.client.post("/api/auth/login", json={"email": email, "password": demo.DEV_PASSWORD})
+                raise flow_demo.DemoError(f"the company has nobody with the designation '{designation}'")
+            r = self.client.post("/api/auth/login", json={"email": email, "password": flow_demo.DEV_PASSWORD})
             if r.status_code != 200:
-                raise demo.DemoError(f"{email} cannot sign in with the demo password (run `demo reset flow` first)")
+                raise flow_demo.DemoError(
+                    f"{email} cannot sign in with the demo password (run `demo reset flow` first)"
+                )
             self._tokens[designation] = {"Authorization": "Bearer " + r.json()["access_token"]}
         return self._tokens[designation]
 
@@ -108,7 +111,7 @@ class _Run:
         r = self.client.request(method, path, json=body, headers=self.who(designation))
         self.db.rollback()
         if r.status_code != 200:
-            raise demo.DemoError(f"{designation}: {method} {path} gave {r.status_code}: {r.text[:200]}")
+            raise flow_demo.DemoError(f"{designation}: {method} {path} gave {r.status_code}: {r.text[:200]}")
         return r.json()
 
     def q(self, sql: str, **params: Any) -> list[Any]:
@@ -173,7 +176,7 @@ class _Run:
         self.work()
         orders = self.orders_of(no)
         if len(orders) != 1:
-            raise demo.DemoError(f"request {no} for {item} should give one order from the contract, gave {orders}")
+            raise flow_demo.DemoError(f"request {no} for {item} should give one order from the contract, gave {orders}")
         return no, orders[0]
 
     # ---- quotation requests ---------------------------------------------------------------------------
@@ -181,12 +184,12 @@ class _Run:
     def rfq_of(self, request_no: str) -> tuple[str, int | None]:
         rows = self.q("select no, proposal_id from rfq where request_no = :r order by no", r=request_no)
         if len(rows) != 1:
-            raise demo.DemoError(f"request {request_no} should have one quotation request, has {len(rows)}")
+            raise flow_demo.DemoError(f"request {request_no} should have one quotation request, has {len(rows)}")
         return str(rows[0][0]), rows[0][1]
 
     def send_rfq(self, rfq: str, proposal: int | None) -> None:
         if proposal is None:
-            raise demo.DemoError(f"{rfq} has no 'send' decision waiting")
+            raise flow_demo.DemoError(f"{rfq} has no 'send' decision waiting")
         self.call(BUYER, "POST", f"/api/admin/proposals/{proposal}/approve", {})
         self.work()
 
@@ -290,16 +293,18 @@ def _stage(run: _Run, label: str, number: str) -> None:
     run.out.cases[label] = number
 
 
-def populate(slug: str = demo.SLUG) -> Populated:
+def populate(slug: str = flow_demo.SLUG) -> Populated:
     """Make the cases. Raises DemoError when it is not safe to, or when the first group of stages cannot be made; a
     failure in the later stages is reported in `stopped` and leaves everything made so far."""
-    demo.require_local_database()
+    flow_demo.require_local_database()
     with tenants.control_session() as control:
         if control.execute(text("select 1 from tenant where slug = :s"), {"s": slug}).first() is None:
-            raise demo.DemoError(f"there is no company '{slug}'; make it with `demo reset flow` first")
+            raise flow_demo.DemoError(f"there is no company '{slug}'; make it with `demo reset flow` first")
     with Session(routing.engine_for(slug)) as check:
         if check.execute(text("select count(*) from request")).scalar_one():
-            raise demo.DemoError(f"'{slug}' already has requests; use `demo populate {slug} --reset` to start over")
+            raise flow_demo.DemoError(
+                f"'{slug}' already has requests; use `demo populate {slug} --reset` to start over"
+            )
 
     run = _Run(slug)
     try:
@@ -322,7 +327,9 @@ def _early(run: _Run) -> None:
     made = run.call(BUYER, "POST", "/api/replenishment/run", {"dry_run": False})["requests"]
     by_category = {r["category"]: r for r in made}
     if sorted(by_category) != ["ELE", "MRO", "PPE"]:
-        raise demo.DemoError(f"the stock check should make requests for ELE, MRO and PPE, made {sorted(by_category)}")
+        raise flow_demo.DemoError(
+            f"the stock check should make requests for ELE, MRO and PPE, made {sorted(by_category)}"
+        )
     run.work()  # the approved shoes request is sourced: a quotation request that waits for a buyer to send it
     shoes_rfq, _ = run.rfq_of(by_category["PPE"]["no"])
     _stage(run, EARLY[0], shoes_rfq)
@@ -366,7 +373,7 @@ def _later(run: _Run) -> None:
     run.work()
     orders = run.orders_of(no)
     if len(orders) != 1:
-        raise demo.DemoError(f"the awarded quotation request should give one order, gave {orders}")
+        raise flow_demo.DemoError(f"the awarded quotation request should give one order, gave {orders}")
     _stage(run, LATER[0], orders[0])
 
     # Orders on the contract price, each one step further along
@@ -419,7 +426,7 @@ def _later(run: _Run) -> None:
     po = run.received_order("ITM-006", 2, "Contactors for the crane")
     blocked = run.invoice(po, price_factor=Decimal("1.12"))
     if blocked.get("status") != "blocked":
-        raise demo.DemoError(f"the invoice billed above the order should be blocked, is {blocked.get('status')}")
+        raise flow_demo.DemoError(f"the invoice billed above the order should be blocked, is {blocked.get('status')}")
     reason = "The supplier's price rose and the stock is needed"
     run.call(AP, "POST", f"/api/invoices/{blocked['invoice']}/release", {"reason": reason})
     _stage(run, LATER[6], blocked["invoice"])
@@ -427,7 +434,7 @@ def _later(run: _Run) -> None:
 
 def _expect(result: dict[str, Any], status: str, what: str) -> None:
     if result.get("status") != status:
-        raise demo.DemoError(f"{what} should be {status}, is {result.get('status')}: {result}")
+        raise flow_demo.DemoError(f"{what} should be {status}, is {result.get('status')}: {result}")
 
 
 def _still_low(run: _Run) -> list[str]:

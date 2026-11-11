@@ -668,7 +668,7 @@ ROLES_FOR = {
 }  # fmt: skip
 PROPOSALS = {"rfq_sends", "payment_runs", "releases", "suppliers", "variances"}
 ALLOWED = {
-    "Admin": set(),
+    "Admin": set(),  # replaced below: the administrator sees every section, read only
     "Requester": {"drafts", "returned"},
     "Buyer": {"to_source", "rfq_wait", "rfq_award", "to_send", "to_acknowledge", "drafts"} | PROPOSALS,
     "Approver": {"requests", "orders"} | PROPOSALS,
@@ -676,6 +676,8 @@ ALLOWED = {
     "AP": {"to_invoice", "blocked"},
     "Finance": {"due", "approve_wait", "to_file", "to_pay"} | PROPOSALS,
 }
+
+ALLOWED["Admin"] = set().union(*[v for k, v in ALLOWED.items() if k != "Admin"]) | {"restock"}
 
 
 def check_homes(world: Any, tower_counts: dict[str, int], wrong: list[str]) -> dict[str, Any]:
