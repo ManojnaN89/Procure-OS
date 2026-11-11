@@ -117,7 +117,8 @@ def main(argv: list[str] | None = None) -> int:
             print(f"not built: {exc}")
             return 1
         loaded = built.report.rows_loaded if built.report else 0
-        print(f"company '{built.slug}' made: {loaded} master rows, {len(built.logins)} logins")
+        moves = f", {built.stock.rows_loaded} stock movements" if built.stock else ""
+        print(f"company '{built.slug}' made: {loaded} master rows{moves}, {len(built.logins)} logins")
         for email, role, designation in built.logins:
             print(f"  {email}  {role}  ({designation})")
         print(f"passwords are in {built.credentials_file}")

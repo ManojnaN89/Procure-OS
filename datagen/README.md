@@ -58,7 +58,27 @@ python -m p2p.cli demo reset apex                            # from backend/: dr
 Each company is one file, `datagen/catalog/<name>/company.yaml`: people and logins, approval rules and who the chain roles are,
 settings, budgets, categories, items with opening stock, suppliers, contracts, last prices paid, and its ERP input files. A new
 company is a new file. `master/` has the same files and headers as `flow` (`generator/master_files.py`); `inputs/` holds the
-company's planning files (see section F of `docs/data-dictionary.md`). Master data only, no history yet.
+company's planning files (see section F of `docs/data-dictionary.md`).
+
+Each also has twelve months of history (1 Nov 2025 to the cutoff, 31 Oct 2026; decisions D36 and D37), driven by the
+`history:` section of its profile (supplier behaviour, demand, buying days, planted problems). Same seed, same files.
+`history/` and `truth/` use the file names, headers and value formats of the older datasets, so `import stock` and the
+eval readers work unchanged; `inputs/history/` has the production orders, material requests and joiner plans of the year.
+The history ends exactly at the profile's opening stock (so the demo's MO-1 sees that stock, with nothing open for its
+materials): `master/stock_opening.csv` is the stock on 1 Nov 2025, worked out backwards from the movements, and
+`demo reset` loads the movements. New answer keys: `truth_shortfall`, `truth_combined_lines`, `truth_supplier_selection`,
+`truth_grni`, `truth_payment` (section D of the data dictionary).
+
+| File | Role |
+|---|---|
+| `generator/history_plan.py` | What the year needs, from the profile and the seed: production orders, joiner plans, services, splits, breakdowns |
+| `generator/history.py`, `history_buying.py` | The day loop (class `History`): stock first, requisitions, approval by value band, the buying route, RFQs, orders with GST, confirmations, deliveries, inspection, service entries |
+| `generator/history_money.py` | Invoices with the planted problems, the expected match, blocks, TDS, due dates, weekly payment runs, bank lines, statements |
+| `generator/history_close.py` | The cutoff, statuses at the cutoff, answer keys, numbering in date order, the files |
+| `generator/history_check.py` | Checks from the files alone: references, GST, TDS (from `data/reference/tds_sections.csv`) and totals to the paisa, stock, working days, segregation of duties, every planted problem counted |
+
+A run that does not land on the profile's stock is drawn again (the attempt number is part of the seed). TDS rules, due
+dates, payment-run days and the numbering in date order are reused from `generator/finance.py`.
 
 - **Apex Pumps** (pump maker, plant at Chakan, Mon-Sat): 9 people, 16 items in four categories, 6 suppliers (one in Gujarat, one
   micro enterprise), a rate contract for castings. Inputs: two pumps, their bills of materials, a sales order, a demand plan and
@@ -74,7 +94,7 @@ company's planning files (see section F of `docs/data-dictionary.md`). Master da
 | `catalog/` | Content authored once with Claude and kept as files: organisation, items, suppliers, text banks. No AI runs at generation time |
 | `generator/master.py` | Combines the content banks; adds price index, contracts, price records, demand truth, planning parameters, budgets |
 | `generator/streams.py`, `flow.py`, `flow2.py`, `simulate.py` | Day-by-day simulation: stock-driven and ad hoc requests, approvals, RFQs, POs, receipts, invoices, planted problems |
-| `generator/finance.py` | TDS in booking order, MSME due dates, weekly payment runs, bank lines, cut-off filter, statuses, chronological numbering |
+| `generator/finance.py` | TDS in booking order, MSME due dates, weekly payment runs, bank lines, cut-off filter, statuses, chronological numbering (`tds_on`, `due_date`, `run_on_or_before`, `run_after`, `renumber` are shared with the profile companies) |
 | `generator/validate.py` | Quality checks and `report.md` |
 | `generator/ids.py` | GSTIN/PAN helpers. Every generated PAN has the digits 0000, which are never issued, so none can belong to a real taxpayer |
 

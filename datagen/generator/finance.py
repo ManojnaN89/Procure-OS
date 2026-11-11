@@ -29,20 +29,23 @@ def tds_for(sim, p, s, cum_before, inv_item_name=""):
     cat = p["category"]
     hsn = p["hsn"]
     base = p["taxable"]
-    single = p.get("po_taxable", base)
-    date_ = p["received_dt"].date()
-    pan_bad = s["pan_status"] == "inoperative"
-    ptype = s["pan"][3]
     sec = {"RAW": "194Q", "PKG": "194Q", "MRO": "194Q", "ELE": "194Q", "TLS": "194Q", "CHM": "194Q", "PPE": "194Q", "OFC": "194Q", "ITH": "194Q",
            "FUR": "194Q", "CAP": "194Q", "FAC": "194C", "AMC": "194C", "LOG": "194C", "PRO": "194J(b)", "SWS": "194J(a)", "TRV": "none"}[cat]
     if cat == "TRV" and hsn in ("998596", "998361"):
         sec = "194C"
     if cat == "LOG" and hsn == "996511":
         return None, base, D(0), D(0)
-    if sec == "194J(b)" and hsn in ("998231", "998221"):
-        sec = "194J(b)"
+    return tds_on(sec, base, p.get("po_taxable", base), cum_before, p["received_dt"].date(), s)
+
+
+def tds_on(sec, base, single, cum_before, on, s):
+    """Tax at source on one bill: (section, base, rate_pct, amount), or (None, base, 0, 0) when none is due.
+    sec is the section ('194Q', '194C', '194J(a)', '194J(b)' or 'none'); single is the contract or order value the
+    single-sum threshold is judged on; cum_before is what was already booked with this supplier under this section in
+    the financial year; s is the supplier row (PAN, PAN status, lower-rate certificate)."""
     if sec == "none":
         return None, base, D(0), D(0)
+    pan_bad = s["pan_status"] == "inoperative"
     cum_after = cum_before + base
     if sec == "194Q":
         thr = D("5000000")
@@ -52,17 +55,53 @@ def tds_for(sim, p, s, cum_before, inv_item_name=""):
     if sec == "194C":
         if not (single > 30000 or cum_after > 100000):
             return None, base, D(0), D(0)
-        rate = D("20") if pan_bad else (D(1) if ptype in ("P", "H") else D(2))
+        rate = D("20") if pan_bad else (D(1) if s["pan"][3] in ("P", "H") else D(2))
         return sec, base, rate, q2(base * rate / 100)
-    thr = D("30000") if date_ < date(2025, 4, 1) else D("50000")
+    thr = D("30000") if on < date(2025, 4, 1) else D("50000")
     if cum_after <= thr and single <= thr:
         return None, base, D(0), D(0)
     rate = D(2) if sec == "194J(a)" else D(10)
-    if s["lower_tds_rate"] and date_.isoformat() <= s["lower_tds_valid_to"] and cum_after <= D(s["lower_tds_limit"]):
+    if s["lower_tds_rate"] and on.isoformat() <= s["lower_tds_valid_to"] and cum_after <= D(s["lower_tds_limit"]):
         rate = D(s["lower_tds_rate"])
     if pan_bad:
         rate = D(20)
     return sec, base, rate, q2(base * rate / 100)
+
+
+def section_label(sec, d):
+    """The section as the books name it on that date: the Income-tax Act 2025 numbering from 1 April 2026."""
+    return SECTION_NEW[sec] if d >= date(2026, 4, 1) else sec
+
+
+def quarter_of(d):
+    return f"{fy(d)} Q{(d.month - 4) % 12 // 3 + 1}"
+
+
+def due_date(term, s, inv_date, accepted_on):
+    """When an invoice falls due: the payment terms from the invoice or acceptance date, and for a micro or small
+    enterprise no later than the MSME limit (the agreed days, at most 45, else 15 days from acceptance)."""
+    base_date = inv_date if term["baseline"] == "invoice_date" else accepted_on
+    due = base_date + timedelta(days=int(term["days"]))
+    if s["msme_category"] in ("micro", "small"):
+        if s["msme_agreement"] == "true":
+            due = min(due, accepted_on + timedelta(days=min(45, int(s["agreed_payment_days"]))))
+        else:
+            due = accepted_on + timedelta(days=15)
+    return due
+
+
+def run_on_or_before(d, cal, loc, weekday=3):
+    """The weekly payment run on or before a date (the working day before, when the run day is a holiday)."""
+    while d.weekday() != weekday:
+        d -= timedelta(days=1)
+    return cal.prev_working(d, loc)
+
+
+def run_after(d, cal, loc, weekday=3):
+    """The weekly payment run on or after a date (the next working day, when the run day is a holiday)."""
+    while d.weekday() != weekday:
+        d += timedelta(days=1)
+    return cal.next_working(d, loc)
 
 
 def bank_rate(d, rates):
@@ -85,23 +124,13 @@ def finalize(sim):
     inv_by_no = {r["no"]: r for r in T["invoice"]}
 
     # payment dates: weekly run on Thursday (previous working day if a holiday)
-    def run_on_or_before(d):
-        d2 = d
-        while d2.weekday() != 3:
-            d2 -= timedelta(days=1)
-        return sim.cal.prev_working(d2, "HO-PUN")
+    def run_before(d):
+        return run_on_or_before(d, sim.cal, "HO-PUN")
 
-    def run_after(d):
-        d2 = d
-        while d2.weekday() != 3:
-            d2 += timedelta(days=1)
-        return sim.cal.next_working(d2, "HO-PUN")
+    def run_next(d):
+        return run_after(d, sim.cal, "HO-PUN")
 
-    def sec_label(sec, d):
-        return SECTION_NEW[sec] if d >= date(2026, 4, 1) else sec
-
-    def quarter_of(d):
-        return f"{fy(d)} Q{(d.month - 4) % 12 // 3 + 1}"
+    sec_label = section_label
 
     # ------------------------------------------------------------------ advances (30% advance suppliers)
     adv_by_po = {}
@@ -110,10 +139,10 @@ def finalize(sim):
         if not p["cancelled"] and (p["po_no"] not in first_inv or p["received_dt"] < first_inv[p["po_no"]]):
             first_inv[p["po_no"]] = p["received_dt"]
     for a in advs:
-        a["pay_date"] = run_after(a["ready_dt"].date() + timedelta(days=R.randint(0, 2)))
+        a["pay_date"] = run_next(a["ready_dt"].date() + timedelta(days=R.randint(0, 2)))
         fi = first_inv.get(a["po_no"])
         if fi is not None and a["pay_date"] >= fi.date() - timedelta(days=1):
-            cand = run_on_or_before(fi.date() - timedelta(days=2))
+            cand = run_before(fi.date() - timedelta(days=2))
             if cand >= a["ready_dt"].date():
                 a["pay_date"] = cand
             else:
@@ -153,14 +182,7 @@ def finalize(sim):
         if sec:
             tds_rows.append(dict(invoice_no=p["invoice_no"], payment_no="", section=sec_label(sec, p["received_dt"].date()), base=money(base), rate=str(rate),
                                  amount=money(amt), booked_on=iso(p["received_dt"].date()), quarter=quarter_of(p["received_dt"].date()), _t=p["received_dt"]))
-        tm = terms[s["payment_terms_code"]]
-        base_date = p["inv_date"] if tm["baseline"] == "invoice_date" else p["accepted_on"]
-        due = base_date + timedelta(days=int(tm["days"]))
-        if s["msme_category"] in ("micro", "small"):
-            if s["msme_agreement"] == "true":
-                due = min(due, p["accepted_on"] + timedelta(days=min(45, int(s["agreed_payment_days"]))))
-            else:
-                due = p["accepted_on"] + timedelta(days=15)
+        due = due_date(terms[s["payment_terms_code"]], s, p["inv_date"], p["accepted_on"])
         p["due"] = due
         if p["invoice_no"] in inv_by_no:
             inv_by_no[p["invoice_no"]]["due_date"] = iso(due)
@@ -170,9 +192,9 @@ def finalize(sim):
             continue
         s = sup[p["supplier_code"]]
         ready = p["ready_dt"].date()
-        want = run_on_or_before(p["due"])
+        want = run_before(p["due"])
         if want < ready:
-            want = run_after(ready)
+            want = run_next(ready)
         msme = s["msme_category"] in ("micro", "small")
         late_by = 0
         if msme:
@@ -180,7 +202,7 @@ def finalize(sim):
                 late_by = R.randint(3, 40)
         elif R.bern(0.25):
             late_by = R.choice([3, 7, 7, 14])
-        pdate = run_after(want + timedelta(days=late_by)) if late_by else want
+        pdate = run_next(want + timedelta(days=late_by)) if late_by else want
         p["pay_date"] = pdate
         net = p["total"] - p["tds"] - p["credit"] - p["adv_used"]
         p["net"] = max(net, D(0))

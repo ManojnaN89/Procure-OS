@@ -1,11 +1,14 @@
 """The demo companies described by a profile file (Apex Pumps, Brightwave Technologies): their master data has the flow
-company's shape, passes its checks, and loads into a new company with nothing left out; their ERP input files add up."""
+company's shape, passes its checks, and loads into a new company with nothing left out; their ERP input files add up;
+their twelve months of history end at the profile's stock, with every planted problem in the answer keys."""
 
 import csv
+import filecmp
 import importlib.util
 import shutil
 import sys
 import uuid
+from collections import Counter
 from collections.abc import Iterator
 from datetime import date
 from decimal import Decimal
@@ -120,9 +123,11 @@ def test_requester_approver_receiver_ap_and_payer_are_different_people(datasets:
         assert not {c for c, j in jobs.items() if j == one} & {c for c, j in jobs.items() if j == two}
 
 
-def _broken(source: Path, target: Path, table: str, change: dict[str, str], line: int = 0) -> Path:
+def _broken(
+    source: Path, target: Path, table: str, change: dict[str, str], line: int = 0, folder: str = "master"
+) -> Path:
     shutil.copytree(source, target)
-    path = target / "master" / f"{table}.csv"
+    path = target / folder / f"{table}.csv"
     rows = _rows(path)
     rows[line].update(change)
     with path.open("w", encoding="utf-8", newline="") as f:
@@ -153,6 +158,94 @@ def test_the_checks_catch_a_dataset_that_breaks_a_rule(
     problems = gen.check(broken, gen.CompanyProfile.named("apex"))
 
     assert any(found in p for p in problems), problems
+
+
+@pytest.mark.parametrize(
+    ("table", "change", "found"),
+    [
+        ("po_line", {"cgst": "1.00", "sgst": "1.00"}, "GST 1.00/1.00"),  # tax that is not rate times value
+        ("invoice", {"total": "1.00"}, "totals"),
+        ("stock_movement", {"qty": "9999.000"}, "below zero"),  # an issue of more than is on the shelf
+        ("request", {"requester": "U02"}, "one person holds two"),  # the storekeeper asks for what he receives
+        ("payment", {"paid_on": "2026-11-05"}, "outside the history"),
+    ],
+)
+def test_the_history_checks_catch_a_history_that_breaks_a_rule(
+    datasets: dict[str, Path], tmp_path: Path, table: str, change: dict[str, str], found: str
+) -> None:
+    rows = _rows(datasets["apex"] / "history" / f"{table}.csv")
+    line = next(i for i, r in enumerate(rows) if table != "stock_movement" or r["type"] == "issue")
+    broken = _broken(datasets["apex"], tmp_path / "apex", table, change, line, folder="history")
+
+    problems = gen.check(broken, gen.CompanyProfile.named("apex"))
+
+    assert any(found in p for p in problems), problems
+
+
+def test_the_same_seed_gives_the_same_files(datasets: dict[str, Path], tmp_path: Path) -> None:
+    gen.build(gen.CompanyProfile.named("apex"), tmp_path / "again")
+
+    for path in sorted(datasets["apex"].rglob("*.*")):
+        assert filecmp.cmp(path, tmp_path / "again" / path.relative_to(datasets["apex"]), shallow=False), path.name
+
+
+@pytest.mark.parametrize("name", COMPANIES)
+def test_the_history_ends_at_the_profile_stock_and_starts_where_the_movements_say(
+    datasets: dict[str, Path], name: str
+) -> None:
+    profile = gen.CompanyProfile.named(name)
+    level = {r["item_code"]: Decimal(r["qty"]) for r in _rows(datasets[name] / "master" / "stock_opening.csv")}
+    for m in _rows(datasets[name] / "history" / "stock_movement.csv"):
+        level[m["item_code"]] += Decimal(m["qty"]) * (1 if m["type"] == "receipt" else -1)
+
+    assert {r["as_of"] for r in _rows(datasets[name] / "master" / "stock_opening.csv")} == {"2025-11-01"}
+    assert level == {it["code"]: Decimal(str(it["on_hand"])) for it in profile["items"] if "on_hand" in it}
+
+
+def test_apex_has_nothing_open_at_the_cutoff_for_the_materials_of_mo_1(datasets: dict[str, Path]) -> None:
+    history = datasets["apex"] / "history"
+    mo_1 = {
+        r["item_code"]
+        for r in _rows(datasets["apex"] / "inputs" / "production_order_line.csv")
+        if r["order_no"] == "MO-1"
+    }
+
+    assert {r["status"] for r in _rows(history / "request_line.csv") if r["item_code"] in mo_1} == {"ordered"}
+    assert {r["status"] for r in _rows(history / "po_line.csv") if r["item_code"] in mo_1} == {"received"}
+    assert {r["status"] for r in _rows(history / "po.csv")} >= {"sent", "closed"}  # other work is still open
+    assert [r["status"] for r in _rows(history / "invoice.csv")].count("blocked") == 1
+
+
+@pytest.mark.parametrize("name", COMPANIES)
+def test_every_planted_problem_is_in_the_answer_key_as_often_as_planned(datasets: dict[str, Path], name: str) -> None:
+    history = gen.CompanyProfile.named(name)["history"]
+    cases = Counter(r["type"] for r in _rows(datasets[name] / "truth" / "truth_case.csv"))
+    blocked = Counter(r["reason_codes"] for r in _rows(datasets[name] / "truth" / "truth_match_expected.csv"))
+
+    assert {kind: cases[kind] for kind in history["planted"]} == history["planted"]
+    assert cases["split_order"] == len(history["split_orders"])
+    assert cases["unmatched_bank_line"] == 12  # a bank charge at each month end
+    assert (blocked["price_variance"], blocked["qty_over_received"]) == (
+        history["planted"]["price_mismatch"],
+        history["planted"]["qty_mismatch"],
+    )
+    assert cases["part_delivery"] > 0 and cases["supplier_date_change"] > 0
+
+
+def test_apex_buys_castings_single_source_until_its_contract_starts_and_bearings_from_late_s2_by_rfq(
+    datasets: dict[str, Path],
+) -> None:
+    po = {r["no"]: r for r in _rows(datasets["apex"] / "history" / "po.csv")}
+    routes = [
+        (po[r["po_no"]]["created_at"][:10], r["route"])
+        for r in _rows(datasets["apex"] / "truth" / "truth_combined_lines.csv")
+        if r["item_code"] == "RM-01"
+    ]
+    asked = {r["item_code"] for r in _rows(datasets["apex"] / "truth" / "truth_supplier_selection.csv")}
+
+    assert {route for day, route in routes if day < "2026-04-01"} == {"single_source"}
+    assert {route for day, route in routes if day >= "2026-04-01"} == {"contract"}
+    assert "RM-06" in asked  # bearings: S2 is too often late for a safe reorder
 
 
 def test_a_production_order_line_that_does_not_match_the_bill_of_materials_is_caught(
@@ -218,6 +311,16 @@ def test_the_approval_rules_send_each_amount_to_the_right_person(company: tuple[
         assert route("request", "50000", "SWS") == ["U07", "U08"]
         assert route("request", "150000", "ITH") == ["U08", "U09"]
         assert route("po", "100000.00") == [] and route("po", "100000.01") == ["U09"]
+
+
+def test_reset_loads_the_stock_history_and_on_hand_is_the_profile_stock(company: tuple[str, Session, Any]) -> None:
+    name, db, made = company
+
+    on_hand = {line.item_code: line.on_hand for line in stock.stock_levels(db)}
+
+    assert made.stock is not None and made.stock.rejected == [] and made.stock.rows_loaded > 500
+    profile = gen.CompanyProfile.named(name)
+    assert on_hand == {it["code"]: Decimal(str(it["on_hand"])) for it in profile["items"] if "on_hand" in it}
 
 
 def test_the_stock_at_or_below_its_reorder_point_is_the_planned_spares_and_supplies(

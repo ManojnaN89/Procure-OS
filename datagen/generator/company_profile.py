@@ -1,4 +1,4 @@
-"""Demo companies described by a profile file: master data and ERP input files, no history.
+"""Demo companies described by a profile file: master data, ERP input files and twelve months of history.
 
     python -I datagen/generator/company_profile.py apex [--out DIR]       # -> data/datasets/apex-v1
     python -I datagen/generator/company_profile.py brightwave             # -> data/datasets/brightwave-v1
@@ -6,7 +6,9 @@
 
 A company is one file, datagen/catalog/<name>/company.yaml: who works there, what it buys, from whom, its rules and
 budgets, and its ERP input files. A new company is a new file. The master folder has the same files, headers and value
-formats as the `flow` company's (master_files.py); `inputs/` holds the company's own planning files.
+formats as the `flow` company's (master_files.py); `inputs/` holds the company's own planning files. The history
+(history.py, history_money.py, history_close.py; checked by history_check.py) ends at the profile's opening stock, so
+master/stock_opening.csv holds the stock at the start of the history and history/stock_movement.csv the rest.
 Safety rules of this repo: PANs carry the digits 0000 (never issued), phones are +91 00000 ..., emails end in .example.
 """
 
@@ -16,7 +18,6 @@ import json
 import re
 import sys
 from collections import defaultdict
-from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
 from typing import Any
@@ -24,6 +25,12 @@ from typing import Any
 import yaml
 
 sys.path.insert(0, str(Path(__file__).parent))
+from history import simulate  # noqa: E402
+from history_check import history_problems  # noqa: E402
+from history_close import Closing  # noqa: E402
+from history_close import write as write_tables  # noqa: E402
+from history_money import Money  # noqa: E402
+from history_plan import production_lines  # noqa: E402
 from master_files import (  # noqa: E402
     EMPTY_TABLES,
     HEADERS,
@@ -411,24 +418,6 @@ class MasterWriter:
         self.put("price_record", prices)
 
 
-def production_lines(bom: list[dict[str, str]], orders: list[dict[str, str]]) -> list[dict[str, str]]:
-    """One line per material of each production order: the quantity per product times the products to make."""
-    per_product: dict[str, list[dict[str, str]]] = defaultdict(list)
-    for b in bom:
-        per_product[b["product_code"]].append(b)
-    return [
-        {
-            "order_no": o["order_no"],
-            "item_code": b["item_code"],
-            "qty": _qty(Decimal(b["qty"]) * Decimal(o["qty"])),
-            "unit": b["unit"],
-            "need_by": o["need_by"],
-        }
-        for o in orders
-        for b in per_product[o["product_code"]]
-    ]
-
-
 def write_inputs(profile: CompanyProfile, out: Path) -> dict[str, int]:
     """The company's ERP input files as the profile gives them, plus the production order lines worked out from them."""
     counts: dict[str, int] = {}
@@ -442,20 +431,31 @@ def write_inputs(profile: CompanyProfile, out: Path) -> dict[str, int]:
     return counts
 
 
+def write_history(profile: CompanyProfile, out: Path) -> dict[str, int]:
+    """Twelve months of history that end at the profile's stock; the opening stock becomes the stock at its start."""
+    hist = simulate(profile, out)
+    tables = Closing(hist, Money(hist).run()).run()
+    prices = {it["code"]: it["price"] for it in profile["items"]}
+    return write_tables(out, tables, hist.opening, hist.start, hist.loc, prices)
+
+
 def build(profile: CompanyProfile, out: Path) -> dict[str, dict[str, int]]:
     out.mkdir(parents=True, exist_ok=True)
     master = MasterWriter(profile, out).write()
     inputs = write_inputs(profile, out)
+    history = write_history(profile, out) if "history" in profile.data else {}
     manifest = {
         "dataset": profile.dataset,
         "profile": profile.name,
         "description": profile["description"],
-        "built": str(datetime.now(UTC).date()),
+        "seed": profile["history"]["seed"] if history else None,
+        "history": {"start": profile["history"]["start"], "cutoff": profile["history"]["cutoff"]} if history else None,
         "rows": master,
         "inputs": inputs,
+        "history_rows": history,
     }
     (out / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
-    return {"master": master, "inputs": inputs}
+    return {"master": master, "inputs": inputs, "history": history}
 
 
 # ---- checks -----------------------------------------------------------------------------------
@@ -638,6 +638,8 @@ def check(out: Path, profile: CompanyProfile | None = None) -> list[str]:
     problems += _input_problems(out, t)
     if profile is not None:
         problems += _profile_problems(profile, t, per_month)
+        if "history" in profile.data and not problems:
+            problems += history_problems(out, profile)
     return problems
 
 
@@ -708,7 +710,8 @@ def main(argv: list[str] | None = None) -> int:
         problems = check(folder, profile)
         print(
             f"wrote {sum(counts['master'].values())} master rows in {len(counts['master'])} tables and "
-            f"{sum(counts['inputs'].values())} input rows in {len(counts['inputs'])} files to {folder}"
+            f"{sum(counts['inputs'].values())} input rows in {len(counts['inputs'])} files and "
+            f"{sum(counts['history'].values())} history rows in {len(counts['history'])} files to {folder}"
         )
     else:
         p.error("name a company or --check a dataset")

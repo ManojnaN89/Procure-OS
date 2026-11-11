@@ -2,7 +2,7 @@
 # Safety rules of this repo: PANs carry 0000 (never issued), phones are +91 00000 ..., emails end in .example.
 
 dataset: apex-v1
-description: One pump plant, nine people, sixteen items, six suppliers, one rate contract, no history. Production orders as ERP input.
+description: One pump plant, nine people, sixteen items, six suppliers, one rate contract, twelve months of history to 31 October 2026. Production orders as ERP input.
 tenant: apex
 
 company:
@@ -214,3 +214,68 @@ inputs:
     rows:
       - [MO-1, FG-01, "50", "2026-12-05", SO-1001]
       - [MO-2, FG-02, "100", "2026-12-15", DP-2026-12]
+
+# Twelve months of history before the cutoff (decisions D36 and D37), read by datagen/generator/history.py. It ends at
+# the opening stock above, with nothing open for the materials of MO-1.
+history:
+  start: "2025-11-01"
+  cutoff: "2026-10-31"
+  seed: 42
+  buying_days: [Mon, Wed, Fri]  # the buyer turns approved requisition lines into orders and RFQs on these days
+  payment_day: Thu  # the weekly payment run
+  planned_buy_by: "2026-09-30"  # the last day materials are requisitioned; later requests are served from stock
+  people: {requester: U01, receiver: U02, ap: U04, payer: U05, buyer: U03}
+  cost_centre: {RAW: CC-PRD, PKG: CC-PRD, MRO: CC-MNT, SRV: CC-MNT}  # where each category is charged
+  route:  # how a requisition line is bought, in this order: contract, single source, emergency, safe reorder, RFQ
+    reorder_within_days: 90  # safe reorder: the same supplier was used within this many days,
+    reorder_on_time_pct: 80  # delivered on time at least this often,
+    reorder_line_below: "25000.00"  # the line is worth less than this,
+    reorder_price_pct: "2.00"  # and its price rose by no more than this since the last order
+    two_quotes_up_to: "200000.00"  # an RFQ needs two quotes up to this value and three above
+    value_window_days: 30  # the value is counted per item over the requisitions of this many days
+    split_award: 0.15  # share of RFQ lines split between the two lowest quotes
+  price_rise_pct_per_quarter: "1.00"  # the price records are the last prices paid; earlier prices were lower
+  # on_time: share delivered by the promised date, else late by `late` days; part: share delivered in two lots;
+  # reject: share of inspected lots partly rejected; ack and reply: working days to confirm an order and answer an RFQ;
+  # date_change: share of orders where the supplier asks for a later date, by `slip` days; lead_extra: days on top
+  suppliers:
+    SUP-001: {on_time: 0.95, late: [1, 2], part: 0.03, reject: 0.0, ack: [0, 1], reply: [1, 2], date_change: 0.03, slip: [2, 4], lead_extra: 0}
+    SUP-002: {on_time: 0.55, late: [3, 9], part: 0.35, reject: 0.2, ack: [1, 3], reply: [2, 4], date_change: 0.15, slip: [3, 7], lead_extra: 1}
+    SUP-003: {on_time: 0.9, late: [1, 3], part: 0.05, reject: 0.0, ack: [0, 1], reply: [1, 2], date_change: 0.05, slip: [2, 4], lead_extra: 0}
+    SUP-004: {on_time: 0.9, late: [1, 2], part: 0.03, reject: 0.0, ack: [0, 1], reply: [1, 2], date_change: 0.03, slip: [1, 3], lead_extra: 0}
+    SUP-005: {on_time: 0.85, late: [1, 4], part: 0.08, reject: 0.0, ack: [0, 2], reply: [1, 3], date_change: 0.05, slip: [2, 4], lead_extra: 0}
+    SUP-006: {on_time: 0.75, late: [2, 6], part: 0.1, reject: 0.05, ack: [1, 2], reply: [2, 4], date_change: 0.08, slip: [2, 5], lead_extra: 3}
+  quoters:  # suppliers asked to quote for an item they hold no price record for, at this share of the item's price
+    RM-06: {SUP-005: "1.08"}
+    RM-07: {SUP-006: "1.06", SUP-005: "1.10"}
+    RM-08: {SUP-006: "1.03"}
+    RM-09: {SUP-006: "1.05", SUP-005: "1.04"}
+    RM-10: {SUP-006: "1.07"}
+    RM-11: {SUP-003: "1.04"}
+  production:  # production orders: from sales orders or the month's demand plan, each with a material request
+    orders_per_month: {FG-01: [2, 4], FG-02: [2, 4]}
+    qty: {FG-01: [20, 40], FG-02: [25, 50]}
+    release_days: [12, 16]  # working days from the material request to the start of production
+    sales_share: 0.6
+    customers: [Sahyadri Pump Distributors, Konkan Agro Equipment, Vidarbha Irrigation Traders]
+    last_start: "2026-10-28"
+  consumption:  # issues from stock on a working day: the chance of an issue and its quantity
+    SP-01: {chance: 0.15, qty: [1, 1]}
+    SP-02: {chance: 0.4, qty: [1, 3]}
+    SP-03: {chance: 0.3, qty: [2, 5]}
+  services:  # bought once in each month listed, on its first working day (or on the day given)
+    - {item: SV-01, months: ["2025-12", "2026-03", "2026-06", "2026-09"]}
+    - {item: SV-01, months: ["2026-05", "2026-08"], qty: 2}  # both test benches
+    - {item: SV-01, months: ["2026-10"], day: 30}  # ordered at the end of October, done in November
+  emergency: {items: [SP-01, SP-02], count: 4, qty: [1, 2]}  # a breakdown: bought at once, issued on arrival
+  split_orders:  # one requisition cut in two, a day apart, each under the RFQ threshold (flagged by the 30-day value)
+    - {item: RM-08, qty: "112", day: "2025-12-08"}
+    - {item: RM-08, qty: "112", day: "2026-02-09"}
+  planted:  # each problem planted this many times; truth/truth_case lists every one
+    duplicate_invoice: 3
+    price_mismatch: 4
+    qty_mismatch: 3
+    receipt_without_po: 2  # from the emergencies: goods first, the order raised afterwards
+    invoice_not_received: 2  # on the supplier's statement, never received
+    grni_month_end: 3  # invoice more than a month after the receipt
+  closed_at_cutoff: [RM-01, RM-03, RM-05, RM-06, RM-07, RM-08, RM-09, RM-10, RM-11, PK-01]  # MO-1's materials

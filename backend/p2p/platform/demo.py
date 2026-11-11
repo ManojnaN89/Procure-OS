@@ -3,7 +3,8 @@
     python -m p2p.cli demo reset flow          # the small demo company (datagen/generator/profile_flow.py)
     python -m p2p.cli demo reset apex          # a company described by datagen/catalog/apex/company.yaml
 
-Drops the company (if it is there), makes it again, loads its generated dataset, sets who approves what, and gives each
+Drops the company (if it is there), makes it again, loads its generated dataset (the master data, then the stock history
+when the dataset has one), sets who approves what, and gives each
 person a login with the same throwaway development password. The logins are written to `.dev-credentials`
 (git-ignored). It refuses to run against any database that is not on this machine. Running it twice leaves one company
 and one set of logins.
@@ -21,6 +22,7 @@ from sqlalchemy.orm import Session
 from p2p.config import REPO_ROOT
 from p2p.masters.importer import ImportReport, import_masters
 from p2p.platform import audit, routing, tenants, users
+from p2p.receiving import stock
 
 # A throwaway DEVELOPMENT password for the synthetic demo company only (fake people, fake suppliers, fake data). It is
 # the same for all eight logins so a walk-through is quick. The platform needs at least 10 characters, which is why it
@@ -56,6 +58,7 @@ class FlowResult:
     slug: str
     logins: list[tuple[str, str, str]] = field(default_factory=list)  # email, role, designation (no passwords)
     report: ImportReport | None = None
+    stock: ImportReport | None = None  # the stock history, when the dataset has one
     credentials_file: Path | None = None
 
 
@@ -231,6 +234,13 @@ def reset_company(
             raise DemoError(
                 f"{len(result.report.rejected)} row(s) left out; first: {first.table} line {first.line}: {first.reason}"
             )
+        if (folder / "history" / "stock_movement.csv").is_file():
+            result.stock = stock.import_movements(db, folder)
+            if result.stock.rejected:
+                first = result.stock.rejected[0]
+                raise DemoError(
+                    f"{len(result.stock.rejected)} stock movement(s) left out; first: line {first.line}: {first.reason}"
+                )
         _configure(db, demo, slug)
         people = db.execute(text("select code, name, designation, email from org_user order by code")).all()
         held: dict[str, set[str]] = {}

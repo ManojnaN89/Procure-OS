@@ -251,6 +251,23 @@ task, notification, alert, proposal, audit_event, agent_run, agent_step, model_c
 
 **truth_case** · case_id, type, documents, cause, expected_result, planted_on
 
+The profile companies (`apex`, `brightwave`, written by `datagen/generator/company_profile.py`) add these answer keys:
+
+| File | Columns | Meaning |
+|---|---|---|
+| truth_shortfall | material_request_no, line_no, item_code, needed, on_hand, on_order, held_for_earlier, reserved, short, request_no, request_line_no | Stock first: what each material request line needed, what was on hand and on order, what earlier requests already held, what it reserved and what was short (the requisition line that asked for it) |
+| truth_combined_lines | po_no, po_line_no, request_no, request_line_no, item_code, qty, route | Which requisition lines went into which order line, and the buying route: contract, single_source, emergency, safe_reorder or rfq |
+| truth_supplier_selection | rfq_no, rfq_line_no, item_code, qty, value_counted, quotes_required, suppliers_asked, options, selected, reason | Per RFQ: the item's value over 30 days, quotes needed (two up to the threshold, three above), every quote (`supplier:price:delivery days`), who was chosen (two when split) and why |
+| truth_grni | month_end, receipt_no, po_no, po_line_no, item_code, qty_accepted, qty_invoiced, qty_not_invoiced, value_not_invoiced | Goods (and services) accepted but not covered by a valid invoice received by each month end, at the order price |
+| truth_payment | invoice_no, supplier_code, total, tds_section, tds_amount, net_payable, due_date, msme, status_at_cutoff, paid_on | Per payable invoice: tax at source, the net to pay, the due date (MSME limit for micro and small suppliers) and when it was paid |
+
+Their `truth_case` types: duplicate_invoice, price_mismatch, qty_mismatch, part_delivery, failed_inspection,
+receipt_without_po, supplier_date_change, unmatched_bank_line, invoice_not_received, grni_month_end, split_order.
+`history/vendor_statement_line.csv` (supplier_code, statement_date, supplier_invoice_no, invoice_date, amount,
+our_invoice_no) is a supplier's month-end statement; a blank `our_invoice_no` is an invoice that never reached us. A
+receipt sent again after a rejection says so in `goods_receipt.remarks`. `approval_event.action` can be `reminded` and
+`po_event.type` can be `dispatched` (the dispatch note in `new_value`).
+
 ## E. Answer keys (G, one JSON line per document or case)
 
 quotes.jsonl · invoices.jsonl · credit_notes.jsonl · emails.jsonl · requests.jsonl · mismatch_cases.jsonl · assistant_questions.jsonl · certificates.jsonl · attacks.jsonl
@@ -272,6 +289,12 @@ loaded by `import masters`. Quantities are in the item's unit.
 | production_order_line.csv | order_no, item_code, qty, unit, need_by | The materials an order needs: the bill of materials times the order quantity |
 | joiner_kit.csv | kit, item_code, qty | An office's "materials per joiner": what each kind of new joiner gets |
 | joiner_plan.csv | plan_no, department, kit, count, start_date | How many people join a department, with which kit, from when |
+
+`inputs/history/` holds the same files over the twelve months of history, each with a `status` (sales orders delivered,
+production orders completed, lines issued, joiners joined), plus the material requests the platform has no table for
+yet: `material_request.csv` (mr_no, source, department, requested_by, raised_on, need_by, status; source is the
+production order, `JP-YYYY-MM/<department>` or `replacement`) and `material_request_line.csv` (mr_no, line_no,
+item_code, qty, unit, issued_on, status).
 
 
 ---
