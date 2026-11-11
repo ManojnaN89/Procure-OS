@@ -74,7 +74,8 @@ class Money:
             prices -= 1
         pick([d for d in early if big(d)], "price_mismatch", prices)
         pick(
-            [d for d in early if any(q >= 5 for _, q in d["lines"])],
+            # not on a lot that failed inspection: there the extra quantity is the rejected one, a different cause
+            [d for d in early if any(q >= 5 for _, q in d["lines"]) and d["doc"]["inspection_status"] != "failed"],
             "qty_mismatch",
             self.planted.get("qty_mismatch", 0),
         )

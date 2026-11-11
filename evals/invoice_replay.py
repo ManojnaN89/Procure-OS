@@ -58,7 +58,7 @@ def replay(world: Any, *, limit_invoices: int | None = None) -> dict[str, Any]:
             _insert(db, "po_charge", r)
     db.commit()
 
-    receipts = {r["no"]: r for r in history("goods_receipt")}
+    receipts = {r["no"]: r for r in history("goods_receipt") if r["po_no"] not in service_pos}
     receipt_lines: dict[str, list[dict]] = defaultdict(list)
     for r in history("gr_line"):
         receipt_lines[r["gr_no"]].append(r)

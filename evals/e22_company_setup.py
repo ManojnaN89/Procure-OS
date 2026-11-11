@@ -369,7 +369,7 @@ def run(ctx) -> Outcome:
     if client.get(f"{SETUP}/approval-rules", headers=admin).json()["problems"]:
         findings.append("the dataset's own rule table has a gap or an overlap")
         chain_problems += 1
-    vocabulary = ["manager", "dept_head", "director", "procurement_head", "finance_manager"]
+    vocabulary = [role for role, _, _ in lib.demo_company().approver_roles]  # the company's own chain roles
     changed = 0
     for rule in rng.sample(in_force, min(8, len(in_force))):
         value = (
