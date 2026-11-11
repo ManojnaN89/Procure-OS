@@ -756,3 +756,21 @@ def test_the_history_can_be_filtered_and_every_change_is_also_in_the_audit_log(s
     assert len(client.get("/api/setup/changes?limit=1", headers=s.a).json()) == 1
     audited = s.db.execute(text("select count(*) from audit_event where action like 'setup.%'")).scalar_one()
     assert audited == 3
+
+
+def test_admin_can_see_the_flow_but_not_act_in_it(s: Setup) -> None:
+    given_views = ["request.view", "invoice.view", "payment.view", "stock.view"]
+    required = sorted(ADMIN_REQUIRED)
+
+    assert (
+        client.put(
+            "/api/setup/roles/Admin", json={"permissions": [*required, *given_views], "reason": "See"}, headers=s.a
+        ).status_code
+        == 200
+    )
+    assert (
+        client.put(
+            "/api/setup/roles/Admin", json={"permissions": [*required, "request.approve"], "reason": "Act"}, headers=s.a
+        ).status_code
+        == 422
+    )

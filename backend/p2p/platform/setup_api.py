@@ -676,7 +676,9 @@ def put_role(role: str, body: RolePermissions, db: Db, ctx: PeopleAdmin) -> dict
     if role == "Admin":
         if not ADMIN_REQUIRED <= wanted:
             raise _422(f"Admin must keep {', '.join(sorted(ADMIN_REQUIRED))}, or nobody could run the setup")
-        business = sorted(a for a in wanted if not a.startswith(("admin.", "audit.")))
+        business = sorted(
+            a for a in wanted if not a.startswith(("admin.", "audit.")) and not a.endswith(".view")
+        )  # seeing is allowed
         if business:
             raise _422(f"Admin is a setup role and cannot take part in the purchase flow: {', '.join(business)}")
     elif wanted & ADMIN_ONLY:
