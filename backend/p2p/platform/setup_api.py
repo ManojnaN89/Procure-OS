@@ -53,6 +53,7 @@ PERMISSIONS: dict[str, str] = {
     "supplier.view": "See suppliers",
     "supplier.propose": "Ask for a supplier to be activated, blocked or reviewed",
     "supplier.activate": "Approve a supplier's status change",
+    "sourcing.route_approve": "Agree to a direct buy or a looser buying route",
     "supplier.documents": "Add a supplier's documents",
     "supplier.verify_docs": "Verify a supplier's documents against the originals",
     "contract.manage": "Store contracts and their price lists",

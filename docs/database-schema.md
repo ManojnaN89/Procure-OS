@@ -27,7 +27,7 @@ Reading a line: `name*` is part of the primary key, `name?` may be empty, then t
 
 ## Tenant database (one per company)
 
-105 tables.
+107 tables.
 
 **advance** · payment_no* text, po_no text, gross num, taxable num, used_gross num, used_taxable num, paid_on? date
 
@@ -62,6 +62,8 @@ Reading a line: `name*` is part of the primary key, `name?` may be empty, then t
 **budget** · id* bigint, cost_centre_code? text, gl_code? text, project_code? text, period? text, amount? num, version? int, policy? text
 
 **budget_actual** · id* bigint, invoice_no text, cost_centre_code? text, gl_code? text, period text, amount num
+
+**buying_route_rule** · id* bigint, category_code? text, version int, effective_from date, effective_to? date, agree_above? num, reorder_within_days? int, reorder_on_time_pct? num, reorder_below? num, reorder_price_pct? num, two_quotes_from? num, three_quotes_above? num, window_days? int, note? text, created_by? text, created_at timestamptz
 
 **case_event** · id* bigint, case_id int, at timestamptz, event text, from_state? text, to_state? text, actor_type text, actor_id text, detail? jsonb
 
@@ -106,6 +108,8 @@ Reading a line: `name*` is part of the primary key, `name?` may be empty, then t
 **item_category** · code* text, name? text, parent_code? text, kind? text, default_gl? int, stocked? bool, capex? bool, min_quotes? int, buyer_user? text, approval_category? text, required_attributes? text, required_supplier_docs? text, inspection_required? bool, default_tds_section? text, reverse_charge_default? text
 
 **item_location** · item_code* text, location_code* text, reorder_policy? text, reorder_point? num, safety_stock? num, min_qty? num, max_qty? num, order_qty? num, service_level_pct? int, lead_days_override? int
+
+**item_single_source** · item_code* text, supplier_code text, reason? text, marked_by? text, marked_at timestamptz
 
 **item_substitute** · item_code* text, substitute_code* text, note? text
 
@@ -185,7 +189,7 @@ Reading a line: `name*` is part of the primary key, `name?` may be empty, then t
 
 **request_line** · request_no* text, line_no* int, item_code? text, free_text? text, attributes? jsonb, qty num, uom? text, base_qty? num, est_price? num, need_by? date, delivery_location? text, cost_centre_code? text, gl_code? text, category_code? text, project_code? text, reason? text, status text
 
-**rfq** · no* text, buyer? text, request_no? text, category_code? text, created_at timestamptz, due_date date, type text, delivery_terms? text, payment_terms_proposed? text, status text, sent_at? timestamptz, proposal_id? bigint, note? text
+**rfq** · no* text, buyer? text, request_no? text, category_code? text, created_at timestamptz, due_date date, type text, delivery_terms? text, payment_terms_proposed? text, status text, sent_at? timestamptz, proposal_id? bigint, note? text, min_quotes? int
 
 **rfq_line** · rfq_no* text, line_no* int, request_no text, request_line_no int, item_code? text, description? text, qty num, uom? text, need_by? date
 
@@ -201,7 +205,7 @@ Reading a line: `name*` is part of the primary key, `name?` may be empty, then t
 
 **setup_change** · id* bigint, at timestamptz, by_user text, area text, key text, old_value? jsonb, new_value? jsonb, reason text
 
-**sourcing_decision** · id* bigint, request_no text, line_no int, method text, supplier_code? text, contract_code? text, price? num, uom? text, lead_days? int, price_valid_to? date, rfq_no? text, reason text, decided_at timestamptz
+**sourcing_decision** · id* bigint, request_no text, line_no int, method text, supplier_code? text, contract_code? text, price? num, uom? text, lead_days? int, price_valid_to? date, rfq_no? text, reason text, decided_at timestamptz, route? text, route_rule? text, checks? jsonb, line_value? num, window_value? num, min_quotes? int, decided_on? date, needs_agreement bool, proposal_id? bigint
 
 **stock_movement** · id* text, item_code text, location_code text, date date, type text, qty num, unit_cost? num, cost_centre_code? text, ref_doc? text, source text
 

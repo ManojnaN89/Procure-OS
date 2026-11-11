@@ -224,7 +224,7 @@ const PurchaseOrdersView = {
             <tbody>
               ${po.lines.map((l) => `
                 <tr>
-                  <td>${this.esc(l.name)}<div class="cell-muted" style="font-size:11px;">${this.esc(l.item_code || "")} · ${l.source === "contract" ? `contract ${this.esc(l.source_ref)}` : `quote ${this.esc(l.source_ref)}`}</div></td>
+                  <td>${this.esc(l.name)}<div class="cell-muted" style="font-size:11px;">${this.esc(l.item_code || "")} · ${l.source === "contract" ? `contract ${this.esc(l.source_ref)}` : l.source === "direct" ? `direct buy (${this.esc(String(l.source_ref || "").replace("_", " "))})` : `quote ${this.esc(l.source_ref)}`}</div></td>
                   <td>${this.esc(l.qty)} <span class="cell-muted">${this.esc(l.uom)}</span></td>
                   <td>${formatCurrency(l.unit_price)}${l.est_price ? `<div class="cell-muted" style="font-size:11px;">estimate ${formatCurrency(l.est_price)}</div>` : ""}</td>
                   <td class="cell-muted">${this.esc(l.gst_rate)}%</td>
