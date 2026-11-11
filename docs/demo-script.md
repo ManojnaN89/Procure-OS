@@ -1,67 +1,61 @@
-# Demo script: the small company
+# Demo script: Apex Pumps
 
-A one-plant company, eight people, twelve items, four suppliers, no history. This script is exactly what eval E34 does in a real browser (`python evals/run.py --only E34`), so every step below is known to work. By hand it takes about twenty minutes.
+Apex Pumps is the main demo company: one pump plant at Chakan, nine people, sixteen items, six suppliers, and twelve months of stock history (nothing open). This script is exactly what eval E34 does in a real browser (`python evals/run.py --only E34`), so every step below is known to work. By hand it takes about twenty-five minutes. The second demo company, Brightwave Technologies (`brightwave`, IT services), is made the same way.
 
-**Make it (any time, safe to repeat):** `python -m p2p.cli demo reset flow` from `backend/`. It only runs against a database on this machine. **All passwords: `flow123456`** (a throwaway development password for synthetic data; the platform needs 10 characters). The logins are also in `.dev-credentials` under `flow`. Start the app with `python scripts/dev.py`, open http://127.0.0.1:8000/ and use two browser windows (one normal, one private) so you can switch role quickly. Test emails land in Mailpit at http://127.0.0.1:8025.
+**Make it (any time, safe to repeat):** `python -m p2p.cli demo reset apex` from `backend/`. It only runs against a database on this machine. **All passwords: `flow123456`** (a throwaway development password for synthetic data; the platform needs 10 characters). The logins are also in `.dev-credentials` under `apex`. Start the app with `python scripts/dev.py`, open http://127.0.0.1:8000/ and use two browser windows (one normal, one private) so you can switch role quickly. Test emails land in Mailpit at http://127.0.0.1:8025.
 
-| Log in as | Role in the app | Does |
+| Log in as (`@apexpumps.example`) | Role in the app | Does |
 |---|---|---|
-| requester@flow.example | Requester (maintenance engineer) | Asks for things |
-| manager@flow.example | Approver (Maintenance Manager) | Approves requests up to Rs 1,00,000 |
-| approver@flow.example | Approver (Plant Head, the owner level) | Approves orders, price variances, payment runs and anything larger |
-| buyer@flow.example | Buyer | Sources, quotes, sends orders |
-| store@flow.example | Store (Storekeeper) | Receives goods |
-| ap@flow.example | AP (Accounts Payable) | Enters invoices |
-| finance@flow.example | Finance (Finance Manager) | Plans and pays |
-| admin@flow.example | Admin | Setup only |
+| production@ | Requester (Production Manager) | Asks for things |
+| planthead@ | Approver (Plant Head) | Approves requests from Rs 10,000 to Rs 1,00,000 |
+| director@ | Approver (Director) | Approves requests above Rs 1,00,000, payment runs |
+| purchasemanager@ | Approver (Purchase Manager) | Approves orders above Rs 1,00,000, price variances |
+| buyer@ | Buyer | Sources, quotes, sends orders |
+| store@ | Store (Storekeeper) | Receives and inspects goods |
+| ap@ | AP (AP Executive) | Enters invoices |
+| finance@ | Finance (Finance Manager) | Plans and pays |
+| admin@ | Admin | Setup only |
 
-**What is in the company.** Four items are below their reorder point: ball bearing 6205-2RS, mechanical seal 25 mm, contactor 32 A, safety shoes. Four suppliers: Sai Bearings (micro enterprise, 60-day terms but 45 days by agreement), Western Electricals (has the rate contract for the contactor, MCB and cable; invoices carry an e-invoice number), Deccan Industrial Supplies, and Gujarat Safety and Tools (other state, so IGST). Rules: up to Rs 10,000 a request approves itself; up to Rs 1,00,000 the maintenance manager; above that the plant head. Orders, price variances and payment runs go to the plant head.
+**What is in the company.** The V-belts (SP-01) are below their reorder point. Suppliers include Deccan Castings (rate contract for castings, impellers and shafts), Gujarat Bearings and Seals (micro enterprise in another state: IGST, 45 days by agreement), Shree Wires (issues e-invoices), Pune Copper and Western Industrial Supplies (the only spares supplier). Rules: up to Rs 10,000 a request approves itself, then the plant head, above Rs 1,00,000 the director. Orders up to Rs 1,00,000 need no approval, above that the purchase manager. Payment runs go to the director. Production orders and material requests (the MO-1 example) come in later plan steps.
 
 ## The journey
 
 | # | Who | Where and what | You should see |
 |---|---|---|---|
-| 1 | buyer@ | **Requests** (nothing yet, and it says to click **Check stock levels**) → **Check stock levels** → read the preview → **Create and submit** | "4 items at or below their reorder point would become 3 requests, about ₹76,600 in all." Three requests: safety shoes Rs 9,200 (approves itself), bearing and seal Rs 55,000 and contactor Rs 12,400 (both wait for the maintenance manager) |
-| 2 | requester@ | **Requests** → **New request** → item **MCB 32 A single pole C curve**, 40 → **Save as draft** → **Submit for approval** | A draft that opens with the progress strip, then "Waiting for Maintenance Manager" (Rs 12,800) |
-| 3 | manager@ | **Dashboard → My work** lists the three requests. Open one: **Approve**, **Approve less…**, **Return for changes** and **Reject** are offered. Then **Requests** → **Needs my decision** → tick the bearing/seal and the contactor → **Approve selected** | Both become approved. The new MCB request is still waiting |
-| 4 | manager@ | Open the **link in the email** about the MCB request (Mailpit) → **Approve** | The page shows the request and decides nothing until you click. After **Approve** the request is approved; the same link does not work a second time |
-| 5 | buyer@ | **Requests** → open the approved bearing and seal request → **Find suppliers** | A quotation request is made. The contactor and the MCB go straight to orders on the contract price (the worker does it). Shoes also go to a quotation request |
-| 6 | requester@ | The bell shows "Request … approved". **Assistant** → "Where is my request?" | The assistant answers from the data, with the request number and its status |
-| 7 | buyer@ | **Dashboard → My work → RFQs waiting to be sent** → open → **Admin → Approvals → Approve**, for each quotation request | Emails to the suppliers in Mailpit: shoes to Deccan and Gujarat; bearing and seal to Sai, Deccan and Gujarat |
-| 8 | the suppliers | Reply by email (shoes: Deccan 1,120 and Gujarat 1,090 a pair). The buyer opens the **Quotations** page of the shoes request: "Replies read from email" → **Confirm this quote** for each | Two quotes with the supplier's own prices; the cheaper (Gujarat) is recommended → **Award the selected suppliers** |
-| 9 | buyer@ | The bearing and seal request: **Enter a quote** → **Save the quote** for Sai (305 / 6,450), Deccan (315 / 6,350) and Gujarat (320 / 6,400) → **Award the selected suppliers** | The comparison recommends the cheapest per line: Sai for the bearing, Deccan for the seal |
-| 10 | approver@ | **Dashboard → My work → Orders waiting for my approval** → open each → **Approve** | CGST and SGST on the in-state orders, IGST on Gujarat's. A link to the order document (PDF). buyer@ cannot approve an order |
-| 11 | buyer@ | **Dashboard → My work → Approved orders to send** → **Send to supplier**, then **Record acknowledgement** with a promised date | Status "sent", then "acknowledged"; the supplier's email with the PDF is in Mailpit |
-| 12 | store@ | **Goods receipt** → **Receive goods** on the bearing order → **30** of 50 → **Post receipt**; later the remaining **20**. The other orders in full | After 30 the order stays open for the rest; the buyer is told "Goods arrived". After the last, every order shows "received" and stock has gone up. requester@ is told the goods for their request arrived. buyer@ and ap@ are refused |
-| 13 | ap@ | **Dashboard → My work → Goods received, waiting for an invoice**. **Invoices** → **Upload an invoice** with the PDF from Western Electricals (it has the e-invoice QR code) → **Check and enter**. **Enter an invoice** for Deccan (6 at 6,350) and Sai (50 at 305) → **Enter and match** | The QR invoice is read by code alone, no model. Each invoice matches and is approved. Due dates: 30 days (Western, Deccan), and for Sai 45 days instead of its 60-day terms |
-| 14 | ap@, then approver@ | **Enter an invoice** for Gujarat's shoes at a price 12% above the order → **Enter and match**. It is **Blocked**, with the reason and a "Next:" line. **Explain why and what to do** → **Ask to pay it anyway** → write the reason → **Send**. approver@: **Dashboard → My work → Blocked invoices to release** → **Admin → Approvals → Approve** | The clerk cannot release the block on an invoice they entered. After the plant head approves, the invoice is approved for payment |
-| 15 | finance@ | **Dashboard → My work → Invoices due: plan a payment run**. **Payments** → **See what is due** → **Send the run for approval** | One payment per supplier, the small supplier first. finance@ cannot approve its own run |
-| 16 | approver@, then finance@ | approver@: **Dashboard → My work → Payment runs to approve** → **Admin → Approvals → Approve**. finance@: **Make the bank file** → **Show the bank file**; then choose the bank's statement (CSV: date, bank reference, narration with the payment number, debit) → **Import the bank statement** (or **The bank has paid this run**) | The bank file is there only after approval. After the statement: invoices paid, orders closed, every supplier has a payment advice with the bank reference, buyer@ is told "paid and closed" |
-| 17 | approver@ | **Control tower**, **Dashboard → Where things stand** | While the shoes invoice was blocked the tower showed one blocked invoice and four waiting for payment; at the end nothing is left in any stage. The cycle KPIs count the four requests |
-| 18 | admin@ | **Admin** (in the menu) → **Company setup** → **Policies** → write a reason at the top, change **Days suppliers get to quote**, **Save**. Then **Audit** and **Company setup** → **History** | The change is in both, with its reason. Nobody else may change a policy |
+| 1 | buyer@ | **Requests** (nothing yet, it says to click **Check stock levels**) → **Check stock levels** → read the preview → **Create and submit** | "1 item at or below their reorder point would become 1 request, about ₹2,310 in all." The V-belt request (11 belts) approves itself |
+| 2 | production@ | **Requests** → **New request** → **Copper winding wire**, 120 → **Save as draft** → **Submit for approval**. The same for **Mechanical seal 18 mm**, 120, and **Impeller 1 HP**, 200 | The wire (₹1,10,400) waits for Meera Iyer (director); the seals (₹11,400) and impellers (₹44,000) wait for Vikram Joshi (plant head) |
+| 3 | planthead@ | **Dashboard → My work** lists both. Open one: **Approve**, **Approve less…**, **Return for changes** and **Reject** are offered. Then **Requests** → **Needs my decision** → tick both → **Approve selected** | Both approved |
+| 4 | director@ | Open the **link in the email** about the wire (Mailpit) → **Approve** | The page decides nothing until you click; the same link does not work a second time |
+| 5 | buyer@ | **Requests** → open the seal request → **Find suppliers** | A quotation request. The impellers go straight to an order on the castings contract (the worker does it) |
+| 6 | production@ | The bell shows the wire request approved. **Assistant** → "Where is my request?" | The answer names the request and its status |
+| 7 | buyer@ | **Dashboard → My work → RFQs waiting to be sent** → **Admin → Approvals → Approve**, for each of the three | Emails to the suppliers in Mailpit (belts to Western Industrial; seals and wire to three suppliers each) |
+| 8 | the supplier, then buyer@ | Western Industrial replies to the belt RFQ by email (205 a belt). **Quotations** → "Replies read from email" → **Confirm this quote**. One quote where two are wanted: write a reason → **Award the selected suppliers** | The award is refused without a reason |
+| 9 | buyer@ | Seals: **Enter a quote** for Gujarat (94), Deccan (99), Shree (97); wire: Shree (905), Pune Copper (915), Deccan (930) → **Award the selected suppliers** | The cheapest is recommended: Gujarat for seals, Shree for wire |
+| 10 | purchasemanager@ | **Dashboard → My work → Orders waiting for my approval** → open the wire order → **Approve** | Only the wire order (₹1,08,600) waits; IGST on Gujarat's order, CGST and SGST on the rest. buyer@ cannot approve |
+| 11 | buyer@ | **My work → Approved orders to send** → **Send to supplier**, then **Record acknowledgement** | "Sent", then "acknowledged"; the PDF is in Mailpit |
+| 12 | store@ | **Goods receipt** → **Receive goods**: impellers 120 of 200, later the other 80; the rest in full. The seals wait for inspection → **Record inspection** | The impeller order stays open after 120 and the buyer is told. Stock goes up only after inspection for the seals |
+| 13 | ap@ | **Invoices** → **Upload an invoice** with Shree's PDF (e-invoice QR code) → **Check and enter**. **Enter an invoice** for Deccan (200 at 220) and Western Industrial (11 at 205) | The QR invoice is read by code alone. Each matches and is approved |
+| 14 | ap@, then purchasemanager@ | **Enter an invoice** for Gujarat's seals 12% above the order. It is **Blocked** → **Explain why and what to do** → **Ask to pay it anyway** → reason → **Send**. purchasemanager@: **My work → Blocked invoices to release** → **Approve** | The clerk cannot release their own invoice; afterwards it is approved for payment |
+| 15 | finance@ | **My work → Invoices due: plan a payment run** → **Payments** → **See what is due** → **Send the run for approval** | One payment per supplier, the micro supplier first. finance@ cannot approve its own run |
+| 16 | director@, then finance@ | director@: **My work → Payment runs to approve** → **Approve**. finance@: **Make the bank file** → **Show the bank file**; then **Import the bank statement** | Invoices paid, orders closed, payment advice with the bank reference to each supplier |
+| 17 | director@ | **Control tower**, **Dashboard → Where things stand** | Nothing left in any stage; the cycle KPIs count the four requests |
+| 18 | admin@ | **Admin** → **Company setup** → **Policies** → reason, change **Days suppliers get to quote**, **Save**; then **Audit** and **History** | The change is in both, with its reason |
 
 ## Start with cases in flight
 
-`python -m p2p.cli demo reset flow`, then `python -m p2p.cli demo populate flow` (or both at once: `demo populate flow --reset`, about 15 seconds, local database only). It does what the people would do, through the real screens' API, so every figure, email (in Mailpit), notification and audit row is real. The company then has:
+`python -m p2p.cli demo populate apex --reset` (about 20 seconds, local database only) makes the company and then does what the people would do, through the real API, so every figure, email, notification and audit row is real:
 
 | Where to look | What is there |
 |---|---|
-| buyer@ **Requests** → **Check stock levels** | Two low items with nothing on the way (V-belt, safety helmet), so it still has something to suggest |
-| buyer@ My work, **RFQs waiting to be sent** | The safety shoes quotation request (made from the stock check, request approved by itself), waiting for a buyer to approve the sending |
-| manager@ My work | Three requests waiting: contactor, bearing and seal (from the stock check) and hose (typed by requester@) |
-| approver@ My work | The grease request (Rs 1,26,000) for the plant head; the gloves order to approve; the blocked invoice to release; payment run PR-…-0003 to approve |
-| requester@ **Requests** | A draft (breakers) to submit |
-| buyer@ **Quotations** | Push buttons: sent, three quotes in, nothing awarded yet |
-| later stages | An order approved and waiting to be sent, one acknowledged, one part received (store@), one received and waiting for an invoice (ap@), an invoice not due yet, a blocked invoice, a payment run waiting, one approved with its bank file made, and one case paid and closed |
+| buyer@ **Requests** → **Check stock levels** | Two spares used up with nothing on the way (lathe inserts, hydraulic oil) |
+| buyer@ My work | The V-belt quotation request waiting to be sent; the capacitor quotation request with three quotes, not yet awarded |
+| production@ **Requests** | A draft (bearings) to submit |
+| planthead@ / director@ My work | Winding wire (₹18,400) for the plant head; motor bodies (₹1,30,000) for the director; the payment run for the director |
+| purchasemanager@ My work | The copper wire order from an award; the blocked invoice to release |
+| later stages | An order approved and waiting to be sent, one acknowledged, one part received (store@), one received and waiting for an invoice (ap@), an invoice not due yet, a run with its bank file made, and one case paid and closed |
 
-It refuses to run on a company that already has requests. To go back to the empty company (what E34 and the 18-step journey above expect), run `demo reset flow` again.
-
-## Things worth showing
-
-- **Someone else's button is missing.** Open any case as a person who must not act on it (requester@ on its own request, buyer@ on an order, finance@ on its own payment run): the button is not offered, and the server refuses it even if you try.
-- **Controls.** admin@: **Admin → Automation** (the "send quotation requests" decision is set so a buyer approves; paying, activating a supplier and releasing a block can never be automatic) and the kill switch.
-- **The guides.** **Help** opens the guide of your role; the guides are in `docs/guides/` and E34 follows each one's first task.
+It refuses a company that already has requests. To go back to the empty company (what E34 and the journey above expect), run `demo reset apex` again.
 
 ## Check that it still works
 
-`python evals/run.py --only E34` runs everything above in a real browser, then follows each role's guide, then opens every screen of every role at laptop and phone width and fails on any error, blank panel, raw code or sideways scroll (about three minutes). `python evals/run.py --only E33` does the money side through the API and compares every figure with the dataset's own files. `python scripts/check.py` includes `tests/test_flow_demo.py`, which checks the company's shape.
+`python evals/run.py --only E34` runs the journey in a real browser, then follows each role's guide, then opens every screen of every role at laptop and phone width (about three minutes). `python evals/run.py --only E33` does the money side through the API against the dataset's own files. `tests/test_demo_company.py` and `tests/test_demo_populate.py` check the company and the cases in flight.

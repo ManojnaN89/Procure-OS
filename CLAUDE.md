@@ -31,9 +31,8 @@ An India-first, domain-neutral, multi-tenant procure-to-pay platform (request, a
 - Remind suppliers who have not answered a quotation request: `python -m p2p.cli remind <tenant> [--dry-run] [--schedule]` (the worker runs it every morning once sourcing has started; reminders go after `rfq_reminder_after_days` working days, at most `rfq_max_reminders`).
 - Make purchase orders from the lines that are ready (contract prices and awarded quotations): `python -m p2p.cli order <tenant> [--request NO]` (the worker does it when a contract line is sourced or an RFQ is awarded). Quotes are entered by a buyer on the RFQ page.
 - Evals against the plan, with independent oracles (separate from the tests): `python evals/run.py [--live] [--only E04,E09] [--quick]`; see `evals/README.md`. Run them before calling a phase done.
-- The small demo company for walking through the flow (8 people, 12 items, 4 suppliers, no history): `python -m p2p.cli demo reset flow` from `backend/` (drops and makes tenant `flow`; role logins like `buyer@flow.example`, all with the throwaway dev password in `demo.DEV_PASSWORD`, also listed in `.dev-credentials`; refuses a non-local database). Script: `docs/demo-script.md`; eval E33. To start mid-flow instead, `python -m p2p.cli demo populate flow [--reset]` fills it with live cases at every stage (`platform/demo_cases.py`; drives the real API as the role logins; refuses a company that already has requests).
-- Regenerate data: `python -I datagen/generator/cli.py --size demo --seed 42`, check it with `datagen/generator/validate.py`.
-- The demo company is one plant buying industrial spares: `python -I datagen/generator/profile_plant.py data/datasets/cbc-demo-v1-seed42` makes `plant-demo-v1-seed42` (11 people, 25 suppliers, 137 items). Evals use `plant-small-v1-seed42`.
+- The demo companies: `python -m p2p.cli demo reset apex` (the main one, Apex Pumps: a pump plant, 9 people, 16 items, 6 suppliers, twelve months of stock history) or `demo reset brightwave` (IT services), from `backend/` (drops and makes the tenant; role logins like `buyer@apexpumps.example`, all with the throwaway dev password in `demo.DEV_PASSWORD`, also listed in `.dev-credentials`; refuses a non-local database). Script: `docs/demo-script.md`; evals E33 and E34. To start mid-flow instead, `python -m p2p.cli demo populate apex [--reset]` fills it with live cases at every stage (`platform/demo_cases.py`; drives the real API as the role logins; refuses a company that already has requests).
+- Regenerate data: `python -I datagen/generator/company_profile.py apex` (or `brightwave`) writes `data/datasets/apex-v1/` from `datagen/catalog/apex/company.yaml`; `--check <dataset>` checks it. Evals use `apex-v1` (`P2P_EVAL_DATASET` picks another).
 
 ## Rules
 
@@ -104,6 +103,6 @@ Match the surrounding code. Short plain-language comments only where the reason 
 | Quotation request wording and Excel quote form, reading replies | `sourcing/templates.py`, `sourcing/quote_sheet.py`, `sourcing/replies.py` |
 | Rate limits (failed logins, uploads, model calls), keys and tokens, stored files | `platform/ratelimit.py`, `crypto.py`, `tokens.py`, `storage.py` |
 | Reference tables (GST rates, HSN, TDS sections, holidays) | `platform/reference.py`, `data/reference/` |
-| The demo company `flow` (reset command, logins) | `platform/demo.py`, `datagen/generator/profile_flow.py`, `docs/demo-script.md` |
+| The demo companies `apex` and `brightwave` (reset command, logins, cases in flight) | `platform/demo.py`, `platform/demo_cases.py`, `datagen/generator/company_profile.py`, `datagen/catalog/<name>/company.yaml`, `docs/demo-script.md` |
 
 A new tenant-database table is a new file in `platform/migrations/tenant/versions/` (next number; the latest is 0040, the control database has 0001-0003). A new agent tool is registered with `ToolRegistry`; modules that register tools or executors are listed in `EXTRA_MODULES` so the API process loads them.

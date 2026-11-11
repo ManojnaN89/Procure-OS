@@ -1,6 +1,6 @@
 """Generate the master-data schema from a generated dataset.
 
-    python scripts/gen_master_schema.py data/datasets/cbc-demo-v1-seed42
+    python scripts/gen_master_schema.py data/datasets/apex-v1
 
 Writes backend/p2p/masters/schema.py (the typed description the importer uses) and the tenant migration that creates the
 tables, with the SQL written out in full so the migration never changes meaning when this script changes. Run it again

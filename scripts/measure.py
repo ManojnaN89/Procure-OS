@@ -1,4 +1,4 @@
-"""Speed of the main operations against a running dev environment (python scripts/dev.py) and the 'demo' company.
+"""Speed of the main operations against a running dev environment (python scripts/dev.py) and the 'apex' demo company.
 
     python scripts/measure.py
 
@@ -22,8 +22,8 @@ API = "http://127.0.0.1:8000"
 
 def creds(role: str) -> tuple[str, str]:
     for line in (ROOT / ".dev-credentials").read_text(encoding="utf-8").splitlines():
-        if line.startswith(f"{role}@"):
-            email, password = line.split()
+        if line.startswith(f"{role}@apexpumps.example"):
+            email, password = line.split()[:2]
             return email, password
     raise SystemExit(f"no login for {role}")
 
@@ -94,7 +94,7 @@ def main() -> None:
     from p2p.platform.sod import Actor
     from p2p.rules import engine as rules
 
-    db = Session(routing.engine_for("demo"))
+    db = Session(routing.engine_for("apex"))
     actor = Actor("service", "measure")
     if not db.execute(
         __import__("sqlalchemy").text("select 1 from rule_table where key = 'measure_demo' and status = 'published'")
