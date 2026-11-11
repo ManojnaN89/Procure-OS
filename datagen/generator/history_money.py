@@ -229,6 +229,8 @@ class Money:
             )
             copy.update(no=no, supplier_invoice_no=variant, received_at=ts(when), received_on=iso(when.date()),
                         status="cancelled", payment_block="duplicate")  # fmt: skip
+            if variant != first["supplier_invoice_no"]:  # typed in again by hand: no e-invoice number came with it
+                copy.update(irn="", ack_no="", ack_date="")
             self.s.add("invoice", copy, when)
             for line in [x for x in self.T["invoice_line"] if x["invoice_no"] == first["no"]]:
                 self.s.add("invoice_line", {**{k2: v for k2, v in line.items() if k2 != "_t"}, "invoice_no": no}, when)
