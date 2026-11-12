@@ -24,7 +24,7 @@ from p2p.formulas.stock import BELOW_SAFETY, COVERED, NEGATIVE, REORDER, STOCKOU
 from p2p.platform import audit, reference
 from p2p.platform.sod import Actor
 from p2p.receiving.stock import StockLine, stock_levels
-from p2p.requests import combining, drafts
+from p2p.requests import combining, drafts, estimates
 from p2p.requests.drafts import DraftLine, DraftRequest
 
 NEEDS_ORDER = {STOCKOUT, BELOW_SAFETY, REORDER}
@@ -132,15 +132,18 @@ def plan(db: Session, as_of: date, *, location: str | None = None) -> tuple[list
         if not item["active"]:
             skipped.append(Skipped(*key, "Item is inactive"))
             continue
-        if not item["standard_price"] or item["standard_price"] <= 0:
-            skipped.append(Skipped(*key, "No standard price to estimate the request with"))
-            continue
         purchase_uom, factor = drafts.purchase_unit(item)
         # stock set aside for material requests is not free, and what is on order for them is not on order for stock
         need = shortfall(line.policy, line.free + line.free_on_order, max_qty=line.max_qty, order_qty=line.order_qty)
         qty = purchase_quantity(need, base_per_purchase_unit=factor, moq=Decimal(item["moq"] or 0))
         if qty == 0:
             skipped.append(Skipped(*key, "Nothing to order"))
+            continue
+        estimate = estimates.for_item(db, line.item_code, purchase_uom, qty, as_of, item["standard_price"])
+        if estimate is None:
+            skipped.append(
+                Skipped(*key, "No price to estimate the request with (no contract, no order, no standard price)")
+            )
             continue
         lead = lead_override.get(key) or item["default_lead_days"] or 0
         priority = "urgent" if line.status in URGENT else "normal"
@@ -151,13 +154,14 @@ def plan(db: Session, as_of: date, *, location: str | None = None) -> tuple[list
                 qty=qty,
                 uom=purchase_uom,
                 base_qty=qty * factor,
-                est_price=item["standard_price"],
-                value=round_money(qty * item["standard_price"]),
+                est_price=estimate.price,
+                value=round_money(qty * estimate.price),
                 need_by=calendar.add_working_days(as_of, int(lead)),
                 gl_code=str(item["gl"]) if item["gl"] is not None else None,
                 reason=_reason(line),
                 stock_status=line.status,
                 stock_qty=need,
+                est_source=estimate.source,
             )
         )
     department = drafts.planning_department(db)

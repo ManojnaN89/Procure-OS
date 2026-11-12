@@ -34,6 +34,7 @@ from p2p.formulas.calendar import business_today
 from p2p.formulas.money import format_inr, format_qty, round_money
 from p2p.platform import audit, numbering, permissions, routing, worker
 from p2p.platform.sod import Actor
+from p2p.requests import estimates
 
 AGENT = Actor("agent", "intake")
 PROMPT_VERSION = "1"
@@ -567,7 +568,12 @@ def _create(
         rows: list[dict[str, Any]] = []
         for _, cand, li in entries:
             row_info = info.get(cand.code) if cand else None
-            est = Decimal(row_info["standard_price"] or 0) if row_info else Decimal(0)
+            estimate = (
+                estimates.for_item(db, str(li.item_code), row_info["uom"], li.qty, today, row_info["standard_price"])
+                if row_info and li.item_code
+                else None
+            )
+            est = estimate.price if estimate else Decimal(0)
             factor = (
                 Decimal(
                     row_info["factor"]
@@ -581,7 +587,7 @@ def _create(
             rows.append(
                 {
                     "item": li.item_code, "free": None if li.item_code else li.phrase, "qty": li.qty, "uom": li.uom,
-                    "base": li.qty * factor, "price": est or None,
+                    "base": li.qty * factor, "price": est or None, "src": estimate.source if estimate else None,
                     "need": need_by or today + timedelta(days=lead),
                     "gl": (row_info["default_gl"] or row_info["cat_gl"]) if row_info else None, "cat": category or None,
                     "reason": f'Asked for in the message as "{li.phrase}" (quantity {format_qty(li.qty)}); '
@@ -607,8 +613,8 @@ def _create(
             db.execute(
                 text(
                     "insert into request_line (request_no, line_no, item_code, free_text, qty, uom, base_qty, est_price, need_by, "
-                    "delivery_location, gl_code, category_code, reason, status) values (:no, :n, :item, :free, :qty, :uom, :base, "
-                    ":price, :need, :loc, :gl, :cat, :reason, 'open')"
+                    "delivery_location, gl_code, category_code, reason, status, est_source) values (:no, :n, :item, :free, :qty, "
+                    ":uom, :base, :price, :need, :loc, :gl, :cat, :reason, 'open', :src)"
                 ),
                 {**r, "no": no, "n": n, "loc": location},
             )
@@ -696,7 +702,10 @@ def _possible_split(
     ).first()
     if row is None:
         return None
-    est = Decimal(info["standard_price"] or 0) if info else Decimal(0)
+    estimate = (
+        estimates.for_item(db, item_code, info["uom"], qty, business_today(), info["standard_price"]) if info else None
+    )
+    est = estimate.price if estimate else Decimal(0)
     earlier = round_money(Decimal(row[2]) * Decimal(row[3]))
     now_value = round_money(qty * est)
     days = (business_today() - row[1]).days

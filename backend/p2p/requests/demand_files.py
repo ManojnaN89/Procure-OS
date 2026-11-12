@@ -35,6 +35,8 @@ class Reference:
     locations: set[str]
     default_location: str | None  # the company's only stock location, used when a file names none
     orders: dict[str, OrderHead] = field(default_factory=dict)
+    departments: set[str] = field(default_factory=set)
+    kits: dict[str, list[tuple[str, Decimal]]] = field(default_factory=dict)  # kit -> (item, base quantity per joiner)
 
     @classmethod
     def load(cls, db: Session) -> "Reference":
@@ -50,7 +52,11 @@ class Reference:
             r[0]: OrderHead(r[1], r[2], r[3])
             for r in db.execute(text("select order_no, id, need_by, location_code from production_order"))
         }
-        return cls(items, factors, set(locations), stock[0] if len(stock) == 1 else None, orders)
+        departments = {r[0] for r in db.execute(text("select code from department"))}
+        kits: dict[str, list[tuple[str, Decimal]]] = {}
+        for kit, item, base in db.execute(text("select kit, item_code, base_qty from joiner_kit order by kit, id")):
+            kits.setdefault(kit, []).append((item, Decimal(base)))
+        return cls(items, factors, set(locations), stock[0] if len(stock) == 1 else None, orders, departments, kits)
 
     def location(self, row: dict[str, Any]) -> str | None:
         """The row's location: the one it names, or the company's only stock location."""
@@ -82,11 +88,11 @@ class Reference:
         return qty if unit == base else (qty * self.factors[(item, unit)]).quantize(QTY_PLACES)
 
 
-def check_qty(qty: Decimal) -> str | None:
+def check_qty(qty: Decimal, column: str = "qty") -> str | None:
     if qty <= 0:
-        return f"qty {qty} must be above zero"
+        return f"{column} {qty} must be above zero"
     if qty != qty.quantize(QTY_PLACES):
-        return f"qty {qty} has more than four decimals"
+        return f"{column} {qty} has more than four decimals"
     return None
 
 
@@ -100,6 +106,7 @@ class DemandFile:
     required: ClassVar[tuple[str, ...]]
     optional: ClassVar[frozenset[str]] = frozenset()  # columns the file may leave out altogether
     key: ClassVar[tuple[str, ...]]  # columns of `table` that identify the row in the ERP
+    qty_column: ClassVar[str] = "qty"  # the quantity every row must have above zero
     compared: ClassVar[tuple[str, ...]]  # columns of `table` whose change on a second import is reported
     example: ClassVar[tuple[str, ...]]  # an example row for the template
 
@@ -114,6 +121,10 @@ class DemandFile:
     def record(self, row: dict[str, Any], ref: Reference) -> dict[str, Any]:
         """The row as it is stored (without the import it came with)."""
         raise NotImplementedError
+
+    def records(self, row: dict[str, Any], ref: Reference) -> list[dict[str, Any]]:
+        """What the row becomes: one record, unless the kind spreads a row over several (a joiner plan over its kit)."""
+        return [self.record(row, ref)]
 
     def accepted(self, rec: dict[str, Any], ref: Reference) -> None:
         """Remember an accepted record for the kinds read after this one."""
@@ -304,7 +315,92 @@ class DemandPlans(DemandFile):
         }
 
 
-# in the order they are read: production order headers before their lines
+class JoinerKits(DemandFile):
+    """An office's "materials per joiner": what each kind of new joiner gets (a laptop, a monitor, a licence)."""
+
+    kind = "joiner_kit"
+    title = "Joiner kits (one row per item of a kit)"
+    table = "joiner_kit"
+    columns = (("kit", "text"), ("item_code", "text"), ("qty", "numeric"), ("unit", "text"))
+    required = ("kit", "item_code", "qty")
+    optional = frozenset({"unit"})
+    key = ("kit", "item_code")
+    compared = ("qty", "unit")
+    example = ("machinist", "SP-02", "10", "")
+
+    def check(self, row: dict[str, Any], ref: Reference) -> str | None:
+        return ref.check_material(row)
+
+    def record(self, row: dict[str, Any], ref: Reference) -> dict[str, Any]:
+        unit = row.get("unit") or ref.items[row["item_code"]][1]
+        return {
+            "kit": row["kit"],
+            "item_code": row["item_code"],
+            "qty": row["qty"],
+            "unit": unit,
+            "base_qty": ref.base_qty(row["item_code"], unit, row["qty"]),
+        }
+
+    def accepted(self, rec: dict[str, Any], ref: Reference) -> None:
+        ref.kits.setdefault(rec["kit"], []).append((rec["item_code"], rec["base_qty"]))
+
+
+class JoinerPlans(DemandFile):
+    """New joiners: how many join a department with which kit from when. Each row becomes the items (and licences) of its
+    kit times the number of joiners, needed by the start date and charged to the joiner's department; a plan's rows for
+    one department become one material request."""
+
+    kind = "joiner_plan"
+    title = "Joiner plan (one row per department, kit and start date)"
+    table = "material_requirement"
+    columns = (
+        ("plan_no", "text"),
+        ("department", "text"),
+        ("kit", "text"),
+        ("count", "numeric"),
+        ("start_date", "date"),
+        ("location_code", "text"),
+    )
+    required = ("plan_no", "department", "kit", "count", "start_date")
+    optional = frozenset({"location_code"})
+    key = ("source_kind", "source_doc_no", "line_key")
+    compared = ("item_code", "qty", "need_by", "location_code", "department_code")
+    qty_column = "count"
+    example = ("JP-2026-12", "PRD", "machinist", "2", "2026-12-01", "")
+
+    def check(self, row: dict[str, Any], ref: Reference) -> str | None:
+        if row["count"] != row["count"].to_integral_value():
+            return f"count {row['count']} must be a whole number of people"
+        if row["department"] not in ref.departments:
+            return f"department '{row['department']}' is not a department of the company"
+        if row["kit"] not in ref.kits:
+            return f"kit '{row['kit']}' is not in joiner_kit: load the kits first"
+        return ref.check_location(row)
+
+    def records(self, row: dict[str, Any], ref: Reference) -> list[dict[str, Any]]:
+        return [
+            {
+                "source_kind": "joiner",
+                "source_doc_no": f"{row['plan_no']}/{row['department']}",
+                "line_key": f"{row['kit']}/{row['start_date'].isoformat()}/{item}",
+                "production_order_id": None,
+                "item_code": item,
+                "qty": per_joiner * row["count"],
+                "unit": ref.items[item][1],
+                "base_qty": per_joiner * row["count"],
+                "need_by": row["start_date"],
+                "location_code": ref.location(row),
+                "department_code": row["department"],
+            }
+            for item, per_joiner in ref.kits[row["kit"]]
+        ]
+
+
+# in the order they are read: production order headers before their lines, kits before the joiners who get them
 KINDS: dict[str, DemandFile] = {
-    k.kind: k for k in (ProductionOrders(), ProductionOrderLines(), MrpResults(), SalesOrders(), DemandPlans())
-}
+    k.kind: k
+    for k in (
+        ProductionOrders(), ProductionOrderLines(), MrpResults(), SalesOrders(), DemandPlans(), JoinerKits(),
+        JoinerPlans(),
+    )
+}  # fmt: skip

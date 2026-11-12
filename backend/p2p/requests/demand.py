@@ -136,33 +136,47 @@ def _existing(db: Session, f: DemandFile) -> dict[tuple[Any, ...], dict[str, Any
 
 def _check_rows(
     db: Session, f: DemandFile, path: Path, ref: Reference, report: DemandReport, rename: dict[str, str]
-) -> list[dict[str, Any]]:
-    """The records of one file that are new; every other row is counted as loaded before or listed with its reason."""
+) -> tuple[list[dict[str, Any]], int]:
+    """The records of one file that are new, and how many rows gave them; every other row is counted as loaded before or
+    listed with its reason. A row that becomes several records (a joiner plan) is loaded, skipped or left out whole."""
     existing = _existing(db, f)
     seen: dict[tuple[Any, ...], int] = {}
     records: list[dict[str, Any]] = []
+    rows = 0
     report.already[f.kind] = 0
     for line, row in read_table(path, f.spec(), report, rename=rename, optional=f.optional):
         missing = [c for c in f.required if row.get(c) is None]
-        reason = f"{', '.join(missing)} is required" if missing else check_qty(row["qty"]) or f.check(row, ref)
+        reason = (
+            f"{', '.join(missing)} is required"
+            if missing
+            else check_qty(row[f.qty_column], f.qty_column) or f.check(row, ref)
+        )
+        new: list[dict[str, Any]] = []
         if reason is None:
-            rec = f.record(row, ref)
-            key = tuple(rec[c] for c in f.key)
-            if key in seen:
-                reason = f"duplicate of line {seen[key]} (same ERP document and line)"
-            elif key in existing:
-                old = existing[key]
-                changes = [f"{c} {_show(old[c])} -> {_show(rec[c])}" for c in f.compared if old[c] != rec[c]]
-                if not changes:
-                    report.already[f.kind] += 1
-                    continue
+            changes: list[str] = []
+            for rec in f.records(row, ref):
+                key = tuple(rec[c] for c in f.key)
+                if key in seen:
+                    reason = f"duplicate of line {seen[key]} (same ERP document and line)"
+                    break
+                if key in existing:
+                    old = existing[key]
+                    changes += [f"{c} {_show(old[c])} -> {_show(rec[c])}" for c in f.compared if old[c] != rec[c]]
+                else:
+                    new.append(rec)
+            if reason is None and changes:
                 reason = "already loaded; changed: " + "; ".join(changes)
+            elif reason is None and not new:
+                report.already[f.kind] += 1
+                continue
         if reason is not None:
             report.rejected.append(Problem(f.kind, line, reason))
             continue
-        seen[key] = line
-        records.append(rec)
-    return records
+        for rec in new:
+            seen[tuple(rec[c] for c in f.key)] = line
+        records += new
+        rows += 1
+    return records, rows
 
 
 def _insert(db: Session, f: DemandFile, records: list[dict[str, Any]], import_id: int) -> None:
@@ -208,14 +222,14 @@ def import_demand(
         version, mapping = current_mapping(db, f.kind)
         report.mappings[f.kind] = version
         rejected_before = len(report.rejected)
-        records = _check_rows(db, f, path, ref, report, {theirs: ours for ours, theirs in mapping.items()})
+        records, rows = _check_rows(db, f, path, ref, report, {theirs: ours for ours, theirs in mapping.items()})
         if import_id is not None:
             _insert(db, f, records, import_id)
         for rec in records:
             f.accepted(rec, ref)
-        report.loaded[f.kind] = len(records)
+        report.loaded[f.kind] = rows
         per_file[f.kind] = {
-            "loaded": len(records),
+            "loaded": rows,
             "already_loaded": report.already[f.kind],
             "rejected": len(report.rejected) - rejected_before,
             "mapping_version": version,

@@ -47,7 +47,7 @@ def _check_owner(db: Session, req: dict[str, Any], user_id: int) -> str:
     return me or f"user {user_id}"
 
 
-def _close_open_steps(db: Session, no: str, round_no: int, user_id: int, why: str) -> list[str]:
+def _close_open_steps(db: Session, no: str, round_no: int, user_id: int | None, why: str) -> list[str]:
     """End the approval steps still waiting and their tasks. Returns the people who had to decide."""
     open_steps = (
         db.execute(
@@ -163,6 +163,34 @@ def cancel(db: Session, tenant: str, no: str, user_id: int, reason: str | None) 
     return "cancelled"
 
 
+def cancel_emptied(db: Session, tenant: str | None, no: str, why: str) -> bool:
+    """A live request whose every line was cut to nothing (stock covered all it bought for) stops: the approvers still
+    waiting and the requester are told. Run by the system after the cut is committed. True when it was cancelled."""
+    req = _locked(db, no)
+    left = db.execute(
+        text("select count(*) from request_line where request_no = :n and status <> 'cancelled'"), {"n": no}
+    ).scalar_one()
+    if req["status"] not in CANCELLABLE or left:
+        db.rollback()
+        return False
+    waiting = _close_open_steps(db, no, int(req["approval_round"]), None, why)
+    db.execute(
+        text("update request set status = 'cancelled', decided_at = now(), decision_reason = :why where no = :n"),
+        {"n": no, "why": why},
+    )
+    audit.record(
+        db, audit.SYSTEM, "request.cancel", "request", no,
+        before={"status": req["status"]}, after={"status": "cancelled", "by": "system"}, reason=why,
+    )  # fmt: skip
+    db.commit()
+    for code in [*waiting[:1], req["requester"]]:
+        approvals.notify_person(
+            db, tenant, code, "request", f"Request {no} was cancelled", f"Nothing is needed from you. {why}",
+            link=f"#/requisitions/{no}",
+        )  # fmt: skip
+    return True
+
+
 def copy(db: Session, user_id: int, no: str, need_by: date | None = None, *, today: date | None = None) -> str:
     """Start a new draft from an earlier request: the same lines, in the copier's name, to be checked and submitted."""
     today = today or business_today()
@@ -211,16 +239,16 @@ def copy(db: Session, user_id: int, no: str, need_by: date | None = None, *, tod
         db.execute(
             text(
                 "insert into request_line (request_no, line_no, item_code, free_text, attributes, qty, uom, base_qty, est_price, "
-                "need_by, delivery_location, cost_centre_code, gl_code, category_code, project_code, reason, status) values "
-                "(:no, :n, :item, :free, cast(:attr as jsonb), :qty, :uom, :base, :price, :need, :loc, :cc, :gl, :cat, :proj, "
-                ":reason, 'open')"
+                "need_by, delivery_location, cost_centre_code, gl_code, category_code, project_code, reason, status, est_source) "
+                "values (:no, :n, :item, :free, cast(:attr as jsonb), :qty, :uom, :base, :price, :need, :loc, :cc, :gl, :cat, "
+                ":proj, :reason, 'open', :est_src)"
             ),
             {
                 "no": new_no, "n": n, "item": r["item_code"], "free": r["free_text"],
                 "attr": None if r["attributes"] is None else json.dumps(r["attributes"]),
                 "qty": r["qty"], "uom": r["uom"], "base": r["base_qty"], "price": r["est_price"], "need": wanted,
                 "loc": r["delivery_location"], "cc": r["cost_centre_code"], "gl": r["gl_code"], "cat": r["category_code"],
-                "proj": r["project_code"], "reason": r["reason"],
+                "proj": r["project_code"], "reason": r["reason"], "est_src": r["est_source"],
             },
         )  # fmt: skip
     audit.record(

@@ -10,7 +10,8 @@ python -m p2p.cli import masters <tenant> <dataset folder> [--dry-run]
 python -m p2p.cli import stock <tenant> <dataset folder> [--dry-run]
         reads the stock movement history of a dataset (after the masters are in)
 python -m p2p.cli import demand <tenant> <dataset folder or file> [--dry-run] [--kind KIND]
-        reads the ERP's demand (production orders and their materials, MRP results, sales orders, demand plan);
+        reads the ERP's demand (production orders and their materials, MRP results, sales orders, demand plan,
+        joiner kits and the joiner plan);
         rows loaded before are skipped, changed ones are listed
 python -m p2p.cli material make <tenant>
         makes material requests for imported production orders that have none (the import does this by itself)

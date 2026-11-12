@@ -274,19 +274,25 @@ def _org_setting(db: Session, key: str, default: str) -> str:
     return str(value) if value not in (None, "") else default
 
 
-def last_prices(db: Session, item_codes: list[str]) -> dict[str, Decimal]:
-    """What we last paid per unit, net of discount, for each item that has been ordered before."""
+def last_paid(db: Session, item_codes: list[str]) -> dict[str, tuple[Decimal, str]]:
+    """What we last paid per unit, net of discount, for each item that has been ordered before, and on which order (the
+    latest order that is not a draft and not cancelled)."""
     if not item_codes:
         return {}
     rows = db.execute(
         text(
-            "select distinct on (pl.item_code) pl.item_code, pl.unit_price from po_line pl join po p on p.no = pl.po_no "
+            "select distinct on (pl.item_code) pl.item_code, pl.unit_price, p.no from po_line pl join po p on p.no = pl.po_no "
             "where pl.item_code = any(:c) and p.status not in ('draft', 'cancelled') and pl.status <> 'cancelled' "
-            "order by pl.item_code, p.created_at desc"
+            "order by pl.item_code, p.created_at desc, p.no desc"
         ),
         {"c": item_codes},
     )
-    return {r[0]: r[1] for r in rows}
+    return {r[0]: (r[1], r[2]) for r in rows}
+
+
+def last_prices(db: Session, item_codes: list[str]) -> dict[str, Decimal]:
+    """What we last paid per unit, net of discount, for each item that has been ordered before."""
+    return {item: price for item, (price, _) in last_paid(db, item_codes).items()}
 
 
 def _input_credit(db: Session, rule: sel.SelectionRule, request_no: str | None) -> bool:

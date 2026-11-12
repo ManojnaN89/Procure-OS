@@ -17,14 +17,15 @@ from sqlalchemy.orm import Session
 
 from p2p.approvals import workflow
 from p2p.formulas.calendar import business_today
-from p2p.formulas.estimate import estimated_price
+from p2p.formulas.estimate import Estimate, estimated_price
 from p2p.formulas.material import earmarked, still_short, to_reserve
 from p2p.main import app
-from p2p.platform import demo, numbering, routing, tenants, users
+from p2p.platform import audit, demo, numbering, routing, tenants, users
 from p2p.platform.sod import user
 from p2p.platform.tokens import create_access_token
+from p2p.receiving import goods
 from p2p.receiving.stock import StockError, post_count, post_issue, stock_levels
-from p2p.requests import demand, duplicates, material, replenishment
+from p2p.requests import demand, duplicates, material, replenishment, reservation
 
 ROOT = Path(__file__).resolve().parents[1]
 APEX = ROOT / "data" / "datasets" / "apex-v1"
@@ -172,11 +173,18 @@ def test_what_is_short_and_what_is_on_its_way(
 
 
 def test_the_estimate_is_the_contract_then_the_last_price_paid_then_the_standard_price() -> None:
-    assert estimated_price(D(650), D(640), D(600)) == (D(650), "contract")
-    assert estimated_price(None, D(38), D(40)) == (D(38), "last price paid")
-    assert estimated_price(None, None, D(45)) == (D(45), "standard price")
-    assert estimated_price(D(0), None, D(45)) == (D(45), "standard price")  # zero is no price
+    contract, paid = (D(650), "CNT-0001"), (D(640), "PO-1")
+    assert estimated_price(contract, paid, D(600)) == Estimate(D(650), "contract", "CNT-0001")
+    assert estimated_price(None, (D(38), "PO-7"), D(40)) == Estimate(D(38), "last price paid", "PO-7")
+    assert estimated_price(None, None, D(45)) == Estimate(D(45), "standard price")
+    assert estimated_price((D(0), "CNT-0002"), None, D(45)) == Estimate(D(45), "standard price")  # zero is no price
+    assert estimated_price(None, (D(0), "PO-8"), D(45)) == Estimate(D(45), "standard price")
+    assert estimated_price(None, None, D(0)) is None
     assert estimated_price(None, None, None) is None
+    # the words kept with the request line
+    assert Estimate(D(650), "contract", "CNT-0001").source == "contract CNT-0001"
+    assert Estimate(D(38), "last price paid", "PO-7").source == "last price paid on PO-7"
+    assert Estimate(D(45), "standard price").source == "standard price"
 
 
 # ---- the worked example -------------------------------------------------------------------------
@@ -559,3 +567,146 @@ def test_components_loaded_later_join_the_orders_open_request_and_nothing_is_mad
 def test_material_requests_are_numbered_by_the_default_series_until_the_company_has_its_own(apex: Apex) -> None:
     assert numbering.prefix(apex.db, "material_request") == "MR"
     assert numbering.prefix(apex.db, "no_such_document") is None
+
+
+# ---- stock that arrives is set aside at once; freed stock never leads to buying twice --------------
+
+
+def _cover(apex: Apex, mr: str, item: str) -> tuple[Decimal, Decimal]:
+    """(set aside, still coming on live requests) for a material request line, never more than it needs."""
+    apex.db.rollback()
+    need, reserved, _, requested = _lines(apex, mr)[item]
+    assert reserved + requested <= need
+    return reserved, requested
+
+
+def _held_and_short(apex: Apex, later_need: str) -> tuple[str, str, str]:
+    """MO-7 holds 50 of the 60 impellers; MO-9 (needed later) holds the 10 left and its shortfall is on a purchase
+    request (submitted for approval). Returns MO-7's and MO-9's material requests and that purchase request."""
+    first = _orders(apex, {"MO-7": ("2026-12-05", [("RM-03", "50")])}).material_requests[0]
+    _check(apex)
+    second = _orders(apex, {"MO-9": ("2026-12-09", [("RM-03", later_need)])}).material_requests[0]
+    (req,) = _check(apex).purchase_requests
+    assert req.no is not None and req.outcome == "submitted"
+    assert _cover(apex, second, "RM-03") == (D(10), D(later_need) - 10)
+    return first, second, req.no
+
+
+@pytest.mark.parametrize(
+    ("later_need", "reserved", "coming", "request_qty", "request_status"),
+    [
+        ("60", "60", "0", None, "cancelled"),  # the 50 freed are exactly what was requested: the request goes
+        ("61", "60", "1", "1", "submitted"),  # a unit over: the request keeps the one unit stock cannot give
+        ("90", "60", "30", "30", "submitted"),  # partly: the request keeps the rest
+    ],
+)
+def test_freed_stock_takes_over_a_purchase_request_never_both(
+    apex: Apex, later_need: str, reserved: str, coming: str, request_qty: str | None, request_status: str
+) -> None:
+    # given MO-9's shortfall on a purchase request not yet with the buyer
+    first, second, no = _held_and_short(apex, later_need)
+    start = apex.db.execute(text("select max(id) from audit_event")).scalar_one()
+
+    # when MO-7 is called off, its 50 impellers come free
+    material.cancel(apex.db, apex.uid("store"), first, "order called off", tenant=apex.slug)
+
+    # then they are set aside for MO-9 at once and its request is cut by as much: never stocked and bought twice
+    assert _cover(apex, second, "RM-03") == (D(reserved), D(coming))
+    status, qty = apex.db.execute(
+        text(
+            "select r.status, (select qty from request_line where request_no = r.no and status <> 'cancelled') "
+            "from request r where r.no = :n"
+        ),
+        {"n": no},
+    ).one()
+    assert (status, qty) == (request_status, D(request_qty) if request_qty else None)
+    cut = apex.db.execute(
+        text("select count(*) from audit_event where action = 'request.line_reduce' and entity_id = :n and id > :s"),
+        {"n": no, "s": start},
+    ).scalar_one()
+    assert cut == 1
+    by = apex.db.execute(
+        text(
+            "select actor_type from audit_event where action = 'material_request.reserve' and entity_id = :m "
+            "and id > :s"
+        ),
+        {"m": second, "s": start},
+    ).scalars()
+    assert list(by) == [audit.SYSTEM.kind]
+
+    # and a store check afterwards changes nothing and buys nothing
+    assert _check(apex).purchase_requests == []
+    assert _cover(apex, second, "RM-03") == (D(reserved), D(coming))
+
+
+def test_a_request_already_with_the_buyer_keeps_its_cover_and_the_stock_stays_free(apex: Apex) -> None:
+    # given MO-9's shortfall already out for quotation
+    first, second, no = _held_and_short(apex, "60")
+    apex.db.execute(text("update request_line set status = 'sourcing' where request_no = :n"), {"n": no})
+    apex.db.commit()
+
+    # when MO-7 is called off
+    material.cancel(apex.db, apex.uid("store"), first, "order called off", tenant=apex.slug)
+
+    # then MO-9 keeps relying on what is being bought, and the 50 stay free
+    assert _cover(apex, second, "RM-03") == (D(10), D(50))
+    assert stock_levels(apex.db, item="RM-03")[0].free == D(50)
+
+
+def test_freed_stock_goes_first_to_a_shortage_nobody_is_buying_for(apex: Apex) -> None:
+    # given MO-9 (needed 9 Dec) covered by a request, and MO-12 (needed later, loaded after the check) covered by nothing
+    first, second, _ = _held_and_short(apex, "60")
+    third = _orders(apex, {"MO-12": ("2026-12-12", [("RM-03", "30")])}).material_requests[0]
+
+    # when MO-7's 50 come free
+    material.cancel(apex.db, apex.uid("store"), first, "order called off", tenant=apex.slug)
+
+    # then MO-12 gets its 30 though it is needed later, and MO-9 the 20 left, its request cut to the 30 still lacking
+    assert _cover(apex, third, "RM-03") == (D(30), D(0))
+    assert _cover(apex, second, "RM-03") == (D(30), D(30))
+
+
+def test_a_count_that_finds_more_is_set_aside_at_once_and_the_store_is_told(apex: Apex) -> None:
+    # given MO-1 checked: 40 bearings set aside, 60 on a purchase request
+    mr = _orders(apex, {"MO-1": ("2026-12-05", MO1)}).material_requests[0]
+    _check(apex)
+
+    # when the store counts 60 bearings where the books say 40
+    resp = client.post(
+        "/api/inventory/count",
+        json={"item_code": "RM-06", "location": "PLT-CKN", "counted_qty": "60", "reason": "found a box"},
+        headers=apex.headers("store", "Store"),
+    )
+
+    # then the 20 are set aside for MO-1 by the system, its request is cut by 20, and the store hears of it
+    assert resp.status_code == 200, resp.text
+    assert _cover(apex, mr, "RM-06") == (D(60), D(40))
+    told = apex.db.execute(
+        text("select body from notification where user_id = :u and kind = 'material' order by id desc limit 1"),
+        {"u": apex.uid("store")},
+    ).scalar_one()
+    assert "MO-1" in told and "20 RM-06" in told
+
+    # and doing it again sets nothing more aside
+    assert reservation.stock_rose(apex.db, apex.slug, [("RM-06", "PLT-CKN")], why="again") == {}
+
+
+def test_goods_accepted_on_a_receipt_are_set_aside_for_the_order_waiting(apex: Apex) -> None:
+    # given MO-8 short of 20 castings (none on the shelf), its request not yet with the buyer
+    mr = _orders(apex, {"MO-8": ("2026-12-05", [("RM-01", "20")])}).material_requests[0]
+    _check(apex)
+    assert _cover(apex, mr, "RM-01") == (D(0), D(20))
+
+    # when 12 castings are accepted on a receipt
+    apex.db.execute(
+        text(
+            "insert into stock_movement (id, item_code, location_code, date, type, qty, ref_doc, source) "
+            "values ('SM-GR-T1-1', 'RM-01', 'PLT-CKN', :d, 'receipt', 12, 'GR-T1', 'platform')"
+        ),
+        {"d": business_today()},
+    )
+    apex.db.commit()
+    goods.reserve_arrived(apex.db, apex.slug, "GR-T1")
+
+    # then they are set aside for MO-8 at once, and its request now buys only the 8 left
+    assert _cover(apex, mr, "RM-01") == (D(12), D(8))
