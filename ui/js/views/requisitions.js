@@ -256,7 +256,7 @@ const RequisitionsView = {
     if (s.method === "contract") return `<span class="badge badge-approved" style="font-size:10px;">contract</span> <span class="cell-muted">${s.route ? "" : this.esc(s.reason)}</span>${order}${route}`;
     if (s.method === "direct") return `<span class="badge badge-approved" style="font-size:10px;">${this.esc(this.ROUTE_LABEL[s.route] || "direct buy")}</span>${order}${route}`;
     if (s.method === "rfq") return `<span class="badge badge-pending" style="font-size:10px;">quotes</span> <a href="#/rfqs/${this.esc(s.rfq_no)}" style="color:var(--accent-tint)">${this.esc(s.rfq_no)}</a>${order}${route}`;
-    return `<span class="badge badge-rejected" style="font-size:10px;">buyer</span> <span class="cell-muted">${this.esc(s.reason)}</span>${route}`;
+    return `<span class="badge badge-waiting" style="font-size:10px;">buyer</span> <span class="cell-muted">${this.esc(s.reason)}</span>${route}`;
   },
 
   STEP_LABEL: { pending: "Waiting", waiting: "Later", approved: "Approved", rejected: "Rejected", returned: "Returned", cancelled: "Cancelled" },
@@ -264,32 +264,17 @@ const RequisitionsView = {
   approvalPanel(r) {
     const a = r.approval || {};
     const steps = a.steps || [];
-    const trail = steps.length
-      ? `<div style="margin:0 0 12px;">
-          ${steps.map((s) => `
-            <div style="display:flex;justify-content:space-between;gap:12px;padding:7px 0;border-bottom:1px solid var(--border);font-size:12.5px;">
-              <div>
-                <span style="color:var(--text-primary);">${this.esc(s.name)}</span>
-                <span class="cell-muted"> · ${this.esc(s.designation || s.role)}${s.stand_in ? ` · ${this.esc(s.stand_in)} standing in` : ""}</span>
-                ${s.comment ? `<div class="cell-muted" style="font-size:11.5px;margin-top:2px;">“${this.esc(s.comment)}”</div>` : ""}
-                ${s.why ? `<div class="cell-muted" style="font-size:11px;margin-top:2px;">Why: ${this.esc(s.why)}</div>` : ""}
-              </div>
-              <div style="text-align:right;white-space:nowrap;">
-                <span class="badge badge-${this.esc(s.status === "pending" ? "waiting" : s.status)}">${this.esc(this.STEP_LABEL[s.status] || s.status)}</span>
-                ${s.acted_at ? `<div class="cell-muted" style="font-size:11px;margin-top:2px;">${formatDate(s.acted_at)}</div>` : ""}
-              </div>
-            </div>`).join("")}
-        </div>` : "";
+    const trail = UI.approvalSteps(steps, this.STEP_LABEL);
     const rule = a.rule_code ? `<details class="more" style="margin:0 0 10px;"><summary>How this was routed</summary><div class="cell-muted">Approval rule ${this.esc(a.rule_code)}, version ${this.esc(a.rule_version)}. The rule is kept with the request, so the decision can be reproduced later.</div></details>` : "";
     const actions = a.can_act
-      ? `<div style="display:flex;gap:10px;flex-wrap:wrap;" id="decideBtns">
-           <div class="btn btn-primary btn-sm" id="approveBtn"><i class="ti ti-check"></i>Approve</div>
-           <div class="btn btn-sm" id="lowerBtn" title="Approve a smaller quantity"><i class="ti ti-adjustments"></i>Approve less…</div>
-           <div class="btn btn-sm" id="returnBtn"><i class="ti ti-arrow-back-up"></i>Return for changes</div>
-           <div class="btn btn-sm" id="rejectBtn"><i class="ti ti-x"></i>Reject</div>
+      ? `<div class="btn-row" id="decideBtns">
+           <div class="btn btn-primary" id="approveBtn"><i class="ti ti-check"></i>Approve</div>
+           <div class="btn" id="lowerBtn" title="Approve a smaller quantity"><i class="ti ti-adjustments"></i>Approve less…</div>
+           <div class="btn" id="returnBtn"><i class="ti ti-arrow-back-up"></i>Return for changes</div>
+           <div class="btn btn-danger" id="rejectBtn"><i class="ti ti-x"></i>Reject</div>
          </div>`
       : a.can_submit
-        ? `<div class="btn btn-primary btn-sm" id="submitBtn" style="display:inline-flex;"><i class="ti ti-send"></i>Submit for approval</div>`
+        ? `<div class="btn btn-primary" id="submitBtn"><i class="ti ti-send"></i>Submit for approval</div>`
         : "";
     const own = [
       a.can_withdraw ? `<div class="btn btn-sm" id="withdrawBtn"><i class="ti ti-arrow-back-up"></i>Withdraw</div>` : "",
@@ -304,7 +289,7 @@ const RequisitionsView = {
         ${(a.budget || []).filter((b) => b.status !== "unchecked").map((b) => `<div class="budget-check" style="margin:0 0 6px;font-size:12px;color:${b.status === "ok" ? "var(--text-secondary)" : "var(--warning-text)"};">Budget account ${this.esc(b.gl_code)}${b.holder ? ` of ${this.esc(b.holder)}` : ""}${b.period ? `, ${this.esc(b.period)}` : ""}: ${formatCurrency(b.budget)} in all, ${formatCurrency(b.committed)} already committed, this request asks for ${formatCurrency(b.requested)}${b.used_pct ? ` · ${this.esc(b.used_pct)}% used` : ""}${b.status === "over" ? ` · over the budget by ${formatCurrency(b.over_by)}` : b.status === "warn" ? " · nearly used up" : ""}</div>`).join("")}
         ${trail}${rule}${actions}
         ${own ? `<div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:10px;">${own}</div>` : ""}
-        ${a.can_source ? `<div class="btn btn-primary btn-sm" id="sourceBtn" style="display:inline-flex;margin-top:6px;"><i class="ti ti-search"></i>Find suppliers</div>` : ""}
+        ${a.can_source ? `<div class="btn btn-primary" id="sourceBtn" style="margin-top:6px;"><i class="ti ti-search"></i>Find suppliers</div>` : ""}
         ${a.can_act ? `<div id="lowerBox" style="display:none;margin-top:10px;">
           <div class="cell-muted" style="font-size:12px;margin-bottom:6px;">Approve less than was asked. A quantity can go down, not up. A reason is needed.</div>
           ${(r.lines || []).filter((l) => l.status !== "cancelled").map((l) => `<div style="display:flex;gap:10px;align-items:center;margin-bottom:6px;font-size:12.5px;">
@@ -317,7 +302,7 @@ const RequisitionsView = {
         <div id="actionNote" style="font-size:12px;color:var(--warning-text);margin-top:8px;"></div>
         <div id="reasonBox" style="display:none;margin-top:10px;">
           <textarea id="reasonText" rows="2" placeholder="Reason (required)" style="width:100%;background:var(--surface-sunken);border:1px solid var(--border);color:var(--text-primary);border-radius:8px;padding:8px;font-size:12.5px;"></textarea>
-          <div style="display:flex;gap:8px;margin-top:8px;"><div class="btn btn-primary btn-sm" id="reasonOk">Confirm</div><div class="btn btn-sm" id="reasonCancel">Cancel</div></div>
+          <div class="btn-row" style="margin-top:8px;"><div class="btn btn-primary btn-sm" id="reasonOk">Confirm</div><div class="btn btn-sm" id="reasonCancel">Cancel</div></div>
         </div>
       </div>`;
   },
@@ -406,12 +391,14 @@ const RequisitionsView = {
       const lines = r.lines || [];
       container.innerHTML = `
         <div class="page-header">
-          <a href="#/requisitions" style="color:var(--text-muted);font-size:12px;text-decoration:none;">← Requests</a>
-          <h1 style="margin-top:6px;">${this.esc(r.title)}</h1>
-          <p>${this.esc(r.id)} · ${formatCurrency(r.amount)} · ${this.esc(r.requested_by)} · ${statusBadge(r.status)}
+          ${UI.backLink("#/requisitions", "Requests")}
+          <h1>${this.esc(r.title)}</h1>
+          <p>${statusBadge(r.status)} · ${this.esc(r.id)} · ${formatCurrency(r.amount)} · ${this.esc(r.requested_by)}
              ${r.ship_to ? ` · deliver to ${this.esc(r.ship_to)}` : ""}${r.need_by ? ` · needed by ${formatDate(r.need_by)}` : ""}</p>
         </div>
         ${FlowStrip.forRequisition(r)}
+        <div class="doc-layout">
+        <div class="doc-main">
         ${this.approvalPanel(r)}
         ${this.checksPanel(r)}
         ${lines.length ? `
@@ -432,12 +419,26 @@ const RequisitionsView = {
             </tbody>
           </table>
         </div>` : ""}
+        </div>
+        <div class="doc-side">
+        <div class="panel">
+          <div class="panel-title">Request details</div>
+          ${UI.facts([
+            ["Number", this.esc(r.id)],
+            ["Requested by", this.esc(r.requested_by)],
+            ["Estimated value", formatCurrency(r.amount)],
+            ["Deliver to", this.esc(r.ship_to || "")],
+            ["Needed by", r.need_by ? formatDate(r.need_by) : ""],
+          ])}
+        </div>
         <div class="panel">
           <div class="panel-title">Why it is needed</div>
-          <p style="color:var(--text-secondary);font-size:12.5px;margin:0 0 14px;">${this.esc(r.description) || "No reason was given."}</p>
+          <p style="color:var(--text-secondary);margin:0 0 14px;">${this.esc(r.description) || "No reason was given."}</p>
           ${r.purchase_order
-            ? `<div style="font-size:12px;color:var(--text-secondary);">Linked purchase order: <a href="#/purchase-orders/${this.esc(r.purchase_order.id)}" style="color:var(--accent-tint)">#${this.esc(r.purchase_order.id)}</a> — ${statusBadge(r.purchase_order.status)}</div>`
-            : `<div style="font-size:12px;color:var(--text-muted);">No purchase order linked yet.</div>`}
+            ? `<div style="font-size:12.5px;color:var(--text-secondary);">Linked purchase order: <a href="#/purchase-orders/${this.esc(r.purchase_order.id)}">#${this.esc(r.purchase_order.id)}</a> ${statusBadge(r.purchase_order.status)}</div>`
+            : `<div style="font-size:12.5px;color:var(--text-muted);">No purchase order linked yet.</div>`}
+        </div>
+        </div>
         </div>
       `;
       this.wireApproval(r);

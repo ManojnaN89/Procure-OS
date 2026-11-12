@@ -50,34 +50,34 @@ const ReceivingView = {
 
   orderCard(o) {
     return `
-      <div class="panel" style="margin-bottom:12px;">
+      <div class="panel recv-card" style="margin-bottom:12px;">
         <div style="display:flex;justify-content:space-between;gap:12px;align-items:center;">
           <div>
-            <a href="#/purchase-orders/${this.esc(o.id)}" style="color:var(--accent-tint);">${this.esc(o.id)}</a>
-            <span class="cell-muted"> · ${this.esc(o.supplier)} · deliver to ${this.esc(o.ship_to)}${o.promised_date ? ` · promised ${formatDate(o.promised_date)}` : ""}</span>
+            <a class="recv-po" href="#/purchase-orders/${this.esc(o.id)}">${this.esc(o.id)}</a>
+            <div class="cell-muted">${this.esc(o.supplier)} · deliver to ${this.esc(o.ship_to)}${o.promised_date ? ` · promised ${formatDate(o.promised_date)}` : ""}</div>
           </div>
-          <div class="btn btn-secondary btn-sm recv-open" data-po="${this.esc(o.id)}">Receive goods</div>
+          <div class="btn btn-primary recv-open" data-po="${this.esc(o.id)}"><i class="ti ti-package-import" aria-hidden="true"></i>Receive goods</div>
         </div>
         <div id="recv-${this.esc(o.id)}" style="display:none;margin-top:12px;">
           <table class="data-table"><thead><tr><th>ITEM</th><th>ORDERED</th><th>RECEIVED SO FAR</th><th>ARRIVED NOW</th><th>REJECTED</th><th>REASON FOR REJECTION</th></tr></thead><tbody>
             ${o.lines.map((l) => `
               <tr data-line="${this.esc(l.line_no)}">
                 <td>${this.esc(l.name)}<div class="cell-muted" style="font-size:11px;">${this.esc(l.item_code || "")}</div></td>
-                <td>${this.esc(l.ordered)} <span class="cell-muted">${this.esc(l.uom)}</span></td>
-                <td>${this.esc(l.received)}</td>
-                <td><input class="recv-qty" type="number" min="0" step="any" style="width:90px;padding:5px;"></td>
-                <td><input class="recv-rej" type="number" min="0" step="any" style="width:80px;padding:5px;"></td>
-                <td><input class="recv-why" style="width:100%;padding:5px;"></td>
+                <td data-label="Ordered">${this.esc(l.ordered)} <span class="cell-muted">${this.esc(l.uom)}</span></td>
+                <td data-label="Received so far">${this.esc(l.received)}</td>
+                <td data-label="Arrived now"><input class="recv-qty" type="number" inputmode="decimal" min="0" step="any" aria-label="Arrived now: ${this.esc(l.name)}" style="width:100px;"></td>
+                <td data-label="Rejected"><input class="recv-rej" type="number" inputmode="decimal" min="0" step="any" aria-label="Rejected: ${this.esc(l.name)}" style="width:90px;"></td>
+                <td data-label="Reason for rejection"><input class="recv-why" aria-label="Reason for rejection: ${this.esc(l.name)}" style="width:100%;"></td>
               </tr>`).join("")}
           </tbody></table>
-          <div style="margin-top:8px;display:flex;gap:8px;flex-wrap:wrap;">
-            <input class="recv-challan" placeholder="Delivery challan no." style="padding:6px;">
-            <input class="recv-invoice" placeholder="Supplier invoice no." style="padding:6px;">
-            <input class="recv-vehicle" placeholder="Vehicle no." style="padding:6px;">
-            <input class="recv-remarks" placeholder="Remarks" style="padding:6px;flex:1;">
-            <div class="btn btn-primary btn-sm recv-send" data-po="${this.esc(o.id)}">Post receipt</div>
+          <div class="form-grid recv-fields" style="margin-top:12px;">
+            <label>Delivery challan no.<input class="recv-challan" placeholder="For example: DC/2611/0412"></label>
+            <label>Supplier invoice no.<input class="recv-invoice" placeholder="If it came with the goods"></label>
+            <label>Vehicle no.<input class="recv-vehicle" placeholder="For example: MH 12 XX 0000"></label>
+            <label>Remarks<input class="recv-remarks" placeholder="Anything to note"></label>
           </div>
-          <div class="recv-note" style="font-size:12px;color:var(--warning-text);margin-top:6px;"></div>
+          <div class="form-actions"><div class="btn btn-primary recv-send" data-po="${this.esc(o.id)}"><i class="ti ti-check" aria-hidden="true"></i>Post receipt</div></div>
+          <div class="recv-note" style="font-size:12.5px;color:var(--warning-text);margin-top:6px;"></div>
         </div>
       </div>`;
   },

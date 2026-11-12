@@ -3,7 +3,7 @@ const RfqsView = {
     return String(value ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
   },
 
-  STATE_BADGE: { invited: "badge-approved", replied: "badge-approved", declined: "badge-rejected", failed: "badge-rejected", "not yet sent": "badge-pending" },
+  STATE_BADGE: { invited: "badge-sent", replied: "badge-received", declined: "badge-draft", failed: "badge-rejected", "not yet sent": "badge-waiting" },
 
   async render(container, params) {
     if (params && params.id) return this.renderDetail(container, params.id);

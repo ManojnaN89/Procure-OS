@@ -33,7 +33,7 @@ const Dashboard = {
             <span class="panel-title" style="margin:0;">Notices</span>
             <span id="attentionBadges"></span>
           </div>
-          <a href="#/notification-history" style="color:var(--text-muted);font-size:12px;text-decoration:none;">View all</a>
+          <a href="#/notification-history" style="font-size:12.5px;font-weight:500;text-decoration:none;">View all</a>
         </div>
         <div id="attentionList"></div>
       </div>
@@ -176,11 +176,11 @@ const Dashboard = {
   },
 
   TYPE_ICONS: {
-    exception_flagged: { icon: "ti-alert-triangle", bg: "#412402", fg: "#FAC775" },
-    vendor_risk: { icon: "ti-building-store", bg: "#501313", fg: "#F09595" },
-    stale_requisition: { icon: "ti-clock", bg: "#412402", fg: "#FAC775" },
-    budget_overrun: { icon: "ti-chart-bar", bg: "#412402", fg: "#FAC775" },
-    contract_expiring: { icon: "ti-file-certificate", bg: "#3C3489", fg: "#CECBF6" },
+    exception_flagged: { icon: "ti-alert-triangle", bg: "var(--warning-bg)", fg: "var(--warning-text)" },
+    vendor_risk: { icon: "ti-building-store", bg: "var(--danger-bg)", fg: "var(--danger-text)" },
+    stale_requisition: { icon: "ti-clock", bg: "var(--warning-bg)", fg: "var(--warning-text)" },
+    budget_overrun: { icon: "ti-chart-bar", bg: "var(--warning-bg)", fg: "var(--warning-text)" },
+    contract_expiring: { icon: "ti-file-certificate", bg: "var(--accent-dim)", fg: "var(--accent-tint)" },
   },
 
   async loadAttention() {
@@ -202,12 +202,12 @@ const Dashboard = {
       badges.innerHTML = ["high", "medium", "low"].filter((s) => counts[s]).map((s) => `
         <span style="background:${s === "high" ? "var(--danger-bg)" : s === "medium" ? "var(--warning-bg)" : "var(--accent-dim)"};
                      color:${s === "high" ? "var(--danger-text)" : s === "medium" ? "var(--warning-text)" : "var(--accent-tint)"};
-                     font-size:9.5px;font-weight:600;padding:3px 10px;border-radius:20px;margin-right:5px;">${counts[s]} ${s}</span>
+                     font-size:11px;font-weight:600;padding:2px 8px;border-radius:20px;margin-right:5px;">${counts[s]} ${s}</span>
       `).join("");
 
       list.innerHTML = `
         <div style="display:flex;flex-direction:column;gap:8px;">
-          ${rows.map((n) => {
+          ${rows.slice(0, 5).map((n) => {
             const t = this.TYPE_ICONS[n.type] || { icon: "ti-bell", bg: "var(--surface-sunken)", fg: "var(--text-muted)" };
             return `
               <div class="attention-row" data-id="${escapeHtml(n.id)}">

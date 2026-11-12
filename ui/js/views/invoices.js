@@ -4,7 +4,7 @@ const InvoicesView = {
   },
 
   STATUS: { received: "Received", matched: "Matched", blocked: "Blocked", approved: "Approved for payment", part_paid: "Part paid", paid: "Paid", cancelled: "Cancelled" },
-  BADGE: { blocked: "badge-rejected", approved: "badge-approved", paid: "badge-approved", cancelled: "badge-pending", received: "badge-pending", part_paid: "badge-pending", matched: "badge-approved" },
+  BADGE: { blocked: "badge-held", approved: "badge-approved", paid: "badge-paid", cancelled: "badge-draft", received: "badge-waiting", part_paid: "badge-waiting", matched: "badge-approved" },
   REASON: {
     price_variance: "Price above the order price",
     qty_over_received: "Quantity more than was received",
@@ -48,7 +48,7 @@ const InvoicesView = {
         wrap.innerHTML = rows.length
           ? `<table class="data-table"><thead><tr><th>INVOICE</th><th>SUPPLIER</th><th>SUPPLIER'S NUMBER</th><th>DATE</th><th>AMOUNT</th><th>STATUS</th></tr></thead><tbody>
               ${rows.map((r) => `<tr data-id="${this.esc(r.id)}">
-                <td class="cell-muted">${this.esc(r.id)}${r.type !== "invoice" ? ` <span class="badge badge-pending">${this.esc(r.type.replace("_", " "))}</span>` : ""}</td>
+                <td class="cell-muted">${this.esc(r.id)}${r.type !== "invoice" ? ` <span class="badge badge-draft">${this.esc(r.type.replace("_", " "))}</span>` : ""}</td>
                 <td>${this.esc(r.supplier)}</td><td>${this.esc(r.number)}</td><td class="cell-muted">${formatDate(r.date)}</td><td>${formatCurrency(r.total)}</td>
                 <td><span class="badge ${this.BADGE[r.status] || ""}">${this.esc(this.STATUS[r.status] || r.status)}</span>${r.reason ? `<div class="cell-muted" style="font-size:11px;margin-top:3px;max-width:340px;">${this.esc(r.reason)}</div>` : ""}${r.next_action ? `<div class="next-action" style="font-size:11.5px;margin-top:3px;max-width:340px;"><strong>Next:</strong> ${this.esc(r.next_action)}</div>` : ""}</td></tr>`).join("")}
             </tbody></table>`
@@ -176,27 +176,44 @@ const InvoicesView = {
       const i = await API.getJSON(`/api/invoices/${encodeURIComponent(id)}`);
       const problems = i.match.filter((m) => m.result === "blocked" || m.reason);
       container.innerHTML = `
-        <div class="page-header"><a href="#/invoices" style="color:var(--text-muted);font-size:12px;text-decoration:none;">← Invoices</a>
-          <h1 style="margin-top:6px;">${this.esc(i.id)} · ${this.esc(i.supplier)}</h1>
+        <div class="page-header">${UI.backLink("#/invoices", "Invoices")}
+          <h1>${this.esc(i.id)} · ${this.esc(i.supplier)}</h1>
           <p><span class="badge ${this.BADGE[i.status] || ""}">${this.esc(this.STATUS[i.status] || i.status)}</span> · ${formatCurrency(i.total)} · supplier's number ${this.esc(i.number)} · ${formatDate(i.date)}${i.type !== "invoice" ? ` · ${this.esc(i.type.replace("_", " "))}${i.ref_invoice_no ? ` for ${this.esc(i.ref_invoice_no)}` : ""}` : ""}</p></div>
         ${FlowStrip.forInvoice(i)}
-        ${i.reason ? `<div class="panel" style="margin-bottom:12px;color:var(--warning-text);font-size:12.5px;"><strong>${this.esc(i.status === "cancelled" && i.duplicate_of ? "Copy of " + i.duplicate_of : "Why it is blocked")}:</strong> ${this.esc(i.reason)}</div>` : ""}
-        ${i.pending_release ? `<div class="panel" style="margin-bottom:12px;font-size:12.5px;">Waiting for approval: ${this.esc(i.pending_release.summary)} (approve it under Admin → Approvals).</div>` : ""}
+        <div class="doc-layout">
+        <div class="doc-main">
+        ${i.reason ? UI.callout(i.status === "blocked" ? "warning" : "info", i.status === "cancelled" && i.duplicate_of ? `Copy of ${i.duplicate_of}` : "Why it is blocked", `<p>${this.esc(i.reason)}</p>${i.status === "blocked" && i.can_act ? "<p>Fix it with the supplier (a credit note or a corrected invoice), match it again, or ask another person to release it. The buttons below do each of these.</p>" : ""}`) : ""}
+        ${i.pending_release ? UI.callout("info", "Waiting for approval", `<p>${this.esc(i.pending_release.summary)}. An approver decides it under Admin → Approvals.</p>`) : ""}
         <div class="table-wrap" style="margin-bottom:12px;"><table class="data-table"><thead><tr><th>ORDER LINE</th><th>ITEM</th><th>QTY</th><th>PRICE</th><th>TAXABLE</th><th>MATCH</th></tr></thead><tbody>
           ${i.lines.map((l) => { const m = i.match.find((x) => x.line_no === l.line_no) || {};
             return `<tr><td>${this.esc(l.po_no)} / ${this.esc(l.po_line_no)}</td><td>${this.esc(l.name)}</td><td>${this.esc(l.qty)} <span class="cell-muted">${this.esc(l.uom)}</span></td><td>${formatCurrency(l.unit_price)}</td><td>${formatCurrency(l.taxable)}</td>
-              <td>${m.result ? `<span class="badge ${m.result === "blocked" ? "badge-rejected" : "badge-approved"}">${this.esc(m.result.replace("_", " "))}</span>${m.reason ? `<div class="cell-muted" style="font-size:11px;">${this.esc(this.REASON[m.reason] || m.reason)}</div>` : ""}` : ""}</td></tr>`; }).join("")}
-        </tbody></table></div>
-        <div class="panel" style="font-size:12.5px;color:var(--text-secondary);margin-bottom:12px;">Taxable ${formatCurrency(i.taxable)} · CGST ${formatCurrency(i.cgst)} · SGST ${formatCurrency(i.sgst)} · IGST ${formatCurrency(i.igst)} · total ${formatCurrency(i.total)}${i.due_date ? ` · due ${formatDate(i.due_date)}` : ""}<br>Supplier GSTIN ${this.esc(i.supplier_gstin || "none")} · our GSTIN ${this.esc(i.buyer_gstin || "none")}${i.irn ? ` · IRN ${this.esc(i.irn.slice(0, 16))}…` : ""}</div>
+              <td>${m.result ? `<span class="badge ${m.result === "blocked" ? "badge-held" : "badge-approved"}">${this.esc(m.result.replace("_", " "))}</span>${m.reason ? `<div class="cell-muted" style="font-size:11px;">${this.esc(this.REASON[m.reason] || m.reason)}</div>` : ""}` : ""}</td></tr>`; }).join("")}
+        </tbody></table>
+          <div class="table-foot">${UI.totals([["Taxable", i.taxable], ["CGST", i.cgst], ["SGST", i.sgst], ["IGST", i.igst], ["Total", i.total]])}</div></div>
         ${problems.filter((m) => m.line_no === null && m.detail).map((m) => `<div class="cell-muted" style="font-size:12px;margin-bottom:6px;">${this.esc(m.detail)}</div>`).join("")}
-        ${i.can_act ? `<div style="display:flex;gap:8px;flex-wrap:wrap;">
-            <div class="btn btn-secondary btn-sm" id="invExplain"><i class="ti ti-search"></i>Explain why and what to do</div>
-            <div class="btn btn-secondary btn-sm" id="invRematch">Match again</div>
-            <div class="btn btn-secondary btn-sm" id="invRelease">Ask to pay it anyway</div>
-            <div class="btn btn-secondary btn-sm" id="invCancel">Cancel (a corrected invoice is coming)</div></div>
-          <div id="invWhy" style="display:none;margin-top:10px;"><input id="invReason" placeholder="Why? (needed)" style="width:55%;padding:6px;"> <div class="btn btn-primary btn-sm" id="invWhyOk" style="display:inline-block;">Send</div></div>` : ""}
+        ${i.can_act ? `<div class="panel"><div class="panel-title">What you can do</div><div class="btn-row">
+            <div class="btn btn-primary" id="invExplain"><i class="ti ti-search"></i>Explain why and what to do</div>
+            <div class="btn" id="invRematch"><i class="ti ti-refresh"></i>Match again</div>
+            <div class="btn" id="invRelease"><i class="ti ti-lock-open"></i>Ask to pay it anyway</div>
+            <div class="btn btn-danger" id="invCancel"><i class="ti ti-x"></i>Cancel (a corrected invoice is coming)</div></div>
+          <div id="invWhy" class="form-grid" style="display:none;margin-top:12px;grid-template-columns:minmax(200px,1fr) auto;"><label>Why? (needed)<input id="invReason" placeholder="For example: the supplier's price rose and the stock is needed"></label> <div class="btn btn-primary" id="invWhyOk">Send</div></div></div>` : ""}
         <div id="invAdvice"></div>
-        <div id="invNote" style="font-size:12.5px;color:var(--warning-text);margin-top:8px;"></div>`;
+        <div id="invNote" style="font-size:12.5px;color:var(--warning-text);margin-top:8px;"></div>
+        </div>
+        <div class="doc-side">
+        <div class="panel">
+          <div class="panel-title">Invoice details</div>
+          ${UI.facts([
+            ["Supplier's number", this.esc(i.number)],
+            ["Invoice date", formatDate(i.date)],
+            ["Due", i.due_date ? formatDate(i.due_date) : ""],
+            ["Supplier GSTIN", this.esc(i.supplier_gstin || "none")],
+            ["Our GSTIN", this.esc(i.buyer_gstin || "none")],
+            ["IRN", i.irn ? `<span class="mono" title="${this.esc(i.irn)}">${this.esc(i.irn.slice(0, 16))}…</span>` : ""],
+          ])}
+        </div>
+        </div>
+        </div>`;
       const note = document.getElementById("invNote");
       const FIX = { credit_note: "Ask the supplier for a credit note", corrected_invoice: "Ask the supplier for a corrected invoice", wait_for_receipt: "Wait for the goods receipt, then match again", request_release: "Ask for a release" };
       const showAdvice = (d) => {

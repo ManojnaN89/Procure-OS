@@ -4,7 +4,7 @@ const PaymentsView = {
   },
 
   STATUS: { proposed: "Waiting for approval", approved: "Approved", file_generated: "Bank file made", paid: "Paid", cancelled: "Cancelled" },
-  BADGE: { proposed: "badge-pending", approved: "badge-approved", file_generated: "badge-pending", paid: "badge-approved", cancelled: "badge-rejected" },
+  BADGE: { proposed: "badge-waiting", approved: "badge-approved", file_generated: "badge-sent", paid: "badge-paid", cancelled: "badge-draft" },
 
   async render(container, params) {
     if (params && params.id) return this.renderRun(container, params.id);

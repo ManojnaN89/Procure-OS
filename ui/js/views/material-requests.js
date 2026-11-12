@@ -4,7 +4,7 @@
  * Every number comes from the server.
  */
 const MaterialRequestsView = {
-  BADGE: { open: "badge-pending", issued: "badge-approved", cancelled: "badge-rejected" },
+  BADGE: { open: "badge-waiting", issued: "badge-approved", cancelled: "badge-draft" },
 
   esc(value) {
     return String(value ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
@@ -64,7 +64,7 @@ const MaterialRequestsView = {
     return `
       <div class="panel" style="margin-bottom:12px;">
         <div style="display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap;align-items:center;">
-          <div class="panel-title" style="margin:0;">${this.esc(r.no)} · ${this.esc(r.order_no)} (${this.esc(r.product_code)}) · need by ${this.esc(r.need_by)}
+          <div class="panel-title" style="margin:0;">${this.esc(r.no)} · ${this.esc(r.order_no)} (${this.esc(r.product_code)}) · need by ${formatDate(r.need_by)}
             <span class="badge ${this.BADGE[r.status] || ""}">${this.esc(r.status)}</span></div>
           <div style="white-space:nowrap;">${buttons}</div>
         </div>
