@@ -81,11 +81,19 @@ BELT_REPLY = ("SUP-006", "205")  # the only spares supplier answers the V-belt q
 SEAL_QUOTES = {"SUP-002": "94", "SUP-001": "99", "SUP-003": "97"}  # typed in by the buyer
 COPPER_QUOTES = {"SUP-003": "905", "SUP-005": "915", "SUP-001": "930"}
 ASKED = 3  # suppliers asked for a quotation (the platform's default `rfq_supplier_count`)
+BANK_CHARGE = ("CHG000001", "NEFT CHARGES INCL GST", Decimal("17.70"))  # on the bank statement; no payment fits it
+STATEMENT_EXTRA = Decimal("1180")  # the impeller supplier's statement carries freight of 1,000 plus GST we never booked
 PROFILE = yaml.safe_load((lib.ROOT / "datagen" / "catalog" / "apex" / "company.yaml").read_text(encoding="utf-8"))
 
 
 def money(value: Decimal | int | str) -> Decimal:
     return Decimal(str(value)).quantize(CENT, rounding=ROUND_HALF_UP)
+
+
+def on_screen(value: Decimal) -> str:
+    """An amount as the main interface writes it (formatCurrency): whole rupees without paise, else two decimals."""
+    shown = rupees(value)
+    return shown[:-3] if shown.endswith(".00") else shown
 
 
 def rupees(value: Decimal) -> str:
@@ -1121,6 +1129,7 @@ def _run(ctx: Any) -> Outcome:
             # ---------------------------------------------------------------- 10. payment run: finance plans, the director approves, bank file, statement
             pin_today(PAY_DAY)
             d.sync()
+            small_suppliers(d, c, token, expect, by_supplier, suppliers, inv_rows)
             with d.step(
                 "finance",
                 "opens Dashboard: Invoices due: plan a payment run; Payments, See what is due, Send the run for approval",
@@ -1196,7 +1205,8 @@ def _run(ctx: Any) -> Outcome:
                 + "".join(
                     f"{PAY_DAY.isoformat()},UTR{n:06d},NEFT {r[0]} APEX PUMPS,{money(r[2])}\n"
                     for n, r in enumerate(pay_rows, start=1)
-                ),
+                )
+                + f"{PAY_DAY.isoformat()},{BANK_CHARGE[0]},{BANK_CHARGE[1]},{BANK_CHARGE[2]}\n",
                 encoding="utf-8",
             )
             with d.step("finance", "chooses the bank's statement and clicks Import the bank statement") as page:
@@ -1220,6 +1230,8 @@ def _run(ctx: Any) -> Outcome:
                 page.locator("#notificationBellBtn").click()
                 expect(page.locator(".notif-row", has_text="paid and closed").first).to_be_visible()
             d.mark(13)
+            reconcile(d, c, q, token, expect, folder, r_imp, imp_po, inv_rows, pay_rows, contract, seal_po, markup, rate,
+                      suppliers[contract["supplier_code"]]["state_code"] != plant_gstin[:2])  # fmt: skip
 
             # ---------------------------------------------------------------- 11. the control tower and the dashboard agree with what happened
             end_tower = tower()
@@ -1361,6 +1373,154 @@ def _run(ctx: Any) -> Outcome:
     out.passed = out.passed and not any(f.severity in ("high", "medium") for f in out.findings)
     db.close()
     return out
+
+
+# ---- step 13: reconciliation ------------------------------------------------------------------------------------
+
+
+def small_suppliers(
+    d: Journey, c: Any, token: Any, expect: Any, by_supplier: dict[str, list[str]], suppliers: dict[str, Any],
+    inv_rows: dict[str, Any],
+) -> None:  # fmt: skip
+    """On the payment day, before the run: finance sees which small suppliers the law says must be paid, and by when."""
+    small = [s for s in by_supplier if suppliers[s]["msme_category"] in ("micro", "small")]
+    limit = {
+        s: min(45, int(suppliers[s]["agreed_payment_days"] or 45)) if suppliers[s]["msme_agreement"] == "true" else 15
+        for s in small
+    }
+    # the goods were accepted the day they came (the seals passed inspection that day): the deadline counts from then
+    deadlines = sorted((inv_rows[s][0], TODAY + timedelta(days=limit[s])) for s in small)
+    with d.step(
+        "finance", "opens Reconciliation, Small suppliers: the micro supplier's invoice and its legal deadline"
+    ) as page:
+        d.go("finance", "reconciliation")
+        page.locator("#recTabs .tab[data-tab=msme]").click()
+        for no, deadline in deadlines:
+            left = (deadline - PAY_DAY).days
+            expect(page.locator("#msmeBox tr", has_text=no)).to_contain_text(
+                "due today" if left == 0 else f"{abs(left)} day(s) {'left' if left > 0 else 'late'}"
+            )
+    d.keep(13, "small suppliers")
+    msme = demo_ui.api("GET", "/api/reconciliation/msme", token("finance")).json()
+    c.same(
+        "small suppliers: each unpaid invoice of a micro or small supplier, due the agreed days (at most 45) after acceptance",
+        sorted((i["invoice"], date.fromisoformat(i["deadline"])) for i in msme["invoices"]),
+        deadlines,
+    )
+
+
+def reconcile(
+    d: Journey, c: Any, q: Any, token: Any, expect: Any, folder: Path, r_imp: str, imp_po: str,
+    inv_rows: dict[str, Any], pay_rows: list[Any], contract: dict[str, str], seal_po: str, markup: Decimal,
+    rate: Any, inter: bool,
+) -> None:  # fmt: skip
+    """Once everything is paid, finance and AP open Reconciliation: the trace of the contract order, what was received
+    and not invoiced, the bank line no payment fits, and a supplier's statement with one planted difference. Every
+    figure is worked out here from what the journey did, not read from the platform's answer."""
+    supplier = contract["supplier_code"]
+    imp_inv = inv_rows[supplier][0]
+    imp_pay = next(r for r in pay_rows if r[1] == supplier)
+    receipts = [r[0] for r in q("select no from goods_receipt where po_no = :p order by no", p=imp_po)]
+    with d.step(
+        "finance", f"opens Reconciliation, Order trace; traces {imp_po} from the request to the payment"
+    ) as page:
+        d.go("finance", "reconciliation")
+        page.locator("#recTabs .tab[data-tab=trace]").click()
+        page.locator("#traceNo").fill(imp_po)
+        page.locator("#traceGo").click()
+        box = page.locator("#traceBox")
+        expect(box).to_contain_text(f"Order trace · {imp_po}")
+        for title in ("Purchase requests", "Purchase orders", "Goods receipts", "Invoices", "Payments"):
+            expect(box).to_contain_text(title)
+        for no in (r_imp, imp_po, *receipts, imp_inv, imp_pay[0]):
+            expect(box).to_contain_text(no)
+    d.keep(13, "order trace")
+    chain = demo_ui.api("GET", f"/api/trace/{imp_po}", token("finance")).json()
+    c.same(
+        f"the trace of {imp_po}: its request, the order, both deliveries, the invoice and the payment",
+        {s["stage"]: [i["no"] for i in s["items"]] for s in chain["stages"]},
+        {"request": [r_imp], "po": [imp_po], "goods_receipt": receipts, "invoice": [imp_inv], "payment": [imp_pay[0]]},
+    )
+    c.same("the contract order came in two deliveries (120, then 80)", len(receipts), 2)
+
+    # received not invoiced: everything was invoiced at the order price but the seals, invoiced 12% above it
+    seal_price = min(Decimal(v) for v in SEAL_QUOTES.values())
+    extra = money(120 * markup) - money(120 * seal_price)
+    with d.step(
+        "ap", f"opens Reconciliation, Received not invoiced as of {PAY_DAY:%d %b %Y}: only the seals' price difference"
+    ) as page:
+        d.go("ap", "reconciliation")
+        expect(page.locator("#grniBox")).not_to_contain_text("Loading")
+        page.locator("#grniDate").fill(PAY_DAY.isoformat())
+        page.locator("#grniGo").click()
+        rows = page.locator("#grniBox tr[data-po]")
+        expect(rows).to_have_count(1)
+        expect(rows.first).to_contain_text(seal_po)
+        expect(rows.first).to_contain_text(on_screen(extra))
+    d.keep(13, "received not invoiced")
+    grni = demo_ui.api("GET", f"/api/reconciliation/received-not-invoiced?as_of={PAY_DAY}", token("ap")).json()
+    c.same(
+        f"received not invoiced: nothing; invoiced and not received: the {extra} the seals were invoiced above the order",
+        (Decimal(grni["not_invoiced"]), Decimal(grni["not_received"]), [x["po_no"] for x in grni["lines"]]),
+        (Decimal(0), extra, [seal_po]),
+    )
+
+    # the bank's charge on the statement: no payment fits it, so it waits for a person
+    with d.step("finance", "opens Reconciliation, Bank lines: the bank's charge, which no payment fits") as page:
+        d.go("finance", "reconciliation")
+        page.locator("#recTabs .tab[data-tab=bank]").click()
+        expect(page.locator("#bankBox")).to_contain_text(BANK_CHARGE[1])
+        expect(page.locator("#bankBox")).to_contain_text("no payment of this amount is waiting")
+    d.keep(13, "bank lines")
+    open_lines = demo_ui.api("GET", "/api/reconciliation/bank-lines", token("finance")).json()
+    c.same(
+        "bank lines left open: only the charge; every payment's line matched",
+        [(x["utr"], Decimal(x["amount"])) for x in open_lines],
+        [(BANK_CHARGE[0], BANK_CHARGE[2])],
+    )
+
+    # the impeller supplier's statement: our invoice with freight we never booked, and our payment
+    taxable = money(200 * Decimal(contract["price"]))
+    gst = money(taxable * rate("RM-03") / 100) if inter else 2 * money(taxable * rate("RM-03") / 200)
+    ours = taxable + gst
+    utr = str(q("select utr from payment where no = :n", n=imp_pay[0])[0][0])
+    statement = folder / "deccan-statement.csv"
+    statement.write_text(
+        "date,type,document_no,amount,reference\n"
+        f"{TODAY},invoice,DC/2611/0207,{ours + STATEMENT_EXTRA},Impellers 200 nos and freight\n"
+        f"{PAY_DAY},payment,{utr},{money(imp_pay[2])},NEFT {utr}\n",
+        encoding="utf-8",
+    )
+    with d.step(
+        "ap", "opens Reconciliation, Supplier statements; chooses the supplier and its statement; Import and match"
+    ) as page:
+        d.go("ap", "reconciliation")
+        page.locator("#recTabs .tab[data-tab=statements]").click()
+        expect(page.locator(f"#stmtSupplier option[value='{supplier}']")).to_have_count(1)
+        page.locator("#stmtSupplier").select_option(supplier)
+        page.set_input_files("#stmtFile", str(statement))
+        page.locator("#stmtGo").click()
+        invoice_row = page.locator("#stmtResult tr", has_text="DC/2611/0207")
+        expect(invoice_row).to_contain_text("Amount differs")
+        expect(invoice_row).to_contain_text(on_screen(STATEMENT_EXTRA))
+        expect(page.locator("#stmtResult tr", has_text=utr)).to_contain_text("Matched")
+    d.keep(13, "supplier statement")
+    kept = demo_ui.api("GET", "/api/reconciliation/vendor-statements", token("ap")).json()
+    c.same(
+        "the statement: the payment matched, the invoice differs, nothing only on one side",
+        [(x["matched"], x["amount_differs"], x["only_theirs"], x["only_ours"]) for x in kept],
+        [(1, 1, 0, 0)],
+    )
+    found = demo_ui.api("GET", f"/api/reconciliation/vendor-statements/{kept[0]['id']}", token("ap")).json()
+    c.same(
+        f"the invoice on it: ours {ours} (200 at {contract['price']} plus GST), the difference the planted {STATEMENT_EXTRA}",
+        [
+            (x["our_ref"], Decimal(x["our_amount"]), Decimal(x["difference"]))
+            for x in found["results"]
+            if x["outcome"] == "amount_differs"
+        ],
+        [(imp_inv, ours, STATEMENT_EXTRA)],
+    )
 
 
 # ---- steps 1 to 5 from the ERP's production orders -------------------------------------------------------------

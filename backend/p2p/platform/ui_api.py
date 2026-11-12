@@ -1959,7 +1959,8 @@ def _slug_from_token(token: str) -> tuple[str, int] | None:
 async def _push_new_rows(
     ws: WebSocket, slug: str, max_sql: str, query: str, params: dict[str, Any], shape: Any
 ) -> None:
-    """Send rows created after the connection was opened, checking every two seconds, until the client goes away."""
+    """Accept the connection, then send rows created after it was opened, checking every two seconds, until the client
+    goes away. What exists is read before the accept, so a row made the moment the client is connected is still sent."""
     engine = routing.engine_for(slug)
 
     def current_max() -> int:
@@ -1970,8 +1971,11 @@ async def _push_new_rows(
         with Session(engine) as db:
             return _rows(db, query, after=after, **params)
 
+    first = await run_in_threadpool(current_max)  # what exists now is history; only newer rows are pushed
+    await ws.accept()
+
     async def pusher() -> None:
-        last = await run_in_threadpool(current_max)  # what exists now is history; only newer rows are pushed
+        last = first
         while True:
             await asyncio.sleep(2)
             for row in await run_in_threadpool(fetch, last):
@@ -1994,7 +1998,6 @@ async def ws_notifications(ws: WebSocket, token: str = "") -> None:
     if who is None:
         await ws.close(code=4401)
         return
-    await ws.accept()
     slug, user = who
     try:
         await _push_new_rows(
@@ -2015,7 +2018,6 @@ async def ws_trail(ws: WebSocket, session_id: str, token: str = "") -> None:
     if who is None:
         await ws.close(code=4401)
         return
-    await ws.accept()
     slug, _ = who
     try:
         await _push_new_rows(

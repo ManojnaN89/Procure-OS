@@ -263,6 +263,7 @@ def test_the_requester_reminds_the_approver_who_approves_less_and_then_several_a
         head = open_app(browser, LAPTOP)
         sign_in(head, company.emails["Approver"])
         head.goto(f"{URL}/#/requisitions/{first}")
+        expect(head.locator("#lowerBtn")).to_be_visible()  # the request is on screen
         expect(head.locator("#remindBtn")).to_have_count(0)  # the approver is not reminded of their own turn
         head.locator("#lowerBtn").click()
         head.locator(".lowerQty").fill("120")
@@ -278,9 +279,11 @@ def test_the_requester_reminds_the_approver_who_approves_less_and_then_several_a
         head.locator(".pickReq").first.check()
         expect(head.locator("#bulkApprove")).to_contain_text("Approve selected (1)")
         head.locator("#bulkApprove").click()
+        # the list is drawn again once the approval is done: no more boxes to tick, nothing waiting for a decision
+        expect(head.locator(".pickReq")).to_have_count(0)
+        expect(head.locator("#reqTabs .tab").first).to_be_visible()
         expect(head.locator("#reqTabs")).not_to_contain_text("Needs my decision")
-        head.reload()
-        head.locator("#tableWrap tbody tr").first.wait_for()
+        company.db.rollback()
         assert company.db.execute(text("select status from request where no = 'R-2'")).scalar_one() == "approved"
         assert [p for p in page.problems if "409" not in p] == []  # type: ignore[attr-defined]
         assert [p for p in head.problems if "409" not in p] == []  # type: ignore[attr-defined]

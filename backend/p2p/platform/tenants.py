@@ -43,7 +43,7 @@ def control_engine() -> Engine:
     """The one shared engine (with its connection pool) for the control database. Do not dispose it per call."""
     url = _render(control_url())
     if url not in _control_engines:
-        _control_engines[url] = create_engine(url, pool_size=10, max_overflow=20, pool_pre_ping=True)
+        _control_engines[url] = create_engine(url, pool_size=4, max_overflow=16, pool_pre_ping=True)
     return _control_engines[url]
 
 
@@ -172,7 +172,8 @@ def tenant_engine(slug: str) -> Engine:
         row = s.execute(
             select(TenantDatabase).join(Tenant, Tenant.id == TenantDatabase.tenant_id).where(Tenant.slug == slug)
         ).scalar_one()
-        return create_engine(crypto.decrypt(row.connection_encrypted))
+        # Postgres allows 100 connections in all: an engine keeps only two open while idle (a cache holds up to 20)
+        return create_engine(crypto.decrypt(row.connection_encrypted), pool_size=2, max_overflow=8, pool_pre_ping=True)
 
 
 def drop_tenant(slug: str) -> bool:

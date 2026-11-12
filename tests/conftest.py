@@ -3,13 +3,13 @@ from collections.abc import Iterator
 
 import pytest
 from cryptography.fernet import Fernet
-from sqlalchemy import create_engine, text
-from sqlalchemy.engine import make_url
+from sqlalchemy import text
 from sqlalchemy.exc import OperationalError
 
 from p2p.config import get_settings
 from p2p.platform import tenants
 from p2p.platform.routing import clear_engine_cache
+from p2p.platform.scratch_db import ScratchControlDb, ScratchDatabaseInUse
 
 TEST_CONTROL_DB = os.environ.get("P2P_TEST_CONTROL_DB", "p2p_control_test")  # a parallel run sets its own
 
@@ -24,53 +24,32 @@ os.environ.setdefault("JWT_SECRET", "test-secret-for-unit-tests-only-0123456789"
 os.environ.setdefault("TENANT_SECRET_KEY", Fernet.generate_key().decode())
 
 
-def _admin(url_text: str):  # type: ignore[no-untyped-def]
-    return create_engine(make_url(url_text).set(database="postgres"), isolation_level="AUTOCOMMIT")
-
-
-def _drop_leftover_tenants(admin_conn, real_url: str, control_db: str) -> None:  # type: ignore[no-untyped-def]
-    """Drop the tenant databases a previous run left behind (its control database still lists them)."""
-    exists = admin_conn.execute(text("select 1 from pg_database where datname = :n"), {"n": control_db}).first()
-    if not exists:
-        return
-    with create_engine(make_url(real_url).set(database=control_db)).connect() as c:
-        try:
-            names = [r[0] for r in c.execute(text("select database_name from tenant_database"))]
-        except Exception:  # noqa: BLE001 - the old control database was never migrated: nothing to drop
-            names = []
-    for n in names:
-        admin_conn.execute(text(f'drop database if exists "{n}" with (force)'))
+_scratch: ScratchControlDb | None = None
 
 
 @pytest.fixture(scope="session")
 def control_db() -> Iterator[str]:
     """A throw-away control database on the local Postgres; tenant databases made by tests are dropped too."""
-    real_url = get_settings().control_database_url
-    admin = _admin(real_url)
+    global _scratch
+    scratch = ScratchControlDb(get_settings().control_database_url, TEST_CONTROL_DB)
     try:
-        with admin.connect() as c:
-            _drop_leftover_tenants(c, real_url, TEST_CONTROL_DB)  # from a run that was killed before it could clean up
-            c.execute(text(f'drop database if exists "{TEST_CONTROL_DB}" with (force)'))
-            c.execute(text(f'create database "{TEST_CONTROL_DB}"'))
+        scratch.create()
     except OperationalError:
         pytest.skip("local Postgres is not running (docker compose up -d)")
-    test_url = make_url(real_url).set(database=TEST_CONTROL_DB).render_as_string(hide_password=False)
+    except ScratchDatabaseInUse as exc:
+        pytest.exit(str(exc), returncode=3)
+    _scratch = scratch
     previous = os.environ.get("CONTROL_DATABASE_URL")
-    os.environ["CONTROL_DATABASE_URL"] = test_url
+    os.environ["CONTROL_DATABASE_URL"] = scratch.url
     get_settings.cache_clear()
     tenants.migrate_control()
     try:
-        yield test_url
+        yield scratch.url
     finally:
         clear_engine_cache()
         tenants.reset_control_engines()  # the shared pool points at a database that is about to be dropped
-        with create_engine(test_url).connect() as c:
-            names = [r[0] for r in c.execute(text("select database_name from tenant_database"))]
-        with admin.connect() as c:
-            for n in names:
-                c.execute(text(f'drop database if exists "{n}" with (force)'))
-            c.execute(text(f'drop database if exists "{TEST_CONTROL_DB}" with (force)'))
-        admin.dispose()
+        scratch.drop()
+        _scratch = None
         if previous is None:
             os.environ.pop("CONTROL_DATABASE_URL", None)
         else:
@@ -84,8 +63,15 @@ def _empty_job_queue(request: pytest.FixtureRequest) -> None:
     if "control_db" not in request.fixturenames:
         return
     request.getfixturevalue("control_db")
-    with tenants.control_engine().begin() as c:
-        c.execute(text("delete from job"))
+    try:
+        with tenants.control_engine().begin() as c:
+            c.execute(text("delete from job"))
+    except OperationalError:
+        if _scratch is not None and not _scratch.exists():  # stop once, not with an error in every test that follows
+            pytest.exit(
+                f"the test database {TEST_CONTROL_DB} was dropped by another process during the run", returncode=3
+            )
+        raise
 
 
 @pytest.fixture(autouse=True)

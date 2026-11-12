@@ -3,10 +3,12 @@ import uuid
 from collections.abc import Iterator
 from typing import Any
 
+import anyio
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import text
 from sqlalchemy.orm import Session
+from starlette.testclient import WebSocketTestSession
 from starlette.websockets import WebSocketDisconnect
 
 from p2p.main import app
@@ -187,12 +189,26 @@ def test_the_trail_shows_what_an_agent_did_in_the_shape_the_interface_expects(en
     assert client.get("/api/trail?agent=nobody", headers=env.h(env.admin, "Admin")).json() == []
 
 
+def _receive_json(ws: WebSocketTestSession, seconds: float) -> Any:
+    """The next message, or a failure after `seconds`: a message that never comes must not hang the test run."""
+
+    async def receive() -> Any:
+        with anyio.move_on_after(seconds):
+            return await ws._send_rx.receive()  # noqa: SLF001 - the test client's receive has no time limit
+        return None
+
+    message = ws.portal.call(receive)
+    if message is None:
+        pytest.fail(f"nothing was pushed within {seconds} seconds")
+    return json.loads(message["text"])
+
+
 def test_a_new_alert_is_pushed_to_an_open_connection_and_only_to_the_right_person(env: Env) -> None:
     with client.websocket_connect(f"/ws/notifications?token={env.token(env.other, 'Requester')}") as ws:
         env.alert("secret of the admin", user=env.admin)
         env.alert("for everyone", user=None, severity="high")
         env.db.commit()
-        got = ws.receive_json()  # the pusher checks every two seconds
+        got = _receive_json(ws, 30)  # the pusher checks every two seconds
 
     assert got["message"] == "for everyone" and got["severity"] == "high" and got["read"] is False
 

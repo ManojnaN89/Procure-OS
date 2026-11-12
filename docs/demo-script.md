@@ -44,7 +44,19 @@ Apex Pumps is the main demo company: one pump plant at Chakan, nine people, sixt
 | 20 | store@ | **Run store check**, then **Issue for production** on MO-1 → **Issue what is set aside** | Stock is set aside earliest need-by first; what is short goes for approval, priced at the contract price, else the last price paid (the wire and seals the journey bought), else the standard price |
 | 21 | planthead@, then buyer@ | Open MO-1's request (lines "Short for MO-1", the budget) and approve it by the emailed link; buyer@ opens it | Each line shows its buying route and why; the castings go straight to an order on the contract |
 
-Every step of the plan's 13 has a picture in `evals/results/journeys/steps/` (Apex and Brightwave), and `journey.md` says which step of the journey shows it.
+## Reconciliation (step 13)
+
+After step 16, everything is paid. **Reconciliation** is in the menu of finance@ and ap@:
+
+| # | Who | Where and what | You should see |
+|---|---|---|---|
+| 1 | finance@ | Before the run in step 15: **Reconciliation** → **Small suppliers** | Gujarat's seal invoice, due by law 45 days after the seals were accepted (the days agreed in writing) |
+| 2 | finance@ | **Order trace** → the impeller order's number → **Trace** | Every step of the case: the request, the order, both receipts (120, then 80), the invoice and the payment, with dates, amounts and who acted |
+| 3 | ap@ | **Received not invoiced** → as of the payment day → **Show** | Nothing received and not invoiced; one line invoiced and not received: the seals, invoiced ₹1,353.60 above the order price (the block that was released) |
+| 4 | finance@ | **Bank lines** (if the bank statement had a line no payment fits, such as the bank's charge) | The line, why it is open, and the payments of the same amount it could be |
+| 5 | ap@ | **Supplier statements** → Deccan Castings → a statement (template: **Download the template**) with its invoice DC/2611/0207 at ₹1,180 more than ours and our payment → **Import and match** | The payment **Matched**; the invoice **Amount differs** by ₹1,180, with ours and theirs side by side |
+
+Every step of the plan's 13 has a picture in `evals/results/journeys/steps/` (Apex and Brightwave), and `journey.md` says which step of the journey shows it; the reconciliation screens have one each too (`journey-13-1-…` onwards).
 
 ## The supplier's answer (step 8)
 

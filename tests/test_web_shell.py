@@ -45,6 +45,11 @@ pytestmark = pytest.mark.skipif(not DIST.is_file(), reason="frontend is not buil
 
 @pytest.fixture(scope="module")
 def server(control_db: str) -> Iterator[subprocess.Popen[bytes]]:
+    try:
+        httpx.get(f"{URL}/api/health", timeout=1)
+        pytest.exit(f"port {PORT} is already in use (another test run?): set P2P_WEB_TEST_PORT", returncode=3)
+    except httpx.HTTPError:
+        pass  # free, as it should be: otherwise the tests would talk to another run's server and database
     py = REPO_ROOT / "backend" / ".venv" / ("Scripts" if sys.platform == "win32" else "bin") / "python"
     proc = subprocess.Popen(  # noqa: S603
         [str(py), "-m", "uvicorn", "p2p.main:app", "--port", str(PORT), "--log-level", "warning"],
@@ -52,7 +57,7 @@ def server(control_db: str) -> Iterator[subprocess.Popen[bytes]]:
         env={**os.environ, "EXTRA_MODULES": "web_test_support", "PYTHONPATH": str(REPO_ROOT / "tests")},
     )
     deadline = time.time() + 90  # a busy machine can take over 30 s to start
-    while time.time() < deadline:
+    while time.time() < deadline and proc.poll() is None:
         try:
             if httpx.get(f"{URL}/api/health", timeout=1).status_code == 200:
                 break

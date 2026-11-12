@@ -562,6 +562,51 @@ def _run(ctx: Any) -> Outcome:  # noqa: C901 - one story, step by step
             c.same("every invoice is paid", sorted({r[0] for r in q("select status from invoice")}), ["paid"])
             c.same("every order is closed", sorted({r[0] for r in q("select status from po")}), ["closed"])
 
+            # ---------------------------------------------------------------- 13. reconciliation: the service order's trace, nothing left open
+            entries = [r[0] for r in q("select no from service_entry where po_no = :p order by no", p=house_po)]
+            house_pay = [r[0] for r in pays if r[1] == house_supplier]
+            with d.step(
+                "finance", f"opens Reconciliation, Order trace; traces {house_po}: the service from request to payment"
+            ) as page:
+                d.go("finance", "reconciliation")
+                page.locator("#recTabs .tab[data-tab=trace]").click()
+                page.locator("#traceNo").fill(house_po)
+                page.locator("#traceGo").click()
+                box = page.locator("#traceBox")
+                expect(box).to_contain_text("Service entries")
+                for no in (r_house, house_po, *entries, inv_house, *house_pay):
+                    expect(box).to_contain_text(no)
+            d.keep(13, "order trace")
+            chain = demo_ui.api("GET", f"/api/trace/{house_po}", token("finance")).json()
+            c.same(
+                f"the trace of {house_po}: the request, the order, the requester's confirmation, the invoice, the payment",
+                {s["stage"]: [i["no"] for i in s["items"]] for s in chain["stages"]},
+                {
+                    "request": [r_house],
+                    "po": [house_po],
+                    "service_entry": entries,
+                    "invoice": [inv_house],
+                    "payment": house_pay,
+                },
+            )
+            with d.step(
+                "finance", f"opens Received not invoiced as of {PAY_DAY:%d %b %Y}: nothing is left open"
+            ) as page:
+                page.locator("#recTabs .tab[data-tab=grni]").click()
+                page.locator("#grniDate").fill(PAY_DAY.isoformat())
+                page.locator("#grniGo").click()
+                expect(page.locator("#grniBox")).to_contain_text("Everything received by this date is invoiced")
+            d.keep(13, "received not invoiced")
+            grni = demo_ui.api(
+                "GET", f"/api/reconciliation/received-not-invoiced?as_of={PAY_DAY}", token("finance")
+            ).json()
+            # each line was invoiced at its order price for what was received: the laptop, five headsets, the service
+            c.same(
+                "received not invoiced and invoiced not received: both nothing",
+                (Decimal(grni["not_invoiced"]), Decimal(grni["not_received"]), grni["lines"]),
+                (Decimal(0), Decimal(0), []),
+            )
+
             # ---------------------------------------------------------------- who did what
             def actors(*actions: str) -> set[str]:
                 return {

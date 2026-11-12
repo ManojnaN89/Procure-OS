@@ -89,6 +89,7 @@ class Demo:
         self.names: dict[str, str] = {}  # key -> "Prakash Gowda (Head - Stores & Logistics)"
         self.steps: list[dict[str, str]] = []
         self.flow: dict[int, int] = {}  # plan step -> transcript step that shows it
+        self.kept: list[tuple[int, int, str]] = []  # more pictures of a plan step: (plan step, transcript step, what)
         self.problems: list[str] = []
         self.allowed: list[str] = []  # responses the script expects to be refused, while it checks a refusal
         self.folder = RESULTS / name
@@ -194,6 +195,10 @@ class Demo:
         """The step just taken shows this step of the plan's flow (the last one marked for a step is its picture)."""
         self.flow[flow_step] = len(self.steps)
 
+    def keep(self, flow_step: int, what: str) -> None:
+        """The step just taken shows one more screen of this step of the plan; its picture is kept in `steps/` too."""
+        self.kept.append((flow_step, len(self.steps), what))
+
     def visitor(self, key: str, who: str) -> Any:
         """Someone with no login (a supplier, an approver by email) in their own browser window."""
         ctx = self.browser.new_context(viewport=LAPTOP)
@@ -254,6 +259,14 @@ class Demo:
                 shutil.copyfile(self.folder / s["shot"], steps_dir / kept)
                 pic = f"[{kept}](steps/{kept})"
             out.append(f"| {n}. {FLOW[n]} | #{s['n']}: {s['did']} | {pic} |")
+            for i, (_, at, what) in enumerate((k for k in self.kept if k[0] == n), start=1):
+                s = self.steps[at - 1]
+                pic = ""
+                if s["shot"] and (self.folder / s["shot"]).is_file():
+                    kept = f"{self.name}-{n:02d}-{i}-{slug(what)}.jpg"
+                    shutil.copyfile(self.folder / s["shot"], steps_dir / kept)
+                    pic = f"[{kept}](steps/{kept})"
+                out.append(f"| {n}. {FLOW[n]}: {what} | #{s['n']}: {s['did']} | {pic} |")
         missing = [f"{n}. {FLOW[n]}" for n in FLOW if n not in self.flow]
         if missing:
             out += ["", f"Not shown: {', '.join(missing)}"]
