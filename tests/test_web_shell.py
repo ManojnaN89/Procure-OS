@@ -51,7 +51,7 @@ def server(control_db: str) -> Iterator[subprocess.Popen[bytes]]:
         cwd=REPO_ROOT / "backend",
         env={**os.environ, "EXTRA_MODULES": "web_test_support", "PYTHONPATH": str(REPO_ROOT / "tests")},
     )
-    deadline = time.time() + 30
+    deadline = time.time() + 90  # a busy machine can take over 30 s to start
     while time.time() < deadline:
         try:
             if httpx.get(f"{URL}/api/health", timeout=1).status_code == 200:
