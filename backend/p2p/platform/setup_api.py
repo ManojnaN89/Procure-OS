@@ -60,6 +60,7 @@ PERMISSIONS: dict[str, str] = {
     "contract.manage": "Store contracts and their price lists",
     "contract.activate": "Activate a contract",
     "grn.create": "Receive and inspect goods",
+    "grn.unordered_approve": "Approve goods received without an order",
     "stock.view": "See stock",
     "stock.issue": "Issue stock for use",
     "stock.adjust": "Correct stock after a count",

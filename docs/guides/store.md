@@ -13,7 +13,7 @@ You receive the goods and say what is wrong with them.
 3. For each line enter the quantity received, the quantity rejected and why. Add the delivery challan number and the supplier invoice number. The person who asked for the goods and the buyer are told what arrived, and what was rejected.
 4. Click **Post receipt**. Stock goes up by the accepted quantity.
 
-More than the tolerance allows over the order is refused. The tolerance is set per item category by the Admin.
+More than the tolerance allows over the order is refused. The tolerance is set per item category by the Admin. A part delivery leaves the order open for the rest; the buyer is reminded if the supplier's date passes. A laptop or other serialised item needs one serial number per unit; a serial received before is refused.
 
 ## Inspect
 
@@ -35,9 +35,9 @@ Each production order imported from the ERP gets a material request: one line pe
 
 **Inventory** shows how much of each item is set aside. Stock set aside cannot be issued for anything else.
 
-## Part deliveries
+## Goods with no order
 
-Receive what came. The order stays open for the rest. The buyer is reminded if the supplier's date passes.
+Open **Receive without order**: enter the supplier, item, quantity, place and why, then **Record and ask the purchase manager**. Nothing goes into stock yet. Once the buyer has raised the order and it is sent, click **Post the receipt**. If it is rejected, send the goods back and click **Mark returned**. Services are not received here: the person who asked confirms them.
 
 ## What you cannot do
 
@@ -45,4 +45,4 @@ You cannot enter the invoice or approve the order for the same goods. Someone el
 
 ## If you are stuck
 
-If a delivery has no order, ask the buyer to raise one. If something is wrong with a receipt you have already posted, tell the buyer and the AP clerk before the invoice is matched.
+If something is wrong with a receipt you have already posted, tell the buyer and the AP clerk before the invoice is matched.

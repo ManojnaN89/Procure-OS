@@ -339,6 +339,7 @@ TABLES: tuple[Table, ...] = (
             ("stocked", "boolean"),
             ("capex", "boolean"),
             ("inspection_required", "boolean"),
+            ("serialised", "boolean"),
             ("hazardous", "boolean"),
             ("default_lead_days", "integer"),
             ("attributes", "text"),

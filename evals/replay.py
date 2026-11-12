@@ -33,6 +33,26 @@ def when(value: str) -> datetime:
     return datetime.fromisoformat(value)
 
 
+def post_service_entry(db, entry: dict) -> None:
+    """A service entry of the dataset (the requester's confirmation, by amount) as the platform keeps it: the amount at
+    the order price counts as received on the line, so the service's invoice is matched against it."""
+    key = {"p": entry["po_no"], "l": int(entry["po_line_no"])}
+    price = D(db.execute(text("select unit_price from po_line where po_no = :p and line_no = :l"), key).scalar_one())
+    qty = (D(entry["amount_accepted"]) / price).quantize(D("0.0001"))
+    extra = {"basis": "amount", "value": D(entry["amount_accepted"]), "qty_accepted": qty, "posted_by": "import"}
+    insert(db, "service_entry", entry, extra)
+    db.execute(
+        text("update po_line set received_qty = received_qty + :q where po_no = :p and line_no = :l"), {"q": qty, **key}
+    )
+
+
+def service_events(rows_: list[dict], allowed: set[str], zone) -> list[tuple]:
+    """The dataset's service entries as replay events, from the start of their day (the dataset counts a confirmation
+    for an invoice that arrives the same day)."""
+    at = lambda r: datetime.combine(date.fromisoformat(r["accepted_on"]), time(0), tzinfo=zone)  # noqa: E731
+    return [(at(r), 0, "service", r["no"]) for r in rows_ if r["po_no"] in allowed]
+
+
 def replay(
     world,
     *,
@@ -43,7 +63,8 @@ def replay(
     goods_only: bool = False,
     advances: bool = False,
 ):
-    """Replay the dataset's history. `suppliers` and `goods_only` restrict it to the orders (and what follows from them) of
+    """Replay the dataset's history (goods receipts, service entries and invoices in the order they happened).
+    `suppliers` and `goods_only` restrict it to the orders (and what follows from them) of
     those suppliers that carry no service line; `advances` pays the dataset's advances (through a payment run approved by
     the Approver login) on the day it paid them, so that invoices received later can take them off."""
     from p2p.invoices import payment
@@ -135,6 +156,8 @@ def replay(
     zone = events[0][0].tzinfo if events else None  # the dataset's times may or may not carry an offset
     for no, p in advance_rows.items():  # paid at noon, after the morning's receipts and invoices
         events.append((datetime.combine(date.fromisoformat(p["paid_on"]), time(12), tzinfo=zone), 2, "advance", no))
+    services = {r["no"]: r for r in history("service_receipt")}
+    events += service_events(list(services.values()), allowed, zone)
     events.sort(key=lambda e: (e[0], e[1], e[3]))
     by_no = {r["no"]: r for r in all_invoices}
 
@@ -159,6 +182,10 @@ def replay(
             except Exception as exc:  # noqa: BLE001 - recorded, and the eval reports it
                 db.rollback()
                 errors.append(f"advance {key}: {exc}")
+            db.commit()
+            continue
+        if kind == "service":
+            post_service_entry(db, services[key])
             db.commit()
             continue
         if kind == "receipt":

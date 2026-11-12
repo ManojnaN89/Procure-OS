@@ -14,7 +14,7 @@ You enter supplier invoices and work the ones that do not match.
 
 ## When it is blocked
 
-The **Blocked** list shows each blocked invoice with the reason and a line starting "Next:" that says what to do about it. Open the invoice. It says why: price over the order, more quantity than received, tax or IRN problem, or a duplicate.
+The **Blocked** list shows each blocked invoice with the reason and a line starting "Next:" that says what to do about it. Open the invoice. It says why: price over the order, more quantity than received, a service the requester has not confirmed yet (it is matched again by itself once they do), tax or IRN problem, or a duplicate.
 
 1. Click **Explain why and what to do** for a plain-words explanation.
 2. If goods or a price are being corrected, wait, then click **Match again**.

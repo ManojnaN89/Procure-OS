@@ -23,6 +23,7 @@ from p2p.platform.master_api import router as master_router
 from p2p.platform.material_api import router as material_router
 from p2p.platform.order_api import router as order_router
 from p2p.platform.payment_api import router as payment_router
+from p2p.platform.service_entry_api import router as service_entry_router
 from p2p.platform.setup_api import router as setup_router
 from p2p.platform.supplier_agent_api import router as supplier_agent_router
 from p2p.platform.ui_api import router as ui_router
@@ -51,6 +52,7 @@ app.include_router(agent_router)
 app.include_router(approval_link_router)
 app.include_router(payment_router)
 app.include_router(supplier_agent_router)
+app.include_router(service_entry_router)
 app.include_router(ui_sockets)
 
 

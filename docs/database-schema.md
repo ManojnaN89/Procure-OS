@@ -27,7 +27,7 @@ Reading a line: `name*` is part of the primary key, `name?` may be empty, then t
 
 ## Tenant database (one per company)
 
-118 tables.
+121 tables.
 
 **advance** · payment_no* text, po_no text, gross num, taxable num, used_gross num, used_taxable num, paid_on? date
 
@@ -107,7 +107,7 @@ Reading a line: `name*` is part of the primary key, `name?` may be empty, then t
 
 **invoice_line** · invoice_no* text, line_no* int, po_no text, po_line_no int, description? text, hsn_sac? text, qty num, uom? text, unit_price num, discount num, taxable num, gst_rate num, cgst num, sgst num, igst num
 
-**item** · code* text, name? text, description? text, category_code? text, kind? text, default_gl? int, brand? text, base_uom? text, purchase_uom? text, pack_size? int, moq? int, hsn_sac? text, gst_rate_before? int, gst_rate_after? int, gst_rate_alt_before? int, gst_rate_alt_after? int, gst_rate_change_date? date, gst_rate_confidence? text, gst_reverse_charge? text, gst_note? text, standard_price? num, abc_class? text, stocked? bool, capex? bool, inspection_required? bool, hazardous? bool, default_lead_days? int, attributes? text, active? bool
+**item** · code* text, name? text, description? text, category_code? text, kind? text, default_gl? int, brand? text, base_uom? text, purchase_uom? text, pack_size? int, moq? int, hsn_sac? text, gst_rate_before? int, gst_rate_after? int, gst_rate_alt_before? int, gst_rate_alt_after? int, gst_rate_change_date? date, gst_rate_confidence? text, gst_reverse_charge? text, gst_note? text, standard_price? num, abc_class? text, stocked? bool, capex? bool, inspection_required? bool, hazardous? bool, default_lead_days? int, attributes? text, active? bool, serialised? bool
 
 **item_category** · code* text, name? text, parent_code? text, kind? text, default_gl? int, stocked? bool, capex? bool, min_quotes? int, buyer_user? text, approval_category? text, required_attributes? text, required_supplier_docs? text, inspection_required? bool, default_tds_section? text, reverse_charge_default? text
 
@@ -221,6 +221,10 @@ Reading a line: `name*` is part of the primary key, `name?` may be empty, then t
 
 **sanction_entry** · id* bigint, name? text, country? text, list_name? text, listed_on? date, aliases? text
 
+**serial_number** · item_code* text, serial* text, gr_no text, po_no text, po_line_no int, created_at timestamptz
+
+**service_entry** · no* text, po_no text, po_line_no int, period_from? date, period_to? date, basis text, value num, qty_accepted num, amount_accepted num, accepted_by text, accepted_on date, via text, remarks? text, posted_by text, created_at timestamptz
+
 **setup_change** · id* bigint, at timestamptz, by_user text, area text, key text, old_value? jsonb, new_value? jsonb, reason text
 
 **sourcing_decision** · id* bigint, request_no text, line_no int, method text, supplier_code? text, contract_code? text, price? num, uom? text, lead_days? int, price_valid_to? date, rfq_no? text, reason text, decided_at timestamptz, route? text, route_rule? text, checks? jsonb, line_value? num, window_value? num, min_quotes? int, decided_on? date, needs_agreement bool, proposal_id? bigint
@@ -256,6 +260,8 @@ Reading a line: `name*` is part of the primary key, `name?` may be empty, then t
 **tolerance** · id* bigint, key? text, value? text, category_code? text, note? text
 
 **touchless_rule** · id* bigint, version int, effective_from date, effective_to? date, value_limit? num, price_pct num, note? text, created_by? text, created_at timestamptz
+
+**unordered_receipt** · no* text, supplier_code text, item_code text, qty num, uom? text, location_code text, reason text, challan? text, serials jsonb, received_by text, posted_by text, received_on date, status text, proposal_id? bigint, decided_by? text, decided_at? timestamptz, decision_note? text, po_no? text, gr_no? text, returned_on? date, return_ref? text, created_at timestamptz
 
 **uom_conversion** · item_code* text, from_uom* text, to_uom* text, factor? num
 

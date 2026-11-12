@@ -52,6 +52,19 @@ Steps 1 to 3 of the flow, on their own (after `demo reset apex`; they add two re
 | 3 | store@ | **Inventory** | The impellers show 50 of 60 set aside for production; the free 10 are all that can be issued |
 | 4 | store@ | **Material requests** → MO-1 → **Issue for production** | Everything set aside is issued; what is short stays on the request until it arrives (run the store check again, then issue) |
 
+## Services and goods with no order (Brightwave)
+
+On `python -m p2p.cli demo reset brightwave` (logins `@brightwave.example`, same password). Brightwave buys services (housekeeping, guards, AC maintenance on a service contract with Clean and Secure; software and cloud) and laptops, which are serialised. Eval E43 checks the same rules through the API on Brightwave's history.
+
+| # | Who | Where and what | You should see |
+|---|---|---|---|
+| 1 | facilities@ | **Requests** → **New request** → **Housekeeping**, 1 → submit; once it is approved the order goes to Clean and Secure on the contract | The order for the month, sent |
+| 2 | ap@ | **Enter an invoice** for the housekeeping order before anyone confirms it | **Blocked**: "Service not confirmed" |
+| 3 | facilities@ | **Confirm services** → the housekeeping line → percent 100 → **Confirm** (or the link in the end-of-period email: `python -m p2p.cli confirm-services brightwave`) | The confirmation is listed; the blocked invoice is matched again and approved. 100.01% is refused |
+| 4 | facilities@ | **Receive without order** → two laptops (LP-01) that came against a phone call, with their two serial numbers → **Record and ask the purchase manager** | Waiting; stock unchanged |
+| 5 | ithead@, then buyer@ | ithead@: **Receive without order** → **Approve**. buyer@: **Raise the order** at ₹62,000 a laptop, then send it | An order for ₹1,24,000 plus GST, linked to the receipt |
+| 6 | facilities@ | **Post the receipt** | Two laptops in stock with their serials; the same serial again is refused |
+
 ## Start with cases in flight
 
 `python -m p2p.cli demo populate apex --reset` (about 20 seconds, local database only) makes the company and then does what the people would do, through the real API, so every figure, email, notification and audit row is real:

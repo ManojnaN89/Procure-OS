@@ -10,6 +10,7 @@ from typing import Any
 
 import lib
 from lib import D, rows
+from replay import post_service_entry, service_events
 from sqlalchemy import text
 
 
@@ -34,41 +35,31 @@ def _when(value: str) -> datetime:
 
 
 def replay(world: Any, *, limit_invoices: int | None = None) -> dict[str, Any]:
-    """The orders for services and their invoices are left out: the platform has no service entry yet to match them to."""
+    """Orders for services are matched against the dataset's service entries (the requester's confirmations)."""
     from p2p.invoices import service as invoices
 
     db, ap = world.db, world.logins["AP"]
     history = lambda name: rows("history", name)  # noqa: E731
-    services = {i["code"] for i in rows("master", "item") if i["kind"] == "service"}
-    service_pos = {ln["po_no"] for ln in history("po_line") if ln["item_code"] in services}
     for r in history("po"):
-        if r["no"] in service_pos:
-            continue
         _insert(db, "po", r)
     for r in history("po_line"):
-        if r["po_no"] in service_pos:
-            continue
         _insert(
             db, "po_line", r,
             {"received_qty": 0, "invoiced_qty": 0, "source": "award", "request_no": r["po_no"], "request_line_no": int(r["line_no"]),
              "taxable": (D(r["qty"]) * D(r["unit_price"])).quantize(D("0.01"))},
         )  # fmt: skip
     for r in history("po_charge"):
-        if r["po_no"] not in service_pos:
-            _insert(db, "po_charge", r)
+        _insert(db, "po_charge", r)
     db.commit()
 
-    receipts = {r["no"]: r for r in history("goods_receipt") if r["po_no"] not in service_pos}
+    receipts = {r["no"]: r for r in history("goods_receipt")}
     receipt_lines: dict[str, list[dict]] = defaultdict(list)
     for r in history("gr_line"):
         receipt_lines[r["gr_no"]].append(r)
     inv_lines: dict[str, list[dict]] = defaultdict(list)
     for r in history("invoice_line"):
         inv_lines[r["invoice_no"]].append(r)
-    on_services = {n for n, ls in inv_lines.items() if any(ln["po_no"] in service_pos for ln in ls)}
-    all_invoices = [
-        r for r in history("invoice") if r["no"] not in on_services and r["ref_invoice_no"] not in on_services
-    ]
+    all_invoices = history("invoice")
     if limit_invoices:
         all_invoices = all_invoices[:limit_invoices]
     inv_charges: dict[str, list[dict]] = defaultdict(list)
@@ -85,9 +76,16 @@ def replay(world: Any, *, limit_invoices: int | None = None) -> dict[str, Any]:
     for r in all_invoices:
         first_po = inv_lines[r["no"]][0]["po_no"] if inv_lines[r["no"]] else ""
         arrived = max(
-            _when(r["received_at"]), receipt_for.get((first_po, r["supplier_invoice_no"]), _when(r["received_at"]))
+            _when(r["received_at"]),
+            receipt_for.get((first_po, r["supplier_invoice_no"]), _when(r["received_at"])),
         )
         events.append((arrived, 1, "invoice", r["no"]))
+    services = {r["no"]: r for r in history("service_receipt")}
+    events += service_events(
+        list(services.values()),
+        {r["no"] for r in history("po")},
+        events[0][0].tzinfo if events else None,
+    )
     events.sort(key=lambda e: (e[0], e[1], e[3]))
     by_no = {r["no"]: r for r in all_invoices}
 
@@ -95,6 +93,10 @@ def replay(world: Any, *, limit_invoices: int | None = None) -> dict[str, Any]:
     entered: dict[str, Any] = {}
     errors: list[str] = []
     for _, _, kind, key in events:
+        if kind == "service":
+            post_service_entry(db, services[key])
+            db.commit()
+            continue
         if kind == "receipt":
             _insert(db, "goods_receipt", receipts[key], {"posted_by": "import"})
             for ln in receipt_lines[key]:

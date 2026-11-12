@@ -62,7 +62,7 @@ const ReceivingView = {
           <table class="data-table"><thead><tr><th>ITEM</th><th>ORDERED</th><th>RECEIVED SO FAR</th><th>ARRIVED NOW</th><th>REJECTED</th><th>REASON FOR REJECTION</th></tr></thead><tbody>
             ${o.lines.map((l) => `
               <tr data-line="${this.esc(l.line_no)}">
-                <td>${this.esc(l.name)}<div class="cell-muted" style="font-size:11px;">${this.esc(l.item_code || "")}</div></td>
+                <td>${this.esc(l.name)}<div class="cell-muted" style="font-size:11px;">${this.esc(l.item_code || "")}</div>${l.serialised ? `<input class="recv-serials" placeholder="Serial numbers, one per unit, commas between" style="width:100%;padding:5px;margin-top:4px;">` : ""}</td>
                 <td>${this.esc(l.ordered)} <span class="cell-muted">${this.esc(l.uom)}</span></td>
                 <td>${this.esc(l.received)}</td>
                 <td><input class="recv-qty" type="number" min="0" step="any" style="width:90px;padding:5px;"></td>
@@ -91,6 +91,7 @@ const ReceivingView = {
         qty_received: tr.querySelector(".recv-qty").value,
         qty_rejected: tr.querySelector(".recv-rej").value,
         reject_reason: tr.querySelector(".recv-why").value,
+        serials: tr.querySelector(".recv-serials") ? tr.querySelector(".recv-serials").value.split(/[,\n]/).map((s) => s.trim()).filter(Boolean) : undefined,
       }))
       .filter((l) => l.qty_received !== "" && Number(l.qty_received) > 0);
     if (!lines.length) { note.textContent = "Enter the quantity that arrived on at least one line."; return; }

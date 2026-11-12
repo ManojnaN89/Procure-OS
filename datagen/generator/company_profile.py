@@ -312,6 +312,7 @@ class MasterWriter:
                     "stocked": str(stocked).lower(),
                     "capex": str(it.get("capex", False)).lower(),
                     "inspection_required": str(it.get("inspection", False)).lower(),
+                    "serialised": str(it.get("serialised", False)).lower(),
                     "hazardous": "false",
                     "default_lead_days": it["lead"],
                     "attributes": "{}",

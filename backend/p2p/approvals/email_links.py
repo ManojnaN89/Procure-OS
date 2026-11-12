@@ -52,11 +52,11 @@ class Link:
         return f"{self.request_no}:{self.round_no}:{self.step}"
 
 
-def _key() -> bytes:
+def _key(purpose: str) -> bytes:
     secret = get_settings().jwt_secret
     if not secret:
-        raise LinkError("approval links are not available: no signing secret is set")
-    return hashlib.sha256(b"approval-link:" + secret.encode()).digest()
+        raise LinkError("emailed links are not available: no signing secret is set")
+    return hashlib.sha256(f"{purpose}:".encode() + secret.encode()).digest()
 
 
 def _b64(data: bytes) -> str:
@@ -67,27 +67,44 @@ def _unb64(text_: str) -> bytes:
     return base64.urlsafe_b64decode(text_ + "=" * (-len(text_) % 4))
 
 
-def make(tenant: str, request_no: str, round_no: int, step: int, user_id: int, *, now: float | None = None) -> str:
+def sign(purpose: str, fields: list[Any], *, now: float | None = None) -> str:
+    """A signed token carrying `fields` and an expiry. The purpose is part of the key, so a token made for one kind of
+    link is not valid as another. Used by every emailed link that acts (approvals here, service confirmations too)."""
     expires = int((time.time() if now is None else now) + EXPIRES_DAYS * 86400)
-    body = _b64(json.dumps([tenant, request_no, round_no, step, user_id, expires], separators=(",", ":")).encode())
-    return f"{body}.{_b64(hmac.new(_key(), body.encode(), hashlib.sha256).digest())}"
+    body = _b64(json.dumps([*fields, expires], separators=(",", ":")).encode())
+    return f"{body}.{_b64(hmac.new(_key(purpose), body.encode(), hashlib.sha256).digest())}"
 
 
-def read(token: str, *, now: float | None = None) -> Link:
-    """The link a token stands for. Raises LinkError for anything altered, malformed or expired."""
+def unsign(purpose: str, token: str, *, now: float | None = None, expired: str = "this link has expired") -> list[Any]:
+    """The fields of a token made by `sign`, the expiry last. Raises LinkError for anything altered, malformed or expired."""
     try:
         body, signature = token.split(".")
-        good = hmac.compare_digest(_unb64(signature), hmac.new(_key(), body.encode(), hashlib.sha256).digest())
-        tenant, no, round_no, step, user_id, expires = json.loads(_unb64(body))
+        good = hmac.compare_digest(_unb64(signature), hmac.new(_key(purpose), body.encode(), hashlib.sha256).digest())
+        fields = json.loads(_unb64(body))
+        expires = int(fields[-1])
     except LinkError:
         raise
     except Exception:  # noqa: BLE001 - whatever is wrong with the text, it is not a link we made
         raise LinkError("this link is not valid") from None
-    if not good:
+    if not good or not isinstance(fields, list):
         raise LinkError("this link is not valid")
-    if (time.time() if now is None else now) > int(expires):
-        raise LinkError("this link has expired: open the request in the app")
-    return Link(str(tenant), str(no), int(round_no), int(step), int(user_id), int(expires))
+    if (time.time() if now is None else now) > expires:
+        raise LinkError(expired)
+    return fields
+
+
+def make(tenant: str, request_no: str, round_no: int, step: int, user_id: int, *, now: float | None = None) -> str:
+    return sign("approval-link", [tenant, request_no, round_no, step, user_id], now=now)
+
+
+def read(token: str, *, now: float | None = None) -> Link:
+    """The link a token stands for. Raises LinkError for anything altered, malformed or expired."""
+    fields = unsign("approval-link", token, now=now, expired="this link has expired: open the request in the app")
+    try:
+        tenant, no, round_no, step, user_id, expires = fields
+        return Link(str(tenant), str(no), int(round_no), int(step), int(user_id), int(expires))
+    except (TypeError, ValueError):
+        raise LinkError("this link is not valid") from None
 
 
 def _waiting(db: Session, link: Link) -> dict[str, Any]:

@@ -39,7 +39,7 @@ _BUTTONS = {
 }
 
 
-def _page(title: str, body: str, status: int = 200) -> HTMLResponse:
+def page(title: str, body: str, status: int = 200) -> HTMLResponse:
     html = (
         f"<!doctype html><html lang=en><meta charset=utf-8><meta name=viewport content='width=device-width,initial-scale=1'>"
         f"<title>{escape(title)}</title><style>{_STYLE}</style><main><h1>{escape(title)}</h1>{body}</main></html>"
@@ -64,7 +64,7 @@ class _Refused(Exception):
 
 
 def _refuse(error: _Refused) -> HTMLResponse:
-    return _page("This link cannot be used", f"<p>{escape(error.message)}</p>", error.status)
+    return page("This link cannot be used", f"<p>{escape(error.message)}</p>", error.status)
 
 
 def _link(token: str, key: str) -> email_links.Link:
@@ -116,7 +116,7 @@ def _form(token: str, data: dict[str, Any], do: str | None, note: str = "") -> H
         + "".join(_BUTTONS[a] for a in actions)
         + "</p></form><p class=muted>This link works once. To change a quantity, open the request in the app.</p>"
     )
-    return _page(f"Request {data['no']}", body)
+    return page(f"Request {data['no']}", body)
 
 
 @router.get("/approve/{token}", response_class=HTMLResponse)
@@ -167,4 +167,4 @@ def decide(
         "rejected": "Rejected. The requester has been told.",
         "returned": "Sent back for changes. The requester has been told.",
     }.get(status, f"Recorded: {status}.")
-    return _page(f"Request {link.request_no}", f"<p>{escape(done)}</p><p class=muted>You can close this page.</p>")
+    return page(f"Request {link.request_no}", f"<p>{escape(done)}</p><p class=muted>You can close this page.</p>")

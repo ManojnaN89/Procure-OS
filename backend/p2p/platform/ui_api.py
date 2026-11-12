@@ -40,6 +40,7 @@ from p2p.platform.permissions import PermissionDenied, can_anywhere, require
 from p2p.platform.rows import rows as _rows
 from p2p.platform.tokens import decode_access_token
 from p2p.receiving import goods
+from p2p.receiving.kinds import service_lines
 from p2p.receiving.stock import StockError, post_count, post_issue, stock_levels
 from p2p.requests import combining, duplicates, jobs, lifecycle, replenishment
 from p2p.sourcing import documents as supplier_documents
@@ -1542,10 +1543,15 @@ def goods_waiting(db: Db, ctx: Ctx) -> list[dict[str, Any]]:
     for o in orders_:
         lines = _rows(
             db,
-            "select line_no, description, item_code, qty, uom, received_qty from po_line "
-            "where po_no = :n and status in ('open', 'part_received') order by line_no",
+            "select l.line_no, l.description, l.item_code, l.qty, l.uom, l.received_qty, coalesce(i.serialised, false) "
+            "as serialised from po_line l left join item i on i.code = l.item_code "
+            "where l.po_no = :n and l.status in ('open', 'part_received') order by l.line_no",
             n=o["no"],
         )
+        services = service_lines(db, o["no"])  # the requester confirms these, the store does not receive them
+        lines = [ln for ln in lines if ln["line_no"] not in services]
+        if not lines:
+            continue
         out.append(
             {
                 "id": o["no"],
@@ -1561,6 +1567,7 @@ def goods_waiting(db: Db, ctx: Ctx) -> list[dict[str, Any]]:
                         "ordered": _qty(ln["qty"]),
                         "received": _qty(ln["received_qty"]),
                         "uom": ln["uom"],
+                        "serialised": bool(ln["serialised"]),
                     }
                     for ln in lines
                 ],
@@ -1649,6 +1656,7 @@ def receive_goods(
                 _decimal(raw.get("qty_received"), "qty_received"),
                 _decimal(raw["qty_rejected"], "qty_rejected") if raw.get("qty_rejected") not in (None, "") else None,
                 raw.get("reject_reason"),
+                [str(s) for s in raw.get("serials") or []] or None,
             )
             for raw in raw_lines
         ]

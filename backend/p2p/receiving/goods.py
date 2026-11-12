@@ -4,6 +4,8 @@ A receipt is posted by a store person who is not the buyer, an approver or the r
 duties). Over-delivery beyond the company's tolerance for the item's category is refused. An item that needs inspection
 waits: nothing counts and nothing goes into stock until the inspection says how much was accepted. What is accepted
 raises the received quantity of the order line (which the invoice match uses later) and, for stocked items, the stock.
+A service line is not received here: the requester confirms it (receiving/services.py). A serialised item needs one serial
+number per unit received, and a serial already on file for the item is refused.
 """
 
 import logging
@@ -20,6 +22,7 @@ from p2p.formulas import receiving as rules
 from p2p.formulas.money import format_qty
 from p2p.platform import audit, notifications, numbering
 from p2p.platform.sod import user
+from p2p.receiving.kinds import service_lines
 
 log = logging.getLogger(__name__)
 RECEIVABLE = ("sent", "acknowledged", "part_received")
@@ -35,6 +38,7 @@ class LineIn:
     qty_received: Decimal
     qty_rejected: Decimal | None = None
     reject_reason: str | None = None
+    serials: list[str] | None = None  # one per unit received, for a serialised item
 
 
 @dataclass
@@ -76,8 +80,9 @@ def over_pct(db: Session, category: str | None) -> Decimal:
     return Decimal(0)
 
 
-def conflict_of(db: Session, po: dict[str, Any], user_id: int) -> str | None:
-    """Why this person may not receive this order, or None. The receiver differs from the buyer, the approvers and the requester."""
+def conflict_of(db: Session, po: dict[str, Any], user_id: int, *, requester_may: bool = False) -> str | None:
+    """Why this person may not receive this order, or None. The receiver differs from the buyer, the approvers and the
+    requester (`requester_may`: a service is confirmed by the person who asked for it, so that is their duty)."""
     me = org_code_of(db, user_id)
     if me is None:
         return None  # a login with no place in the organisation holds none of those duties
@@ -92,7 +97,7 @@ def conflict_of(db: Session, po: dict[str, Any], user_id: int) -> str | None:
         return "the buyer who ordered cannot also receive the goods"
     if me in approvers:
         return "an approver of the order cannot also receive the goods"
-    if me == requester:
+    if me == requester and not requester_may:
         return "the person who asked for the goods cannot also receive them"
     return None
 
@@ -111,20 +116,24 @@ def _counted(db: Session, po_no: str, line_no: int) -> Decimal:
 
 
 def _item(db: Session, item_code: str | None) -> dict[str, Any]:
+    none = {"stocked": False, "inspection_required": False, "serialised": False, "category_code": None}
     if not item_code:
-        return {"stocked": False, "inspection_required": False, "category_code": None}
+        return none
     row = (
         db.execute(
-            text("select stocked, inspection_required, category_code from item where code = :c"), {"c": item_code}
+            text("select stocked, inspection_required, serialised, category_code from item where code = :c"),
+            {"c": item_code},
         )
         .mappings()
         .first()
     )
-    return dict(row) if row else {"stocked": False, "inspection_required": False, "category_code": None}
+    return dict(row) if row else none
 
 
-def _accept(db: Session, gr_no: str, po: dict[str, Any], line: dict[str, Any], accepted: Decimal, as_of: date) -> None:
-    """What was accepted counts against the order line and goes into stock."""
+def count_accepted(
+    db: Session, gr_no: str, po: dict[str, Any], line: dict[str, Any], accepted: Decimal, as_of: date
+) -> None:
+    """What was accepted (or confirmed, for a service) counts against the order line, and stocked goods go into stock."""
     if accepted <= 0:
         return
     total = Decimal(line["received_qty"]) + accepted
@@ -152,13 +161,34 @@ def _accept(db: Session, gr_no: str, po: dict[str, Any], line: dict[str, Any], a
         )
 
 
-def _refresh_order(db: Session, po_no: str) -> str:
+def refresh_order(db: Session, po_no: str) -> str:
+    """The order's status from its lines."""
     statuses = [r[0] for r in db.execute(text("select status from po_line where po_no = :p"), {"p": po_no})]
     new = rules.order_status(statuses)
     if new:
         db.execute(text("update po set status = :s where no = :p"), {"s": new, "p": po_no})
         return new
     return str(db.execute(text("select status from po where no = :p"), {"p": po_no}).scalar_one())
+
+
+def _serials(db: Session, item_code: str, ln: LineIn) -> list[str]:
+    """The serial numbers of a serialised item: one per unit received, none already on file for the item."""
+    try:
+        numbers = rules.check_serials(ln.serials or [], ln.qty_received)
+    except ValueError as exc:
+        raise ReceiptError(f"line {ln.po_line_no}: {exc}") from None
+    taken = sorted(
+        r[0]
+        for r in db.execute(
+            text("select serial from serial_number where item_code = :i and serial = any(:s)"),
+            {"i": item_code, "s": numbers},
+        )
+    )
+    if taken:
+        raise ReceiptError(
+            f"line {ln.po_line_no}: serial number(s) already received for {item_code}: {', '.join(taken)}"
+        )
+    return numbers
 
 
 def post_receipt(db: Session, po_no: str, lines: list[LineIn], header: Header, user_id: int, *, as_of: date) -> Posted:
@@ -183,11 +213,19 @@ def post_receipt(db: Session, po_no: str, lines: list[LineIn], header: Header, u
     }
     plan: list[tuple[LineIn, dict[str, Any], dict[str, Any], rules.SplitResult | None]] = []
     result: rules.SplitResult | None
+    services = service_lines(db, po_no)
+    serials: dict[int, list[str]] = {}
     for ln in lines:
         row = order_lines.get(ln.po_line_no)
         if row is None or row["status"] not in ("open", "part_received"):
             raise ReceiptError(f"line {ln.po_line_no} is not open on {po_no}")
+        if ln.po_line_no in services:
+            raise ReceiptError(
+                f"line {ln.po_line_no} ({row['description']}) is a service: the person who asked for it confirms it"
+            )
         item = _item(db, row["item_code"])
+        if item["serialised"]:
+            serials[ln.po_line_no] = _serials(db, row["item_code"], ln)
         room = rules.room_left(
             Decimal(row["qty"]), _counted(db, po_no, ln.po_line_no), over_pct(db, item["category_code"])
         )
@@ -234,6 +272,14 @@ def post_receipt(db: Session, po_no: str, lines: list[LineIn], header: Header, u
             "u": str(user_id),
         },
     )
+    for line_no, numbers in serials.items():
+        for serial in numbers:
+            db.execute(
+                text(
+                    "insert into serial_number (item_code, serial, gr_no, po_no, po_line_no) values (:i, :s, :g, :p, :l)"
+                ),
+                {"i": order_lines[line_no]["item_code"], "s": serial, "g": gr_no, "p": po_no, "l": line_no},
+            )
     accepted_by_line: dict[int, Decimal] = {}
     for ln, row, _, result in plan:
         db.execute(
@@ -253,8 +299,8 @@ def post_receipt(db: Session, po_no: str, lines: list[LineIn], header: Header, u
         )
         if result is not None:
             accepted_by_line[ln.po_line_no] = result.accepted
-            _accept(db, gr_no, po, row, result.accepted, as_of)
-    status = _refresh_order(db, po_no)
+            count_accepted(db, gr_no, po, row, result.accepted, as_of)
+    status = refresh_order(db, po_no)
     audit.record(
         db,
         user(user_id),
@@ -267,6 +313,7 @@ def post_receipt(db: Session, po_no: str, lines: list[LineIn], header: Header, u
             "accepted": {k: str(v) for k, v in accepted_by_line.items()},
             "pending_inspection": pending,
             "po_status": status,
+            **({"serials": serials} if serials else {}),
         },
     )
     db.commit()
@@ -321,12 +368,12 @@ def inspect(db: Session, gr_no: str, decisions: list[Decision], user_id: int, *,
         )
         total_rejected += d.qty_rejected
         accepted_by_line[line_no] = d.qty_accepted
-        _accept(db, gr_no, po, order_lines[line_no], d.qty_accepted, as_of)
+        count_accepted(db, gr_no, po, order_lines[line_no], d.qty_accepted, as_of)
     db.execute(
         text("update goods_receipt set inspection_status = :s, accepted_on = :d where no = :n"),
         {"s": "failed" if total_rejected > 0 else "passed", "d": as_of, "n": gr_no},
     )
-    status = _refresh_order(db, po["no"])
+    status = refresh_order(db, po["no"])
     audit.record(
         db,
         user(user_id),
