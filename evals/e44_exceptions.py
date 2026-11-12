@@ -119,7 +119,7 @@ def oracle(db: Any, today: date) -> dict[tuple[str, str], dict[str, Any]]:
         d=today,
     ):
         want[("service", ln["po_no"])] = {
-            "owner": f"Requester: {name.get(ln['requester'], ln['requester'])}", "act": None, "since": ln["need_by"],
+            "owner": f"Requester: {name.get(ln['requester'], ln['requester']) if ln['requester'] else 'the requester'}", "act": None, "since": ln["need_by"],
         }  # fmt: skip
 
     for s in q(
