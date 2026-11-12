@@ -114,7 +114,4 @@ Match the surrounding code. Short plain-language comments only where the reason 
 | Reference tables (GST rates, HSN, TDS sections, holidays) | `platform/reference.py`, `data/reference/` |
 | The demo companies `apex` and `brightwave` (reset command, logins, cases in flight) | `platform/demo.py`, `platform/demo_cases.py`, `datagen/generator/company_profile.py`, `datagen/catalog/<name>/company.yaml`, `docs/demo-script.md` |
 
-<<<<<<< HEAD
-=======
 A new tenant-database table is a new file in `platform/migrations/tenant/versions/` (next number; the latest is 0054, the control database has 0001-0003). A new agent tool is registered with `ToolRegistry`; modules that register tools or executors are listed in `EXTRA_MODULES` so the API process loads them.
->>>>>>> phase1-service-entry
