@@ -38,6 +38,7 @@ class Finding:
     detail: str
     link: str
     roles: tuple[str, ...]
+    since: date | None = None  # when the problem started, for the exceptions screen's age
 
     @property
     def key(self) -> str:
@@ -100,7 +101,7 @@ def rfqs_without_quotes(c: Context) -> list[Finding]:
     return [
         Finding(
             "rfq_no_quotes", "rfq", no, "medium", f"{no} is past its reply date with no quotes",
-            f"Suppliers were to reply by {due:%d %b %Y}.", f"#/rfqs/{no}", ("Buyer",),
+            f"Suppliers were to reply by {due:%d %b %Y}.", f"#/rfqs/{no}", ("Buyer",), due,
         )
         for no, due in rows
     ]  # fmt: skip
@@ -119,6 +120,7 @@ def orders_not_acknowledged(c: Context) -> list[Finding]:
                 Finding(
                     "po_not_acknowledged", "po", no, "medium", f"{no} has not been acknowledged by {supplier}",
                     f"Sent on {sent_at.astimezone(IST):%d %b %Y}.", f"#/purchase-orders/{no}", ("Buyer",),
+                    sent_at.astimezone(IST).date(),
                 )
             )  # fmt: skip
     return out
@@ -140,6 +142,7 @@ def late_deliveries(c: Context) -> list[Finding]:
             Finding(
                 "late_delivery", "po", no, "high" if late > 7 else "medium", f"Goods on {no} are {late} day(s) late",
                 f"{lines} line(s) were promised by {oldest:%d %b %Y} and are not all received.", f"#/purchase-orders/{no}", ("Buyer",),
+                oldest,
             )
         )  # fmt: skip
     return out

@@ -15,7 +15,7 @@ from p2p.approvals.workflow import name_of, org_code_of
 from p2p.formulas.calendar import business_today
 from p2p.formulas.kpis import BUCKETS, working_days_between
 from p2p.invoices import payment
-from p2p.platform import alerts, control_tower, reference, routing
+from p2p.platform import alerts, control_tower, exceptions, reference, routing
 from p2p.platform.permissions import can_anywhere
 from p2p.platform.rows import rows as _rows
 from p2p.requests import replenishment
@@ -514,6 +514,20 @@ def control_tower_stage(
     title = dict(control_tower.STAGES)[stage]
     rows = control_tower.drill(db, stage, business_today(), reference.calendar_for(db), bucket, location)
     return {"stage": stage, "title": title, "rows": rows}
+
+
+@router.get("/exceptions")
+def exception_list(db: Db, ctx: Ctx, kind: str | None = None, mine: bool = False) -> dict[str, Any]:
+    """Everything stuck that needs a person, as far as this login may see it, oldest first; one kind, or only their own."""
+    if kind and kind not in exceptions.KINDS:
+        raise HTTPException(422, f"kind must be one of {', '.join(exceptions.KINDS)}")
+    today = business_today()
+    rows = exceptions.for_user(db, ctx.user_id, today, reference.calendar_for(db), kind=kind, mine=mine)
+    return {
+        "as_of": today.isoformat(),
+        "kinds": [{"key": k, "title": t} for k, t in exceptions.KINDS.items()],
+        "rows": rows,
+    }
 
 
 @router.get("/kpis")

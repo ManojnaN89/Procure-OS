@@ -12,7 +12,7 @@ from pydantic import BaseModel
 from sqlalchemy import select, text, update
 from sqlalchemy.orm import Session
 
-from p2p.platform import ratelimit, routing, tenants
+from p2p.platform import permissions, ratelimit, routing, tenants
 from p2p.platform.control_models import AppUser, RefreshToken, Tenant
 from p2p.platform.tokens import create_access_token
 from p2p.platform.users import hasher
@@ -148,13 +148,7 @@ def me(
     name = db.execute(text("select display_name from user_profile where user_id = :i"), {"i": ctx.user_id}).scalar()
     if name is None:
         raise HTTPException(404, "No profile")
-    actions = db.execute(
-        text(
-            "select distinct rp.action from user_role ur join role_permission rp on rp.role = ur.role "
-            "where ur.user_id = :u order by rp.action"
-        ),
-        {"u": ctx.user_id},
-    ).scalars()
+    actions = permissions.granted(db, ctx.user_id)
     with tenants.control_session() as s:
         tenant_name = s.scalar(select(Tenant.name).where(Tenant.slug == ctx.slug)) or ctx.slug
     return MeOut(

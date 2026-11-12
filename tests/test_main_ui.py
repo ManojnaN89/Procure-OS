@@ -16,6 +16,7 @@ PAGES = [
     "requisitions",
     "vendors",
     "inventory",
+    "exceptions",
     "purchase-orders",
     "payments",
     "contracts",
@@ -95,6 +96,7 @@ MENUS = {
         "Payments",
         "Vendors",
         "Inventory",
+        "Exceptions",
         "Control tower",
         "Assistant",
         "Settings",
@@ -112,6 +114,7 @@ MENUS = {
         "Vendors",
         "Contracts",
         "Inventory",
+        "Exceptions",
         "Control tower",
         "Assistant",
         "Help",
@@ -126,6 +129,7 @@ MENUS = {
         "Receive without order",
         "Confirm services",
         "Inventory",
+        "Exceptions",
         "Assistant",
         "Help",
     ],
@@ -134,6 +138,7 @@ MENUS = {
         "Purchase orders",
         "Invoices",
         "Payments",
+        "Exceptions",
         "Control tower",
         "Assistant",
         "Help",
@@ -964,3 +969,40 @@ def test_hostile_markup_in_a_guide_is_shown_as_text(company: Company, browser: A
     assert page.evaluate("window.__hit") is None  # nothing in it ran
     assert page.locator("#guideBody img, #guideBody script, #guideBody b").count() == 0
     assert "<script>" in page.locator("#guideBody").inner_text()
+
+
+def test_the_exceptions_page_lists_a_waiting_decision_for_who_may_take_it_as_text_and_filters_to_mine(
+    company: Company, browser: Any
+) -> None:
+    from p2p.platform import proposals  # noqa: PLC0415
+    from p2p.platform.sod import user  # noqa: PLC0415
+
+    db = company.db
+    pid = proposals.propose(
+        db, user(company.ids["Buyer"]), action="e2e.decide", summary="<b>Accept</b> a late delivery",
+        payload={}, required_permission="po.approve",
+    )  # fmt: skip
+    db.commit()
+    try:
+        page = open_app(browser, LAPTOP)
+        sign_in(page, company.emails["Approver"])
+        page.goto(f"{URL}/#/exceptions")
+        row = page.locator(f".exc-row[data-ref='Proposal {pid}']")
+        expect(row).to_contain_text("<b>Accept</b> a late delivery")  # shown as typed, never as markup
+        expect(row).to_contain_text("Approve or reject it on Approvals")
+        expect(row).to_contain_text("You")
+        assert page.locator("#excList b").count() == 0
+        page.locator("#excMine").check()
+        expect(row).to_be_visible()
+        page.locator("#excKind").select_option("invoice")
+        expect(page.locator(".exc-row")).to_have_count(0)
+        assert page.problems == []  # type: ignore[attr-defined]
+
+        buyer = open_app(browser, LAPTOP)  # the buyer asked for it and may not decide it: not on their list
+        sign_in(buyer, company.emails["Buyer"])
+        buyer.goto(f"{URL}/#/exceptions")
+        expect(buyer.locator("#excList")).not_to_contain_text("Loading")
+        expect(buyer.locator(f".exc-row[data-ref='Proposal {pid}']")).to_have_count(0)
+    finally:
+        db.execute(text("update proposal set status = 'expired' where id = :i"), {"i": pid})
+        db.commit()

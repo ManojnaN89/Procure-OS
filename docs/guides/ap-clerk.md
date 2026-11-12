@@ -28,3 +28,7 @@ You cannot release a block on an invoice you entered, and you cannot approve pay
 ## If you are stuck
 
 If the goods were never received, the Store has to post the receipt first. Use the filters **Blocked**, **Approved for payment** and **Paid** to find an invoice.
+
+## Exceptions
+
+**Exceptions** lists everything stuck that needs a person, oldest first, with the reason, who must act, the next step and the age in working days; tick **Only mine** for what waits on you. Blocked invoices show there with what to do next.

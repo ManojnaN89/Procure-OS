@@ -105,6 +105,7 @@ READS = [
     "/api/receipts",
     "/api/workspace",
     "/api/control-tower",
+    "/api/exceptions",
     "/api/kpis",
     "/api/alerts",
     "/api/invoice-drafts",

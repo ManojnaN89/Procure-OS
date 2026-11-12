@@ -38,3 +38,7 @@ You cannot decide what you asked for, entered or proposed. You cannot verify a d
 ## If you are stuck
 
 If you will be away, open **Settings** (the gear at the top) → **Away? Name a deputy**, pick an approver and the days, and click **Name deputy**. Approvals that come up meanwhile go to them. To change who approves for good, ask the Admin (**Company setup** → **Approvers**).
+
+## Exceptions
+
+**Exceptions** lists everything stuck that needs a person, oldest first, with the reason, who must act, the next step and the age in working days; tick **Only mine** for what waits on you. Approvals you were reminded about, goods that came with no order and other decisions show there.

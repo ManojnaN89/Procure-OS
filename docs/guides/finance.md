@@ -40,3 +40,7 @@ A small supplier's invoice may have an earlier due date than the terms say (the 
 ## Watch the budgets
 
 Open **Control tower**. Under **Budgets, this financial year so far** each cost centre and account shows its budget, what requests already hold, what was spent, and what is left. A figure in red is over budget.
+
+## Exceptions
+
+**Exceptions** lists everything stuck that needs a person, oldest first, with the reason, who must act, the next step and the age in working days; tick **Only mine** for what waits on you. A release you may decide shows there as yours.

@@ -45,6 +45,19 @@ def can_anywhere(db: Session, user_id: int, action: str) -> bool:
     )
 
 
+def granted(db: Session, user_id: int) -> list[str]:
+    """Every action any of the user's roles grants, whatever its scope, in order."""
+    return list(
+        db.execute(
+            text(
+                "select distinct rp.action from user_role ur join role_permission rp on rp.role = ur.role "
+                "where ur.user_id = :u order by rp.action"
+            ),
+            {"u": user_id},
+        ).scalars()
+    )
+
+
 def approval_limit(
     db: Session, user_id: int, document: str, *, category: str | None = None, location: str | None = None
 ) -> Decimal | None:
