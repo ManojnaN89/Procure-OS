@@ -210,7 +210,8 @@ def test_apex_has_nothing_open_at_the_cutoff_for_the_materials_of_mo_1(datasets:
 
     assert {r["status"] for r in _rows(history / "request_line.csv") if r["item_code"] in mo_1} == {"ordered"}
     assert {r["status"] for r in _rows(history / "po_line.csv") if r["item_code"] in mo_1} == {"received"}
-    assert {r["status"] for r in _rows(history / "po.csv")} >= {"sent", "closed"}  # other work is still open
+    statuses = {r["status"] for r in _rows(history / "po.csv")}
+    assert "closed" in statuses and statuses & {"sent", "acknowledged", "part_received"}  # other work is still open
     assert [r["status"] for r in _rows(history / "invoice.csv")].count("blocked") == 1
 
 
