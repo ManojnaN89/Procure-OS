@@ -63,31 +63,44 @@ const RfqsView = {
         ${c.can_quote ? `<div class="btn btn-primary btn-sm" id="addQuoteBtn" style="display:inline-flex;"><i class="ti ti-plus"></i>Enter a quote</div>` : ""}</div>`;
     }
     const waiting = c.waiting_for.length ? `<div class="cell-muted" style="font-size:11.5px;margin-bottom:8px;">Still to reply: ${c.waiting_for.map((s) => this.esc(s)).join(", ")}</div>` : "";
-    const lines = c.lines.map((l) => `
+    const nameOf = (code) => (c.suppliers.find((s) => s.code === code) || {}).name || code;
+    const lines = c.lines.map((l) => {
+      const open = c.can_award && !l.awarded;
+      const splitRec = l.split && l.split.worthwhile;
+      const splitRow = l.split ? `
+        <tr style="${splitRec ? "background:var(--success-bg);" : ""}">
+          ${open ? `<td><input type="radio" name="pick-${l.rfq_line_no}" value="__split__" data-parts='${this.esc(JSON.stringify(l.split.parts.map((p) => [p.supplier_code, p.qty])))}' ${splitRec ? "checked" : ""}></td>` : ""}
+          <td colspan="5" style="font-size:12px;">Split: ${l.split.parts.map((p) => `${this.esc(nameOf(p.supplier_code))} ${this.esc(p.qty)}`).join(" + ")}${splitRec ? ' <span class="badge badge-approved" style="font-size:10px;">recommended</span>' : ""}<div class="cell-muted" style="font-size:11px;">${this.esc(l.split.reason)}</div></td>
+        </tr>` : "";
+      return `
       <div style="margin-bottom:14px;">
-        <div style="font-size:13px;margin-bottom:6px;">${this.esc(l.name)} <span class="cell-muted">\u00b7 ${this.esc(l.qty)} ${this.esc(l.uom)}${l.need_by ? ` \u00b7 needed by ${formatDate(l.need_by)}` : ""}</span></div>
-        ${l.awarded ? `<div style="font-size:12px;color:var(--success-text);margin-bottom:6px;">Awarded to ${this.esc((c.suppliers.find((s) => s.code === l.awarded) || {}).name || l.awarded)}</div>` : ""}
+        <div style="font-size:13px;margin-bottom:6px;">${this.esc(l.name)} <span class="cell-muted">\u00b7 ${this.esc(l.qty)} ${this.esc(l.uom)}${l.need_by ? ` \u00b7 needed by ${formatDate(l.need_by)}` : ""} \u00b7 ${this.esc(l.qualifying)} qualifying</span></div>
+        ${l.awarded ? `<div style="font-size:12px;color:var(--success-text);margin-bottom:6px;">Supplier selected: ${l.awarded_parts.map((p) => `${this.esc(nameOf(p.supplier_code))}${l.awarded_parts.length > 1 ? ` (${this.esc(p.qty)})` : ""}`).join(", ")}</div>` : ""}
         <table class="data-table">
-          <thead><tr>${c.can_award && !l.awarded ? "<th></th>" : ""}<th>SUPPLIER</th><th>PRICE</th><th>TO OUR DOOR</th><th>DAYS</th><th>NOTES</th></tr></thead>
+          <thead><tr>${open ? "<th></th>" : ""}<th>RANK</th><th>SUPPLIER</th><th>PRICE</th><th>TOTAL COST</th><th>DAYS</th><th>NOTES</th></tr></thead>
           <tbody>
             ${l.offers.map((o) => `
               <tr style="${o.supplier_code === l.recommended ? "background:var(--success-bg);" : ""}">
-                ${c.can_award && !l.awarded ? `<td><input type="radio" name="pick-${l.rfq_line_no}" value="${this.esc(o.supplier_code)}" data-recommended="${o.supplier_code === l.recommended}" ${o.supplier_code === l.recommended ? "checked" : ""}></td>` : ""}
-                <td>${this.esc(o.supplier_name)}${o.supplier_code === l.recommended ? ' <span class="badge badge-approved" style="font-size:10px;">recommended</span>' : ""}</td>
+                ${open ? `<td><input type="radio" name="pick-${l.rfq_line_no}" value="${this.esc(o.supplier_code)}" ${o.supplier_code === l.recommended ? "checked" : ""}></td>` : ""}
+                <td class="cell-muted">${o.rank ?? (o.flags.length ? "dropped" : "part")}</td>
+                <td>${this.esc(o.supplier_name)}${o.supplier_code === l.recommended ? ' <span class="badge badge-approved" style="font-size:10px;">recommended</span>' : ""}${o.payment_days ? `<div class="cell-muted" style="font-size:11px;">pays in ${this.esc(o.payment_days)} days</div>` : ""}</td>
                 <td>${formatCurrency(o.net_price)}${Number(o.discount_pct) > 0 ? `<div class="cell-muted" style="font-size:11px;">${formatCurrency(o.unit_price)} less ${this.esc(o.discount_pct)}%</div>` : ""}</td>
-                <td>${formatCurrency(o.landed)}<div class="cell-muted" style="font-size:11px;">${formatCurrency(o.value)}${Number(o.charges) > 0 ? ` + ${formatCurrency(o.charges)} freight and packing` : ""} + ${formatCurrency(o.tax)} GST (${this.esc(o.gst_rate)}%)</div>${o.score !== null ? `<div class="cell-muted" style="font-size:11px;">score ${this.esc(o.score)} of 100</div>` : ""}</td>
+                <td>${formatCurrency(o.cost)}<div class="cell-muted" style="font-size:11px;">${formatCurrency(o.value)}${Number(o.charges) > 0 ? ` + ${formatCurrency(o.charges)} freight and packing` : ""}; GST ${formatCurrency(o.tax)} (${this.esc(o.gst_rate)}%)${o.cost === o.landed ? " counted" : " shown, claimed back"}</div>${o.score !== null ? `<div class="cell-muted" style="font-size:11px;">score ${this.esc(o.score)} of 100</div>` : ""}</td>
                 <td class="cell-muted">${o.delivery_days ?? "\u2014"}</td>
-                <td style="font-size:11.5px;color:var(--warning-text);">${o.flags.map((f) => this.esc(f)).join("; ")}${o.questions.length ? `<div>Ask the supplier: price is ${o.questions.map((q) => this.esc(q)).join("; ")}</div>` : ""}${o.last_price ? `<div class="cell-muted">last paid ${formatCurrency(o.last_price)}</div>` : ""}</td>
+                <td style="font-size:11.5px;color:var(--warning-text);">${o.flags.length ? `Dropped: ${o.flags.map((f) => this.esc(f)).join("; ")}` : ""}${o.qty_offered ? `<div>offers only ${this.esc(o.qty_offered)}</div>` : ""}${o.questions.length ? `<div>Ask the supplier: price is ${o.questions.map((q) => this.esc(q)).join("; ")}</div>` : ""}${o.last_price ? `<div class="cell-muted">last paid ${formatCurrency(o.last_price)}</div>` : ""}</td>
               </tr>`).join("")}
+            ${splitRow}
           </tbody>
         </table>
         <div class="cell-muted" style="font-size:11.5px;margin-top:4px;">${this.esc(l.why)}</div>
-      </div>`).join("");
+      </div>`;
+    }).join("");
     const actions = c.can_award && c.lines.some((l) => !l.awarded)
-      ? `<div id="reasonBoxAward" style="margin:8px 0;">
-           <textarea id="awardReason" rows="2" placeholder="Reason (needed when you pick someone other than the recommendation, or when fewer quotes came in than wanted)" style="width:100%;background:var(--surface-sunken);border:1px solid var(--border);color:var(--text-primary);border-radius:8px;padding:8px;font-size:12.5px;"></textarea>
+      ? `<div class="cell-muted" style="font-size:11.5px;">Compared on ${this.esc(c.basis)} (${this.esc(c.rule)})</div>
+         <div id="reasonBoxAward" style="margin:8px 0;">
+           <textarea id="awardReason" rows="2" placeholder="Reason (needed when you select other than the recommended, cheapest qualifying quote, or when fewer qualifying quotes came in than wanted)" style="width:100%;background:var(--surface-sunken);border:1px solid var(--border);color:var(--text-primary);border-radius:8px;padding:8px;font-size:12.5px;"></textarea>
          </div>
-         <div style="display:flex;gap:8px;"><div class="btn btn-primary btn-sm" id="awardBtn"><i class="ti ti-award"></i>Award the selected suppliers</div>
+         <div style="display:flex;gap:8px;"><div class="btn btn-primary btn-sm" id="awardBtn"><i class="ti ti-check"></i>Select these suppliers</div>
          ${c.can_quote ? `<div class="btn btn-sm" id="addQuoteBtn"><i class="ti ti-plus"></i>Enter another quote</div>` : ""}</div>`
       : (c.can_quote ? `<div class="btn btn-sm" id="addQuoteBtn" style="display:inline-flex;"><i class="ti ti-plus"></i>Enter another quote</div>` : "");
     return `<div class="panel" style="margin-bottom:12px;">${head}${waiting}${lines}${actions}<div id="awardNote" style="font-size:12px;color:var(--warning-text);margin-top:8px;"></div></div>`;
@@ -226,10 +239,20 @@ const RfqsView = {
       const note = document.querySelector(`.draftNote[data-id="${btn.dataset.id}"]`);
       if (note) note.textContent = res.data.detail || "That did not work.";
     }));
+    document.querySelectorAll(".rfqPdf").forEach((a) => a.addEventListener("click", async (e) => {
+      e.preventDefault();
+      const res = await Auth.fetch(`${API.base}/api/rfqs/${encodeURIComponent(r.id)}/suppliers/${encodeURIComponent(a.dataset.supplier)}/pdf`);
+      if (res.ok) window.open(URL.createObjectURL(await res.blob()), "_blank");
+    }));
     on("awardBtn", async () => {
       const choices = {};
-      document.querySelectorAll('input[type="radio"]:checked').forEach((el) => { choices[el.name.replace("pick-", "")] = el.value; });
-      const res = await API.postJSON(`/api/rfqs/${encodeURIComponent(r.id)}/award`, { choices, reason: document.getElementById("awardReason").value });
+      const splits = {};
+      document.querySelectorAll('input[type="radio"][name^="pick-"]:checked').forEach((el) => {
+        const line = el.name.replace("pick-", "");
+        if (el.value === "__split__") splits[line] = JSON.parse(el.dataset.parts);
+        else choices[line] = el.value;
+      });
+      const res = await API.postJSON(`/api/rfqs/${encodeURIComponent(r.id)}/award`, { choices, splits, reason: document.getElementById("awardReason").value });
       if (res.ok) return this.renderDetail(document.getElementById("appContent"), r.id);
       const note = document.getElementById("awardNote");
       if (note) note.textContent = res.data.detail || "That did not work.";
@@ -253,13 +276,14 @@ const RfqsView = {
         ${r.note ? `<div class="panel" style="margin-bottom:12px;font-size:12.5px;color:var(--warning-text);">${this.esc(r.note)}</div>` : ""}
         <div class="table-wrap" style="margin-bottom:12px;">
           <table class="data-table">
-            <thead><tr><th>SUPPLIER</th><th>EMAIL</th><th>STATE</th></tr></thead>
+            <thead><tr><th>SUPPLIER</th><th>EMAIL</th><th>STATE</th><th>PRINT</th></tr></thead>
             <tbody>
               ${r.suppliers.map((s) => `
                 <tr>
                   <td>${this.esc(s.name)}<div class="cell-muted" style="font-size:11px;">${this.esc(s.code)}</div></td>
                   <td class="cell-muted">${this.esc(s.email)}</td>
                   <td><span class="badge ${this.STATE_BADGE[s.state] || ""}">${this.esc(s.state)}</span>${s.error ? `<div class="cell-muted" style="font-size:11px;">${this.esc(s.error)}</div>` : ""}${s.reminders ? `<div class="cell-muted" style="font-size:11px;">reminded ${this.esc(s.reminders)} time(s), last ${formatDate(s.last_reminded_at)}</div>` : ""}</td>
+                  <td><a href="#" class="rfqPdf" data-supplier="${this.esc(s.code)}" style="color:var(--accent-tint);font-size:12px;">RFQ (PDF)</a></td>
                 </tr>`).join("")}
             </tbody>
           </table>

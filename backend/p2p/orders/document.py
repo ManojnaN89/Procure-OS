@@ -62,6 +62,73 @@ def terms_text(db: Session, po: dict[str, Any]) -> str:
     return ""  # unreachable: the standard text always renders
 
 
+class Pdf:
+    """The layout our documents share (the order, the quotation request): the company heading, a box with the two
+    parties, a table of lines and plain paragraphs, built to A4 bytes. Values put on the page are escaped here."""
+
+    def __init__(self, db: Session) -> None:
+        self.company = db.execute(text("select legal_name, registered_address, pan from company limit 1")).first()
+        styles = getSampleStyleSheet()
+        self.body = ParagraphStyle("body", parent=styles["BodyText"], fontSize=9, leading=12)
+        self.small = ParagraphStyle("small", parent=self.body, fontSize=8, leading=10)
+        self.heading = ParagraphStyle("heading", parent=styles["Title"], fontSize=16, leading=20, alignment=0)
+        self.bold = ParagraphStyle("bold", parent=self.body, fontName="Helvetica-Bold")
+        self.story: list[Any] = []
+
+    def p(self, value: object, style: ParagraphStyle | None = None) -> Paragraph:
+        return Paragraph(escape(str(value)).replace("\n", "<br/>"), style or self.body)
+
+    def add(self, *items: Any) -> None:
+        self.story.extend(items)
+
+    def space(self, height_mm: float) -> None:
+        self.story.append(Spacer(1, height_mm * mm))
+
+    def title(self, title: str, dated: str) -> None:
+        """The company's name and address, then the document's title and date."""
+        self.add(self.p(self.company[0] if self.company else "Our company", self.heading))
+        self.add(self.p((self.company[1] if self.company else "") or "", self.small))
+        self.space(4)
+        self.add(self.p(title, ParagraphStyle("h2", parent=self.heading, fontSize=13)), self.p(dated))
+        self.space(3)
+
+    def parties(self, left: tuple[str, list[str]], right: tuple[str, list[str]]) -> None:
+        """Two boxes side by side, each a bold label over its lines (empty lines are left out)."""
+
+        def box(label: str, rows: list[str]) -> Paragraph:
+            return Paragraph(f"<b>{escape(label)}</b><br/>" + "<br/>".join(escape(r) for r in rows if r), self.body)
+
+        table = Table([[box(*left), box(*right)]], colWidths=[90 * mm, 90 * mm])
+        table.setStyle(TableStyle([("VALIGN", (0, 0), (-1, -1), "TOP"), ("BOX", (0, 0), (-1, -1), 0.4, colors.grey)]))
+        self.add(table)
+        self.space(4)
+
+    def lines(self, rows: list[list[Any]], widths_mm: list[float], right_cols: tuple[int, int]) -> None:
+        """A table with a grey header row; the columns between right_cols are numbers, aligned right."""
+        table = Table(rows, colWidths=[w * mm for w in widths_mm], repeatRows=1)
+        table.setStyle(
+            TableStyle(
+                [
+                    ("FONTSIZE", (0, 0), (-1, -1), 8),
+                    ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#e8e8e8")),
+                    ("GRID", (0, 0), (-1, -1), 0.25, colors.grey),
+                    ("VALIGN", (0, 0), (-1, -1), "TOP"),
+                    ("ALIGN", (right_cols[0], 1), (right_cols[1], -1), "RIGHT"),
+                ]
+            )
+        )
+        self.add(table)
+        self.space(3)
+
+    def build(self, title: str) -> bytes:
+        buffer = BytesIO()
+        SimpleDocTemplate(
+            buffer, pagesize=A4, leftMargin=15 * mm, rightMargin=15 * mm, topMargin=15 * mm, bottomMargin=15 * mm,
+            title=title, author=str(self.company[0]) if self.company else "",
+        ).build(self.story)  # fmt: skip
+        return buffer.getvalue()
+
+
 def order_document(db: Session, po_no: str) -> bytes:
     found = db.execute(text("select * from po where no = :n"), {"n": po_no}).mappings().first()
     if found is None:
@@ -81,18 +148,10 @@ def order_document(db: Session, po_no: str) -> bytes:
         dict(r)
         for r in db.execute(text("select * from po_charge where po_no = :n order by id"), {"n": po_no}).mappings()
     ]
-    company = db.execute(text("select legal_name, registered_address, pan from company limit 1")).first()
+    address = supplier_address(db, po["supplier_code"], po["supplier_gstin"])
     supplier = db.execute(
-        text("select coalesce(trade_name, legal_name) as name, gstin, pan from supplier where code = :c"),
-        {"c": po["supplier_code"]},
-    ).one()
-    address = db.execute(
-        text(
-            "select address, city, pincode from supplier_address where supplier_code = :c "
-            "order by (gstin = :g) desc nulls last, id limit 1"
-        ),
-        {"c": po["supplier_code"], "g": po["supplier_gstin"]},
-    ).first()
+        text("select coalesce(trade_name, legal_name) from supplier where code = :c"), {"c": po["supplier_code"]}
+    ).scalar_one()
     ship = db.execute(
         text("select name, address, city, pincode from location where code = :c"), {"c": po["ship_to_location"]}
     ).first()
@@ -107,55 +166,26 @@ def order_document(db: Session, po_no: str) -> bytes:
         )
     ]
 
-    styles = getSampleStyleSheet()
-    body = ParagraphStyle("body", parent=styles["BodyText"], fontSize=9, leading=12)
-    small = ParagraphStyle("small", parent=body, fontSize=8, leading=10)
-    heading = ParagraphStyle("heading", parent=styles["Title"], fontSize=16, leading=20, alignment=0)
-
-    def p(value: object, style: ParagraphStyle = body) -> Paragraph:
-        return Paragraph(escape(str(value)).replace("\n", "<br/>"), style)
-
-    def rich(markup: str, style: ParagraphStyle = body) -> Paragraph:
-        """Markup composed here, with every value in it already escaped."""
-        return Paragraph(markup, style)
-
+    doc = Pdf(db)
     version = f", version {po['version']}" if int(po["version"]) > 1 else ""
-    story: list[Any] = [
-        p(company[0] if company else "Our company", heading),
-        p((company[1] if company else "") or "", small),
-        Spacer(1, 4 * mm),
-        p(f"PURCHASE ORDER {po['no']}{version}", ParagraphStyle("h2", parent=heading, fontSize=13)),
-        p(f"Date: {po['created_at']:%d %b %Y}", body),
-        Spacer(1, 3 * mm),
-    ]
-    parties = Table(
-        [
+    doc.title(f"PURCHASE ORDER {po['no']}{version}", f"Date: {po['created_at']:%d %b %Y}")
+    doc.parties(
+        ("Supplier", [str(supplier), f"GSTIN {po['supplier_gstin']}" if po["supplier_gstin"] else "", address]),
+        (
+            "Deliver to",
             [
-                rich(
-                    "<b>Supplier</b><br/>"
-                    + escape(str(supplier[0]))
-                    + (f"<br/>GSTIN {escape(str(po['supplier_gstin']))}" if po["supplier_gstin"] else "")
-                    + (f"<br/>{escape(', '.join(x for x in address if x))}" if address else "")
-                ),
-                rich(
-                    "<b>Deliver to</b><br/>"
-                    + escape(str(ship[0] if ship else po["ship_to_location"]))
-                    + (f"<br/>{escape(', '.join(x for x in ship[1:] if x))}" if ship else "")
-                    + (f"<br/>Buyer GSTIN {escape(str(po['buyer_gstin']))}" if po["buyer_gstin"] else "")
-                ),
-            ]
-        ],
-        colWidths=[90 * mm, 90 * mm],
+                str(ship[0] if ship else po["ship_to_location"]),
+                ", ".join(x for x in ship[1:] if x) if ship else "",
+                f"Buyer GSTIN {po['buyer_gstin']}" if po["buyer_gstin"] else "",
+            ],
+        ),
     )
-    parties.setStyle(TableStyle([("VALIGN", (0, 0), (-1, -1), "TOP"), ("BOX", (0, 0), (-1, -1), 0.4, colors.grey)]))
-    story += [parties, Spacer(1, 4 * mm)]
-
     rows: list[list[Any]] = [["#", "Item", "HSN/SAC", "Qty", "Rate", "GST %", "Amount", "Needed by"]]
     for n, ln in enumerate(lines, start=1):
         rows.append(
             [
                 str(n),
-                p(ln["description"] + (f" ({ln['item_code']})" if ln["item_code"] else ""), small),
+                doc.p(ln["description"] + (f" ({ln['item_code']})" if ln["item_code"] else ""), doc.small),
                 ln["hsn_sac"] or "",
                 f"{format_qty(ln['qty'])} {ln['uom'] or ''}".strip(),
                 _rs(ln["unit_price"]),
@@ -166,20 +196,8 @@ def order_document(db: Session, po_no: str) -> bytes:
         )
     for c in charges:
         label = "Freight" if c["type"] == "freight" else "Packing and forwarding"
-        rows.append(["", p(label, small), "", "", "", format_qty(c["gst_rate"]), _rs(c["amount"]), ""])
-    table = Table(rows, colWidths=[8 * mm, 58 * mm, 18 * mm, 20 * mm, 22 * mm, 12 * mm, 24 * mm, 22 * mm], repeatRows=1)
-    table.setStyle(
-        TableStyle(
-            [
-                ("FONTSIZE", (0, 0), (-1, -1), 8),
-                ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#e8e8e8")),
-                ("GRID", (0, 0), (-1, -1), 0.25, colors.grey),
-                ("VALIGN", (0, 0), (-1, -1), "TOP"),
-                ("ALIGN", (3, 1), (6, -1), "RIGHT"),
-            ]
-        )
-    )
-    story += [table, Spacer(1, 3 * mm)]
+        rows.append(["", doc.p(label, doc.small), "", "", "", format_qty(c["gst_rate"]), _rs(c["amount"]), ""])
+    doc.lines(rows, [8, 58, 18, 20, 22, 12, 24, 22], (3, 6))
 
     tax_rows: list[list[Any]] = [["Total before tax", _rs(po["taxable"])]]
     if po["igst"]:
@@ -197,24 +215,32 @@ def order_document(db: Session, po_no: str) -> bytes:
             ]
         )
     )
-    story += [totals, Spacer(1, 5 * mm)]
+    doc.add(totals)
+    doc.space(5)
     if po["delivery_terms"]:
-        story.append(p(f"Delivery terms: {po['delivery_terms']}"))
-    story += [p("Terms", ParagraphStyle("t", parent=body, fontName="Helvetica-Bold")), p(terms_text(db, po), small)]
-    story += [
-        Spacer(1, 6 * mm),
-        p(
+        doc.add(doc.p(f"Delivery terms: {po['delivery_terms']}"))
+    doc.add(doc.p("Terms", doc.bold), doc.p(terms_text(db, po), doc.small))
+    doc.space(6)
+    doc.add(
+        doc.p(
             "Approved by: " + ", ".join(approved_by)
             if approved_by
             else f"Approved automatically under rule {po['rule_code']}"
             if po["rule_code"]
             else "",
-            small,
+            doc.small,
+        )
+    )
+    return doc.build(f"Purchase order {po['no']}")
+
+
+def supplier_address(db: Session, supplier_code: str, gstin: str | None = None) -> str:
+    """The supplier's address as one line: the one registered under the GSTIN on the document first."""
+    row = db.execute(
+        text(
+            "select address, city, pincode from supplier_address where supplier_code = :c "
+            "order by (gstin = :g) desc nulls last, id limit 1"
         ),
-    ]
-    buffer = BytesIO()
-    SimpleDocTemplate(
-        buffer, pagesize=A4, leftMargin=15 * mm, rightMargin=15 * mm, topMargin=15 * mm, bottomMargin=15 * mm,
-        title=f"Purchase order {po['no']}", author=str(company[0]) if company else "",
-    ).build(story)  # fmt: skip
-    return buffer.getvalue()
+        {"c": supplier_code, "g": gstin},
+    ).first()
+    return ", ".join(x for x in row if x) if row else ""

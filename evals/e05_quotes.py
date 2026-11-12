@@ -11,7 +11,7 @@ from sqlalchemy import text
 
 ID = "E05"
 TITLE = "Quote comparison recommends the right supplier and the award rules hold"
-REQUIREMENT = "Plan: collect quotes, compare, award; the recommendation is the lowest compliant offer; an override or too few quotes needs a reason"
+REQUIREMENT = "Plan: collect quotes, compare, select; the recommendation is the lowest qualifying offer; an override or too few qualifying quotes needs a reason"
 
 
 def net(price: Decimal, discount: Decimal) -> Decimal:
@@ -179,9 +179,10 @@ def run(ctx) -> Outcome:
             flags_ok += {o.supplier_code: o.compliant for o in g.offers} == {
                 o["supplier"]: o["compliant"] for o in offs
             }
-            order_ok += [o.supplier_code for o in g.offers] == [
-                o["supplier"] for o in sorted(offs, key=lambda o: (o["net"], o["days"], o["supplier"]))
-            ]
+            # the ranking shows the qualifying offers first, cheapest first; the dropped ones follow
+            order_ok += [o.supplier_code for o in g.offers][: len(good)] == [o["supplier"] for o in good] and {
+                o.supplier_code for o in g.offers
+            } == {o["supplier"] for o in offs}
             if g.recommended != want:
                 bad.append(f"{rfq_no} line {n}: platform recommends {g.recommended}, oracle {want}")
             for o in g.offers:
@@ -198,9 +199,9 @@ def run(ctx) -> Outcome:
         }
         if not picks:
             continue
-        needs_reason = (comp.quotes_received < min_quotes) or any(
-            picks[n] != recommended[n] or not next(o for o in offers[n] if o["supplier"] == picks[n])["compliant"]
-            for n in picks
+        # a reason: a pick that is not the cheapest qualifying offer, or a picked line with too few qualifying quotes
+        needs_reason = any(
+            picks[n] != recommended[n] or sum(o["compliant"] for o in offers[n]) < min_quotes for n in picks
         )
         award_cases += 1
         try:

@@ -239,7 +239,7 @@ history:
     reorder_price_pct: "2.00"  # and its price rose by no more than this since the last order
     two_quotes_up_to: "200000.00"  # an RFQ needs two quotes up to this value and three above
     value_window_days: 30  # the value is counted per item over the requisitions of this many days
-    split_award: 0  # share of RFQ lines split between the two lowest quotes (none: the platform awards one supplier per line)
+    split_award: 0.15  # share of RFQ lines where the lowest quote offers only part and the next lowest supplies the rest
   price_rise_pct_per_quarter: "1.00"  # the price records are the last prices paid; earlier prices were lower
   # on_time: share delivered by the promised date, else late by `late` days; part: share delivered in two lots;
   # reject: share of inspected lots partly rejected; ack and reply: working days to confirm an order and answer an RFQ;

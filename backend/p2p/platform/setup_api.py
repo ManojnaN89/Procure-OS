@@ -199,16 +199,6 @@ POLICIES: dict[str, tuple[str, str, str, str, str, float | None, float | None, t
         None,
         (),
     ),
-    "comparison_mode": (
-        "org",
-        "choice",
-        "How quotes are compared",
-        "Price: the cheapest landed cost that complies. Weighted: landed cost, delivery record and quality record, by the weights below",
-        "price",
-        None,
-        None,
-        ("price", "weighted"),
-    ),
     "low_price_flag_pct": (
         "org",
         "int",
@@ -222,8 +212,8 @@ POLICIES: dict[str, tuple[str, str, str, str, str, float | None, float | None, t
     "score_weight_price": (
         "org",
         "int",
-        "Weight of price in a weighted comparison",
-        "Shares of price, delivery and quality are taken in proportion to these three weights",
+        "Weight of price in the vendor score",
+        "Shares of price, delivery and quality are taken in proportion to these three weights (quotes are compared by the versioned supplier selection rule)",
         "40",
         0,
         100,

@@ -1493,7 +1493,7 @@ def quotation_to_order(
         expect(page.locator("#appContent")).to_contain_text("2 of")
         expect(page.locator("#appContent tr", has_text="recommended")).to_contain_text(suppliers[winner]["trade_name"])
         page.locator("#awardBtn").click()
-        expect(page.locator("#appContent")).to_contain_text(f"Awarded to {suppliers[winner]['trade_name']}")
+        expect(page.locator("#appContent")).to_contain_text(f"Supplier selected: {suppliers[winner]['trade_name']}")
     d.sync()
     c.same("RFQ status", one(db, "select status from rfq where no = :n", n=rfq), "awarded")
 

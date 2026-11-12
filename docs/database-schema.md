@@ -27,7 +27,7 @@ Reading a line: `name*` is part of the primary key, `name?` may be empty, then t
 
 ## Tenant database (one per company)
 
-115 tables.
+116 tables.
 
 **advance** · payment_no* text, po_no text, gross num, taxable num, used_gross num, used_taxable num, paid_on? date
 
@@ -55,7 +55,7 @@ Reading a line: `name*` is part of the primary key, `name?` may be empty, then t
 
 **autonomy_setting** · decision_type* text, level text, value_cap? num, min_confidence num, max_wrong_rate num, updated_by? int, updated_at timestamptz
 
-**award** · rfq_no* text, rfq_line_no* int, supplier_code text, quote_no text, qty num, price num, reason? text, overridden bool, by_user? text, at timestamptz
+**award** · rfq_no* text, rfq_line_no* int, supplier_code* text, quote_no text, qty num, price num, reason? text, overridden bool, by_user? text, at timestamptz, split bool, selection_rule? text
 
 **bank** · code* text, name? text, ifsc_prefix? text
 
@@ -242,6 +242,8 @@ Reading a line: `name*` is part of the primary key, `name?` may be empty, then t
 **supplier_document** · id* bigint, supplier_code? text, doc_type? text, number? text, issued_on? date, expires_on? date, verified? bool, added_by? text, verified_by? text, verified_at? timestamptz
 
 **supplier_message** · id* bigint, email_id bigint, linked_type text, linked_ref text, supplier_code? text, kind? text, status text, reading? jsonb, action? text, task_id? bigint, reply_draft? text, confidence? num, model? text, prompt_version? text, created_at timestamptz
+
+**supplier_selection_rule** · id* bigint, version int, effective_from date, effective_to? date, method text, weight_price num, weight_delivery num, weight_quality num, weight_payment_terms num, tie_break text, input_credit bool, note? text, created_by? text, created_at timestamptz
 
 **supplier_status_history** · id* bigint, supplier_code? text, at? timestamptz, from_status? text, to_status? text, reason? text, by_user? text
 

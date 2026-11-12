@@ -1,7 +1,8 @@
 """Purchase orders: one per supplier, made from the lines of an approved request that are ready to be bought.
 
 A line is ready when it was sourced on a contract, bought directly by its buying route (once the purchase manager has
-agreed, when that was needed), or its quotation was awarded. The price is the contract price, the route's price on
+agreed, when that was needed), or a supplier was selected from its quotes. A line shared between suppliers becomes one
+order line with each, for that supplier's part. The price is the contract price, the route's price on
 file or last price, or the awarded net price, never an estimate; the GST rate is the item's (contract) or the quote's (award); the tax split
 follows the supplier's state, the place of supply and the supplier's registration. A price well above the estimate
 holds the order until a person accepts the variance (rule 5), then it goes for approval by the rule table.
@@ -84,8 +85,8 @@ def ready_lines(db: Session, request_no: str, as_of: date) -> tuple[list[ReadyLi
             "from request_line rl join sourcing_decision d on d.request_no = rl.request_no and d.line_no = rl.line_no "
             "left join item i on i.code = rl.item_code "
             "where rl.request_no = :n and rl.status = 'sourcing' and d.method in ('contract', 'direct', 'rfq') "
-            "and not exists (select 1 from po_line p where p.request_no = rl.request_no "
-            "and p.request_line_no = rl.line_no and p.status <> 'cancelled') order by rl.line_no"
+            "and (d.method = 'rfq' or not exists (select 1 from po_line p where p.request_no = rl.request_no "
+            "and p.request_line_no = rl.line_no and p.status <> 'cancelled')) order by rl.line_no"
         ),
         {"n": request_no},
     ).mappings()
@@ -128,28 +129,35 @@ def ready_lines(db: Session, request_no: str, as_of: date) -> tuple[list[ReadyLi
                 )
             )
             continue
-        won = db.execute(
+        # one row per supplier selected; a line shared between suppliers is ordered in parts, each from its own quote
+        for supplier, price, quote_no, gst_rate, part, split in db.execute(
             text(
-                "select a.supplier_code, a.price, a.quote_no, ql.gst_rate from award a "
+                "select a.supplier_code, a.price, a.quote_no, ql.gst_rate, a.qty, a.split from award a "
                 "join rfq_line l on l.rfq_no = a.rfq_no and l.line_no = a.rfq_line_no "
                 "join quote_line ql on ql.quote_no = a.quote_no and ql.rfq_line_no = a.rfq_line_no "
-                "where a.rfq_no = :r and l.request_no = :n and l.request_line_no = :l"
+                "where a.rfq_no = :r and l.request_no = :n and l.request_line_no = :l and not exists ("
+                "select 1 from po_line p where p.request_no = :n and p.request_line_no = :l "
+                "and p.source_ref = a.quote_no and p.status <> 'cancelled') order by a.qty desc, a.supplier_code"
             ),
             {"r": r["rfq_no"], "n": request_no, "l": r["line_no"]},
-        ).first()
-        if won is None:
-            continue  # not awarded yet: the buyer has not decided
-        ready.append(
-            ReadyLine(
-                **common,
-                supplier_code=won[0],
-                unit_price=won[1],
-                gst_rate=won[3],
-                source="award",
-                source_ref=won[2],
-                quote_no=won[2],
+        ):
+            share: dict[str, Any] = {}
+            if split:  # the part's quantity, and the same share of the quantity in the base unit
+                share = {
+                    "qty": part,
+                    "base_qty": r["base_qty"] * part / r["qty"] if r["base_qty"] is not None else None,
+                }
+            ready.append(
+                ReadyLine(
+                    **{**common, **share},
+                    supplier_code=supplier,
+                    unit_price=price,
+                    gst_rate=gst_rate,
+                    source="award",
+                    source_ref=quote_no,
+                    quote_no=quote_no,
+                )
             )
-        )
     return ready, notes
 
 
