@@ -157,9 +157,9 @@ items:
   - {code: RM-04, name: Impeller 0.5 HP, description: Closed impeller for the 0.5 HP pump, category: RAW, unit: NOS, hsn: "841391", gst: [12, 5], price: "160.00", lead: 10, on_hand: 0}
   - {code: RM-05, name: Pump shaft, description: Stainless steel pump shaft, machined, category: RAW, unit: NOS, hsn: "841391", gst: [12, 5], price: "180.00", lead: 10, on_hand: 60}
   - {code: RM-06, name: Ball bearing 6204, description: Deep groove ball bearing 20x47x14 mm, sealed, category: RAW, unit: NOS, hsn: "848210", gst: [18, 18], price: "38.00", lead: 7, on_hand: 40, inspection: true}
-  - {code: RM-07, name: Mechanical seal 18 mm, description: Single spring mechanical seal for 18 mm shaft, category: RAW, unit: NOS, hsn: "848420", gst: [18, 18], price: "95.00", lead: 7, on_hand: 20, inspection: true}
+  - {code: RM-07, name: Mechanical seal 18 mm, description: Single spring mechanical seal for 18 mm shaft, category: RAW, unit: NOS, hsn: "848420", gst: [18, 18], price: "95.00", lead: 7, on_hand: 60, inspection: true}
   - {code: RM-08, name: Copper winding wire, description: Enamelled copper winding wire, per kg, category: RAW, unit: KGS, hsn: "854411", gst: [18, 18], price: "920.00", lead: 5, on_hand: 50}
-  - {code: RM-09, name: Run capacitor, description: Motor run capacitor, polypropylene film, category: RAW, unit: NOS, hsn: "853225", gst: [18, 18], price: "85.00", lead: 5, on_hand: 0}
+  - {code: RM-09, name: Run capacitor, description: Motor run capacitor, polypropylene film, category: RAW, unit: NOS, hsn: "853225", gst: [18, 18], price: "85.00", lead: 5, on_hand: 60}
   - {code: RM-10, name: Terminal box, description: Motor terminal box with cover, category: RAW, unit: NOS, hsn: "850300", gst: [18, 18], price: "60.00", lead: 5, on_hand: 200}
   - {code: RM-11, name: Enamel paint, description: Synthetic enamel paint, blue, per litre, category: RAW, unit: LTR, hsn: "320810", gst: [18, 18], price: "350.00", lead: 5, on_hand: 30}
   - {code: PK-01, name: Export carton, description: 5 ply corrugated carton for one pump, category: PKG, unit: NOS, hsn: "481910", gst: [12, 5], price: "45.00", lead: 4, on_hand: 20}
