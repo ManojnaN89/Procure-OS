@@ -13,7 +13,11 @@ def test_the_schema_reference_lists_every_table_and_column_the_migrations_make(c
     slug = "s" + uuid.uuid4().hex[:8]
     assert tenants.create_tenant(slug, load_reference=False).ok
 
-    made = schema_doc.render(tenants.control_engine(), tenants.tenant_engine(slug))
+    engine = tenants.tenant_engine(slug)
+    try:
+        made = schema_doc.render(tenants.control_engine(), engine)
+    finally:
+        engine.dispose()
 
     written = REFERENCE.read_text(encoding="utf-8")
     changes = "\n".join(
