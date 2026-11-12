@@ -231,14 +231,14 @@ def test_within_the_limits_the_agent_acts_on_its_own_and_it_is_recorded(env: Env
         (
             "cap",
             Decision(tool="release_payment", args={"invoice": "I", "amount": "150000"}, confidence=0.99),
-            "above the cap",
+            "above the automatic limit of ₹ ",
         ),
         (
             "cap",
             Decision(tool="release_payment", args={"invoice": "I", "amount": "5000"}, confidence=0.5),
             "confidence",
         ),
-        ("off", CALL_RELEASE, "set to propose"),
+        ("off", CALL_RELEASE, "a person confirms it first"),
     ],
 )
 def test_outside_the_limits_the_action_becomes_a_proposal(env: Env, setup: str, decision: Decision, why: str) -> None:

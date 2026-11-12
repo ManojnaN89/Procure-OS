@@ -13,6 +13,7 @@ from decimal import Decimal
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
+from p2p.formulas.money import format_inr
 from p2p.platform import audit
 from p2p.platform.sod import Actor
 
@@ -20,6 +21,31 @@ WINDOW = timedelta(days=30)
 
 # Decisions that a person always makes (rule 5). No setting, by anyone, lets them happen without one.
 LOCKED = frozenset({"payment_run.approve", "supplier.set_status", "invoice.release_block"})
+
+# What each decision is called on the Automation screen, so a reason names it the way a person sees it.
+LABELS = {
+    "rfq.send": "Send a request for quotation",
+    "rfq.award": "Award to the recommended supplier",
+    "quote.read": "Accept a quote read from an email",
+    "po.send": "Send an approved purchase order",
+    "po.issue": "Issue a touchless purchase order",
+    "invoice.read": "Enter an invoice read from a document",
+    "supplier.change": "Apply a small change a supplier asks for",
+    "supplier.remind": "Chase a supplier by email",
+    "payment_run.approve": "Approve a payment run",
+    "supplier.set_status": "Activate or block a supplier",
+    "invoice.release_block": "Release a payment block on an invoice",
+    # the other permissions a proposal can wait for, named for the admin's home page
+    "payment.approve": "Approve a payment run",
+    "invoice.approve": "Release a payment block on an invoice",
+    "po.approve": "Approve a purchase order or its price",
+    "supplier.activate": "Activate or block a supplier",
+}
+LEVEL_WORDS = {"propose": "a person confirms it first", "off": "it is done by hand"}
+
+
+def label(decision_type: str) -> str:
+    return LABELS.get(decision_type, decision_type.replace(".", " ").replace("_", " "))
 
 
 @dataclass(frozen=True)
@@ -37,8 +63,9 @@ def gate(
     now: datetime | None = None,
 ) -> GateDecision:
     now = now or datetime.now(UTC)
+    name = label(decision_type)
     if decision_type in LOCKED:
-        return GateDecision(False, f"'{decision_type}' is always decided by a person")
+        return GateDecision(False, f"“{name}” is always decided by a person")
     if db.execute(text("select kill_switch from autonomy_global where id = 1")).scalar_one():
         return GateDecision(False, "the kill switch is on")
     row = db.execute(
@@ -46,12 +73,16 @@ def gate(
         {"d": decision_type},
     ).first()
     if row is None or row[0] != "auto":
-        return GateDecision(False, f"'{decision_type}' is set to {row[0] if row else 'propose'}, not auto")
+        level = row[0] if row else "propose"
+        return GateDecision(
+            False, f"{LEVEL_WORDS.get(level, 'a person decides')} (automation setting “{name}”: {level})"
+        )
     level, cap, min_conf, max_wrong = row
     if cap is not None and (value is None or value > cap):
-        return GateDecision(False, f"value {value} is above the cap {cap}")
+        shown = format_inr(value) if value is not None else "an unknown value"
+        return GateDecision(False, f"{shown} is above the automatic limit of {format_inr(cap)} for “{name}”")
     if confidence is None or Decimal(str(confidence)) < min_conf:
-        return GateDecision(False, f"confidence {confidence} is below {min_conf}")
+        return GateDecision(False, f"the reading's confidence {confidence} is below the {min_conf} needed")
     n, wrong = db.execute(
         text(
             "select count(*), count(*) filter (where wrong) from autonomy_outcome "
@@ -60,8 +91,11 @@ def gate(
         {"d": decision_type, "since": now - WINDOW},
     ).one()
     if n and Decimal(wrong) / Decimal(n) > max_wrong:
-        return GateDecision(False, f"{wrong} of {n} automatic decisions in 30 days were wrong, above {max_wrong}")
-    return GateDecision(True, "within the autonomy limits")
+        allowed = f"{(Decimal(max_wrong) * 100).normalize():f}%"
+        return GateDecision(
+            False, f"{wrong} of {n} automatic decisions in 30 days were wrong, more than the {allowed} allowed"
+        )
+    return GateDecision(True, "allowed by the automation settings")
 
 
 def record_outcome(

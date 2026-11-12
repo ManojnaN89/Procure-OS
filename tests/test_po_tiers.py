@@ -90,7 +90,7 @@ def _facts(**kw: object) -> tl.Facts:
         "contracts": (tl.ContractCeiling("K", D("2500000"), D("32500")),),
         "budget_over": None,
         "gate_allowed": True,
-        "gate_reason": "within the autonomy limits",
+        "gate_reason": "allowed by the automation settings",
     }
     return tl.Facts(**{**base, **kw})  # type: ignore[arg-type]
 
@@ -274,7 +274,9 @@ def test_with_the_autonomy_gate_off_the_order_waits_for_the_buyer_and_says_why(
     row = _po(tiers, _order(tiers, "R-6", "RM-01", "50", "650"))
 
     assert (row["status"], row["touchless"]) == ("approved", False)
-    assert "autonomy gate po.issue" in row["touchless_note"]
+    why = "the kill switch is on" if how == "kill switch" else "a person confirms it first (automation setting"
+    assert f"automatic issue: {why}" in row["touchless_note"]
+    assert "po.issue" not in row["touchless_note"]
     assert [m for m in outbox.sent if "Purchase order" in m["subject"]] == []
 
 

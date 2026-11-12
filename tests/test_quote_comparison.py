@@ -154,7 +154,7 @@ def test_a_price_far_below_the_last_price_paid_is_a_question_even_with_one_quote
     offer = _comp(shop, second).lines[0].offers[0]
 
     assert offer.last_price == D("200.0000")
-    assert offer.questions == ["50.00% below the last price paid (200.00)"]
+    assert offer.questions == ["50.00% below the last price paid (₹ 200.00)"]
 
 
 def test_the_weighted_comparison_recommends_the_best_score_and_says_how_it_was_scored(

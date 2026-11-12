@@ -784,7 +784,7 @@ def _dispatch(db: Session, rfq_no: str, value: Decimal, actor: Actor, result: So
         db,
         SERVICE,
         action="rfq.send",
-        summary=f"Send {rfq_no} to {count} suppliers ({gate.reason})",
+        summary=f"Send {rfq_no} to {count} supplier{'' if count == 1 else 's'}: {gate.reason}",
         payload={"rfq_no": rfq_no},
         required_permission="rfq.send",
         risk="low",

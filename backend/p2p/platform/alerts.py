@@ -18,6 +18,7 @@ from sqlalchemy.orm import Session
 from p2p.formulas.calendar import IST, BusinessCalendar, business_today
 from p2p.formulas.fy import fy_bounds
 from p2p.formulas.kpis import working_days_between
+from p2p.formulas.money import format_inr
 from p2p.orders import contracts as contract_usage
 from p2p.orders import dispatch
 from p2p.platform import notifications, reference, routing, worker
@@ -84,7 +85,7 @@ def stale_requisitions(c: Context) -> list[Finding]:
                 Finding(
                     "stale_requisition", "request", no, "high" if waited > 2 * limit else "medium",
                     f"{no} has waited {waited} working days for approval",
-                    f"Submitted request of {value:,.2f}; the limit is {limit} working days.", f"#/requisitions/{no}", ("Approver",),
+                    f"Submitted request of {format_inr(value)}; the limit is {limit} working days.", f"#/requisitions/{no}", ("Approver",),
                 )
             )  # fmt: skip
     return out

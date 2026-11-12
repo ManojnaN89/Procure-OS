@@ -34,13 +34,9 @@ You cannot enter a date in the future for the payment.
 
 If AP asked to pay a blocked invoice anyway, you may decide it under **Admin** → **Approvals** if you did not enter it.
 
-## What you cannot do
+## What you cannot do, and if you are stuck
 
-You cannot approve a run you proposed. You cannot make the bank file before approval.
-
-## If you are stuck
-
-A small supplier's invoice may have an earlier due date than the terms say (the law caps it). The run page shows each due date.
+You cannot approve a run you proposed. You cannot make the bank file before approval. A small supplier's invoice may have an earlier due date than the terms say (the law caps it). The run page shows each due date.
 
 ## Watch the budgets
 

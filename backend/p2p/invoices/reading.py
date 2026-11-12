@@ -33,6 +33,7 @@ from p2p.ai_steps.runner import run_step
 from p2p.formulas import matching
 from p2p.formulas.calendar import IST
 from p2p.formulas.gst import Registration
+from p2p.formulas.money import format_inr
 from p2p.formulas.orders import charge_rate, line_amounts
 from p2p.invoices import einvoice
 from p2p.invoices import service as invoices
@@ -377,7 +378,8 @@ def _finish(db: Session, d: Draft, pool: list[Candidate], printed_total: Decimal
             d.assumptions.append("the total could not be checked against the lines (the buyer's GSTIN was not read)")
         elif abs(expected.quantize(D("1")) - printed_total) > D("1.00"):
             d.problems.append(
-                f"the lines come to {expected.quantize(D('1')):,.0f} with GST by our rules, the invoice says {printed_total:,.2f}"
+                f"the lines come to {format_inr(expected.quantize(D('1')))} with GST by our rules, the invoice says "
+                f"{format_inr(printed_total)}"
             )
     return d
 

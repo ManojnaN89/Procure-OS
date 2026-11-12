@@ -15,6 +15,7 @@ from p2p.invoices import service as invoices
 from p2p.platform import routing
 from p2p.platform.permissions import can_anywhere, require
 from p2p.platform.rows import rows as _rows
+from p2p.receiving import kinds
 
 router = APIRouter(prefix="/api", tags=["invoices"])
 Db = Annotated[Session, Depends(routing.tenant_session)]
@@ -48,13 +49,17 @@ def _date(value: Any, field: str) -> date:
 
 @router.get("/invoicing/ready")
 def ready_to_invoice(db: Db, ctx: Ctx, supplier: str | None = None) -> list[dict[str, Any]]:
-    """Order lines with goods accepted that have not been invoiced yet, which is what an invoice can be entered against."""
+    """Order lines with goods accepted that have not been invoiced yet, which is what an invoice can be entered against.
+    A service line can be invoiced as soon as the order is with the supplier: the supplier bills before the requester has
+    confirmed, and the match holds the invoice until the service is confirmed (two-way match)."""
     rows = _rows(
         db,
-        "select l.po_no, l.line_no, l.description, l.item_code, l.uom, l.unit_price, l.gst_rate, l.received_qty, l.invoiced_qty, "
-        "po.supplier_code, coalesce(s.trade_name, s.legal_name) as supplier, po.buyer_gstin, po.supplier_gstin "
-        "from po_line l join po on po.no = l.po_no join supplier s on s.code = po.supplier_code "
-        "where l.received_qty > l.invoiced_qty and l.status <> 'cancelled' and po.status not in ('draft', 'submitted', 'cancelled') "
+        "select l.po_no, l.line_no, l.description, l.item_code, l.uom, l.unit_price, l.gst_rate, "  # noqa: S608 - fixed fragments only
+        f"case when {kinds.IS_SERVICE} then greatest(l.qty, l.received_qty) else l.received_qty end as billable, "
+        "l.invoiced_qty, po.supplier_code, coalesce(s.trade_name, s.legal_name) as supplier, po.buyer_gstin, po.supplier_gstin "
+        f"from po_line l join po on po.no = l.po_no join supplier s on s.code = po.supplier_code {kinds.SERVICE_JOINS} "
+        f"where (l.received_qty > l.invoiced_qty or ({kinds.IS_SERVICE} and l.qty > l.invoiced_qty)) "
+        "and l.status <> 'cancelled' and po.status not in ('draft', 'submitted', 'approved', 'cancelled') "
         "and (cast(:s as text) is null or po.supplier_code = :s) order by po.supplier_code, l.po_no, l.line_no limit 500",
         s=supplier,
     )
@@ -69,7 +74,7 @@ def ready_to_invoice(db: Db, ctx: Ctx, supplier: str | None = None) -> list[dict
             "supplier": r["supplier"],
             "unit_price": _money(r["unit_price"]),
             "gst_rate": _money(r["gst_rate"]),
-            "available": format_qty(r["received_qty"] - r["invoiced_qty"]),
+            "available": format_qty(r["billable"] - r["invoiced_qty"]),
             "buyer_gstin": r["buyer_gstin"],
             "supplier_gstin": r["supplier_gstin"],
         }

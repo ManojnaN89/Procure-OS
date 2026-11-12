@@ -11,9 +11,11 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
+from p2p.agents import autonomy
 from p2p.approvals.workflow import name_of, org_code_of
 from p2p.formulas.calendar import business_today
 from p2p.formulas.kpis import BUCKETS, working_days_between
+from p2p.formulas.money import format_inr
 from p2p.invoices import payment
 from p2p.platform import alerts, control_tower, exceptions, reference, routing
 from p2p.platform.permissions import can_anywhere
@@ -62,7 +64,7 @@ def _requester(db: Session, org: str | None) -> list[dict[str, Any]]:
                 key,
                 title,
                 "#/requisitions",
-                [_row(r["no"], r["no"], f"#/requisitions/{r['no']}", f"{r['total_value']:,.2f}") for r in rows],
+                [_row(r["no"], r["no"], f"#/requisitions/{r['no']}", format_inr(r["total_value"])) for r in rows],
             )
         )
     return out
@@ -82,7 +84,7 @@ def _approver(db: Session, user_id: int, org: str | None) -> list[dict[str, Any]
                 "requests",
                 "Requests waiting for my approval",
                 "#/requisitions",
-                [_row(r["no"], r["no"], f"#/requisitions/{r['no']}", f"{r['total_value']:,.2f}") for r in rows],
+                [_row(r["no"], r["no"], f"#/requisitions/{r['no']}", format_inr(r["total_value"])) for r in rows],
             )
         )
         rows = _rows(
@@ -96,7 +98,7 @@ def _approver(db: Session, user_id: int, org: str | None) -> list[dict[str, Any]
                 "orders",
                 "Orders waiting for my approval",
                 "#/purchase-orders",
-                [_row(r["no"], r["no"], f"#/purchase-orders/{r['no']}", f"{r['total']:,.2f}") for r in rows],
+                [_row(r["no"], r["no"], f"#/purchase-orders/{r['no']}", format_inr(r["total"])) for r in rows],
             )
         )
     # decisions that need a person with the right permission, but never the person who asked
@@ -147,7 +149,7 @@ def _buyer(db: Session) -> list[dict[str, Any]]:
             "to_source",
             "Approved requests to source",
             "#/requisitions",
-            [_row(r["no"], r["no"], f"#/requisitions/{r['no']}", f"{r['total_value']:,.2f}") for r in rows],
+            [_row(r["no"], r["no"], f"#/requisitions/{r['no']}", format_inr(r["total_value"])) for r in rows],
         )
     )
     for key, title, quoted in (
@@ -167,7 +169,7 @@ def _buyer(db: Session) -> list[dict[str, Any]]:
             "to_send",
             "Approved orders to send to the supplier",
             "#/purchase-orders",
-            [_row(r["no"], r["no"], f"#/purchase-orders/{r['no']}", f"{r['total']:,.2f}") for r in rows],
+            [_row(r["no"], r["no"], f"#/purchase-orders/{r['no']}", format_inr(r["total"])) for r in rows],
         )
     )
     rows = _rows(db, "select no, total from po where status = 'sent' order by sent_at")
@@ -176,7 +178,7 @@ def _buyer(db: Session) -> list[dict[str, Any]]:
             "to_acknowledge",
             "Sent orders waiting for the supplier's acknowledgement",
             "#/purchase-orders",
-            [_row(r["no"], r["no"], f"#/purchase-orders/{r['no']}", f"{r['total']:,.2f}") for r in rows],
+            [_row(r["no"], r["no"], f"#/purchase-orders/{r['no']}", format_inr(r["total"])) for r in rows],
         )
     )
     rows = _rows(
@@ -303,7 +305,7 @@ def _finance(db: Session, today: date) -> list[dict[str, Any]]:
                 key,
                 title,
                 "#/payments",
-                [_row(r["no"], r["no"], f"#/payments/{r['no']}", f"{r['total']:,.2f}") for r in rows],
+                [_row(r["no"], r["no"], f"#/payments/{r['no']}", format_inr(r["total"])) for r in rows],
             )
         )
     return out
@@ -343,7 +345,7 @@ def _admin(db: Session, today: date) -> list[dict[str, Any]]:
                     r["no"],
                     r["no"],
                     f"#/requisitions/{r['no']}",
-                    f"{r['total_value']:,.2f} · waits for {name_of(db, r['delegate'] or r['approver'])}",
+                    f"{format_inr(r['total_value'])} · waits for {name_of(db, r['delegate'] or r['approver'])}",
                 )
                 for r in rows
             ],
@@ -364,7 +366,7 @@ def _admin(db: Session, today: date) -> list[dict[str, Any]]:
                     r["no"],
                     r["no"],
                     f"#/purchase-orders/{r['no']}",
-                    f"{r['total']:,.2f} · waits for {name_of(db, r['delegate'] or r['approver'])}",
+                    f"{format_inr(r['total'])} · waits for {name_of(db, r['delegate'] or r['approver'])}",
                 )
                 for r in rows
             ],
@@ -390,7 +392,12 @@ def _admin(db: Session, today: date) -> list[dict[str, Any]]:
                 title,
                 "/admin/approvals",
                 [
-                    _row(str(p["id"]), p["summary"][:90], "/admin/approvals", f"needs {p['required_permission']}")
+                    _row(
+                        str(p["id"]),
+                        p["summary"][:90],
+                        "/admin/approvals",
+                        f"for a person who may: {autonomy.label(p['required_permission']).lower()}",
+                    )
                     for p in found
                 ],
             )

@@ -31,7 +31,7 @@ from p2p.ai_steps.evidence import dates_in
 from p2p.ai_steps.runner import AiStep, run_step
 from p2p.approvals import workflow as approvals
 from p2p.formulas.calendar import business_today
-from p2p.formulas.money import format_qty, round_money
+from p2p.formulas.money import format_inr, format_qty, round_money
 from p2p.platform import audit, numbering, permissions, routing, worker
 from p2p.platform.sod import Actor
 
@@ -701,8 +701,8 @@ def _possible_split(
     now_value = round_money(qty * est)
     days = (business_today() - row[1]).days
     return (
-        f"possible split order: {row[0]} asked for the same item {days} day(s) ago (about {earlier}); together with this "
-        f"about {earlier + now_value}. The approver should look at the two together"
+        f"possible split order: {row[0]} asked for the same item {days} day(s) ago (about {format_inr(earlier)}); together with this "
+        f"about {format_inr(earlier + now_value)}. The approver should look at the two together"
     )
 
 

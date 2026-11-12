@@ -188,7 +188,7 @@ def test_a_small_request_over_budget_does_not_approve_itself(db: Session) -> Non
         "submitted",
         "REQ-02",
     )  # the first rule above the automatic band
-    assert "Over budget: GL G1 by 7,000.00" in _row(db, no)["decision_reason"]
+    assert "Over budget: GL G1 by ₹ 7,000.00" in _row(db, no)["decision_reason"]
     assert "cannot approve itself" in _row(db, no)["decision_reason"]
     assert db.execute(text("select count(*) from approval_step where request_no = :n"), {"n": no}).scalar_one() == 1
 
@@ -213,7 +213,7 @@ def test_a_request_that_needs_people_anyway_is_sent_with_a_warning(db: Session) 
     result = _submit(db, no)
 
     assert result.status == "submitted" and result.rule_code == "REQ-04"
-    assert "Over budget: GL G1 by 100,000.00" in _row(db, no)["decision_reason"]
+    assert "Over budget: GL G1 by ₹ 1,00,000.00" in _row(db, no)["decision_reason"]
 
 
 def test_when_the_policy_is_block_an_over_budget_request_cannot_be_submitted(
@@ -400,7 +400,7 @@ def test_a_line_within_its_cost_centre_can_still_be_over_the_location_budget(db:
         "WH-BLR", D("960000"), D("200000"), D("10000.00"),
     )  # fmt: skip
     said = budget.summary(checks)
-    assert "GL G1 by 10,000.00 (location WH-BLR, Apr 2026 to Nov 2026 (FY 2026-27))" in said
+    assert "GL G1 by ₹ 10,000.00 (location WH-BLR, Apr 2026 to Nov 2026 (FY 2026-27))" in said
 
     # and the location's policy blocks the submit
     with pytest.raises(workflow.ApprovalError, match="location WH-BLR"):
@@ -470,7 +470,7 @@ def test_the_budget_is_checked_again_when_the_approver_decides(db: Session, logi
     _ask(db, "R-A", "250000", cc="CC1", status="approved")
 
     # then the approver cannot approve it: the budget is now over by 50,000, and nothing changed
-    with pytest.raises(workflow.ApprovalError, match="cannot be approved now: Over budget: GL G1 by 50,000.00"):
+    with pytest.raises(workflow.ApprovalError, match="cannot be approved now: Over budget: GL G1 by ₹ 50,000.00"):
         workflow.approve(db, db.info["slug"], no, logins.stores)
     assert _row(db, no)["status"] == "submitted"
     assert db.execute(text("select count(*) from audit_event where action = 'request.approve'")).scalar_one() == 0

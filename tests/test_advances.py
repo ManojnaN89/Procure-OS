@@ -153,7 +153,7 @@ def test_an_order_is_advanced_once_the_supplier_has_acknowledged_it_and_only_onc
     assert (
         terms.execute(text("select count(*) from payment_allocation")).scalar_one() == 0
     )  # an advance settles no invoice
-    assert "Pay 1 advance(s), 354.00 in all" in terms.execute(text("select summary from proposal")).scalar_one()
+    assert "Pay 1 advance, ₹ 354.00 in all" in terms.execute(text("select summary from proposal")).scalar_one()
     assert payment.due_advances(terms) == []  # already in a run
     pid = terms.execute(text("select proposal_id from payment_run")).scalar_one()
     proposals.approve(terms, pid, owner)  # nothing is paid until the owner approves
@@ -321,9 +321,10 @@ def test_tax_at_source_on_an_advance_and_on_the_invoice_together_equal_what_the_
 
 
 def test_services_carry_no_tax_at_source_of_the_goods_kind_and_are_still_paid(terms: Session, outbox: Outbox) -> None:  # noqa: F811
+    # received first: since P1-37 the store cannot receive a service, its requester confirms it
+    po_no, _ = _goods(terms)
     terms.execute(text("update item set kind = 'service' where code = 'A'"))
     terms.commit()
-    po_no, _ = _goods(terms)
 
     invoice = _invoice(terms, po_no)
 
@@ -392,7 +393,7 @@ def test_a_run_pays_an_invoice_early_when_the_discount_would_be_lost_by_waiting_
 
     run = payment.propose_run(terms, date(2026, 11, 12), finance, window_days=7)
     summary = terms.execute(text("select summary from proposal")).scalar_one()
-    assert "saving 20.00 in early-payment discount" in summary and "1,160.00 in all" in summary
+    assert "saving ₹ 20.00 in early-payment discount" in summary and "1,160.00 in all" in summary
     assert terms.execute(text("select amount, discount from payment_allocation")).one() == (D("1180.00"), D("20.00"))
     assert terms.execute(text("select amount from payment")).scalar_one() == D("1160.00")
     _pay(terms, run, finance, owner, date(2026, 11, 12))
@@ -402,7 +403,7 @@ def test_a_run_pays_an_invoice_early_when_the_discount_would_be_lost_by_waiting_
         "980.00"
     )  # 1,000 less the discount earned
     (mail,) = outbox.sent[-1:]
-    assert "less early-payment discount Rs 20.00" in mail["body"]
+    assert "less early-payment discount ₹ 20.00" in mail["body"]
 
 
 def test_with_discounts_off_the_run_waits_for_the_due_date(terms: Session, outbox: Outbox) -> None:  # noqa: F811

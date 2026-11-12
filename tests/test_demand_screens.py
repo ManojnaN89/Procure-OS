@@ -159,17 +159,34 @@ def test_the_store_issues_stock_and_corrects_it_after_a_count_and_nobody_else_is
 def test_the_store_checks_a_production_order_buys_the_shortfall_and_issues_the_rest(
     company: Company, browser: Any, tmp_path: Any
 ) -> None:  # noqa: F811
-    from p2p.requests import demand
-
     seed_stock_and_approvals(company, price=100)  # 5 on hand of item A
     (tmp_path / "production_order.csv").write_text("order_no,product_code,qty,need_by\nMO-1,FG-01,8,2026-12-05\n")
     (tmp_path / "production_order_line.csv").write_text("order_no,item_code,qty\nMO-1,A,8\n")
+    (tmp_path / "bad_lines.csv").write_text("order_no,item_code,qty\nMO-9,A,8\n")
     try:
-        assert demand.import_demand(company.db, tmp_path).material_requests
+        # the store loads the ERP's files on the screen (step 1); a line for an order it does not know is left out
         store = open_app(browser, LAPTOP)
         sign_in(store, company.emails["Store"])
         store.goto(f"{URL}/#/material-requests")
+        expect(store.locator("#mrList")).to_contain_text("Load from the ERP")
+        for kind, name in (
+            ("production_order", "production_order.csv"),
+            ("production_order_line", "production_order_line.csv"),
+        ):
+            store.locator("#mrLoad").click()
+            store.locator("#mrKind").select_option(kind)
+            store.set_input_files("#mrFile", str(tmp_path / name))
+            store.locator("#mrLoadGo").click()
+            expect(store.locator("#mrNote")).to_contain_text("Loaded 1 row;")
+        expect(store.locator("#mrNote")).to_contain_text("New material requests: MR-")
         expect(store.locator("#mrList")).to_contain_text("MO-1")
+        store.locator("#mrLoad").click()
+        store.locator("#mrKind").select_option("production_order_line")
+        store.set_input_files("#mrFile", str(tmp_path / "bad_lines.csv"))
+        store.locator("#mrLoadGo").click()
+        expect(store.locator("#mrNote")).to_contain_text("Left out: line")
+        company.db.rollback()
+        assert company.db.execute(text("select count(*) from production_order")).scalar_one() == 1
 
         # the check sets the 5 on the shelf aside and buys the 3 missing (Rs 300 approves itself)
         store.locator("#mrCheck").click()

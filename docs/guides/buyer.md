@@ -42,10 +42,6 @@ On the order page, the panel **Order document and changes** keeps the version an
 
 **Vendors** → **Onboard vendor**: fill in the form and click **Save as draft**. The checks name any wrong PAN, GSTIN, Udyam number or bank detail. On the vendor page click **Add a document** for each paper (PAN, bank proof, GST and Udyam certificates) and **Attach** its scan. A different person verifies each document, and a person with approval rights activates the supplier. The bank account of a supplier already in use can only change with another person's approval. **Contracts** → **Store contract**, **Add a price**. A different person activates the contract.
 
-## What you cannot do
+## What you cannot do, and if you are stuck
 
-You cannot approve an order, verify a document you added, or activate a contract.
-
-## If you are stuck
-
-An order held for a price waits for an Approver. Goods that came with no order show in **Receive without order**; once the purchase manager approves, click **Raise the order** and give the price agreed with the supplier, then send it as usual. A supplier with a missing or unverified document cannot be used: open the vendor to see which one. **Exceptions** lists everything stuck that needs a person, oldest first, with the reason, who must act, the next step and the age in working days; tick **Only mine** for what waits on you.
+You cannot approve an order, verify a document you added, or activate a contract. An order held for a price waits for an Approver. Goods that came with no order show in **Receive without order**; once the purchase manager approves, click **Raise the order** and give the price agreed with the supplier, then send it as usual. A supplier with a missing or unverified document cannot be used: open the vendor to see which one. **Exceptions** lists everything stuck that needs a person, oldest first, with the reason, who must act, the next step and the age in working days; tick **Only mine** for what waits on you.

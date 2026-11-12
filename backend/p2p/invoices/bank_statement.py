@@ -24,6 +24,7 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from p2p.formulas import reconciliation as rules
+from p2p.formulas.money import format_inr
 from p2p.invoices import payment as payments
 from p2p.invoices.service import InvoiceError
 from p2p.platform import audit, tasks
@@ -251,7 +252,9 @@ def import_statement(
         if not named:
             why = "no payment has this reference"
         elif not same:
-            why = "the amount differs: payment " + ", ".join(f"{p['no']} is {p['amount']}" for p in named[:3])
+            why = "the amount differs: payment " + ", ".join(
+                f"{p['no']} is {format_inr(p['amount'])}" for p in named[:3]
+            )
         elif len({p["no"] for p in same}) > 1:
             why = "more than one payment fits: " + ", ".join(p["no"] for p in same[:4])
         else:

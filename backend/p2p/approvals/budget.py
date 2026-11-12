@@ -23,6 +23,7 @@ from sqlalchemy.orm import Session
 
 from p2p.formulas.budget import BLOCK_PCT, WARN_PCT, BudgetCheck, check_budget
 from p2p.formulas.fy import financial_year, fy_bounds
+from p2p.formulas.money import format_inr
 from p2p.platform import settings
 
 COMMITTED_STATUSES = ("submitted", "approved", "closed")
@@ -228,7 +229,7 @@ def summary(checks: list[GroupCheck]) -> str:
         return "No budget was checked: no budget is set for these lines."
     over = [c for c in checks if c.check.status == "over"]
     if over:
-        parts = "; ".join(f"GL {c.gl_code} by {c.check.over_by:,.2f} ({c.holder}, {c.period})" for c in over)
+        parts = "; ".join(f"GL {c.gl_code} by {format_inr(c.check.over_by)} ({c.holder}, {c.period})" for c in over)
         return f"Over budget: {parts}."
     near = [c for c in checks if c.check.status == "warn"]
     if near:

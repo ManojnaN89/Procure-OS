@@ -419,33 +419,21 @@ TOLERANCES: dict[str, tuple[str, str, float | None, float | None]] = {
 }
 
 # decision type -> (label, what it does, how its level is stored)
-DECISIONS: dict[str, tuple[str, str]] = {
-    "rfq.send": ("Send a request for quotation", "Emails the suppliers chosen for a line"),
-    "rfq.award": ("Award to the recommended supplier", "Awards a quotation when there is a clear winner"),
-    "quote.read": ("Accept a quote read from an email", "Turns a clean reading of a supplier's reply into a quote"),
-    "po.send": ("Send an approved purchase order", "Emails the order to the supplier"),
-    "po.issue": (
-        "Issue a touchless purchase order",
-        "Issues and sends a contract or safe-reorder order within the buyer's tier and the touchless limit, "
-        "with no buyer",
-    ),
-    "invoice.read": (
-        "Enter an invoice read from a document",
-        "Enters a clean reading of a supplier's invoice without AP",
-    ),
-    "supplier.change": (
-        "Apply a small change a supplier asks for",
-        "Moves a promised date within the accepted days; quantities are only noted, prices always go to a buyer",
-    ),
-    "supplier.remind": (
-        "Chase a supplier by email",
-        "Reminds a supplier that has not acknowledged an order, or still owes part of a delivery",
-    ),
+_HELP = {
+    "rfq.send": "Emails the suppliers chosen for a line",
+    "rfq.award": "Awards a quotation when there is a clear winner",
+    "quote.read": "Turns a clean reading of a supplier's reply into a quote",
+    "po.send": "Emails the order to the supplier",
+    "po.issue": "Issues and sends a contract or safe-reorder order within the buyer's tier and the touchless limit, "
+    "with no buyer",
+    "invoice.read": "Enters a clean reading of a supplier's invoice without AP",
+    "supplier.change": "Moves a promised date within the accepted days; quantities are only noted, prices always go to "
+    "a buyer",
+    "supplier.remind": "Reminds a supplier that has not acknowledged an order, or still owes part of a delivery",
 }
+DECISIONS: dict[str, tuple[str, str]] = {dt: (autonomy.LABELS[dt], help_) for dt, help_ in _HELP.items()}
 LOCKED_LABELS = {
-    "payment_run.approve": "Approve a payment run",
-    "supplier.set_status": "Activate or block a supplier",
-    "invoice.release_block": "Release a payment block on an invoice",
+    dt: autonomy.LABELS[dt] for dt in ("payment_run.approve", "supplier.set_status", "invoice.release_block")
 }
 LEVELS = ("off", "propose", "auto")
 

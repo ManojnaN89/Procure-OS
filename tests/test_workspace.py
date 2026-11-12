@@ -417,7 +417,7 @@ def test_the_buyer_sees_orders_to_send_and_acknowledge_and_the_store_sees_goods_
     receiving = _sections(store, people["Store"], "Store")
 
     assert buyer["to_acknowledge"]["rows"] == [
-        {"id": po_no, "label": po_no, "sub": "1,180.00", "link": f"#/purchase-orders/{po_no}"}
+        {"id": po_no, "label": po_no, "sub": "₹ 1,180.00", "link": f"#/purchase-orders/{po_no}"}
     ]
     assert "to_send" not in buyer  # sections with nothing in them are left out
     assert receiving["to_receive"]["count"] == 1 and receiving["to_receive"]["rows"][0]["sub"] == "Alpha Traders"

@@ -46,3 +46,4 @@ evals/results/journeys/**/*.jpg
 
 # scratch results of parallel working sessions
 evals/results/fork_*
+!evals/results/journeys/steps/*.jpg

@@ -316,9 +316,7 @@ class _VendorScores:
         return self._scores.get(code)
 
 
-def _rank_line(
-    good: list[Offer], rule: sel.SelectionRule, vendors: _VendorScores, longest_terms: int
-) -> tuple[list[Offer], str | None]:
+def _rank_line(good: list[Offer], rule: sel.SelectionRule, vendors: _VendorScores) -> tuple[list[Offer], str | None]:
     """Order the qualifying offers for the whole quantity, best first, and say how a tie was broken."""
     costs = [o.cost for o in good]
     tie = len(costs) != len(set(costs))
@@ -328,6 +326,7 @@ def _rank_line(
             o.vendor_score = found.total if found else Decimal(0)
     if rule.method == "weighted" and good:
         best = min(costs)
+        longest_terms = max(o.payment_days for o in good)  # like the price, scaled among the qualifying offers only
         for o in good:
             found = vendors.get(o.supplier_code)
             parts = {
@@ -424,7 +423,6 @@ def comparison(db: Session, rfq_no: str, as_of: date) -> Comparison:
     threshold = Decimal(_org_setting(db, "low_price_flag_pct", "40"))
     last = last_prices(db, sorted({line["item_code"] for line in lines if line["item_code"]}))
     vendors = _VendorScores(db, as_of)
-    longest_terms = max((int(q["payment_days"]) for q in quotes), default=0)
     per_line: dict[int, list[Offer]] = {}
     of_quote: dict[str, list[Offer]] = defaultdict(list)  # a quote's offers, in line order
     for line in lines:
@@ -489,7 +487,7 @@ def comparison(db: Session, rfq_no: str, as_of: date) -> Comparison:
             o.questions = rules.price_questions(o.net_price, o.last_price, others, threshold)
         qualifying = [o for o in offers if o.compliant]
         whole = [o for o in qualifying if not o.partial]
-        ranked, tie = _rank_line(whole, rule, vendors, longest_terms)
+        ranked, tie = _rank_line(whole, rule, vendors)
         in_ranking = {id(o) for o in ranked}
         rest = sorted(  # offers for part of the quantity, then those dropped
             (o for o in offers if id(o) not in in_ranking), key=lambda o: (not o.compliant, o.cost, o.supplier_code)
