@@ -2,7 +2,8 @@
 out here from the raw dataset (the main demo company, Apex Pumps; see `scenario()` for the three items it plans by stock
 level for these runs). The plan's three scenarios (a normal run, a part delivery, a price mismatch on the invoice)
 each run twice: with everything typed in at the screens, and with documents (the supplier's quotation arrives as an email
-and the supplier's invoice is uploaded as a PDF). A held order (a price above the estimate) is a fourth scenario."""
+and the supplier's invoice is uploaded as a PDF). A held order (a quoted price above the estimate) is a fourth
+scenario."""
 
 import hashlib
 import json
@@ -44,14 +45,15 @@ TODAY = lib.TODAY
 SERVICE_LEVEL_NOTE = "stock at its reorder point"
 
 # Apex plans its raw materials by production order, not by stock level, so for these runs the eval gives three of them a
-# min/max plan in a copy of the dataset, with the stock at the maximum, and makes the shaft contract dearer than the
-# estimate. Everything the runs check is then worked out from that copy's files.
-PLANS = {  # item -> (reorder point, maximum): a quotation item, a contract item, and the dear contract item
+# min/max plan in a copy of the dataset, with the stock at the maximum, and takes the shaft off its contract, so that it is
+# bought by quotation and estimated at its standard price (no price was ever paid in these runs' company). Everything the
+# runs check is then worked out from that copy's files.
+PLANS = {  # item -> (reorder point, maximum): a quotation item, a contract item, and the item quoted dear
     "RM-09": ("10", "160"),
     "RM-03": ("20", "60"),
     "RM-05": ("10", "50"),
 }
-DEAR = ("RM-05", "225.00")  # the shaft's contract price, 25% above its estimate of 180
+DEAR = ("RM-05", "225.00", "240.00")  # the shaft: the best quote, 25% above its estimate of 180, and the other quote
 QUOTE_WINNER, WIN_PRICE, WIN_DISCOUNT, OTHER_PRICE = "SUP-003", "88", "2", "92"
 SCENARIO: Path | None = None
 
@@ -94,10 +96,8 @@ def scenario() -> Path:
             if r["item_code"] in top:
                 r["qty"] = top[r["item_code"]]
 
-    def dear(table: list[dict[str, str]]) -> None:
-        for r in table:
-            if r["item_code"] == DEAR[0] and r["contract_code"]:
-                r["price"] = DEAR[1]
+    def dear(table: list[dict[str, str]]) -> None:  # the shaft is no longer on contract
+        table[:] = [r for r in table if not (r["item_code"] == DEAR[0] and r["contract_code"])]
 
     SCENARIO = folder
     rewrite("item_location", plans)
@@ -326,7 +326,7 @@ class Pick:
     reorder_point: Decimal
     max_qty: Decimal
     moq: Decimal
-    price: Decimal  # the standard price the request is estimated with
+    price: Decimal  # the estimate the request is made at: the contract price in force, else the standard price
     qty: Decimal = Decimal(0)
     value: Decimal = Decimal(0)
     notes: dict[str, Any] = field(default_factory=dict)
@@ -353,6 +353,14 @@ def candidates() -> list[Pick]:
         )  # fmt: skip
         # what the stock plan asks for from the reorder point: up to the maximum, never below the minimum order
         p.qty = max(p.moq, Decimal(ceil(p.max_qty - p.reorder_point)))
+        # plan step 3: the contract price for the quantity, else the last price paid (none: the runs' company has no
+        # orders before them), else the standard price
+        prices = contract_prices(p.item, p.qty)
+        if prices:
+            best = min(prices, key=lambda x: D(x["price"]))
+            p.price, p.notes["estimate"] = D(best["price"]), f"contract {best['contract_code']}"
+        else:
+            p.notes["estimate"] = "standard price"
         p.value = half_up(Fraction(p.qty) * Fraction(p.price), 2)
         out.append(p)
     return sorted(out, key=lambda p: (p.item, p.loc))
@@ -360,11 +368,18 @@ def candidates() -> list[Pick]:
 
 def pick_for(kind: str) -> Pick:
     """The first item (by code) that suits the run. 'quotation': no contract price, a manager approves the request.
-    'contract': a contract price within the price band, small enough to approve itself. 'dear': a contract price well
-    above the estimate. Contract suppliers are ones that charge GST (not on the composition scheme)."""
+    'contract': a contract price within the price band, small enough to approve itself. 'dear': the shaft, off contract,
+    whose quotes come in well above its estimate. Contract suppliers are ones that charge GST (not on the composition
+    scheme)."""
     suppliers = csv_suppliers()
     for p in candidates():
         prices = contract_prices(p.item, p.qty)
+        if kind == "dear":
+            if p.item == DEAR[0] and not prices:
+                return p
+            continue
+        if p.item == DEAR[0]:
+            continue  # kept for the held run
         if kind == "quotation":
             if not prices and request_route(p.value) == "plant_head":
                 return p
@@ -376,9 +391,7 @@ def pick_for(kind: str) -> Pick:
             continue
         ratio = D(best["price"]) / p.price
         small = D("6000") <= p.value <= D("15000")
-        if (kind == "contract" and ratio <= D("1.10") and small) or (
-            kind == "dear" and ratio >= D("1.20") and D("1000") <= p.value <= D("15000")
-        ):
+        if kind == "contract" and ratio <= D("1.10") and small:
             p.notes.update(
                 price=D(best["price"]),
                 supplier=best["supplier_code"],
@@ -528,7 +541,17 @@ def replenish(d: Demo, c: Checks, pick: Pick, route: str) -> str:
     ).one()
     c.same("the request is for the item that fell to its reorder point", line[0], pick.item)
     c.same("quantity: up to the maximum, not below the minimum order", D(line[1]), pick.qty)
-    c.same("estimate: the item's standard price", D(line[2]), pick.price)
+    c.same(
+        f"estimate: the {pick.notes['estimate']} (the contract price in force, else the standard price: nothing was paid "
+        "before in this company)",
+        D(line[2]),
+        pick.price,
+    )
+    c.same(
+        "the request line keeps where its estimate came from",
+        one(d.db, "select est_source from request_line where request_no = :n", n=req),
+        pick.notes["estimate"],
+    )
     c.same(
         "the request's value",
         D(one(d.db, "select total_value from request where no = :n", n=req)),
@@ -1368,6 +1391,30 @@ def same_as_typed(d: Demo, c: Checks, scenario: str, typed: bool) -> None:
 BUYING_KEYS = ("buyer", "stores_head", "proc_head", "store", "ap", "finance", "owner")
 
 
+def type_quotes(d: Demo, pick: Pick, rfq: str, prices: dict[str, tuple[str, str | None]]) -> None:
+    """The buyer opens the quotation request and types in each supplier's quote (price, discount)."""
+    from playwright.sync_api import expect
+
+    suppliers = csv_suppliers()
+    with d.step("buyer", "opens the quotation request: no quotes yet") as page:
+        d.go("buyer", f"rfqs/{rfq}")
+        expect(page.locator("#appContent")).to_contain_text("No quotes received yet")
+    for supplier, (price, discount) in prices.items():
+        with d.step(
+            "buyer",
+            f"enters the quote of {suppliers[supplier]['trade_name']}: {price} less {discount or 0}%",
+        ) as page:
+            page.locator("#addQuoteBtn").click()
+            page.locator("#qSupplier").select_option(supplier)
+            row = page.locator("#quoteForm tbody tr").first
+            row.locator(".qPrice").fill(price)
+            row.locator(".qDisc").fill(discount or "0")
+            row.locator(".qGst").fill(f"{item_rate(pick.item):f}")
+            row.locator(".qDays").fill("5")
+            page.locator("#saveQuote").click()
+            expect(page.locator("#appContent")).to_contain_text("Quotes")
+
+
 def quotation_to_order(
     d: Demo, c: Checks, co: Company, pick: Pick, by_documents: bool
 ) -> tuple[str, str, Decimal, Decimal, Decimal, Decimal]:
@@ -1470,23 +1517,7 @@ def quotation_to_order(
             )
         confirm_quote_mails(d, c, rfq, prices)
     else:
-        with d.step("buyer", "opens the quotation request: no quotes yet") as page:
-            d.go("buyer", f"rfqs/{rfq}")
-            expect(page.locator("#appContent")).to_contain_text("No quotes received yet")
-        for supplier, (price, discount) in prices.items():
-            with d.step(
-                "buyer",
-                f"enters the quote of {suppliers[supplier]['trade_name']}: {price} less {discount or 0}%",
-            ) as page:
-                page.locator("#addQuoteBtn").click()
-                page.locator("#qSupplier").select_option(supplier)
-                row = page.locator("#quoteForm tbody tr").first
-                row.locator(".qPrice").fill(price)
-                row.locator(".qDisc").fill(discount or "0")
-                row.locator(".qGst").fill(f"{item_rate(pick.item):f}")
-                row.locator(".qDays").fill("5")
-                page.locator("#saveQuote").click()
-                expect(page.locator("#appContent")).to_contain_text("Quotes")
+        type_quotes(d, pick, rfq, prices)
     with d.step(
         "buyer",
         "compares the quotes: the cheaper one after discount is recommended; awards it",
@@ -2065,7 +2096,7 @@ def run_blocked_invoice(d: Demo, c: Checks, co: Company, pick: Pick, by_document
     )
 
 
-# ---- run 3: a contract price far above the estimate holds the order until an approver accepts -----
+# ---- run 3: quotes far above the estimate hold the order until an approver accepts -----------------
 
 
 def run_held_order(d: Demo, c: Checks, co: Company, pick: Pick) -> None:
@@ -2073,14 +2104,29 @@ def run_held_order(d: Demo, c: Checks, co: Company, pick: Pick) -> None:
 
     db = d.db
     sign_in_all(d, co, ("buyer", "proc_head"))
-    replenish(d, c, pick, "auto")
+    replenish(d, c, pick, request_route(pick.value))
     d.work()
-    supplier, price = sourced_from_contract(d, c, pick)
+    c.true("no contract price is in force for the item, so quotations are asked for", not contract_prices(pick.item, pick.qty))
+    rfq = str(one(db, "select no from rfq"))
+    invited = [r[0] for r in db.execute(text("select supplier_code from rfq_supplier where rfq_no = :n order by 1"), {"n": rfq})]
+    decide_in_approvals(d, "buyer", "RFQs waiting to be sent", rfq, what="approves sending the quotation request")
+    supplier, price = invited[0], D(DEAR[1])
+    # two quotes, as in the quotation runs: the cheapest, 25% above the estimate, and a dearer one
+    type_quotes(d, pick, rfq, {s: (DEAR[1] if s == supplier else DEAR[2], None) for s in invited[:2]})
+    with d.step("buyer", "compares the quotes and awards the cheapest") as page:
+        expect(page.locator("#appContent tr", has_text="recommended")).to_contain_text(
+            csv_suppliers()[supplier]["trade_name"]
+        )
+        page.locator("#awardBtn").click()
+        expect(page.locator("#appContent")).to_contain_text("Supplier selected")
+    d.sync()
+    d.work()  # the worker makes the order from the award
     po = str(one(db, "select no from po"))
     band = D(next(r["value"] for r in rows("master", "setting") if r["key"] == "price_band_pct"))
     over = (price - pick.price) / pick.price * 100
     c.true(
-        f"the contract price {price} is {over:.1f}% above the estimate {pick.price}: more than the {band}% allowed",
+        f"the quoted price {price} is {over:.1f}% above the estimate {pick.price} (its {pick.notes['estimate']}): "
+        f"more than the {band}% allowed",
         over > band,
     )
     taxable, total, igst = check_order(d, c, po, supplier, pick, price, status="draft")
@@ -2123,7 +2169,7 @@ def run_held_order(d: Demo, c: Checks, co: Company, pick: Pick) -> None:
         api("POST", f"/api/purchase-orders/{po}/send", d.w.headers("Buyer"), json={}).status_code,
         409,
     )
-    c.same("no mail went to the supplier", len(supplier_mails(d)), 0)
+    c.same("the order did not go to the supplier", len(supplier_mails(d, subject=po)), 0)
 
     decide_in_approvals(
         d,
@@ -2162,7 +2208,7 @@ def run_held_order(d: Demo, c: Checks, co: Company, pick: Pick) -> None:
     approve_order(d, c, po, taxable, total, igst)
     send_and_acknowledge(d, c, po, supplier, total)
     c.same(
-        "the price on the order is the contract price, not the estimate",
+        "the price on the order is the quoted price, not the estimate",
         D(
             one(
                 db,
@@ -2207,7 +2253,7 @@ RUNS = {
     ),
     "3": (
         "held",
-        "Run 3: a contract price far above the estimate holds the order until an approver accepts it",
+        "Run 3: quotes far above the estimate hold the order until an approver accepts the price",
         "dear",
         run_held_order,
     ),

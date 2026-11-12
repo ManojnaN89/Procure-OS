@@ -1,4 +1,8 @@
-"""E35: the ERP's demand files load row for row, bad rows are listed with their reasons, nothing loads twice."""
+"""E35: the ERP's demand files load row for row, bad rows are listed with their reasons, nothing loads twice.
+
+The main demo company (Apex Pumps) sends production orders, their lines, sales orders and the demand plan. The IT services
+company (Brightwave) sends its joiner kits and the joiners planned by department: each joiner becomes the items of their
+kit, needed by the start date, for the joiner's department, checked against an oracle from the raw files."""
 
 import csv
 import io
@@ -16,8 +20,20 @@ TITLE = "ERP demand files load exactly once, with every bad row explained"
 REQUIREMENT = (
     "Plan P1-29: production orders with their component lines, MRP results, sales orders and the demand plan are "
     "imported from the client's ERP files; every rejected row is listed with its reason; the same ERP order is never "
-    "loaded twice; a changed order is reported, not overwritten; one company never sees another's imports"
+    "loaded twice; a changed order is reported, not overwritten; one company never sees another's imports. For an IT "
+    "services company the joiner kits and the joiner plan load the same way: each joiner row becomes its kit's items "
+    "times the joiners, by the start date, for the joiner's department, and one material request per plan and department"
 )
+BRIGHTWAVE = lib.ROOT / "data" / "datasets" / "brightwave-v1"
+JOINER_PLANTED = {  # line of the planted joiner plan -> (row, a word the reason must contain)
+    2: (["JP-2027-01", "ENG", "developer", "2", "2027-01-04"], None),  # clean: must load
+    3: (["JP-2027-01", "ENG", "intern", "1", "2027-01-04"], "kit"),
+    4: (["JP-2027-01", "XYZ", "standard", "1", "2027-01-04"], "department"),
+    5: (["JP-2027-01", "ADM", "standard", "0", "2027-01-04"], "above zero"),
+    6: (["JP-2027-01", "ADM", "standard", "1.5", "2027-01-04"], "whole number"),
+    7: (["JP-2027-01", "ADM", "standard", "1", ""], "required"),
+    8: (["JP-2027-01", "ENG", "developer", "2", "2027-01-04"], "duplicate"),
+}
 
 KINDS = (
     "production_order",
@@ -73,10 +89,12 @@ def run(ctx) -> Outcome:
     from p2p.requests import demand
 
     out = Outcome(True)
+    if (BRIGHTWAVE / "inputs" / "joiner_plan.csv").is_file():
+        brightwave(out)
+    else:
+        out.notes.append("no Brightwave dataset: the joiner files were not checked")
     if not (lib.DATASET / "inputs" / "production_order.csv").is_file():
-        out.notes.append(
-            f"{lib.DATASET.name} has no production orders (its demand is a joiner plan): nothing to check"
-        )
+        out.notes.append(f"{lib.DATASET.name} has no production orders: the production files were not checked")
         return out
     a = lib.build_world("e35a", with_stock=False)
     b = lib.build_world("e35b", with_stock=False)
@@ -263,9 +281,147 @@ def run(ctx) -> Outcome:
         out.find("high", "a requester can see the ERP imports")
 
     out.metrics = {
+        **out.metrics,
         "rows in the files": sum(rows_in_files.values()),
         "requirements checked against the BOM": len(expected),
         "planted faults caught": f"{caught} of {sum(1 for _, w in PLANTED.values() if w)}",
         "rows loaded twice": reloaded,
     }
     return out
+
+
+def _joiner_oracle() -> dict[tuple[str, str], tuple[Decimal, date, str]]:
+    """From the raw files: per plan and department, and item, the quantity (the kit's quantity times the joiners), the
+    date it is needed (the earliest start) and the department it is for."""
+    kits: dict[str, list[tuple[str, Decimal]]] = defaultdict(list)
+    for r in lib.rows("inputs", "joiner_kit", BRIGHTWAVE):
+        kits[r["kit"]].append((r["item_code"], lib.D(r["qty"])))
+    out: dict[tuple[str, str], tuple[Decimal, date, str]] = {}
+    for r in lib.rows("inputs", "joiner_plan", BRIGHTWAVE):
+        doc = f"{r['plan_no']}/{r['department']}"
+        for item, qty in kits[r["kit"]]:
+            before = out.get((doc, item))
+            start = date.fromisoformat(r["start_date"])
+            out[(doc, item)] = (
+                (before[0] if before else Decimal(0)) + qty * lib.D(r["count"]),
+                min(start, before[1]) if before else start,
+                r["department"],
+            )
+    return out
+
+
+def brightwave(out: Outcome) -> None:  # noqa: C901 - one scenario, step by step
+    """The IT services company's joiner kits and joiner plan, loaded through the upload screen's API."""
+    from p2p.main import app
+
+    w = lib.build_world("e35bw", with_stock=False, dataset=BRIGHTWAVE)
+    client = TestClient(app)
+    store = w.headers("Store")
+
+    def upload(kind: str, body: bytes) -> dict:
+        resp = client.post(
+            f"/api/demand/import/{kind}", files={"file": (f"{kind}.csv", body, "text/csv")}, headers=store
+        )
+        if resp.status_code != 200:
+            out.find("high", f"Brightwave: uploading {kind} answered {resp.status_code}: {resp.text[:200]}")
+            return {"loaded": 0, "already_loaded": 0, "rejected": [], "summary": ""}
+        return resp.json()
+
+    files = {k: (BRIGHTWAVE / "inputs" / f"{k}.csv").read_bytes() for k in ("joiner_kit", "joiner_plan")}
+    rows_in = {k: len(lib.rows("inputs", k, BRIGHTWAVE)) for k in files}
+    plan_first = upload("joiner_plan", files["joiner_plan"])  # before the kits: every row must say why it waits
+    if plan_first["loaded"] or len(plan_first["rejected"]) != rows_in["joiner_plan"] or not all(
+        "kit" in p["reason"] for p in plan_first["rejected"]
+    ):
+        out.find("high", f"Brightwave: a joiner plan loaded before its kits answered {plan_first}")
+    first = {k: upload(k, body) for k, body in files.items()}
+    for k, got in first.items():
+        if got["rejected"] or got["loaded"] != rows_in[k]:
+            out.find("high", f"Brightwave {k}: {got['loaded']} of {rows_in[k]} rows loaded; left out {got['rejected'][:3]}")
+
+    # what was stored against the oracle
+    want = _joiner_oracle()
+    stored: dict[tuple[str, str], tuple[Decimal, date, str]] = {}
+    for doc, item, qty, need_by, dep in w.db.execute(
+        text(
+            "select source_doc_no, item_code, sum(base_qty), min(need_by), max(department_code) "
+            "from material_requirement where source_kind = 'joiner' group by source_doc_no, item_code"
+        )
+    ):
+        stored[(doc, item)] = (Decimal(qty), need_by, dep)
+    if stored != want:
+        wrong = sorted(k for k in set(want) | set(stored) if want.get(k) != stored.get(k))
+        out.find("high", f"Brightwave: joiner requirements differ from kit x joiners for {wrong[:4]}")
+    made = {
+        r.order_no: (r.department_code, r.need_by, r.lines)
+        for r in w.db.execute(
+            text(
+                "select m.order_no, m.department_code, m.need_by, count(l.id) as lines from material_request m "
+                "join material_request_line l on l.mr_no = m.no where m.source_kind = 'joiner' "
+                "group by m.order_no, m.department_code, m.need_by"
+            )
+        )
+    }
+    docs = {doc for doc, _ in want}
+    expected_mr = {
+        doc: (
+            next(d for (o, _), (_, _, d) in want.items() if o == doc),
+            min(n for (o, _), (_, n, _) in want.items() if o == doc),
+            sum(1 for o, _ in want if o == doc),
+        )
+        for doc in docs
+    }
+    if made != expected_mr:
+        out.find("high", f"Brightwave: material requests {made}, expected one per plan and department {expected_mr}")
+
+    # the store check buys the kits for the joiner's department, at the estimate
+    resp = client.post("/api/material-requests/check", json={}, headers=store)
+    if resp.status_code != 200:
+        out.find("high", f"Brightwave: the store check answered {resp.status_code}: {resp.text[:200]}")
+    else:
+        w.db.rollback()
+        departments = {
+            r[0]: r[1]
+            for r in w.db.execute(
+                text("select m.order_no, r.department_code from request r join material_request m on m.no = r.source_ref")
+            )
+        }
+        wrong_dep = {doc: d for doc, d in departments.items() if d != expected_mr[doc][0]}
+        if wrong_dep or not departments:
+            out.find("high", f"Brightwave: kit purchase requests raised for {departments}, expected the joiner's department")
+
+    # the same files again load nothing; planted bad rows are each left out with their reason; a change is reported
+    again = {k: upload(k, body) for k, body in files.items()}
+    if any(g["loaded"] or g["rejected"] or g["already_loaded"] != rows_in[k] for k, g in again.items()):
+        out.find("high", f"Brightwave: a second import of the same files answered {again}")
+    planted = upload(
+        "joiner_plan",
+        _csv(["plan_no", "department", "kit", "count", "start_date"], [JOINER_PLANTED[n][0] for n in sorted(JOINER_PLANTED)]),
+    )
+    reasons = {p["line"]: p["reason"] for p in planted["rejected"]}
+    caught = 0
+    for line, (_, word) in JOINER_PLANTED.items():
+        if word is None:
+            if line in reasons:
+                out.find("high", f"Brightwave: a clean planted joiner row was left out: {reasons[line]}")
+        elif line not in reasons or word not in reasons[line].lower():
+            out.find("high", f"Brightwave: planted joiner row {line} (expected: {word}) gave {reasons.get(line)}")
+        else:
+            caught += 1
+    plan = lib.rows("inputs", "joiner_plan", BRIGHTWAVE)[0]
+    changed = upload(
+        "joiner_plan",
+        _csv(
+            ["plan_no", "department", "kit", "count", "start_date"],
+            [[plan["plan_no"], plan["department"], plan["kit"], str(int(plan["count"]) + 1), plan["start_date"]]],
+        ),
+    )
+    if changed["loaded"] or len(changed["rejected"]) != 1 or "already loaded; changed: qty" not in changed["rejected"][0]["reason"]:
+        out.find("high", f"Brightwave: a changed joiner count was not reported as changed: {changed}")
+    out.metrics.update(
+        {
+            "Brightwave joiner rows (kits / plan)": f"{rows_in['joiner_kit']} / {rows_in['joiner_plan']}",
+            "Brightwave requirements checked against kit x joiners": len(want),
+            "Brightwave planted joiner faults caught": f"{caught} of {sum(1 for _, w_ in JOINER_PLANTED.values() if w_)}",
+        }
+    )
