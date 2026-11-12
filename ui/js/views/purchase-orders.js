@@ -328,8 +328,10 @@ const PurchaseOrdersView = {
         <div id="poChangesBox"></div>
         </div>
         </div>
+        <div id="poTraceBox" style="margin-top:12px;"></div>
       `;
       this.wire(po);
+      TracePanel.mount(document.getElementById("poTraceBox"), po.id);
       this.mountChanges(po);
       if (po.sent_at) this.mountSupplierAnswer(po);
       if (po.sent_at) SupplierMessages.mount(document.getElementById("supplierMessagesBox"), "orders", po.id);

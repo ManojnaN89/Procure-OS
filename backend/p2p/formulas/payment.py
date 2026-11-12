@@ -10,8 +10,31 @@ from p2p.formulas.fy import financial_year
 
 TWO = Decimal("0.01")
 MSME_CATEGORIES = ("micro", "small")  # medium enterprises are outside the 45-day rule
+# The day limits of the MSMED Act, section 15, are data: the settings `msme_max_days` and `msme_no_agreement_days`
+# (invoices/payment.py msme_limits). These are the statute's figures, used when a company has not set them.
 STATUTORY_DAYS = 45  # the most a buyer may take, agreed in writing, from acceptance
 NO_AGREEMENT_DAYS = 15  # without a written agreement
+
+
+@dataclass(frozen=True)
+class MsmeLimits:
+    max_days: int = STATUTORY_DAYS
+    no_agreement_days: int = NO_AGREEMENT_DAYS
+
+
+def msme_deadline(accepted_on: date, agreement: bool, agreed_days: int | None, limits: MsmeLimits) -> date:
+    """The last day a micro or small supplier may be paid: the days agreed in writing (never more than the maximum), or
+    the no-agreement days, counted in calendar days from the day the goods or service were accepted."""
+    if agreement:
+        return accepted_on + timedelta(days=min(limits.max_days, int(agreed_days or limits.max_days)))
+    return accepted_on + timedelta(days=limits.no_agreement_days)
+
+
+def days_late(deadline: date, on: date) -> int:
+    """Days past the deadline on a date: 0 on the deadline itself, negative while there is still time."""
+    return (on - deadline).days
+
+
 # The tax rules are data: the rate, the threshold and the act come from the reference table `ref_tds_section` (see
 # invoices/payment.py). These are the values in force when this was written and are used only when the table has no row
 # for the date, so a company with its reference data not loaded still gets the statutory figure.
@@ -35,18 +58,18 @@ def due_date(
     msme_category: str | None,
     msme_agreement: bool,
     agreed_days: int | None,
+    limits: MsmeLimits | None = None,
 ) -> date:
     """The payment terms' day count from their baseline (the invoice date, or the day the goods were accepted).
 
     A micro or small supplier must be paid within what was agreed in writing, never more than 45 days from acceptance,
-    and within 15 days if nothing was agreed in writing.
+    and within 15 days if nothing was agreed in writing (the limits as the company has them).
     """
     base = invoice_date if baseline == "invoice_date" else accepted_on
     due = base + timedelta(days=days)
     if msme_category in MSME_CATEGORIES:
-        if msme_agreement:
-            return min(due, accepted_on + timedelta(days=min(STATUTORY_DAYS, int(agreed_days or STATUTORY_DAYS))))
-        return accepted_on + timedelta(days=NO_AGREEMENT_DAYS)
+        deadline = msme_deadline(accepted_on, msme_agreement, agreed_days, limits or MsmeLimits())
+        return min(due, deadline) if msme_agreement else deadline
     return due
 
 

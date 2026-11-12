@@ -886,7 +886,8 @@ def pay_many(
     with d.step("finance", f"records that the bank has paid, on {run_date}") as page:
         page.locator("#paidOn").fill(run_date.isoformat())
         page.locator("#markPaid").click()
-        expect(page.locator("#appContent")).to_contain_text("bank reference")
+        # the run is drawn again without the button once it is paid ("bank reference" is also in the page's help text)
+        expect(page.locator("#markPaid")).to_have_count(0)
     d.sync()
     for no, _, taxable, _ in invoices:
         c.same(

@@ -13,6 +13,7 @@ const ExportList = {
     vendors: "vendors",
     contracts: "contracts",
     inventory: "stock",
+    reconciliation: "received-not-invoiced",
   },
 
   /** Called after a page has drawn. Only a list page (no case id) gets the button, and only once. */

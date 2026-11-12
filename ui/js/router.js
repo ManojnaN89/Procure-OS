@@ -19,6 +19,7 @@ const Router = {
     "receive-without-order": UnorderedView,
     invoices: InvoicesView,
     payments: PaymentsView,
+    reconciliation: ReconciliationView,
     contracts: ContractsView,
     assistant: AssistantPageView,
     trail: TrailPageView,

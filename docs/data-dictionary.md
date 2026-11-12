@@ -225,6 +225,10 @@ Platform additions to the tables above: `invoice.advance_used`, `invoice.advance
 
 **bank_statement_line** · account, value_date, amount, utr, reference, narration, matched_payment_no
 
+**vendor_statement_line** · supplier_code, statement_date, supplier_invoice_no, invoice_date, amount, our_invoice_no (empty: an invoice the supplier says it sent that we never received) · *the supplier's side of a statement of account*
+
+Reconciliation in the platform (plan step 13, P1-39): received not invoiced is worked out when asked, per order line, from goods accepted (at the order price, on `goods_receipt.accepted_on`) and service entries (`amount_accepted` on `accepted_on`) against invoice lines (`taxable`, on `invoice.received_on`; credit notes take off, cancelled invoices count nothing). Small suppliers are checked against the MSMED Act deadline: the days agreed in writing (`supplier.agreed_payment_days`, at most the setting `msme_max_days`, 45) or, without an agreement, `msme_no_agreement_days` (15), counted from the latest acceptance before the invoice came; `msme_warn_days` (7) lists those reaching it soon. The platform's statement tables are in C8.
+
 ### C6. Messages and files
 
 **email_message** · id, message_id, in_reply_to, thread_id, mailbox, direction enum(in,out), from, to, cc, subject, body_ref, attachments, at, plus_tag, linked_doc_type, linked_doc_no
@@ -264,6 +268,9 @@ task, notification, alert, proposal, audit_event, agent_run, agent_step, model_c
 | product_demand | Sales orders and demand plan lines (finished products): why production orders exist; kept for reference |
 | demand_import | One ERP import: source file or folder, per file what loaded, what was loaded before, what was left out and the mapping version used, who and when |
 | erp_column_map | The client's column names for each kind of ERP file (`columns`: our column -> theirs), versioned; an import uses the latest version and records which |
+| vendor_statement | One supplier statement of account as imported (plan step 13): supplier, the period compared, the file's name and hash (the same file for the same supplier is imported once), how many lines, and how many came out matched, amount differs, only on their side, only on ours; who imported it and when |
+| vendor_statement_line | The result of matching a statement, one row per line of theirs (`row_no` is the file's line) and per item of ours in the period that is not on it (`row_no` empty): date, type (invoice, credit_note, debit_note, payment), their number, their amount, our number (PI-... or PAY-...) and amount, the difference (theirs less ours), the outcome and the reason in words |
+| bank_statement_line | Every debit line of an imported bank statement, kept once however often it is imported (`line_key` is a hash of date, bank reference, narration, amount and its count in the file): status `matched` (the run is paid, or was already), `waiting` (its payment is found, the rest of the run is not on a statement yet), `open` (no payment fitted; `why` says why) or `confirmed` (a person said which payment it is: `confirmed_by`, `confirmed_at`); `payment_no` once known |
 | alembic_version | The migration revision of the database |
 | tenant, tenant_database, tenant_setting, feature_flag, app_user, refresh_token | Control database: the companies, where each one's database is (the connection string is encrypted) and its migration revision, per-company settings, feature flags, logins (with failed-attempt lock) and refresh tokens |
 

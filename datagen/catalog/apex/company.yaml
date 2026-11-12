@@ -119,6 +119,9 @@ settings:
   - [request_mailbox, requests@apexpumps.example, Mailbox where staff email requests]
   - [purchase_mailbox, purchase@apexpumps.example, Mailbox buyers use for supplier correspondence]
   - [tds_applicable_on_goods, "true", Buyer turnover is above Rs 10 crore so TDS on purchase of goods applies]
+  - [msme_max_days, "45", Most days a micro or small supplier may be paid in when agreed in writing (MSMED Act section 15)]
+  - [msme_no_agreement_days, "15", Days a micro or small supplier must be paid in without a written agreement (MSMED Act section 15)]
+  - [msme_warn_days, "7", Invoices of small suppliers reaching their deadline within this many days are listed]
 
 tolerances:
   - [price_pct, "2.00", Invoice price above PO price by this percent is within tolerance]

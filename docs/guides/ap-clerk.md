@@ -21,6 +21,12 @@ The **Blocked** list shows each blocked invoice with the reason and a line start
 3. If the supplier is right and the order is wrong, click **Ask to pay it anyway**, write the reason and click **Send**. A different person decides, under **Admin** → **Approvals**.
 4. If the invoice is wrong, click **Cancel**.
 
+## Reconcile with a supplier and with the store
+
+1. Open **Reconciliation**. **Received not invoiced** lists, per order line, goods accepted and services confirmed that have no invoice yet (and invoices for more than was received), with their age and totals by supplier. Pick a date and click **Show**; **Export** gives the list as a file.
+2. Under **Supplier statements**, choose the supplier, the statement file (CSV or Excel in the template) and click **Import and match**. Each line comes back **Matched**, **Amount differs**, **Only on theirs** or **Only on ours**, with the reason. The same file twice is imported once.
+3. **Order trace** shows the whole chain of any document: request, quotation, order, receipts, invoices and payment, with dates, amounts and who acted.
+
 ## What you cannot do
 
 You cannot release a block on an invoice you entered, and you cannot approve payments.

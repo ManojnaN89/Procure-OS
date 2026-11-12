@@ -53,6 +53,8 @@ MATRIX = [
     ("POST", "/api/payment-runs/NOPE/file", None, {"Finance"}),
     ("POST", "/api/payment-runs/NOPE/paid", {}, {"Finance"}),
     ("POST", "/api/payment-runs/statement", {"csv": "date,narration,debit\n2026-11-06,x,1\n"}, {"Finance"}),
+    ("POST", "/api/reconciliation/vendor-statements?supplier=NOPE", None, {"AP"}),
+    ("POST", "/api/reconciliation/bank-lines/999999/confirm", {"payment": "NOPE"}, {"Finance"}),
     ("POST", "/api/vendors", {"legal_name": "x"}, {"Buyer", "Approver"}),
     ("PUT", "/api/vendors/NOPE", {"trade_name": "x"}, {"Buyer", "Approver"}),
     ("POST", "/api/vendors/NOPE/bank", {"account_no": "1", "ifsc": "x"}, {"Buyer", "Approver"}),

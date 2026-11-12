@@ -27,7 +27,7 @@ Reading a line: `name*` is part of the primary key, `name?` may be empty, then t
 
 ## Tenant database (one per company)
 
-126 tables.
+129 tables.
 
 **advance** · payment_no* text, po_no text, gross num, taxable num, used_gross num, used_taxable num, paid_on? date
 
@@ -58,6 +58,8 @@ Reading a line: `name*` is part of the primary key, `name?` may be empty, then t
 **award** · rfq_no* text, rfq_line_no* int, supplier_code* text, quote_no text, qty num, price num, reason? text, overridden bool, by_user? text, at timestamptz, split bool, selection_rule? text
 
 **bank** · code* text, name? text, ifsc_prefix? text
+
+**bank_statement_line** · id* bigint, line_key text, row_no int, value_date? date, utr? text, narration? text, amount num, status text, payment_no? text, why? text, imported_by text, imported_at timestamptz, confirmed_by? text, confirmed_at? timestamptz
 
 **budget** · id* bigint, cost_centre_code? text, gl_code? text, project_code? text, period? text, amount? num, version? int, policy? text, location_code? text
 
@@ -280,3 +282,7 @@ Reading a line: `name*` is part of the primary key, `name?` may be empty, then t
 **user_profile** · user_id* int, display_name text, role text, created_at timestamptz
 
 **user_role** · id* int, user_id int, role text, scope_location? text, scope_department? text
+
+**vendor_statement** · id* bigint, supplier_code text, period_from date, period_to date, file_name? text, file_hash text, lines int, matched int, amount_differs int, only_theirs int, only_ours int, imported_by text, imported_at timestamptz
+
+**vendor_statement_line** · id* bigint, statement_id bigint, row_no? int, doc_date? date, doc_type text, doc_no? text, their_amount? num, our_ref? text, our_amount? num, difference? num, outcome text, reason text

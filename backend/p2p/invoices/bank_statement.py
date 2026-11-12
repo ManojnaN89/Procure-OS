@@ -5,6 +5,10 @@ sent in the file) appearing in the line's narration or bank reference, and by th
 paid only when every payment in it is matched, so a statement never settles half a run. Anything else goes to a person:
 a line with no payment, an amount that differs, a date that has not come, a payment matched twice.
 Importing the same statement again changes nothing: its lines show up as already paid.
+
+Every debit line is kept (bank_statement_line), once however often it is imported. A payment matched on one statement
+counts towards its run on the next, so a run can be settled across statements. A line no payment fits stays open: it is
+listed with the payments of the same amount it could be (named ones first), and a person confirms which it is.
 """
 
 import csv
@@ -19,6 +23,7 @@ from typing import Any
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
+from p2p.formulas import reconciliation as rules
 from p2p.invoices import payment as payments
 from p2p.invoices.service import InvoiceError
 from p2p.platform import audit, tasks
@@ -65,9 +70,10 @@ def _cell(row: list[str], i: int | None) -> str:
     return row[i].strip() if i is not None and i < len(row) else ""
 
 
-def _date(value: str) -> date | None:
+def read_date(value: str) -> date | None:
+    """A date as banks and suppliers write it (2026-11-05, 05-11-2026, 05/11/2026, 05-Nov-2026, 05 Nov 2026)."""
     value = value.strip()
-    for fmt in ("%Y-%m-%d", "%d-%m-%Y", "%d/%m/%Y", "%d-%b-%Y", "%d %b %Y"):
+    for fmt in ("%Y-%m-%d", "%d-%m-%Y", "%d/%m/%Y", "%d-%b-%Y", "%d %b %Y", "%Y-%m-%d %H:%M:%S"):
         try:
             return datetime.strptime(value, fmt).date()  # noqa: DTZ007 - a calendar date, no time
         except ValueError:
@@ -75,7 +81,8 @@ def _date(value: str) -> date | None:
     return None
 
 
-def _amount(value: str) -> D | None:
+def read_amount(value: str) -> D | None:
+    """An amount with or without commas, spaces, a rupee sign, INR or Rs."""
     cleaned = re.sub(r"[,\s₹]|INR|Rs\.?", "", value.strip(), flags=re.I)
     if not cleaned:
         return None
@@ -105,11 +112,11 @@ def parse(csv_text: str) -> tuple[list[Line], list[dict[str, Any]], int]:
     bad: list[dict[str, Any]] = []
     skipped = 0
     for n, r in enumerate(rows[1:], start=2):
-        amount = _amount(_cell(r, c_debit))
+        amount = read_amount(_cell(r, c_debit))
         if amount is None or amount <= 0:
             skipped += 1  # a credit or an empty debit
             continue
-        paid_on = _date(_cell(r, c_date))
+        paid_on = read_date(_cell(r, c_date))
         lines.append(Line(n, paid_on, _cell(r, c_utr), _cell(r, c_text), amount))
         if paid_on is None:
             bad.append({"row": n, "amount": str(amount), "why": f"the date '{_cell(r, c_date)}' cannot be read"})
@@ -139,17 +146,93 @@ def _first_user_with_role(db: Session, *roles: str) -> int:
     return int(db.execute(text("select user_id from user_profile order by user_id limit 1")).scalar() or 0)
 
 
+def _key(line: Line, seen: dict[str, int]) -> str:
+    """The same bank line, in this statement or an overlapping one, has the same key (identical lines are counted)."""
+    base = f"{line.paid_on}|{line.utr.upper()}|{line.narration.upper()}|{line.amount}"
+    seen[base] = seen.get(base, 0) + 1
+    return hashlib.sha256(f"{base}|{seen[base]}".encode()).hexdigest()
+
+
+def _keep(
+    db: Session, key: str, line: Line, status: str, user_id: int, *, payment: str | None = None, why: str | None = None
+) -> None:
+    """Keep the line; a line kept before changes only while nobody has settled it."""
+    db.execute(
+        text(
+            "insert into bank_statement_line (line_key, row_no, value_date, utr, narration, amount, status, payment_no, "
+            "why, imported_by) values (:k, :r, :d, :u, :n, :a, :s, :p, :w, :by) on conflict (line_key) do update set "
+            "status = excluded.status, payment_no = excluded.payment_no, why = excluded.why, row_no = excluded.row_no "
+            "where bank_statement_line.status in ('open', 'waiting')"
+        ),
+        {
+            "k": key, "r": line.row, "d": line.paid_on, "u": line.utr or None, "n": line.narration[:500] or None,
+            "a": line.amount, "s": status, "p": payment, "w": why, "by": str(user_id),
+        },
+    )  # fmt: skip
+
+
+def _linked(db: Session) -> dict[str, str]:
+    """Payments a kept bank line already stands for, and that line's key."""
+    return {
+        str(r[0]): str(r[1])
+        for r in db.execute(
+            text(
+                "select payment_no, line_key from bank_statement_line where payment_no is not null "
+                "and status in ('waiting', 'confirmed', 'matched')"
+            )
+        )
+    }
+
+
+def _settle(db: Session, run_no: str, user_id: int, tenant: str | None) -> int:
+    """Mark the run paid when every payment in it is on a bank line (from any statement). Returns how many are missing."""
+    needed = {
+        str(r[0]) for r in db.execute(text("select no from payment where run_no = :r and amount > 0"), {"r": run_no})
+    }
+    have = {
+        str(r[0]): (r[1], r[2])
+        for r in db.execute(
+            text(
+                "select payment_no, value_date, utr from bank_statement_line where payment_no = any(:p) "
+                "and status in ('waiting', 'confirmed')"
+            ),
+            {"p": list(needed)},
+        )
+    }
+    missing = len(needed - set(have))
+    if missing or not needed:
+        return missing
+    db.execute(
+        text(
+            "update bank_statement_line set status = 'matched', why = null "
+            "where payment_no = any(:p) and status = 'waiting'"
+        ),
+        {"p": list(needed)},
+    )
+    payments.mark_paid(
+        db, run_no, user_id, paid_on=max(d for d, _ in have.values()), utrs={p: u for p, (_, u) in have.items() if u},
+        tenant=tenant,
+    )  # fmt: skip
+    return 0
+
+
 def import_statement(
     db: Session, csv_text: str, user_id: int, *, today: date, tenant: str | None = None
 ) -> dict[str, Any]:
+    """Match the statement's debit lines to payments, settle the runs that are complete, and keep every line: the ones
+    no payment fits stay open for a person (open_lines, confirm)."""
     lines, unreadable, skipped = parse(csv_text)
     out = Outcome(skipped=skipped, for_a_person=list(unreadable))
-    unreadable_rows = {b["row"] for b in unreadable}
+    why_unreadable = {b["row"]: b["why"] for b in unreadable}
     pool = _payments(db)
+    linked = _linked(db)
     taken: set[str] = set()
-    by_run: dict[str, list[tuple[dict[str, Any], Line]]] = {}
+    by_run: dict[str, list[tuple[str, Line, str]]] = {}
+    seen: dict[str, int] = {}
     for line in lines:
-        if line.row in unreadable_rows:
+        key = _key(line, seen)
+        if line.row in why_unreadable:
+            _keep(db, key, line, "open", user_id, why=why_unreadable[line.row])
             continue
         shown = {
             "row": line.row,
@@ -164,49 +247,41 @@ def import_statement(
             if p["no"].upper() in haystack or (p["reference"] and str(p["reference"]).upper() in haystack)
         ]
         same = [p for p in named if D(p["amount"]) == line.amount]
+        why: str | None = None
         if not named:
-            out.for_a_person.append({**shown, "why": "no payment has this reference"})
+            why = "no payment has this reference"
         elif not same:
-            out.for_a_person.append(
-                {
-                    **shown,
-                    "why": "the amount differs: payment " + ", ".join(f"{p['no']} is {p['amount']}" for p in named[:3]),
-                }
-            )
+            why = "the amount differs: payment " + ", ".join(f"{p['no']} is {p['amount']}" for p in named[:3])
         elif len({p["no"] for p in same}) > 1:
-            out.for_a_person.append(
-                {**shown, "why": "more than one payment fits: " + ", ".join(p["no"] for p in same[:4])}
-            )
+            why = "more than one payment fits: " + ", ".join(p["no"] for p in same[:4])
         else:
             p = same[0]
             if p["run_status"] == "paid":
                 out.already_paid.append({**shown, "payment": p["no"]})
-            elif p["no"] in taken:
-                out.for_a_person.append({**shown, "why": f"payment {p['no']} is already matched by an earlier line"})
+                _keep(db, key, line, "matched", user_id, payment=p["no"])
+            elif p["no"] in taken or linked.get(p["no"], key) != key:
+                why = f"payment {p['no']} is already matched by an earlier line"
             elif line.paid_on is not None and line.paid_on > today:
-                out.for_a_person.append({**shown, "why": "the bank date has not come yet"})
+                why = "the bank date has not come yet"
             else:
                 taken.add(p["no"])
-                by_run.setdefault(p["run_no"], []).append((p, line))
+                _keep(db, key, line, "waiting", user_id, payment=p["no"])
+                by_run.setdefault(p["run_no"], []).append((p["no"], line, key))
+        if why:
+            out.for_a_person.append({**shown, "why": why})
+            _keep(db, key, line, "open", user_id, why=why)
     for run_no, pairs in sorted(by_run.items()):
-        needed = {p["no"] for p in pool if p["run_no"] == run_no}
-        got = {p["no"] for p, _ in pairs}
-        if got != needed:
-            out.waiting.extend(
-                {
-                    "row": ln.row,
-                    "payment": p["no"],
-                    "run": run_no,
-                    "why": f"the other {len(needed - got)} payment(s) of {run_no} are not on the statement",
-                }
-                for p, ln in pairs
+        missing = _settle(db, run_no, user_id, tenant)
+        if missing:
+            why = f"the other {missing} payment(s) of {run_no} are not on the statement"
+            out.waiting.extend({"row": ln.row, "payment": p, "run": run_no, "why": why} for p, ln, _ in pairs)
+            db.execute(
+                text("update bank_statement_line set why = :w where line_key = any(:k) and status = 'waiting'"),
+                {"w": why, "k": [k for _, _, k in pairs]},
             )
             continue
-        paid_on = max(ln.paid_on for _, ln in pairs if ln.paid_on is not None)
-        utrs = {p["no"]: ln.utr for p, ln in pairs if ln.utr}
-        payments.mark_paid(db, run_no, user_id, paid_on=paid_on, utrs=utrs, tenant=tenant)
         out.runs_paid.append(run_no)
-        out.matched.extend({"row": ln.row, "payment": p["no"], "run": run_no, "utr": ln.utr or None} for p, ln in pairs)
+        out.matched.extend({"row": ln.row, "payment": p, "run": run_no, "utr": ln.utr or None} for p, ln, _ in pairs)
     open_items = len(out.for_a_person) + len(out.waiting)
     if open_items and tenant:
         out.task_id = tasks.create_task(
@@ -235,3 +310,87 @@ def import_statement(
         "waiting": out.waiting,
         "task_id": out.task_id,
     }
+
+
+# ---- lines no payment fitted: a person matches them --------------------------------------------
+
+
+def _unsettled(db: Session) -> list[rules.Candidate]:
+    """Payments the bank may have paid that no bank line stands for yet: those of runs whose bank file was made."""
+    return [
+        rules.Candidate(r[0], r[1], D(r[2]), r[3])
+        for r in db.execute(
+            text(
+                "select p.no, p.reference, p.amount, r.run_date from payment p join payment_run r on r.no = p.run_no "
+                "where r.status = 'file_generated' and p.amount > 0 and not exists (select 1 from bank_statement_line b "
+                "where b.payment_no = p.no and b.status in ('waiting', 'confirmed', 'matched')) order by p.no"
+            )
+        )
+    ]
+
+
+def open_lines(db: Session) -> list[dict[str, Any]]:
+    """Bank lines nobody has matched yet, each with the payments it could be (same amount; named ones first)."""
+    candidates = _unsettled(db)
+    out = []
+    for r in db.execute(
+        text(
+            "select id, row_no, value_date, utr, narration, amount, why, imported_at from bank_statement_line "
+            "where status = 'open' order by value_date nulls last, id"
+        )
+    ).mappings():
+        said = f"{r['narration'] or ''} {r['utr'] or ''}"
+        out.append({**dict(r), "suggestions": rules.suggest(D(r["amount"]), said, r["value_date"], candidates)})
+    return out
+
+
+def confirm(
+    db: Session, line_id: int, payment_no: str, user_id: int, *, today: date, tenant: str | None = None
+) -> dict[str, Any]:
+    """A person says an open bank line is a payment. The amounts must agree to the paisa; the person who approved the
+    run cannot confirm that it was paid. When every payment of the run is then on the bank, the run is marked paid."""
+    line = (
+        db.execute(text("select * from bank_statement_line where id = :i for update"), {"i": line_id})
+        .mappings()
+        .first()
+    )
+    if line is None:
+        raise InvoiceError(f"bank line {line_id} does not exist")
+    if line["status"] != "open":
+        raise InvoiceError(f"bank line {line_id} is already {line['status']}")
+    if line["value_date"] is None or line["value_date"] > today:
+        raise InvoiceError("the line's date cannot be read or has not come yet")
+    pay = (
+        db.execute(
+            text(
+                "select p.no, p.amount, p.run_no, r.approved_by from payment p join payment_run r on r.no = p.run_no "
+                "where p.no = :n"
+            ),
+            {"n": payment_no},
+        )
+        .mappings()
+        .first()
+    )
+    if pay is None:
+        raise InvoiceError(f"payment {payment_no} does not exist")
+    if payment_no not in {c.no for c in _unsettled(db)}:
+        raise InvoiceError(f"payment {payment_no} is not waiting for the bank (paid, matched already, or no bank file)")
+    if D(pay["amount"]) != D(line["amount"]):
+        raise InvoiceError(f"the amounts differ: the line is {line['amount']}, payment {payment_no} is {pay['amount']}")
+    if pay["approved_by"] == str(user_id):
+        raise InvoiceError("segregation of duties: the person who approved the run cannot confirm its bank match")
+    db.execute(
+        text(
+            "update bank_statement_line set status = 'confirmed', payment_no = :p, confirmed_by = :u, "
+            "confirmed_at = now() where id = :i"
+        ),
+        {"p": payment_no, "u": str(user_id), "i": line_id},
+    )
+    audit.record(
+        db, user(user_id), "bank_statement.confirm", "bank_statement_line", str(line_id),
+        before={"status": "open", "why": line["why"]},
+        after={"status": "confirmed", "payment": payment_no, "amount": line["amount"]},
+    )  # fmt: skip
+    missing = _settle(db, pay["run_no"], user_id, tenant)
+    db.commit()
+    return {"line": line_id, "payment": payment_no, "run": pay["run_no"], "run_paid": missing == 0}

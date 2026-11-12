@@ -25,6 +25,11 @@ Or, instead of step 2, choose the bank's statement (a CSV with a date, the bank 
 
 You cannot enter a date in the future for the payment.
 
+## Bank lines and small suppliers
+
+1. Open **Reconciliation** and choose **Bank lines**: the statement lines no payment fitted, each with the payments of the same amount it could be. Choose the payment and click **Confirm**. The amounts must agree, and the person who approved the run cannot confirm it. When every payment of a run is on the bank, the run is paid.
+2. **Small suppliers** lists unpaid invoices of micro and small suppliers that are late, or due within the days you give: at most 45 days from acceptance when agreed in writing, 15 days without (MSMED Act section 15; the days are company settings).
+
 ## Release a blocked invoice
 
 If AP asked to pay a blocked invoice anyway, you may decide it under **Admin** → **Approvals** if you did not enter it.
