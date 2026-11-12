@@ -20,8 +20,7 @@ from cryptography.fernet import Fernet
 
 os.environ.setdefault("TENANT_SECRET_KEY", Fernet.generate_key().decode())
 
-from sqlalchemy import create_engine, text
-from sqlalchemy.engine import make_url
+from sqlalchemy import text
 
 CONTROL_DB = os.environ.get("P2P_EVAL_CONTROL_DB", "p2p_control_eval")
 
@@ -32,21 +31,11 @@ def environment() -> Iterator[str]:
     from p2p.config import get_settings
     from p2p.platform import tenants
     from p2p.platform.routing import clear_engine_cache
+    from p2p.platform.scratch_db import ScratchControlDb
 
-    real_url = get_settings().control_database_url
-    admin = create_engine(make_url(real_url).set(database="postgres"), isolation_level="AUTOCOMMIT")
-    with admin.connect() as c:
-        if c.execute(text("select 1 from pg_database where datname = :n"), {"n": CONTROL_DB}).first():
-            # a run that was killed leaves its companies behind: drop them before the list of them is lost
-            try:
-                with create_engine(make_url(real_url).set(database=CONTROL_DB)).connect() as old:
-                    for (name,) in old.execute(text("select database_name from tenant_database")):
-                        c.execute(text(f'drop database if exists "{name}" with (force)'))
-            except Exception:  # noqa: BLE001 - never migrated: nothing to drop
-                pass
-        c.execute(text(f'drop database if exists "{CONTROL_DB}" with (force)'))
-        c.execute(text(f'create database "{CONTROL_DB}"'))
-    url = make_url(real_url).set(database=CONTROL_DB).render_as_string(hide_password=False)
+    scratch = ScratchControlDb(get_settings().control_database_url, CONTROL_DB)
+    scratch.create()  # refuses a name another run is still using
+    url = scratch.url
     previous = os.environ.get("CONTROL_DATABASE_URL")
     os.environ["CONTROL_DATABASE_URL"] = url
     get_settings.cache_clear()
@@ -65,13 +54,7 @@ def environment() -> Iterator[str]:
         pin_today(None)
         clear_engine_cache()
         tenants.reset_control_engines()
-        with create_engine(url).connect() as c:
-            names = [r[0] for r in c.execute(text("select database_name from tenant_database"))]
-        with admin.connect() as c:
-            for n in names:
-                c.execute(text(f'drop database if exists "{n}" with (force)'))
-            c.execute(text(f'drop database if exists "{CONTROL_DB}" with (force)'))
-        admin.dispose()
+        scratch.drop()
         if previous is None:
             os.environ.pop("CONTROL_DATABASE_URL", None)
         else:
