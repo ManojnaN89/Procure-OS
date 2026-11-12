@@ -1,6 +1,7 @@
 """Browser tests of the main interface (ui/, the Procure-OS look), served by the API behind the platform's login."""
 
 import json
+import re
 from typing import Any
 
 import pytest
@@ -760,7 +761,7 @@ def test_the_buyer_compares_quotes_and_awards_and_the_approver_signs_the_purchas
         expect(panel).to_contain_text("Suggested reply (not sent)")
         expect(panel).to_contain_text("Thank you, please confirm the date in writing.")
         panel.get_by_text("Chase suppliers now").click()
-        expect(buyer.locator("#chaseNote")).to_contain_text("reminder(s) emailed")
+        expect(buyer.locator("#chaseNote")).to_contain_text(re.compile(r"\d+ reminders? emailed"))
 
         store = open_app(browser, LAPTOP)  # a store person receives the goods
         sign_in(store, company.emails["Store"])

@@ -366,7 +366,7 @@ def test_the_vendor_page_shows_the_numbers_behind_the_score(shop: Session, outbo
     assert s["score"]["score"] == "63.1" and s["score"]["on_time"] == 0 and s["score"]["receipts_judged"] == 6
     assert s["score"]["weights"] == {"price": "40", "delivery": "40", "quality": "20"}
     assert s["risk"]["risk_level"] == "medium" and s["risk"]["risk_score"] == "36.9"
-    assert s["risk"]["late_delivery_rate_pct"] == "100.0" and "6 delivery line(s)" in s["risk"]["basis"]
+    assert s["risk"]["late_delivery_rate_pct"] == "100.0" and "6 delivery lines" in s["risk"]["basis"]
     new = client.get("/api/vendors/S4", headers=h).json()
     assert new["score"]["score"] == "74.0" and new["score"]["on_time_pct"] is None  # no history: neutral and says so
 

@@ -30,6 +30,7 @@ from p2p.formulas.contracts import ContractUse
 from p2p.formulas.money import format_qty, round_money
 from p2p.formulas.scoring import risk_level
 from p2p.formulas.suppliers import LABELS
+from p2p.formulas.words import count
 from p2p.masters import supplier_status
 from p2p.orders import contracts as contract_usage
 from p2p.orders import dispatch, dispatch_notes, quotes
@@ -100,7 +101,7 @@ def update_settings(
 ) -> dict[str, Any]:
     unknown = [k for k in payload if k not in DEFAULT_SETTINGS]
     if unknown:
-        return {"error": f"Unknown setting(s): {', '.join(unknown)}"}
+        return {"error": f"Unknown {'setting' if len(unknown) == 1 else 'settings'}: {', '.join(unknown)}"}
     current = all_settings(db)
     for key, value in payload.items():
         value = str(value)
@@ -423,8 +424,8 @@ def get_vendor(vendor_id: str, db: Db, ctx: Ctx) -> dict[str, Any]:
             if score.history.receipt_lines
             else 0,
             "basis": (
-                f"Score {score.total} of 100 from {score.history.receipts} delivery line(s), "
-                f"{score.history.receipt_lines} receipt line(s) and {score.price_items} item price(s) compared."
+                f"Score {score.total} of 100 from {count(score.history.receipts, 'delivery line')}, "
+                f"{count(score.history.receipt_lines, 'receipt line')} and {count(score.price_items, 'item price')} compared."
             ),
         },
         "purchase_orders": [],
@@ -1007,7 +1008,7 @@ def list_rfqs(db: Db, ctx: Ctx) -> list[dict[str, Any]]:
     return [
         {
             "id": r["no"],
-            "title": f"{r['category'] or 'Quotation request'}: {r['items']} item(s) for {r['request_no']}",
+            "title": f"{r['category'] or 'Quotation request'}: {count(r['items'], 'item')} for {r['request_no']}",
             "status": r["status"],
             "vendor_count": r["vendors"],
             "quote_count": r["quoted"],
@@ -1050,7 +1051,7 @@ def get_rfq(no: str, db: Db, ctx: Ctx) -> dict[str, Any]:
 
     return {
         "id": r["no"],
-        "title": f"{r['category'] or 'Quotation request'}: {len(lines)} item(s) for {r['request_no']}",
+        "title": f"{r['category'] or 'Quotation request'}: {count(len(lines), 'item')} for {r['request_no']}",
         "status": r["status"],
         "request_no": r["request_no"],
         "due_date": r["due_date"].isoformat(),

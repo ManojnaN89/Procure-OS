@@ -82,3 +82,16 @@ function formatDate(iso) {
   if (!iso) return "\u2014";
   return new Date(iso).toLocaleDateString(AppConfig.currencyLocale, { day: "numeric", month: "short", year: "numeric" });
 }
+
+// "3 lines", "1 line": a count with its noun in the right number (never "line(s)")
+function plural(n, noun, many) {
+  return `${n} ${Number(n) === 1 ? noun : many || noun + "s"}`;
+}
+
+// A versioned rule as it is stored on a decision ("buying_route v1 + C1 v2") in words people read
+const RULE_NAMES = { buying_route: "Buying route rule", supplier_selection: "Supplier selection rule", touchless_po: "Touchless order rule" };
+function ruleName(label) {
+  if (!label) return "";
+  return String(label).replace(/^([a-z_]+) v(\d+)(?: \+ (\S+) v(\d+))?$/, (all, key, v, cat, cv) =>
+    RULE_NAMES[key] ? `${RULE_NAMES[key]}, version ${v}${cat ? ` (category ${cat}, version ${cv})` : ""}` : all);
+}

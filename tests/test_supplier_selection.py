@@ -49,7 +49,7 @@ def facts(**kw: object) -> sel.OfferFacts:
 # ---- the must-haves ------------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize(("days", "dropped"), [(13, []), (14, []), (15, ["delivers 1 day(s) after it is needed"])])
+@pytest.mark.parametrize(("days", "dropped"), [(13, []), (14, []), (15, ["delivers 1 day after it is needed"])])
 def test_delivery_on_the_need_by_date_qualifies_and_one_day_late_is_dropped(days: int, dropped: list[str]) -> None:
     # given a line needed in fourteen days, when a quote delivers in 13, 14 or 15 days, then only 15 is dropped
     assert sel.must_haves(facts(delivery_days=days)) == dropped
@@ -212,9 +212,9 @@ def test_failing_quotes_are_dropped_with_reasons_and_the_rest_ranked_on_total_co
     s2, s3, s1 = line.offers  # the qualifying first, then the dropped by cost
     assert (s2.supplier_code, s2.rank, s2.cost, s2.landed) == ("S2", 1, D("550.00"), D("649.00"))
     assert s1.flags == ["supplier is blocked, not active"] and s1.rank is None and s1.cost == D("600.00")
-    assert s3.flags == ["delivers 1 day(s) after it is needed"]
+    assert s3.flags == ["delivers 1 day after it is needed"]
     assert (line.recommended, line.cheapest, line.qualifying) == ("S2", "S2", 1)
-    assert line.why.startswith("Lowest total cost among 1 qualifying offer(s): ₹ 550.00 (price and freight; GST is")
+    assert line.why.startswith("Lowest total cost among 1 qualifying offer: ₹ 550.00 (price and freight; GST is")
 
 
 def test_without_a_gst_registration_the_gst_is_part_of_the_cost(shop: Session, outbox: Outbox) -> None:
@@ -283,7 +283,7 @@ def test_selecting_other_than_the_cheapest_qualifying_quote_needs_a_written_reas
 
     # then S1 is recommended on its score, though S2 is cheaper
     assert (line.recommended, line.cheapest) == ("S1", "S2")
-    assert line.why.startswith("Best score (100.0 of 100) among 2 qualifying offer(s)")
+    assert line.why.startswith("Best score (100.0 of 100) among 2 qualifying offers")
     assert "payment terms 100; weights 0/0/0/100" in line.why
     for pick in ("S1", "S2"):  # neither is both the recommendation and the cheapest
         with pytest.raises(quotes.QuoteError, match="a reason is required: a choice is not the recommended"):
@@ -324,7 +324,7 @@ def test_fewer_qualifying_quotes_than_the_route_asked_for_need_a_reason(shop: Se
     _quote(shop, rfq, "S2", "90", days=20)
 
     with pytest.raises(
-        quotes.QuoteError, match=r"line 1: only 1 quote\(s\) came in and 2 are wanted \(1 more did not qualify\)"
+        quotes.QuoteError, match=r"line 1: only 1 quote came in and 2 are wanted \(1 more did not qualify\)"
     ):
         quotes.award(shop, rfq, {1: "S1"}, BUYER, as_of=TODAY)
 
@@ -423,8 +423,8 @@ def test_every_selection_and_rule_change_is_in_the_audit_log_with_the_ranking(sh
     assert rule == "supplier_selection v1"
     assert after["awards"]["1"] == [{"supplier": "S1", "qty": "5", "price": "100.0000", "quote": f"{rfq}-S1-R1"}]
     assert [(r["supplier"], r["rank"]) for r in after["ranking"]["1"]] == [("S1", 1), ("S2", 2), ("S3", None)]
-    assert after["ranking"]["1"][2]["dropped"] == ["delivers 6 day(s) after it is needed"]
-    assert after["why"]["1"].startswith("Lowest total cost among 2 qualifying offer(s)")
+    assert after["ranking"]["1"][2]["dropped"] == ["delivers 6 days after it is needed"]
+    assert after["why"]["1"].startswith("Lowest total cost among 2 qualifying offers")
     assert change[0]["input_credit"] is True and change[1]["input_credit"] is False and change[1]["version"] == 2
 
 
@@ -496,7 +496,7 @@ def test_apex_copper_wire_goes_to_pune_copper_at_rs_36000_for_the_40_kg_shortfal
 
     # then Pune Copper is recommended and selected at Rs 36,000, and its order follows with GST
     assert (line.recommended, line.offers[0].supplier_name, line.offers[0].cost) == ("S2", "Pune Copper Co.", D(36000))
-    assert line.why.startswith("Lowest total cost among 2 qualifying offer(s): ₹ 36,000.00")
+    assert line.why.startswith("Lowest total cost among 2 qualifying offers: ₹ 36,000.00")
     quotes.award(shop, rfq, {1: "S2"}, BUYER, as_of=TODAY)
     made = service.order_request(shop, shop.info["slug"], no, as_of=TODAY)
     po = shop.execute(

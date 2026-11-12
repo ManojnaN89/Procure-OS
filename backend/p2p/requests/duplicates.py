@@ -19,6 +19,7 @@ from typing import Any
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
+from p2p.formulas.words import count
 from p2p.platform import audit, numbering
 from p2p.platform.sod import user
 
@@ -328,7 +329,7 @@ def gate(db: Session, request_no: str, override_reason: str | None, user_id: int
     open_ = [d for d in dups if not d.overridden]
     if open_:
         names = ", ".join(
-            f"{d.other_request} ({'a likely repeat' if d.likely else 'possibly a repeat'}, {len(d.lines)} line(s) alike)"
+            f"{d.other_request} ({'a likely repeat' if d.likely else 'possibly a repeat'}, {count(len(d.lines), 'line')} alike)"
             for d in open_
         )
         raise DuplicateError(f"{request_no} looks like a repeat of {names}. Give a reason to go ahead.", open_)

@@ -40,7 +40,7 @@ def test_a_dearer_unit_price_can_still_be_the_cheapest_once_freight_and_tax_are_
     assert (s1.value, s1.charges, s1.tax, s1.landed) == (D("900.00"), D("100.00"), D("180.00"), D("1180.00"))
     assert line.recommended == "S2"
     assert (s2.cost, s1.cost) == (D("950.00"), D("1000.00"))  # GST is claimed back: shown, not counted
-    assert line.why.startswith("Lowest total cost among 2 qualifying offer(s): ₹ 950.00 (price and freight")
+    assert line.why.startswith("Lowest total cost among 2 qualifying offers: ₹ 950.00 (price and freight")
 
 
 def test_when_the_cheapest_unit_price_is_also_cheapest_landed_the_reason_says_price(
@@ -53,7 +53,7 @@ def test_when_the_cheapest_unit_price_is_also_cheapest_landed_the_reason_says_pr
 
     line = _comp(shop, rfq).lines[0]
 
-    assert line.recommended == "S1" and line.why.startswith("Lowest total cost among 2 qualifying offer(s): ₹ 910.00")
+    assert line.recommended == "S1" and line.why.startswith("Lowest total cost among 2 qualifying offers: ₹ 910.00")
 
 
 def test_a_quotes_freight_is_shared_over_the_lines_it_prices_by_value_and_adds_up_exactly(
@@ -176,7 +176,7 @@ def test_the_weighted_comparison_recommends_the_best_score_and_says_how_it_was_s
     assert line.recommended == "S1"
     assert (
         line.why
-        == "Best score (100.0 of 100) among 2 qualifying offer(s): price 100, delivery 70, quality 70, payment terms 100; "
+        == "Best score (100.0 of 100) among 2 qualifying offers: price 100, delivery 70, quality 70, payment terms 100; "
         "weights 100/0/0/0"
     )
 

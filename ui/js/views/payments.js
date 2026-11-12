@@ -127,8 +127,8 @@ const PaymentsView = {
         if (!res.ok) { out.textContent = res.data.detail || "The statement was not read."; return; }
         const d = res.data;
         const open = [...d.for_a_person.map((x) => `line ${x.row}: ${x.why}`), ...d.waiting.map((x) => `line ${x.row}: ${x.why}`)];
-        out.innerHTML = `<div>${d.matched.length} payment(s) matched, ${d.runs_paid.length} run(s) settled${d.already_paid.length ? `, ${d.already_paid.length} already paid` : ""}.</div>`
-          + (open.length ? `<div style="margin-top:6px;color:var(--warning-text);">${open.length} line(s) need a person (a task was made):<ul style="margin:4px 0 0 18px;">${open.slice(0, 10).map((t) => `<li>${this.esc(t)}</li>`).join("")}</ul></div>` : "");
+        out.innerHTML = `<div>${plural(d.matched.length, "payment")} matched, ${plural(d.runs_paid.length, "run")} settled${d.already_paid.length ? `, ${d.already_paid.length} already paid` : ""}.</div>`
+          + (open.length ? `<div style="margin-top:6px;color:var(--warning-text);">${plural(open.length, "line")} ${open.length === 1 ? "needs" : "need"} a person (a task was made):<ul style="margin:4px 0 0 18px;">${open.slice(0, 10).map((t) => `<li>${this.esc(t)}</li>`).join("")}</ul></div>` : "");
         if (d.runs_paid.includes(id)) return this.renderRun(container, id);
       });
     } catch {

@@ -13,6 +13,8 @@ from typing import Any
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
+from p2p.formulas.words import count
+
 D = Decimal
 # what a number can be, and where to look for it (the first table that has it wins)
 KINDS = (
@@ -180,7 +182,7 @@ def _production_orders(db: Session, mrs: set[str], order_no: str | None) -> list
 def _material_requests(db: Session, mrs: set[str], who: People) -> list[dict[str, Any]]:
     return [
         _item(r["no"], r["created_at"], r["status"], qty=r["qty"], who=who(r["created_by"]),
-              detail=f"for {r['order_no']}, {r['lines']} line(s)")
+              detail=f"for {r['order_no']}, {count(r['lines'], 'line')}")
         for r in _rows(
             db,
             "select m.no, m.created_at, m.status, m.created_by, m.order_no, count(l.id) as lines, sum(l.need_qty) as qty "
@@ -224,7 +226,7 @@ def _rfqs(db: Session, requests: set[str], pos: set[str], who: People) -> list[d
         won = f"; awarded to {', '.join(a['supplier_code'] for a in awards)}" if awards else ""
         out.append(
             _item(r["no"], r["at"], r["status"], qty=r["qty"], who=who(awards[0]["by_user"] if awards else r["buyer"]),
-                  detail=f"{r['asked']} supplier(s) asked, {r['quotes']} quoted{won}")
+                  detail=f"{count(r['asked'], 'supplier')} asked, {r['quotes']} quoted{won}")
         )  # fmt: skip
     return out
 

@@ -14,6 +14,7 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from p2p.formulas.calendar import BusinessCalendar
+from p2p.formulas.words import count
 from p2p.platform import audit, notifications, reference, routing, settings, worker
 from p2p.platform.sod import Actor
 
@@ -98,7 +99,7 @@ def _remind(ctx: worker.JobContext) -> None:
         audit.record(
             db, REMINDER, "request.remind", "request", no,
             after={"approver": who, "step": step, "round": round_no, "automatic": True, "told": login is not None},
-            reason=f"no decision after {days.normalize()} working day(s)",
+            reason=f"no decision after {count(int(days), 'working day')}",
         )  # fmt: skip
         db.commit()
         if login is not None:

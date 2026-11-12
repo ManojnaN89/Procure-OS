@@ -16,6 +16,7 @@ from p2p.approvals.workflow import name_of, org_code_of
 from p2p.formulas.calendar import business_today
 from p2p.formulas.kpis import BUCKETS, working_days_between
 from p2p.formulas.money import format_inr
+from p2p.formulas.words import count
 from p2p.invoices import payment
 from p2p.platform import alerts, control_tower, exceptions, reference, routing
 from p2p.platform.permissions import can_anywhere
@@ -263,7 +264,7 @@ def _ap(db: Session) -> list[dict[str, Any]]:
             "to_invoice",
             "Goods received, waiting for an invoice",
             "#/invoices/new",
-            [_row(r["po_no"], r["po_no"], "#/invoices/new", f"{r['lines']} line(s)") for r in rows],
+            [_row(r["po_no"], r["po_no"], "#/invoices/new", count(r["lines"], "line")) for r in rows],
         )
     ]
     rows = _rows(

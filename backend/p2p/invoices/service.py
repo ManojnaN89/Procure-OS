@@ -19,6 +19,7 @@ from p2p.formulas.fy import financial_year
 from p2p.formulas.gst import Registration
 from p2p.formulas.money import format_inr
 from p2p.formulas.orders import line_amounts
+from p2p.formulas.words import count
 from p2p.platform import audit, numbering, proposals
 from p2p.platform.sod import Actor, user
 from p2p.receiving.kinds import service_lines
@@ -386,7 +387,7 @@ def _explain(
     if reason == rules.PRICE:
         v = next((x for x in verdicts if x.reason == rules.PRICE), None)
         return (
-            f"Price above the order price on {sum(1 for x in verdicts if x.reason == rules.PRICE)} line(s), by up to {format_inr(max((x.price_var for x in verdicts), default=D(0)))} per unit"
+            f"Price above the order price on {count(sum(1 for x in verdicts if x.reason == rules.PRICE), 'line')}, by up to {format_inr(max((x.price_var for x in verdicts), default=D(0)))} per unit"
             if v
             else "Price above the order price"
         )

@@ -72,7 +72,7 @@ const PurchaseOrdersView = {
       <div class="panel" style="margin-bottom:12px;">
         <div class="panel-title">${po.touchless ? 'Issued without a buyer <span class="badge badge-approved">Touchless</span>' : "Touchless check"}</div>
         <p style="margin:0 0 8px;font-size:12.5px;color:var(--text-secondary);">${this.esc(po.touchless_note)}</p>
-        <details class="more"><summary>The facts checked${po.touchless_rule ? ` (${this.esc(po.touchless_rule)})` : ""}</summary>${checks}</details>
+        <details class="more"><summary>The facts checked${po.touchless_rule ? ` (${this.esc(ruleName(po.touchless_rule))})` : ""}</summary>${checks}</details>
       </div>`;
   },
 

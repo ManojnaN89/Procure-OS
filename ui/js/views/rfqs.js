@@ -96,7 +96,7 @@ const RfqsView = {
       </div>`;
     }).join("");
     const actions = c.can_award && c.lines.some((l) => !l.awarded)
-      ? `<div class="cell-muted" style="font-size:11.5px;">Compared on ${this.esc(c.basis)} (${this.esc(c.rule)})</div>
+      ? `<div class="cell-muted" style="font-size:11.5px;">Compared on ${this.esc(c.basis)} (${this.esc(ruleName(c.rule))})</div>
          <div id="reasonBoxAward" style="margin:8px 0;">
            <textarea id="awardReason" rows="2" placeholder="Reason (needed when you select other than the recommended, cheapest qualifying quote, or when fewer qualifying quotes came in than wanted)" style="width:100%;background:var(--surface-sunken);border:1px solid var(--border);color:var(--text-primary);border-radius:8px;padding:8px;font-size:12.5px;"></textarea>
          </div>
@@ -282,7 +282,7 @@ const RfqsView = {
                 <tr>
                   <td>${this.esc(s.name)}<div class="cell-muted" style="font-size:11px;">${this.esc(s.code)}</div></td>
                   <td class="cell-muted">${this.esc(s.email)}</td>
-                  <td><span class="badge ${this.STATE_BADGE[s.state] || ""}">${this.esc(s.state)}</span>${s.error ? `<div class="cell-muted" style="font-size:11px;">${this.esc(s.error)}</div>` : ""}${s.reminders ? `<div class="cell-muted" style="font-size:11px;">reminded ${this.esc(s.reminders)} time(s), last ${formatDate(s.last_reminded_at)}</div>` : ""}</td>
+                  <td><span class="badge ${this.STATE_BADGE[s.state] || ""}">${this.esc(s.state)}</span>${s.error ? `<div class="cell-muted" style="font-size:11px;">${this.esc(s.error)}</div>` : ""}${s.reminders ? `<div class="cell-muted" style="font-size:11px;">reminded ${this.esc(plural(s.reminders, "time"))}, last ${formatDate(s.last_reminded_at)}</div>` : ""}</td>
                   <td><a href="#" class="rfqPdf" data-supplier="${this.esc(s.code)}" style="color:var(--accent-tint);font-size:12px;">RFQ (PDF)</a></td>
                 </tr>`).join("")}
             </tbody>

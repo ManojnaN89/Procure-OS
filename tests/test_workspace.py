@@ -179,7 +179,7 @@ def test_an_order_not_acknowledged_in_time_and_goods_later_than_promised_alert_t
     done = alerts.run(store, slug, today=TODAY)
 
     assert sorted(done.opened) == [f"late_delivery:{po_no}", f"po_not_acknowledged:{po_no}"]
-    assert _alert(store, f"late_delivery:{po_no}")["title"] == f"Goods on {po_no} are 3 day(s) late"
+    assert _alert(store, f"late_delivery:{po_no}")["title"] == f"Goods on {po_no} are 3 days late"
     assert len(_notified(store, people["Buyer"])) == 2
     _receive(store, po_no, "10")  # the goods arrive
     store.execute(text("update po set status = 'acknowledged'"))

@@ -425,7 +425,7 @@ def test_fewer_approved_suppliers_than_the_category_wants_is_flagged_on_the_rfq(
     result = _source(db, no, dispatch=False)
 
     note = db.execute(text("select note from rfq where no = :r"), {"r": result.rfqs[0]}).scalar_one()
-    assert note == "Only 2 supplier(s) are approved for C2; at least 3 quotes are wanted"
+    assert note == "Only 2 suppliers are approved for C2; at least 3 quotes are wanted"
     assert db.execute(text("select count(*) from rfq_supplier")).scalar_one() == 2
 
 

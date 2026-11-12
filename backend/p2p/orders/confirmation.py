@@ -425,7 +425,7 @@ def _ask_for_price_approval(
         db,
         user(user_id),
         action=PRICE_ACTION,
-        summary=f"Accept the supplier's price rise on {ch['po_no']}, {what} (Rs {rise} more before tax)",
+        summary=f"Accept the supplier's price rise on {ch['po_no']}, {what} ({format_inr(rise)} more before tax)",
         payload={"tenant": tenant, "change_id": int(ch["id"]), "approver": step.approver, "delegate": step.delegate},
         required_permission="po.approve",
         value=rise,

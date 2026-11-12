@@ -208,7 +208,13 @@ def read_table(
         raw_rows = [{rename.get(k, k): v for k, v in r.items()} for r in raw_rows]
     missing = [c for c, _ in spec.columns if c not in fieldnames and c not in optional]
     if missing:
-        report.rejected.append(Problem(spec.name, 1, f"column(s) missing in {path.name}: {', '.join(missing)}"))
+        report.rejected.append(
+            Problem(
+                spec.name,
+                1,
+                f"{'column' if len(missing) == 1 else 'columns'} missing in {path.name}: {', '.join(missing)}",
+            )
+        )
         return []
     out: list[tuple[int, dict[str, Any]]] = []
     for line, raw in enumerate(raw_rows, start=2):
@@ -247,7 +253,11 @@ def import_masters(db: Session, dataset: Path, *, actor: Actor = audit.SYSTEM, d
             key = tuple(row[c] for c in natural)
             if spec.pk and any(v is None for v in key):
                 report.rejected.append(
-                    Problem(spec.name, line, f"key column(s) {', '.join(spec.pk)} must not be empty")
+                    Problem(
+                        spec.name,
+                        line,
+                        f"key {'column' if len(spec.pk) == 1 else 'columns'} {', '.join(spec.pk)} must not be empty",
+                    )
                 )
                 continue
             if key in seen:

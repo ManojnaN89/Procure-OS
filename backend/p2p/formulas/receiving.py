@@ -3,6 +3,8 @@
 from dataclasses import dataclass
 from decimal import ROUND_HALF_UP, Decimal
 
+from p2p.formulas.words import count
+
 QTY = Decimal("0.0001")
 
 
@@ -94,10 +96,10 @@ def check_serials(serials: list[str], units: Decimal) -> list[str]:
     if units != units.to_integral_value():
         raise ValueError("a serialised item is received in whole units")
     if len(clean) != int(units):
-        raise ValueError(f"{int(units)} serial number(s) are needed, one per unit; {len(clean)} given")
+        raise ValueError(f"{count(int(units), 'serial number')} needed, one per unit; {len(clean)} given")
     twice = sorted({s for s in clean if clean.count(s) > 1})
     if twice:
-        raise ValueError("serial number(s) given twice: " + ", ".join(twice))
+        raise ValueError("given twice: " + ", ".join(twice))
     return clean
 
 

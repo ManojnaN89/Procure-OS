@@ -32,7 +32,7 @@ def test_finance_imports_the_statement_and_the_matching_run_is_settled(
     # a statement with a wrong amount: nothing is settled and the line is listed for a person
     expect(page.locator("#importStmt")).to_be_visible()
     _upload(page, HEAD + f"2026-11-05,UTR1,{pay_no},1179.00,\n")
-    expect(page.locator("#stmtResult")).to_contain_text("0 payment(s) matched")
+    expect(page.locator("#stmtResult")).to_contain_text("0 payments matched")
     expect(page.locator("#stmtResult")).to_contain_text("the amount differs")
     assert ledger.execute(text("select status from payment_run")).scalar_one() == "file_generated"
 

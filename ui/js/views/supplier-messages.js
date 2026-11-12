@@ -54,7 +54,7 @@ const SupplierMessages = {
       if (out.ok) await this.mount(box, kind, ref);
       const note = document.getElementById("chaseNote");
       if (note) note.textContent = out.ok
-        ? `Done: ${out.data.emailed} reminder(s) emailed, ${out.data.tasks} left for a person.`
+        ? `Done: ${plural(out.data.emailed.length, "reminder")} emailed, ${out.data.tasks.length} left for a person.`
         : (out.data.detail || "That did not work.");
     });
   },

@@ -227,7 +227,7 @@ def test_a_date_past_the_tolerance_is_not_applied_and_a_buyer_gets_a_task_with_a
     assert _promised(shop) == PROMISED  # unchanged
     assert outbox.sent == []  # nothing goes out without a person
     (kind, title, payload) = _tasks(shop)[0]
-    assert kind == "supplier_change" and "4 day(s)" in title
+    assert kind == "supplier_change" and "4 days" in title
     assert payload is not None and payload["within_tolerance"] is False and payload["reply_draft"]
     assert shop.execute(text("select assignee from task where kind = 'supplier_change'")).scalar_one() == _buyer(shop)
 

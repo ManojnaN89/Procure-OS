@@ -12,6 +12,7 @@ from decimal import ROUND_HALF_UP, Decimal
 from itertools import combinations
 
 from p2p.formulas.money import format_inr, format_qty, round_money
+from p2p.formulas.words import count
 
 D = Decimal
 ONE = D(1)
@@ -103,7 +104,7 @@ def must_haves(f: OfferFacts) -> list[str]:
         out.append(f"below the supplier's minimum order of {format_qty(f.moq)}")
     late = days_late(f.as_of, f.delivery_days, f.need_by)
     if late:
-        out.append(f"delivers {late} day(s) after it is needed")
+        out.append(f"delivers {count(late, 'day')} after it is needed")
     if f.expected_gst_rate is not None and f.gst_rate != f.expected_gst_rate:
         out.append(f"GST rate {format_qty(f.gst_rate)}% differs from the expected {format_qty(f.expected_gst_rate)}%")
     if f.supplier_status != "active":

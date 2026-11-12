@@ -26,6 +26,7 @@ from p2p.formulas import selection as sel
 from p2p.formulas.money import format_inr, format_qty, round_money
 from p2p.formulas.orders import current_gst_rate, net_unit_price
 from p2p.formulas.scoring import NEUTRAL
+from p2p.formulas.words import count
 from p2p.orders import selection_rule
 from p2p.platform import audit, worker
 from p2p.platform.sod import Actor
@@ -364,12 +365,12 @@ def _why(best: Offer, n: int, rule: sel.SelectionRule, basis: str, tie: str | No
     if rule.method == "weighted":
         pct = {k: int((v * 100).to_integral_value()) for k, v in (best.score_parts or {}).items()}
         why = (
-            f"Best score ({best.score} of 100) among {n} qualifying offer(s): price {pct.get('price')}, "
+            f"Best score ({best.score} of 100) among {count(n, 'qualifying offer')}: price {pct.get('price')}, "
             f"delivery {pct.get('delivery')}, quality {pct.get('quality')}, payment terms {pct.get('payment_terms')}; "
             f"weights {rule.weights.label()}"
         )
     else:
-        why = f"Lowest total cost among {n} qualifying offer(s): {format_inr(best.cost)} ({basis})"
+        why = f"Lowest total cost among {count(n, 'qualifying offer')}: {format_inr(best.cost)} ({basis})"
     return f"{why}; {tie}" if tie else why
 
 
@@ -667,7 +668,7 @@ def award(
         if line.qualifying < comp.min_quotes:
             dropped = len(line.offers) - line.qualifying
             short.append(
-                f"line {line_no}: only {line.qualifying} quote(s) came in and {comp.min_quotes} are wanted"
+                f"line {line_no}: only {count(line.qualifying, 'quote')} came in and {comp.min_quotes} are wanted"
                 + (f" ({dropped} more did not qualify)" if dropped else "")
             )
     if (overridden or short) and not (reason and reason.strip()):

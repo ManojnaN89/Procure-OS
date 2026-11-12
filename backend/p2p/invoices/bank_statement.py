@@ -25,6 +25,7 @@ from sqlalchemy.orm import Session
 
 from p2p.formulas import reconciliation as rules
 from p2p.formulas.money import format_inr
+from p2p.formulas.words import count
 from p2p.invoices import payment as payments
 from p2p.invoices.service import InvoiceError
 from p2p.platform import audit, tasks
@@ -276,7 +277,7 @@ def import_statement(
     for run_no, pairs in sorted(by_run.items()):
         missing = _settle(db, run_no, user_id, tenant)
         if missing:
-            why = f"the other {missing} payment(s) of {run_no} are not on the statement"
+            why = f"the other {count(missing, 'payment')} of {run_no} {'is' if missing == 1 else 'are'} not on the statement"
             out.waiting.extend({"row": ln.row, "payment": p, "run": run_no, "why": why} for p, ln, _ in pairs)
             db.execute(
                 text("update bank_statement_line set why = :w where line_key = any(:k) and status = 'waiting'"),
@@ -291,7 +292,7 @@ def import_statement(
             db,
             tenant,
             kind="bank_statement_lines",
-            title=f"Bank statement: {open_items} line(s) need a person",
+            title=f"Bank statement: {count(open_items, 'line')} {'needs' if open_items == 1 else 'need'} a person",
             assignee=_first_user_with_role(db, "Finance", "AP"),
             sla_hours=24,
             payload={"for_a_person": out.for_a_person[:50], "waiting": out.waiting[:50]},
