@@ -2,7 +2,7 @@
 place within a few days is bought on one request line.
 
 A planned line (a material request's shortfall, or a restock) joins an open line of a *draft* planning request for the
-same item and delivery location when all their need-by dates fall within `combine_window_days` (default 7). Nothing is
+same item, delivery location and department when all their need-by dates fall within `combine_window_days` (default 7). Nothing is
 added to a request once it has been submitted: the approver approved what they saw. Within one store check the requests
 are written one after the other as drafts and submitted at the end, so shortfalls of several orders checked together
 combine; a restock run combines with a shortfall still in draft, and the other way round.
@@ -42,9 +42,12 @@ def window_days(db: Session) -> int:
     return int(settings.number(db, "combine_window_days", DEFAULT_WINDOW_DAYS))
 
 
-def open_line(db: Session, item: str, location: str, need_by: date, window: int) -> dict[str, Any] | None:
-    """An open line of a draft planning request this need can join: same item and delivery location, every need-by
-    within the window. The request is locked. None when there is none."""
+def open_line(
+    db: Session, item: str, location: str, need_by: date, window: int, department: str | None
+) -> dict[str, Any] | None:
+    """An open line of a draft planning request this need can join: same item, delivery location and department (the
+    request is raised for, and charged to, one department), every need-by within the window. The request is locked.
+    None when there is none."""
     rows = db.execute(
         text(
             "select rl.request_no, rl.line_no, rl.need_by, rl.uom, k.latest from request_line rl "  # noqa: S608 - fixed fragments only
@@ -52,9 +55,10 @@ def open_line(db: Session, item: str, location: str, need_by: date, window: int)
             "left join (" + _LINKED.format(where="") + ") k "
             "on k.request_no = rl.request_no and k.request_line_no = rl.line_no "
             "where r.status = 'draft' and r.channel = 'planning' and rl.status = 'open' and rl.stock_qty is not null "
-            "and rl.item_code = :i and rl.delivery_location = :l order by rl.need_by, rl.request_no, rl.line_no"
+            "and rl.item_code = :i and rl.delivery_location = :l and r.department_code is not distinct from :d "
+            "order by rl.need_by, rl.request_no, rl.line_no"
         ),
-        {"i": item, "l": location},
+        {"i": item, "l": location, "d": department},
     ).mappings()
     for r in rows:
         dates = [r["need_by"], need_by] + ([r["latest"]] if r["latest"] else [])

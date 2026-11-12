@@ -179,7 +179,7 @@ def _combine(db: Session, actor: Actor, req: DraftRequest, window: int, as_of: d
     window) join it as its stock part; the rest stay on the request."""
     kept = []
     for line in req.lines:
-        target = combining.open_line(db, line.item_code, req.location_code, line.need_by, window)
+        target = combining.open_line(db, line.item_code, req.location_code, line.need_by, window, req.department)
         if target is None:
             kept.append(line)
             continue

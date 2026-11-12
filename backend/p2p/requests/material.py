@@ -233,7 +233,7 @@ def _combine(
         return links
     kept: list[tuple[drafts.DraftLine, tuple[int, Decimal]]] = []
     for line, link in zip(req.lines, links, strict=True):
-        target = combining.open_line(db, line.item_code, req.location_code, line.need_by, window)
+        target = combining.open_line(db, line.item_code, req.location_code, line.need_by, window, req.department)
         if target is None:
             kept.append((line, link))
             continue

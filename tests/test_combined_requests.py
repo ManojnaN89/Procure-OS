@@ -164,6 +164,38 @@ def test_two_orders_bearing_shortfalls_make_one_requisition_line(apex: Apex) -> 
     assert f"combined with MO-B ({mrs['MO-B']}) short 50" in reason
 
 
+@pytest.mark.parametrize(("second_department", "lines"), [("PRD", 1), ("STR", 2)])
+def test_shortfalls_combine_only_within_one_department(apex: Apex, second_department: str, lines: int) -> None:
+    # given two material requests short of bearings within the window, the first for Production, the second for
+    # Production too or for Stores (as joiners of two departments are)
+    mrs = _orders(
+        apex,
+        {
+            "MO-A": (FIRST, [("RM-06", "100")], "PLT-CKN"),
+            "MO-B": (FIRST + timedelta(days=3), [("RM-06", "50")], "PLT-CKN"),
+        },
+    )
+    apex.db.execute(text("update material_request set department_code = 'PRD' where no = :n"), {"n": mrs["MO-A"]})
+    apex.db.execute(
+        text("update material_request set department_code = :d where no = :n"),
+        {"d": second_department, "n": mrs["MO-B"]},
+    )
+    apex.db.commit()
+
+    # when the store checks
+    _check(apex, submit=False)
+
+    # then one department's shortfalls share a line; another department's get their own line and request
+    got = _request_lines(apex, "RM-06")
+    assert len(got) == lines
+    assert sorted(q for _, q, _ in got) == ([D(110)] if lines == 1 else [D(50), D(60)])
+    departments = apex.db.execute(
+        text("select distinct r.department_code from request r join request_line l on l.request_no = r.no "
+             "where l.item_code = 'RM-06' order by 1")
+    ).scalars().all()  # fmt: skip
+    assert departments == sorted({"PRD", second_department})
+
+
 def test_orders_eight_days_apart_are_bought_on_separate_lines(apex: Apex) -> None:
     _orders(
         apex,
