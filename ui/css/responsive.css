@@ -79,6 +79,12 @@
   #tableWrap .data-table tbody td:empty, #receiptsWrap .data-table tbody td:empty { display: none; }
 }
 
+/* ---------- New request on a phone: the item on its own line, quantity, unit and remove under it ---------- */
+@media (max-width: 600px) {
+  .req-line { grid-template-columns: minmax(0, 1fr) 70px 44px !important; }
+  .req-line > label:first-child { grid-column: 1 / -1; }
+}
+
 /* ---------- The store's receive screen on a phone: one column, big fields, the action at thumb height ---------- */
 @media (max-width: 600px) {
   #waitingWrap .panel { padding: var(--space-4); overflow: visible; }
@@ -97,8 +103,9 @@
     font-size: var(--text-xs); font-weight: var(--weight-semibold); color: var(--color-text-muted);
     text-transform: uppercase; letter-spacing: 0.04em; margin-bottom: 2px;
   }
+  #waitingWrap .data-table td { text-align: left !important; }
   #waitingWrap .data-table td:first-child { font-weight: var(--weight-semibold); font-size: var(--text-md); }
-  #waitingWrap input:not([type="checkbox"]) { width: 100% !important; min-height: 48px; font-size: 16px !important; padding: 10px 12px !important; }
+  #waitingWrap .data-table td:first-child::before { display: none; }  #waitingWrap input:not([type="checkbox"]) { width: 100% !important; min-height: 48px; font-size: 16px !important; padding: 10px 12px !important; }
   #waitingWrap .recv-send {
     position: sticky; bottom: 12px; z-index: 5;
     width: 100%; min-height: 52px; font-size: var(--text-md); box-shadow: var(--shadow-lg);

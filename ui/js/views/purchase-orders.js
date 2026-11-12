@@ -230,7 +230,7 @@ const PurchaseOrdersView = {
              ${po.contract_code ? ` · contract ${this.esc(po.contract_code)}` : ""}</p>
         </div>
         ${FlowStrip.forOrder(po)}
-        ${po.cancel_reason ? UI.callout("danger", "Cancelled", `<p>${this.esc(po.cancel_reason)}</p>`) : ""}
+        ${po.cancel_reason ? UI.callout("danger", "", `<p><strong>Cancelled:</strong> ${this.esc(po.cancel_reason)}</p>`) : ""}
         <div class="doc-layout">
         <div class="doc-main">
         ${approvalActs ? this.approvalPanel(po) : ""}
