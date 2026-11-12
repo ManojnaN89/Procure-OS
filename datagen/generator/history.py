@@ -379,7 +379,8 @@ class History(Buying):
 
     def rule(self, document: str, value: Decimal, category: str | None) -> dict[str, str]:
         rules = [r for r in self.m["approval_rule"] if r["document"] == document
-                 and D(r["min_value"]) <= value <= D(r["max_value"])]  # fmt: skip
+                 and D(r["min_value"]) <= value <= D(r["max_value"])
+                 and not r["approver_chain"].startswith("+") and r["location_code"] == "ANY"]  # fmt: skip
         mine = [r for r in rules if r["category_code"] == category]
         return (mine or [r for r in rules if r["category_code"] == "ANY"])[0]
 
@@ -393,6 +394,8 @@ class History(Buying):
             source, value = roles[role]
             if source == "designation":
                 person = next(u["code"] for u in self.m["user"] if u["designation"] == value)
+            elif source == "location_head":
+                person = self.m["location"][0]["head_user"]
             else:
                 person = next(d["head_user"] for d in self.m["department"] if d["code"] == department)
             if person != self.people["requester"] and (not people or people[-1] != person):

@@ -18,6 +18,7 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from p2p.agents import autonomy
+from p2p.approvals.rules import chain_roles
 from p2p.formulas.calendar import business_today
 from p2p.platform import audit, routing, tenants, users
 from p2p.platform.permissions import require
@@ -80,7 +81,7 @@ PERMISSIONS: dict[str, str] = {
 }
 ADMIN_ONLY = {"admin.users", "admin.rules", "admin.settings"}
 ADMIN_REQUIRED = ADMIN_ONLY | {"audit.view"}  # without these nobody could run the setup any more
-APPROVER_SOURCES = ("requester_manager", "department_head", "department_head_of", "designation")
+APPROVER_SOURCES = ("requester_manager", "department_head", "department_head_of", "designation", "location_head")
 
 
 # Only settings that some code reads are offered here: a setting that nothing reads would be a control that does nothing.
@@ -261,7 +262,37 @@ POLICIES: dict[str, tuple[str, str, str, str, str, float | None, float | None, t
         100,
         (),
     ),
-    "approval_reminder_hours": ("org", "int", "Remind an approver after (hours)", "", "24", 1, 720, ()),
+    "approval_reminder_hours": ("org", "int", "Remind an order approver after (hours)", "", "24", 1, 720, ()),
+    "approval_reminder_days": (
+        "org",
+        "decimal",
+        "Remind a request approver after (working days)",
+        "One reminder by email, counted on the business calendar",
+        "1",
+        0.5,
+        30,
+        (),
+    ),
+    "approval_escalation_days": (
+        "org",
+        "decimal",
+        "Escalate a request approval after (working days)",
+        "To the approver's manager, else the next approver",
+        "2",
+        0.5,
+        60,
+        (),
+    ),
+    "approval_otp_above": (
+        "org",
+        "decimal",
+        "One-time code for approvals above (Rs)",
+        "Approving by email above this value needs a code sent to the approver",
+        "500000.00",
+        0,
+        999999999,
+        (),
+    ),
     "supplier_document_warn_days": ("org", "int", "Warn before a document expires (days)", "", "30", 0, 365, ()),
     "payment_run_window_days": (
         "org",
@@ -733,11 +764,11 @@ def list_approvers(db: Db, ctx: RulesAdmin) -> dict[str, Any]:
     heads = {d["code"]: d["head_user"] for d in _rows(db, "select code, head_user from department")}
     by_code = {p["code"]: p for p in people}
     used = {
-        part.strip()
+        role
         for (chain,) in db.execute(
             text("select approver_chain from approval_rule where effective_to is null or effective_to >= current_date")
         )
-        for part in str(chain).split(">")
+        for role in chain_roles(str(chain))[1]
     }
     out = []
     for r in roles:
@@ -745,6 +776,8 @@ def list_approvers(db: Db, ctx: RulesAdmin) -> dict[str, Any]:
             who = "The requester's own manager"
         elif r["source"] == "department_head":
             who = "The head of the request's department"
+        elif r["source"] == "location_head":
+            who = "The head of the request's delivery location"
         elif r["source"] == "department_head_of":
             head = by_code.get(heads.get(r["value"]) or "")
             who = f"The head of {r['value']}: {head['name'] if head else 'nobody set'}"
@@ -775,7 +808,7 @@ def put_approver(role: str, body: ApproverBody, db: Db, ctx: RulesAdmin) -> dict
     if body.source not in APPROVER_SOURCES:
         raise _422(f"source must be one of {', '.join(APPROVER_SOURCES)}")
     value = (body.value or "").strip() or None
-    if body.source in ("requester_manager", "department_head"):
+    if body.source in ("requester_manager", "department_head", "location_head"):
         value = None
     elif not value:
         raise _422("this kind of role needs a value (a department code, or a designation)")
@@ -821,7 +854,7 @@ def drop_approver(role: str, db: Db, ctx: RulesAdmin, reason: str = "") -> dict[
     for (chain,) in db.execute(
         text("select approver_chain from approval_rule where effective_to is null or effective_to >= current_date")
     ):
-        if role in [p.strip() for p in str(chain).split(">")]:
+        if role in chain_roles(str(chain))[1]:
             raise HTTPException(409, "an approval chain still uses this role")
     db.execute(text("delete from approver_role where role = :r"), {"r": role})
     _log(db, user_actor(ctx.user_id), "approver_role", role, {"source": old[0], "value": old[1]}, None, reason)
@@ -866,33 +899,37 @@ def put_head(code: str, body: HeadBody, db: Db, ctx: RulesAdmin) -> dict[str, st
 CENT = D("0.01")
 
 
-def _chain(db: Session, chain: str) -> list[str]:
-    parts = [p.strip() for p in chain.split(">") if p.strip()]
+def _chain(db: Session, chain: str) -> str:
+    """The chain as stored: 'auto', roles joined by '>', or '+' and roles for a row that adds approvers."""
+    adds, roles = chain_roles(chain)
+    parts = list(roles)
     if not parts:
-        raise _422("a chain needs at least one step, or 'auto'")
-    if parts == ["auto"]:
-        return parts
+        if adds or chain.strip() != "auto":
+            raise _422("a chain needs at least one step, or 'auto'")
+        return "auto"
     known = {r[0] for r in db.execute(text("select role from approver_role"))}
     missing = [p for p in parts if p not in known]
     if missing:
         raise _422(f"these roles are not defined under Approvers: {', '.join(missing)}")
     if len(set(parts)) != len(parts):
         raise _422("a role appears twice in the chain")
-    return parts
+    return ("+" if adds else "") + ">".join(parts)
 
 
 def coverage_problems(db: Session, document: str, on: date) -> list[str]:
-    """For each scope of a document, the value bands in force on a date must follow one another with no gap and no overlap."""
+    """For each scope of a document, the value bands in force on a date must follow one another with no gap and no overlap.
+    Rows that add an approver ('+role') cover only the band they name, so they are not part of this check."""
     rows = _rows(
         db,
-        "select rule_code, min_value, max_value, category_code, department_code, spend_type from approval_rule "
-        "where document = :d and effective_from <= :o and (effective_to is null or effective_to >= :o) order by min_value",
+        "select rule_code, min_value, max_value, category_code, department_code, coalesce(location_code, 'ANY') as "
+        "location_code, spend_type from approval_rule where document = :d and effective_from <= :o "
+        "and (effective_to is null or effective_to >= :o) and approver_chain not like '+%' order by min_value",
         d=document,
         o=on,
     )
-    scopes: dict[tuple[str, str, str], list[dict[str, Any]]] = {}
+    scopes: dict[tuple[str, str, str, str], list[dict[str, Any]]] = {}
     for r in rows:
-        scopes.setdefault((r["category_code"], r["department_code"], r["spend_type"]), []).append(r)
+        scopes.setdefault((r["category_code"], r["department_code"], r["location_code"], r["spend_type"]), []).append(r)
     problems = []
     for scope, bands in scopes.items():
         label = "/".join(scope)
@@ -917,8 +954,10 @@ def _rule_json(r: dict[str, Any], today: date) -> dict[str, Any]:
         "max_value": str(r["max_value"]),
         "category": r["category_code"],
         "department": r["department_code"],
+        "location": r.get("location_code") or "ANY",
         "spend_type": r["spend_type"],
-        "chain": [p.strip() for p in str(r["approver_chain"]).split(">")],
+        "adds": chain_roles(str(r["approver_chain"]))[0],
+        "chain": list(chain_roles(str(r["approver_chain"]))[1]) or ["auto"],
         "version": r["version"],
         "effective_from": _iso(r["effective_from"]),
         "effective_to": _iso(r["effective_to"]),
@@ -946,6 +985,7 @@ class RuleVersion(BaseModel):
     max_value: Decimal
     category_code: str = "ANY"
     department_code: str = "ANY"
+    location_code: str = "ANY"
     spend_type: str = "ANY"
     approver_chain: str
     effective_from: date
@@ -1005,11 +1045,13 @@ def new_rule_version(body: RuleVersion, db: Db, ctx: RulesAdmin) -> dict[str, An
     new_id = db.execute(
         text(
             "insert into approval_rule (rule_code, document, min_value, max_value, category_code, department_code, spend_type, "
-            "approver_chain, version, effective_from) values (:c, :d, :lo, :hi, :cat, :dep, :sp, :ch, :v, :f) returning id"
+            "location_code, approver_chain, version, effective_from) values (:c, :d, :lo, :hi, :cat, :dep, :sp, :loc, :ch, "
+            ":v, :f) returning id"
         ),
         {
             "c": code, "d": body.document, "lo": body.min_value, "hi": body.max_value, "cat": body.category_code,
-            "dep": body.department_code, "sp": body.spend_type, "ch": ">".join(chain), "v": version, "f": body.effective_from,
+            "dep": body.department_code, "sp": body.spend_type, "loc": body.location_code or "ANY", "ch": chain, "v": version,
+            "f": body.effective_from,
         },
     ).scalar_one()  # fmt: skip
     problems = coverage_problems(db, body.document, body.effective_from)

@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from p2p.approvals import rules as approval_rules
@@ -289,9 +290,23 @@ def test_the_approval_rules_send_each_amount_to_the_right_person(company: tuple[
     name, db, _ = company
 
     def route(document: str, value: str, category: str | None = None) -> list[str]:
-        rule = approval_rules.find_rule(db, document, Decimal(value), TODAY, category=category)
+        where = db.execute(text("select code from location order by code limit 1")).scalar()
+        rule = approval_rules.find_rule(db, document, Decimal(value), TODAY, category=category, location=where)
         steps = approval_rules.resolve_chain(
-            db, rule.roles, requester="U01", department="ENG" if name == "brightwave" else "PRD", on_date=TODAY
+            db,
+            rule.roles,
+            requester="U01",
+            department="ENG" if name == "brightwave" else "PRD",
+            on_date=TODAY,
+            location=where,
+        )
+        return [s.approver for s in steps]
+
+    def route_capex(value: str) -> list[str]:
+        where = db.execute(text("select code from location order by code limit 1")).scalar()
+        rule = approval_rules.find_rule(db, "request", Decimal(value), TODAY, spend_type="capex", location=where)
+        steps = approval_rules.resolve_chain(
+            db, rule.roles, requester="U01", department="PRD", on_date=TODAY, location=where
         )
         return [s.approver for s in steps]
 
@@ -301,6 +316,8 @@ def test_the_approval_rules_send_each_amount_to_the_right_person(company: tuple[
         assert route("po", "100000.00") == [] and route("po", "100000.01") == ["U08"]
         assert route("po", "500000.00") == ["U08"] and route("po", "500000.01") == ["U09"]
         assert route("price_variance", "5000") == ["U08"] and route("payment_run", "5000") == ["U09"]
+        # capital purchases above a lakh are also seen by the purchase manager (a '+' row adds to the chain)
+        assert route_capex("100000.01") == ["U09", "U08"] and route_capex("100000.00") == ["U07"]
     else:  # head of engineering U07, IT head U08, CFO U09
         assert route("request", "10000.00") == [] and route("request", "10000.01") == ["U07"]
         assert route("request", "100000.01") == ["U09"]

@@ -153,6 +153,7 @@ class MasterWriter:
                     "receiving_hours": loc["receiving_hours"],
                     "holiday_scope": f"central;{loc['state_code']}",
                     "loc_short": loc["loc_short"],
+                    "head_user": loc.get("head", ""),
                 }
             ],
         )
@@ -205,7 +206,9 @@ class MasterWriter:
 
     def rules(self) -> None:
         lines = self.p["approval_rules"].strip().splitlines()
-        self.put("approval_rule", list(csv.DictReader(lines)))
+        self.put(
+            "approval_rule", [{**r, "location_code": r.get("location_code") or "ANY"} for r in csv.DictReader(lines)]
+        )
         self.put("setting", [{"key": k, "value": v, "description": d} for k, v, d in self.p["settings"]])
         self.put(
             "tolerance", [{"key": k, "value": v, "category_code": "ANY", "note": n} for k, v, n in self.p["tolerances"]]
@@ -470,6 +473,7 @@ REFERENCES = [
     ("user", "department_code", "department", "code"),
     ("user", "location_code", "location", "code"),
     ("department", "head_user", "user", "code"),
+    ("location", "head_user", "user", "code"),
     ("cost_centre", "department_code", "department", "code"),
     ("cost_centre", "location_code", "location", "code"),
     ("cost_centre", "owner_user", "user", "code"),
@@ -579,7 +583,9 @@ def check(out: Path, profile: CompanyProfile | None = None) -> list[str]:
     # approval bands: for each document and scope, from zero to the top with no gap and no overlap
     bands: dict[tuple[str, ...], list[tuple[Decimal, Decimal]]] = defaultdict(list)
     for r in t["approval_rule"]:
-        key = (r["document"], r["category_code"], r["department_code"], r["spend_type"])
+        if r["approver_chain"].startswith("+"):
+            continue  # a row that adds an approver covers only its own band
+        key = (r["document"], r["category_code"], r["department_code"], r["location_code"], r["spend_type"])
         bands[key].append((Decimal(r["min_value"]), Decimal(r["max_value"])))
     for key, spans in bands.items():
         spans.sort()
@@ -685,7 +691,7 @@ def _profile_problems(
     problems: list[str] = []
     roles = {role: (source, value) for role, source, value in profile.approver_roles}
     for r in t["approval_rule"]:
-        for role in r["approver_chain"].split(">"):
+        for role in r["approver_chain"].lstrip("+").split(">"):
             if role != "auto" and role not in roles:
                 problems.append(f"rule {r['rule_code']} names '{role}', which approver_roles does not define")
     for role, (source, value) in roles.items():
@@ -693,6 +699,8 @@ def _profile_problems(
             problems.append(f"role {role}: not exactly one person is '{value}'")
         if source == "department_head" and any(not d["head_user"] for d in t["department"]):
             problems.append(f"role {role}: a department has no head")
+        if source == "location_head" and any(not loc["head_user"] for loc in t["location"]):
+            problems.append(f"role {role}: a location has no head")
     plans = {**profile["budgets"]["per_month"], **profile["budgets"]["per_location"]}
     for holder, plan in plans.items():
         if sum((Decimal(v) for v in plan["gl"].values()), Decimal(0)) != Decimal(plan["total"]):

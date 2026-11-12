@@ -69,4 +69,8 @@ def mark_read(db: Session, user_id: int, notification_id: int) -> None:
 
 @worker.register("send_email")
 def _send_email_job(ctx: worker.JobContext) -> None:
-    mail.send_email(ctx.payload["to"], ctx.payload["subject"], ctx.payload["body"])
+    html = ctx.payload.get("html")
+    if html:
+        mail.send_email(ctx.payload["to"], ctx.payload["subject"], ctx.payload["body"], html=html)
+    else:
+        mail.send_email(ctx.payload["to"], ctx.payload["subject"], ctx.payload["body"])

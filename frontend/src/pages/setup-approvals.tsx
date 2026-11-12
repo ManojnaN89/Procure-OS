@@ -28,6 +28,7 @@ const SOURCE_LABEL: Record<string, string> = {
 	department_head: "Head of the request's department",
 	department_head_of: "Head of a named department",
 	designation: "Whoever holds a designation",
+	location_head: "Head of the request's delivery location",
 };
 
 export function Approvers(shared: Shared) {
@@ -234,7 +235,9 @@ type Rule = {
 	max_value: string;
 	category: string;
 	department: string;
+	location: string;
 	spend_type: string;
+	adds: boolean;
 	chain: string[];
 	version: number;
 	effective_from: string;
@@ -268,6 +271,7 @@ export function ApprovalChains(shared: Shared) {
 		spend_type: "opex",
 		category_code: "ANY",
 		department_code: "ANY",
+		location_code: "ANY",
 		approver_chain: "",
 		effective_from: tomorrow(),
 	});
@@ -289,7 +293,8 @@ export function ApprovalChains(shared: Shared) {
 			spend_type: r.spend_type,
 			category_code: r.category,
 			department_code: r.department,
-			approver_chain: r.chain.join(">"),
+			location_code: r.location,
+			approver_chain: (r.adds ? "+" : "") + r.chain.join(">"),
 			effective_from: tomorrow(),
 		});
 
@@ -343,13 +348,15 @@ export function ApprovalChains(shared: Shared) {
 								<Td>
 									{r.document}
 									<div className="text-xs text-muted-foreground">
-										{r.spend_type} · {r.category} · {r.department}
+										{r.spend_type} · {r.category} · {r.department} ·{" "}
+										{r.location}
 									</div>
 								</Td>
 								<Td>
 									{r.min_value} – {r.max_value}
 								</Td>
 								<Td>
+									{r.adds ? "adds " : ""}
 									{r.chain.join(" → ")}
 									{r.chain[0] === "auto" ? " (approves itself)" : ""}
 								</Td>
@@ -413,8 +420,16 @@ export function ApprovalChains(shared: Shared) {
 							))}
 						</select>
 					</Field>
+					<Field label="Location (ANY for every location)">
+						<Input
+							value={form.location_code}
+							onChange={(e) =>
+								setForm({ ...form, location_code: e.target.value || "ANY" })
+							}
+						/>
+					</Field>
 					<Field
-						label={`Approvers in order, with ">" between (${d.roles.join(", ")}) or "auto"`}
+						label={`Approvers in order, with ">" between (${d.roles.join(", ")}), "auto", or "+" first to add to the chain chosen by value`}
 					>
 						<Input
 							value={form.approver_chain}

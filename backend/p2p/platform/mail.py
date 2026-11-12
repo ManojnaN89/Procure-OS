@@ -22,8 +22,10 @@ def send_email(
     reply_to: str | None = None,
     message_id: str | None = None,
     attachments: list[tuple[str, str, bytes]] | None = None,
+    html: str | None = None,
 ) -> str:
-    """Send a plain-text email, optionally with attachments (filename, content type, bytes). Returns the Message-ID."""
+    """Send a plain-text email, optionally with an HTML version and attachments (filename, content type, bytes). Returns
+    the Message-ID."""
     msg = EmailMessage()
     msg["From"] = sender
     msg["To"] = to
@@ -32,6 +34,8 @@ def send_email(
     if reply_to:
         msg["Reply-To"] = reply_to
     msg.set_content(body)
+    if html:
+        msg.add_alternative(html, subtype="html")
     for name, content_type, data in attachments or []:
         maintype, _, subtype = content_type.partition("/")
         msg.add_attachment(data, maintype=maintype or "application", subtype=subtype or "octet-stream", filename=name)

@@ -54,6 +54,7 @@ TABLES: list[tuple[str, str, tuple[str, ...] | None]] = [
 
 # column -> (referenced table, referenced column); checked when loading and enforced (deferred) in the database
 FOREIGN_KEYS: dict[str, list[tuple[str, str, str]]] = {
+    "location": [("head_user", "org_user", "code")],
     "cost_centre": [("department_code", "department", "code"), ("location_code", "location", "code")],
     "org_user": [
         ("department_code", "department", "code"),

@@ -68,25 +68,27 @@ cost_centres:
   - [CC-ADM, Admin and Facilities, ADM, U09]
 
 # Up to Rs 10,000 approves itself, up to Rs 1 lakh the department head, above that the CFO. IT hardware and software
-# always need the IT head as well (rules for one category beat the ANY rules).
+# always need the IT head as well (rules for one category beat the ANY rules). Capital purchases from Rs 10,000 to
+# Rs 1 lakh are also seen by the CFO ('+' adds to the chain chosen by value).
 approval_rules: |
-  rule_code,document,min_value,max_value,category_code,department_code,spend_type,approver_chain,version,effective_from,effective_to
-  REQ-01,request,0.00,10000.00,ANY,ANY,ANY,auto,1,2025-04-01,
-  REQ-02,request,10000.01,100000.00,ANY,ANY,ANY,dept_head,1,2025-04-01,
-  REQ-03,request,100000.01,999999999.00,ANY,ANY,ANY,cfo,1,2025-04-01,
-  REQ-04,request,0.00,10000.00,ITH,ANY,ANY,it_head,1,2025-04-01,
-  REQ-05,request,10000.01,100000.00,ITH,ANY,ANY,dept_head>it_head,1,2025-04-01,
-  REQ-06,request,100000.01,999999999.00,ITH,ANY,ANY,it_head>cfo,1,2025-04-01,
-  REQ-07,request,0.00,10000.00,SWS,ANY,ANY,it_head,1,2025-04-01,
-  REQ-08,request,10000.01,100000.00,SWS,ANY,ANY,dept_head>it_head,1,2025-04-01,
-  REQ-09,request,100000.01,999999999.00,SWS,ANY,ANY,it_head>cfo,1,2025-04-01,
-  PO-01,po,0.00,100000.00,ANY,ANY,ANY,auto,1,2025-04-01,
-  PO-02,po,100000.01,999999999.00,ANY,ANY,ANY,cfo,1,2025-04-01,
-  POA-01,po_amendment,0.00,100000.00,ANY,ANY,ANY,auto,1,2025-04-01,
-  POA-02,po_amendment,100000.01,999999999.00,ANY,ANY,ANY,cfo,1,2025-04-01,
-  VAR-01,price_variance,0.00,999999999.00,ANY,ANY,ANY,cfo,1,2025-04-01,
-  PAY-01,payment_run,0.00,999999999.00,ANY,ANY,ANY,cfo,1,2025-04-01,
-  SUP-01,supplier_activation,0.00,999999999.00,ANY,ANY,ANY,cfo,1,2025-04-01,
+  rule_code,document,min_value,max_value,category_code,department_code,location_code,spend_type,approver_chain,version,effective_from,effective_to
+  REQ-01,request,0.00,10000.00,ANY,ANY,ANY,ANY,auto,1,2025-04-01,
+  REQ-02,request,10000.01,100000.00,ANY,ANY,ANY,ANY,dept_head,1,2025-04-01,
+  REQ-03,request,100000.01,999999999.00,ANY,ANY,ANY,ANY,cfo,1,2025-04-01,
+  REQ-04,request,0.00,10000.00,ITH,ANY,ANY,ANY,it_head,1,2025-04-01,
+  REQ-05,request,10000.01,100000.00,ITH,ANY,ANY,ANY,dept_head>it_head,1,2025-04-01,
+  REQ-06,request,100000.01,999999999.00,ITH,ANY,ANY,ANY,it_head>cfo,1,2025-04-01,
+  REQ-07,request,0.00,10000.00,SWS,ANY,ANY,ANY,it_head,1,2025-04-01,
+  REQ-08,request,10000.01,100000.00,SWS,ANY,ANY,ANY,dept_head>it_head,1,2025-04-01,
+  REQ-09,request,100000.01,999999999.00,SWS,ANY,ANY,ANY,it_head>cfo,1,2025-04-01,
+  REQ-10,request,10000.01,100000.00,ANY,ANY,ANY,capex,+cfo,1,2025-04-01,
+  PO-01,po,0.00,100000.00,ANY,ANY,ANY,ANY,auto,1,2025-04-01,
+  PO-02,po,100000.01,999999999.00,ANY,ANY,ANY,ANY,cfo,1,2025-04-01,
+  POA-01,po_amendment,0.00,100000.00,ANY,ANY,ANY,ANY,auto,1,2025-04-01,
+  POA-02,po_amendment,100000.01,999999999.00,ANY,ANY,ANY,ANY,cfo,1,2025-04-01,
+  VAR-01,price_variance,0.00,999999999.00,ANY,ANY,ANY,ANY,cfo,1,2025-04-01,
+  PAY-01,payment_run,0.00,999999999.00,ANY,ANY,ANY,ANY,cfo,1,2025-04-01,
+  SUP-01,supplier_activation,0.00,999999999.00,ANY,ANY,ANY,ANY,cfo,1,2025-04-01,
 
 # the autonomy gate (set by `demo reset`): no touchless orders here, a buyer issues every order
 autonomy:
@@ -107,7 +109,9 @@ settings:
   - [min_quotes_default, "2", Minimum quotes when the category does not say]
   - [working_saturdays, none, Company rule for Saturdays at head office (none or 1st-3rd-5th)]
   - [approval_reminder_hours, "24", Hours before an approver is reminded (one working day)]
-  - [approval_escalation_hours, "48", Hours before a pending approval escalates to the next level (two working days)]
+  - [approval_reminder_days, "1", Working days before a request approver is reminded by email (once)]
+  - [approval_escalation_days, "2", Working days before a waiting request approval escalates to the approver's manager or the next approver]
+  - [approval_otp_above, "500000.00", Approving a request by email above this value needs a one-time code sent to the approver]
   - [auto_approve_requires_budget, "true", Auto-approval only when budget is available]
   - [po_send_requires_confirmation, "true", A person confirms before a PO is sent to a supplier]
   - [grn_edit_window_days, "3", Days a goods receipt can be corrected after posting]
