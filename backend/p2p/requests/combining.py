@@ -189,15 +189,26 @@ def release(db: Session, actor: Actor, mr_no: str, reason: str) -> tuple[list[st
         if not ln["shared"] or ln["line_status"] != "open":
             left.add(no)
             continue
-        old, new = _resize(db, no, line_no, may_grow=ln["request_status"] == "draft")
+        old, new = reduce(
+            db, actor, no, line_no, f"{mr_no} cancelled: {reason}", may_grow=ln["request_status"] == "draft"
+        )
         if new != old:
-            audit.record(
-                db, actor, "request.line_reduce", "request", no,
-                before={"line": line_no, "qty": str(old)}, after={"line": line_no, "qty": str(new)},
-                reason=f"{mr_no} cancelled: {reason}",
-            )  # fmt: skip
             reduced.add(no)
     return sorted(reduced), sorted(left - reduced)
+
+
+def reduce(
+    db: Session, actor: Actor, request_no: str, line_no: int, reason: str, *, may_grow: bool = False
+) -> tuple[Decimal, Decimal]:
+    """A source of the line bought for less (its part was cut or its material request cancelled): its quantity worked
+    out again, audited when it changed. The caller commits. Returns the quantity before and after (0: cancelled)."""
+    old, new = _resize(db, request_no, line_no, may_grow=may_grow)
+    if new != old:
+        audit.record(
+            db, actor, "request.line_reduce", "request", request_no,
+            before={"line": line_no, "qty": str(old)}, after={"line": line_no, "qty": str(new)}, reason=reason,
+        )  # fmt: skip
+    return old, new
 
 
 def sources(db: Session, request_no: str) -> dict[int, list[dict[str, Any]]]:

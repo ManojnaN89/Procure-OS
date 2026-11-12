@@ -26,9 +26,10 @@ from p2p.requests.demand_files import KINDS
 
 ROOT = Path(__file__).resolve().parents[1]
 APEX = ROOT / "data" / "datasets" / "apex-v1"
+BRIGHTWAVE = ROOT / "data" / "datasets" / "brightwave-v1"
 DEMAND_TABLES = (
     *("material_request_buy", "material_request_line", "material_request"),  # made from the demand
-    *("material_requirement", "production_order", "product_demand", "demand_import", "erp_column_map"),
+    *("material_requirement", "production_order", "product_demand", "joiner_kit", "demand_import", "erp_column_map"),
 )
 client = TestClient(app)
 D = Decimal
@@ -354,3 +355,91 @@ def test_only_the_store_may_import(company: tuple[str, Session], db: Session) ->
         assert (resp.status_code == 200) == allowed, role
     resp = client.get("/api/demand/templates/production_order", headers=_headers(slug, "Store"))
     assert resp.text.lstrip("﻿").splitlines()[0] == "order_no,product_code,qty,need_by,reason,location_code"
+
+
+# ---- an IT services company: joiner kits and the joiner plan --------------------------------------
+
+
+@pytest.fixture(scope="module")
+def brightwave(control_db: str) -> Iterator[Session]:
+    if not (BRIGHTWAVE / "manifest.json").is_file():
+        subprocess.run(
+            [sys.executable, "-I", str(ROOT / "datagen/generator/company_profile.py"), "brightwave"],
+            check=True,
+            cwd=ROOT,
+        )
+    slug = "dw" + uuid.uuid4().hex[:8]
+    assert tenants.create_tenant(slug, load_reference=False).ok
+    db = Session(routing.engine_for(slug))
+    assert import_masters(db, BRIGHTWAVE).rejected == []
+    yield db
+    db.close()
+
+
+def test_brightwave_joiners_become_the_items_of_their_kits_for_their_department(brightwave: Session) -> None:
+    # given Brightwave's input files: two kits, and 4 developers (ENG) and 2 standard joiners (ADM) on 1 December
+    kits = _rows(BRIGHTWAVE / "inputs" / "joiner_kit.csv")
+    plan = _rows(BRIGHTWAVE / "inputs" / "joiner_plan.csv")
+
+    # when the dataset is imported
+    report = demand.import_demand(brightwave, BRIGHTWAVE)
+
+    # then every row loads, kits first, and nothing is left out
+    assert report.rejected == []
+    assert report.loaded == {"joiner_kit": len(kits), "joiner_plan": len(plan)}
+
+    # and each joiner row is its kit's items times the joiners, by the start date, for the joiner's department
+    got = {
+        (r.source_doc_no, r.item_code): (r.qty, r.need_by.isoformat(), r.department_code)
+        for r in brightwave.execute(
+            text("select * from material_requirement where source_kind = 'joiner' and status = 'open'")
+        )
+    }
+    want = {
+        (f"{p['plan_no']}/{p['department']}", k["item_code"]): (
+            D(k["qty"]) * D(p["count"]), p["start_date"], p["department"],
+        )
+        for p in plan
+        for k in kits
+        if k["kit"] == p["kit"]
+    }  # fmt: skip
+    assert got == want
+
+    # and each plan and department has one material request, raised for that department
+    made = brightwave.execute(
+        text("select order_no, department_code, source_kind, product_code from material_request order by order_no")
+    ).all()
+    assert [tuple(r) for r in made] == [
+        ("JP-2026-12/ADM", "ADM", "joiner", "standard"),
+        ("JP-2026-12/ENG", "ENG", "joiner", "developer"),
+    ]
+    assert len(report.material_requests) == 2
+
+    # and a second import loads nothing
+    again = demand.import_demand(brightwave, BRIGHTWAVE)
+    assert again.rows_loaded == 0 and again.rejected == [] and again.already_loaded == len(kits) + len(plan)
+
+
+def test_a_joiner_plan_with_an_unknown_kit_department_or_part_person_is_left_out(
+    brightwave: Session, tmp_path: Path
+) -> None:
+    demand.import_demand(brightwave, BRIGHTWAVE, kind="joiner_kit")
+    path = _write(
+        tmp_path / "joiner_plan.csv",
+        ["plan_no", "department", "kit", "count", "start_date"],
+        [
+            ["JP-2027-02", "ENG", "intern", "1", "2027-02-01"],
+            ["JP-2027-02", "XYZ", "standard", "1", "2027-02-01"],
+            ["JP-2027-02", "ADM", "standard", "1.5", "2027-02-01"],
+            ["JP-2027-02", "ADM", "standard", "0", "2027-02-01"],
+        ],
+    )
+
+    report = demand.import_demand(brightwave, path)
+
+    assert [p.reason for p in report.rejected] == [
+        "kit 'intern' is not in joiner_kit: load the kits first",
+        "department 'XYZ' is not a department of the company",
+        "count 1.5 must be a whole number of people",
+        "count 0 must be above zero",
+    ]

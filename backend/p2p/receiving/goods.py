@@ -23,6 +23,7 @@ from p2p.formulas.money import format_qty
 from p2p.platform import audit, notifications, numbering
 from p2p.platform.sod import user
 from p2p.receiving.kinds import service_lines
+from p2p.requests import reservation
 
 log = logging.getLogger(__name__)
 RECEIVABLE = ("sent", "acknowledged", "part_received")
@@ -384,6 +385,26 @@ def inspect(db: Session, gr_no: str, decisions: list[Decision], user_id: int, *,
     )
     db.commit()
     return Posted(gr_no, po["no"], status, [], accepted_by_line)
+
+
+def reserve_arrived(db: Session, tenant: str, gr_no: str) -> None:
+    """Stocked goods accepted on a receipt (at posting or inspection) are set aside at once for the open material requests
+    that need them, by the system. It never undoes the receipt: a failure is only logged (the store check does it too)."""
+    try:
+        places = [
+            (str(r[0]), str(r[1]))
+            for r in db.execute(
+                text(
+                    "select distinct item_code, location_code from stock_movement "
+                    "where ref_doc = :g and type = 'receipt' and qty > 0"
+                ),
+                {"g": gr_no},
+            )
+        ]
+        reservation.stock_rose(db, tenant, places, why=f"Goods accepted on {gr_no}")
+    except Exception:  # noqa: BLE001 - setting stock aside must never undo or hide a receipt
+        db.rollback()
+        log.warning("could not set aside the stock of receipt %s", gr_no, exc_info=True)
 
 
 def tell_requesters(db: Session, tenant: str, gr_no: str, *, inspected: bool = False) -> int:

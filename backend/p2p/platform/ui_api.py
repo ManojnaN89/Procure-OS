@@ -42,7 +42,7 @@ from p2p.platform.tokens import decode_access_token
 from p2p.receiving import goods
 from p2p.receiving.kinds import service_lines
 from p2p.receiving.stock import StockError, post_count, post_issue, stock_levels
-from p2p.requests import combining, duplicates, jobs, lifecycle, replenishment
+from p2p.requests import combining, duplicates, jobs, lifecycle, replenishment, reservation
 from p2p.sourcing import documents as supplier_documents
 from p2p.sourcing import replies, rfq_document
 from p2p.sourcing import service as sourcing
@@ -532,12 +532,15 @@ def count_stock(
 ) -> dict[str, Any]:
     """After counting the shelf: correct the books to match it. The difference is worked out by the server."""
     counted = _quantity(payload, "counted_qty")
-    return _stock_post(
-        lambda: post_count(
-            db, ctx.user_id, str(payload.get("item_code") or ""), str(payload.get("location") or ""), counted,
-            str(payload.get("reason") or ""),
-        )
-    )  # fmt: skip
+    item, location = str(payload.get("item_code") or ""), str(payload.get("location") or "")
+
+    def count() -> str | None:
+        movement = post_count(db, ctx.user_id, item, location, counted, str(payload.get("reason") or ""))
+        if movement is not None:  # a count that finds more is set aside for the material requests waiting
+            reservation.stock_rose(db, ctx.slug, [(item, location)], why=f"Stock count of {item} at {location}")
+        return movement
+
+    return _stock_post(count)
 
 
 _REQUISITION_STATUS = {"submitted": "pending"}  # the screen calls a request waiting for approval "pending"
@@ -651,7 +654,7 @@ def get_requisition(no: str, db: Db, ctx: Ctx) -> dict[str, Any]:
     lines = _rows(
         db,
         "select rl.line_no, rl.item_code, coalesce(i.name, rl.free_text) as name, rl.qty, rl.uom, rl.est_price, rl.need_by, "
-        "rl.reason, rl.status, rl.delivery_location, d.method as source_method, d.reason as source_reason, "
+        "rl.est_source, rl.reason, rl.status, rl.delivery_location, d.method as source_method, d.reason as source_reason, "
         "d.rfq_no as source_rfq, d.contract_code as source_contract, d.route, d.route_rule, d.checks as route_checks, "
         "d.min_quotes, d.window_value, (select status from proposal where id = d.proposal_id) as agreement, "
         "(select p.po_no from po_line p "
@@ -695,6 +698,7 @@ def get_requisition(no: str, db: Db, ctx: Ctx) -> dict[str, Any]:
                 "qty": _qty(line["qty"]),
                 "uom": line["uom"],
                 "est_price": str(line["est_price"]) if line["est_price"] is not None else None,
+                "est_source": line["est_source"],
                 "value": str(round_money(line["qty"] * line["est_price"])) if line["est_price"] is not None else None,
                 "need_by": line["need_by"].isoformat() if line["need_by"] else None,
                 "reason": line["reason"],
@@ -1674,6 +1678,7 @@ def receive_goods(
     def post() -> dict[str, Any]:
         done = goods.post_receipt(db, no, lines, header, ctx.user_id, as_of=business_today())
         goods.tell_requesters(db, ctx.slug, done.no)
+        goods.reserve_arrived(db, ctx.slug, done.no)
         return {
             "receipt": done.no,
             "po_status": done.po_status,
@@ -1707,6 +1712,7 @@ def inspect_goods(
     def decide() -> dict[str, Any]:
         done = goods.inspect(db, no, decisions, ctx.user_id, as_of=business_today())
         goods.tell_requesters(db, ctx.slug, done.no, inspected=True)
+        goods.reserve_arrived(db, ctx.slug, done.no)
         return {
             "receipt": done.no,
             "po_status": done.po_status,

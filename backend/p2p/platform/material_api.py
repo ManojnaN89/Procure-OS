@@ -119,7 +119,7 @@ def issue(no: str, db: Db, ctx: Store, payload: dict[str, Any] | None = None) ->
 @router.post("/{no}/cancel")
 def cancel(no: str, payload: dict[str, Any], db: Db, ctx: Store) -> dict[str, Any]:
     try:
-        left = material.cancel(db, ctx.user_id, no, str(payload.get("reason") or ""))
+        left = material.cancel(db, ctx.user_id, no, str(payload.get("reason") or ""), tenant=ctx.slug)
     except material.MaterialError as exc:
         raise HTTPException(404 if "there is no" in str(exc) else 409, str(exc)) from None
     return {"status": "cancelled", "purchase_requests_left": left}

@@ -410,7 +410,7 @@ const RequisitionsView = {
                 <tr>
                   <td>${this.esc(l.name)}<div class="cell-muted" style="font-size:11px;">${this.esc(l.item_code || "")}${l.reason ? ` · ${this.esc(l.reason)}` : ""}</div>${this.boughtFor(l.bought_for)}</td>
                   <td>${this.esc(l.qty)} <span class="cell-muted">${this.esc(l.uom)}</span></td>
-                  <td class="cell-muted">${l.est_price === null ? "—" : formatCurrency(l.est_price)}</td>
+                  <td class="cell-muted">${l.est_price === null ? "—" : formatCurrency(l.est_price)}${l.est_source ? `<div class="est-source" style="font-size:11px;">estimate from ${this.esc(l.est_source)}</div>` : ""}</td>
                   <td>${l.value === null ? "—" : formatCurrency(l.value)}</td>
                   <td class="cell-muted">${formatDate(l.need_by)}</td>
                   <td style="font-size:12px;">${this.sourceCell(l.source)}</td>

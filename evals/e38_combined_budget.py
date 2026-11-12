@@ -18,7 +18,8 @@ TITLE = "Shortfalls of several orders combine into one line, and the budget is c
 REQUIREMENT = (
     "Plan P1-31 and step 3 of the flow: shortfall lines for the same item and delivery location needed within the "
     "combining window (setting, default 7 days) become one requisition line that keeps each order's own quantity; lines "
-    "further apart stay separate; cancelling one order takes its part off the combined line; the budget is checked per "
+    "further apart stay separate; cancelling one order takes its part off the combined line (and the stock it held "
+    "covers, earliest need-by first, the parts of the others, which are cut by as much); the budget is checked per "
     "department and per location (decision D36: warn at 90% used, over above 100%), naming the location, the department "
     "and the months of the financial year it counted; every combination and reduction is audited"
 )
@@ -45,6 +46,28 @@ def orders_with_extras() -> list[dict[str, str]]:
     return orders + extra
 
 
+TAKEN: dict[tuple[str, str], Decimal] = {}  # (order, item) -> what the oracle's store check set aside for it
+
+
+def freed_cuts(lines: list[dict], orders: list[dict[str, str]], victim: str) -> dict[tuple[str, str], Decimal]:
+    """After the victim is cancelled: the stock it held goes, earliest need-by first, to the other orders' shortfalls
+    (all on requests still open), and each such request part is cut by what it takes. (order, item) -> cut."""
+    due = {o["order_no"]: o["need_by"] for o in orders}
+    cuts: dict[tuple[str, str], Decimal] = {}
+    for item in {ln["item"] for ln in lines}:
+        left = TAKEN.get((victim, item), D(0))
+        shorts = sorted(
+            ((due[o], o, q) for ln in lines if ln["item"] == item for o, q in ln["for"].items() if o != victim),
+            key=lambda x: (x[0], x[1]),
+        )
+        for _, order, short in shorts:
+            cut = min(short, left)
+            left -= cut
+            if cut:
+                cuts[(order, item)] = cut
+    return cuts
+
+
 def oracle(orders: list[dict[str, str]], window: int) -> list[dict]:
     """Per combined line: the item, the orders it buys for with their own shortfall, and its quantity and price. Orders
     take stock earliest need-by first; a shortfall joins the first line of its item whose need-by dates stay within the
@@ -62,6 +85,7 @@ def oracle(orders: list[dict[str, str]], window: int) -> list[dict]:
             need = D(part["qty"]) * D(order["qty"])
             take = min(need, max(stock.get(item, D(0)), D(0)))
             stock[item] = stock.get(item, D(0)) - take
+            TAKEN[(order["order_no"], item)] = take
             short = need - take
             if short <= 0:
                 continue
@@ -236,26 +260,30 @@ def run(ctx) -> Outcome:  # noqa: C901 - one scenario, step by step
     if not checked_location:
         out.find("high", "no request was checked against a location budget: the dataset has none")
 
-    # 5. cancelling one order takes its part off the combined line
+    # 5. cancelling one order takes its part off the combined line, and the stock it held is set aside at once for the
+    # other orders, so their parts of the lines are cut by as much (never stocked and bought twice)
     extras = {no for no, _, _ in EXTRA_ORDERS}
     victim = next((o for ln in combined for o in ln["for"] if o in extras), None)
     reduced = 0
     if victim:
+        cuts = freed_cuts(want, orders, victim)
         resp = client.post(f"/api/material-requests/{by_order[victim]}/cancel", json={"reason": "eval"}, headers=store)
         if resp.status_code != 200:
             out.find("high", f"cancelling {victim} answered {resp.status_code}: {resp.text[:200]}")
         for ln in combined:
             if victim not in ln["for"]:
                 continue
-            rest = {o: q for o, q in ln["for"].items() if o != victim}
-            expect = min(max(sum(rest.values(), D(0)), ln["moq"]), ln["qty"])
+            rest = {o: q - cuts.get((o, ln["item"]), D(0)) for o, q in ln["for"].items() if o != victim}
+            left = sum(rest.values(), D(0))
+            expect = min(max(left, ln["moq"]), ln["qty"]) if left else D(0)
             match = next((g for g in got_lines if g["item_code"] == ln["item"] and g["for"] == ln["for"]), None)
             if match is None:
                 continue
-            now = db.execute(
-                text("select qty from request_line where request_no = :n and line_no = :l"),
+            qty, status = db.execute(
+                text("select qty, status from request_line where request_no = :n and line_no = :l"),
                 {"n": match["request_no"], "l": match["line_no"]},
-            ).scalar_one()
+            ).one()
+            now = D(0) if status == "cancelled" else qty
             if now != expect:
                 out.find(
                     "high", f"after cancelling {victim}, {ln['item']} is {now}, expected {expect} (was {ln['qty']})"

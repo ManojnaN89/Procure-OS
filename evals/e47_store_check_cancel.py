@@ -1,11 +1,14 @@
-"""E47: cancelling a production order gives its stock back, and the next store check hands it on (plan step 2, P1-30).
+"""E47: cancelling a production order gives its stock back, and it is handed on at once to the next orders, never so
+that an order is both stocked and bought for (plan step 2, P1-30).
 
 The main demo company's two production orders plus a third of MO-1's product, planted after MO-2, come in from the ERP and
 the store checks them. Then MO-1 (needed first) is called off. An oracle written here from the raw files (stock replayed
 from the opening and the movement history, materials from `bom.csv` times the order quantity) says what each line held
-before, what the cancel frees, and what the next check gives each later order, earliest need-by first, up to what it still
-lacks. The planted order's quantity puts one item exactly on the edge (what is freed equals what it lacks) and the
-bearings fall short of it (freed less than lacking).
+before, what the cancel frees, and what each later order holds after it, earliest need-by first, up to what it still
+lacks. Its shortfall was already on purchase requests not yet with the buyer, so the oracle also says by how much each
+request line must be cut: what the stock now covers. Set aside plus still requested never exceeds a line's need, and the
+check after the cancel buys nothing. The planted order's quantity puts one item exactly on the edge (what is freed equals
+what it lacks) and the bearings fall short of it (freed less than lacking).
 """
 
 from collections import defaultdict
@@ -19,12 +22,13 @@ from lib import D, Outcome, rows
 from sqlalchemy import text
 
 ID = "E47"
-TITLE = "Cancelling a production order releases its stock, and the next check gives it to the next order"
+TITLE = "Cancelling a production order releases its stock to the next order at once, never stocked and bought twice"
 REQUIREMENT = (
     "Plan P1-30 and step 2 of the flow: cancelling an order releases its reservation (a reason is needed; only the "
-    "store; once); the next store check gives the freed stock to the open orders earliest need-by first, each up to "
-    "what it still lacks, never more than is on the shelf; purchase requests already made stay and are named; issue "
-    "never moves more than is set aside; the cancel is audited"
+    "store; once); the freed stock is set aside at once for the open orders earliest need-by first, each up to what it "
+    "still lacks, never more than is on the shelf; a purchase request still open for that shortfall is cut by as much "
+    "(set aside plus requested never exceeds the need) and the next check buys nothing; purchase requests made only for "
+    "the cancelled order stay and are named; issue never moves more than is set aside; the cancel is audited"
 )
 PLANTED = ("MO-3", "FG-01", "60", "2026-12-28")  # 60 pumps: impellers left after MO-1 (10) plus MO-1's 50 = exactly 60
 
@@ -123,6 +127,31 @@ def run(ctx) -> Outcome:  # noqa: C901 - one scenario, step by step
             out.find("high", f"{label}: {len(wrong)} line(s) differ from the oracle; first: {wrong[0]}")
         return len(wrong)
 
+    def cover_wrong(want: dict[str, dict[str, Decimal]]) -> int:
+        """Still requested per line (what live purchase requests buy for it) against the oracle, and never set aside
+        plus requested above the need."""
+        db.rollback()
+        got: dict[str, dict[str, tuple[Decimal, Decimal, Decimal]]] = defaultdict(dict)
+        for order, item, need_qty, reserved, requested in db.execute(
+            text(
+                "select m.order_no, c.item_code, c.need_qty, c.reserved_qty, c.requested_qty "
+                "from material_request_cover c join material_request m on m.no = c.mr_no where c.status = 'open'"
+            )
+        ):
+            got[order][item] = (D(need_qty), D(reserved), D(requested))
+        over = [f"{o} {i}" for o, items in got.items() for i, (n, r, q) in items.items() if r + q > n]
+        if over:
+            out.find("high", f"set aside plus requested is above the need for {over[:4]}: bought twice")
+        wrong = [
+            f"{o} {i}: {got.get(o, {}).get(i, (0, 0, 0))[2]} requested, expected {q}"
+            for o in want
+            for i, q in want[o].items()
+            if got.get(o, {}).get(i, (0, 0, 0))[2] != q
+        ]
+        if wrong:
+            out.find("high", f"after the cancel {len(wrong)} line(s) are still requested differently; first: {wrong[0]}")
+        return len(wrong) + len(over)
+
     def over_shelf(label: str) -> None:
         db.rollback()
         over = db.execute(
@@ -194,13 +223,24 @@ def run(ctx) -> Outcome:  # noqa: C901 - one scenario, step by step
     }:
         out.find("high", f"the cancel is audited as {[a[0] for a in audit]}, expected one row releasing {released}")
 
-    # 4. the second check hands the freed stock on, earliest need-by first
-    resp = client.post("/api/material-requests/check", json={}, headers=store)
-    if resp.status_code != 200:
-        out.find("high", f"the second store check answered {resp.status_code}: {resp.text[:200]}")
-        return out
+    # 4. the cancel hands the freed stock on at once, earliest need-by first, and cuts the requests it covers
     wrong_second = compare("after the cancel", want_second)
     over_shelf("after the cancel")
+    want_coming = {
+        o: {i: need[o][i] - q for i, q in items.items()} for o, items in want_second.items()
+    }  # every shortfall was requested by the first check, so what stock does not cover stays requested
+    cut_wrong = cover_wrong(want_coming)
+    requests_before = db.execute(text("select count(*) from request")).scalar_one()
+    resp = client.post("/api/material-requests/check", json={}, headers=store)
+    if resp.status_code != 200:
+        out.find("high", f"the store check after the cancel answered {resp.status_code}: {resp.text[:200]}")
+        return out
+    db.rollback()
+    if compare("the check after the cancel", want_second) or cover_wrong(want_coming):
+        out.find("high", "the store check after the cancel moved stock or cover again")
+    bought = db.execute(text("select count(*) from request")).scalar_one() - requests_before
+    if bought:
+        out.find("high", f"the store check after the cancel made {bought} new purchase request(s): buying twice")
 
     # the edges the scenario was built for
     edges: dict[str, list[str]] = {"exact": [], "less": [], "more": []}
@@ -254,6 +294,7 @@ def run(ctx) -> Outcome:  # noqa: C901 - one scenario, step by step
         "lines checked against the oracle, before and after": f"{sum(len(v) for v in want_first.values())} / "
         f"{sum(len(v) for v in want_second.values())}",
         "lines differing (first check / after the cancel)": f"{wrong_first} / {wrong_second}",
+        "lines whose request was not cut to what stock leaves short": cut_wrong,
         "freed per item": {i: str(q) for i, q in want_first[first_order].items() if q},
         "edges hit": {k: v for k, v in edges.items() if v},
         "purchase requests left after the cancel": left,

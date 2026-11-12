@@ -278,6 +278,7 @@ def order_unordered(no: str, payload: dict[str, Any], db: Db, ctx: Buyer) -> dic
 def receive_unordered(no: str, db: Db, ctx: Store) -> dict[str, Any]:
     gr_no: str = _guard(lambda: unordered.receive_on_order(db, no, ctx.user_id, as_of=business_today()))
     goods.tell_requesters(db, ctx.slug, gr_no)
+    goods.reserve_arrived(db, ctx.slug, gr_no)
     return {"receipt": no, "goods_receipt": gr_no}
 
 

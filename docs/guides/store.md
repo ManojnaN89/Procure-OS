@@ -29,11 +29,11 @@ After counting the shelf click **Count**: enter what you counted and why it diff
 
 ## Material requests for production orders
 
-Each production order imported from the ERP gets a material request: one line per material, with the quantity needed.
+Each production order (or each department's new joiners, with their kits) imported from the ERP gets a material request: one line per material, with the quantity needed.
 
-1. Open **Material requests** and click **Run store check**. Free stock is set aside for the orders needed soonest first; stock already set aside for another order is never taken. What is still short goes to the plant head for approval as one purchase request per order, priced at the contract price, else the last price paid, else the standard price.
-2. When production starts, click **Issue for production** on the order. Everything set aside is issued. What is short stays on the request: run the store check again when it arrives, then issue it.
-3. If the order is called off, click **Cancel** and say why. Its stock is free again. Tell the buyer about any purchase request already made for it.
+1. Open **Material requests** and click **Run store check**. Free stock is set aside for the orders needed soonest first; stock already set aside for another order is never taken. What is still short goes for approval as one purchase request per order, priced at the contract price, else the last price paid, else the standard price. Stock that comes in later (a receipt, a count that finds more, a cancelled order) is set aside by itself, soonest first, and you get a notice; a purchase request not yet with the buyer is made smaller by as much.
+2. When production starts, click **Issue for production** on the order. Everything set aside is issued. What is short stays on the request: when it arrives it is set aside for the order, then issue it.
+3. If the order is called off, click **Cancel** and say why. Its stock goes at once to the next orders that need it. Tell the buyer about any purchase request made only for it.
 
 **Inventory** shows how much of each item is set aside. Stock set aside cannot be issued for anything else.
 

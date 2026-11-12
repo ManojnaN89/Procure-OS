@@ -35,6 +35,7 @@ class DraftLine:
     stock_status: str = ""
     category_code: str | None = None  # when the lines of one request differ (else the request's)
     stock_qty: Decimal = Decimal(0)  # stock unit: what the line buys for stock (the rest buys for material requests)
+    est_source: str | None = None  # where the estimate came from (formulas/estimate.py Estimate.source)
 
 
 @dataclass
@@ -148,8 +149,8 @@ def write(
         db.execute(
             text(
                 "insert into request_line (request_no, line_no, item_code, qty, uom, base_qty, est_price, need_by, "
-                "delivery_location, gl_code, category_code, reason, status, stock_qty) values (:no, :n, :item, :qty, :uom, "
-                ":base, :price, :need, :loc, :gl, :cat, :why, 'open', :stock)"
+                "delivery_location, gl_code, category_code, reason, status, stock_qty, est_source) values (:no, :n, :item, :qty, "
+                ":uom, :base, :price, :need, :loc, :gl, :cat, :why, 'open', :stock, :src)"
             ),
             {
                 "no": req.no,
@@ -165,6 +166,7 @@ def write(
                 "cat": line.category_code or req.category_code,
                 "why": line.reason,
                 "stock": line.stock_qty,
+                "src": line.est_source,
             },
         )
     audit.record(

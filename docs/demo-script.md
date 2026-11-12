@@ -68,7 +68,7 @@ Steps 1 to 3 of the flow, on their own (after `demo reset apex`; they add two re
 | 1 | store@ | **Material requests** | MO-1 and MO-2, each with its materials and nothing set aside yet |
 | 2 | store@ | **Run store check** | MO-1 (needed first) gets its stock first: all 50 impellers, shafts, terminal boxes and paint, 40 of 100 bearings, 50 of 90 kg copper wire, 20 of 50 cartons, 20 of 50 seals. One request for what is short goes to Vikram Joshi (plant head): castings 50 (contract ₹650), bearings 60, copper wire 40 kg, cartons 30, seals 30, capacitors 50, ₹80,030 in all. The plan's example has only the first four items (₹72,930); Apex's bill of materials also has seals and capacitors. MO-2 gets what is left; its request (₹2,11,500) goes to Meera Iyer (director) |
 | 3 | store@ | **Inventory** | The impellers show 50 of 60 set aside for production; the free 10 are all that can be issued |
-| 4 | store@ | **Material requests** → MO-1 → **Issue for production** | Everything set aside is issued; what is short stays on the request until it arrives (run the store check again, then issue) |
+| 4 | store@ | **Material requests** → MO-1 → **Issue for production** | Everything set aside is issued; what is short stays on the request until it arrives, and is set aside for MO-1 by itself when it does (the store gets a notice), then issue it |
 
 ## Services and goods with no order (Brightwave)
 

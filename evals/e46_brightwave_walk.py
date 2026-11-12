@@ -103,6 +103,10 @@ def _run(ctx: Any) -> Outcome:  # noqa: C901 - one story, step by step
     }
     rules = lib.rows("master", "approval_rule", dataset)
 
+    def estimate(item: str) -> Decimal:
+        """Plan step 3: the contract price, else the last price paid (no order exists yet), else the standard price."""
+        return contract[item][1] if item in contract else Decimal(items[item]["standard_price"])
+
     def band(document: str, value: Decimal) -> str:
         return next(
             (
@@ -181,9 +185,9 @@ def _run(ctx: Any) -> Outcome:  # noqa: C901 - one story, step by step
                 d.go("employee", f"requisitions/{r_laptop}")
                 expect(page.locator("#appContent")).to_contain_text("Check before ordering")
                 expect(page.locator("#appContent")).to_contain_text("Budget account")
-                expect(page.locator("#appContent")).to_contain_text(
-                    rupees(Decimal(items["LP-01"]["standard_price"]))[:-3]
-                )
+                expect(page.locator("#appContent")).to_contain_text(rupees(estimate("LP-01"))[:-3])
+                if "LP-01" in contract:  # the request line says where its estimate came from
+                    expect(page.locator("#appContent")).to_contain_text("estimate from contract")
             d.mark(3)
             r_head = raise_request("employee", "HS-01", 5, "Headsets for the support desk")
             r_house = raise_request("employee", "SV-01", 1, "Housekeeping for the engineering floor in December")
@@ -192,12 +196,12 @@ def _run(ctx: Any) -> Outcome:  # noqa: C901 - one story, step by step
                 for n in (r_laptop, r_head, r_house)
             }
             c.same(
-                "each request is valued at the item's standard price",
+                "each request is valued at the estimate: the contract price, else the standard price (nothing paid yet)",
                 values,
                 {
-                    r_laptop: money(Decimal(items["LP-01"]["standard_price"])),
-                    r_head: money(5 * Decimal(items["HS-01"]["standard_price"])),
-                    r_house: money(Decimal(items["SV-01"]["standard_price"])),
+                    r_laptop: money(estimate("LP-01")),
+                    r_head: money(5 * estimate("HS-01")),
+                    r_house: money(estimate("SV-01")),
                 },
             )
             with d.step(
