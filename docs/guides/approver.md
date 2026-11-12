@@ -19,7 +19,7 @@ By email: the mail about a request that waits for you has a link. It opens a pag
 
 ## Approve an order
 
-Open **Purchase orders**, click the order, then **Approve** or **Reject**. An order held for a price, a contract ceiling or a budget says why: the budget is checked again at the order's final price, and when the budget policy blocks, accepting it is your decision, under **Admin** → **Approvals**. An order over budget never approves itself, even when its total is within the automatic band.
+Orders are approved by tier, shown in the list of **Purchase orders**: the buyer up to Rs 1,00,000 (the buyer's issue is the approval), the purchase manager above that up to Rs 5,00,000, the director above Rs 5,00,000. Open **Purchase orders**, click the order, then **Approve** or **Reject**. You cannot approve an order you bought yourself. Orders marked **Touchless** were issued without a person, within the buyer's tier; the order page lists the facts that were checked. An order held for a price, a contract ceiling or a budget says why: the budget is checked again at the order's final price, and when the budget policy blocks, accepting it is your decision, under **Admin** → **Approvals**. An order over budget never approves itself, even when its total is within the automatic band.
 
 ## Decide the rest
 

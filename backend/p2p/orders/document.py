@@ -152,9 +152,7 @@ def order_document(db: Session, po_no: str) -> bytes:
     supplier = db.execute(
         text("select coalesce(trade_name, legal_name) from supplier where code = :c"), {"c": po["supplier_code"]}
     ).scalar_one()
-    ship = db.execute(
-        text("select name, address, city, pincode from location where code = :c"), {"c": po["ship_to_location"]}
-    ).first()
+    ship_name, ship_address = delivery_place(db, po["ship_to_location"])
     approved_by = [
         r[0]
         for r in db.execute(
@@ -174,8 +172,8 @@ def order_document(db: Session, po_no: str) -> bytes:
         (
             "Deliver to",
             [
-                str(ship[0] if ship else po["ship_to_location"]),
-                ", ".join(x for x in ship[1:] if x) if ship else "",
+                f"{ship_name} ({po['ship_to_location']})",
+                ship_address,
                 f"Buyer GSTIN {po['buyer_gstin']}" if po["buyer_gstin"] else "",
             ],
         ),
@@ -225,13 +223,23 @@ def order_document(db: Session, po_no: str) -> bytes:
         doc.p(
             "Approved by: " + ", ".join(approved_by)
             if approved_by
-            else f"Approved automatically under rule {po['rule_code']}"
+            else f"Issued without a buyer (touchless) under {po['touchless_rule']} and rule {po['rule_code']}"
+            if po["touchless"]
+            else f"Within the buyer's tier under rule {po['rule_code']}: issued by the buyer"
             if po["rule_code"]
             else "",
             doc.small,
         )
     )
     return doc.build(f"Purchase order {po['no']}")
+
+
+def delivery_place(db: Session, code: str) -> tuple[str, str]:
+    """A delivery location's name and its address as one line (the code when the location is unknown)."""
+    row = db.execute(text("select name, address, city, pincode from location where code = :c"), {"c": code}).first()
+    if row is None:
+        return code, ""
+    return str(row[0] or code), ", ".join(str(x) for x in row[1:] if x)
 
 
 def supplier_address(db: Session, supplier_code: str, gstin: str | None = None) -> str:

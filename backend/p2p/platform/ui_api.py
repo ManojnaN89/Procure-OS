@@ -1336,14 +1336,28 @@ def _po(r: dict[str, Any]) -> dict[str, Any]:
         "created_at": _iso(r["created_at"]),
         "held": bool(r["hold_reason"]),
         "po_type": r["po_type"],
+        "tier": r["approval_tier"],
+        "approver": (
+            ("the system (touchless)" if r["touchless"] else r["buyer_name"] or "the buyer")
+            if r["approval_tier"] == "buyer"
+            else r["approvers"]
+        ),
+        "ship_to": r["ship_to_location"],
+        "ship_to_name": r["ship_to_name"],
+        "touchless": bool(r["touchless"]),
+        "touchless_note": r["touchless_note"],
     }
 
 
 _PO_SELECT = (
-    "select p.*, coalesce(s.trade_name, s.legal_name) as supplier_name, "
+    "select p.*, coalesce(s.trade_name, s.legal_name) as supplier_name, loc.name as ship_to_name, b.name as buyer_name, "
     "(select a.name from po_approval_step st join org_user a on a.code = coalesce(st.delegate, st.approver) "
-    "where st.po_no = p.no and st.round = p.approval_round and st.status = 'pending' limit 1) as waiting_for "
-    "from po p join supplier s on s.code = p.supplier_code"
+    "where st.po_no = p.no and st.round = p.approval_round and st.status = 'pending' limit 1) as waiting_for, "
+    "(select string_agg(a.name, ' then ' order by st.step) from po_approval_step st "
+    "join org_user a on a.code = coalesce(st.acted_by, st.delegate, st.approver) "
+    "where st.po_no = p.no and st.round = p.approval_round and st.status <> 'cancelled') as approvers "
+    "from po p join supplier s on s.code = p.supplier_code left join location loc on loc.code = p.ship_to_location "
+    "left join org_user b on b.code = p.buyer"
 )
 
 
@@ -1385,7 +1399,8 @@ def get_purchase_order(no: str, db: Db, ctx: Ctx) -> dict[str, Any]:
         "waiting_for": r["waiting_for"],
         "buyer_gstin": r["buyer_gstin"],
         "supplier_gstin": r["supplier_gstin"],
-        "ship_to": r["ship_to_location"],
+        "touchless_checks": r["touchless_checks"] or [],
+        "touchless_rule": r["touchless_rule"],
         "contract_code": r["contract_code"],
         "rfq_no": r["rfq_no"],
         "payment_terms": r["payment_terms_code"],

@@ -5,7 +5,7 @@ Not a replay of history: the company starts with its master data and stock, and 
 stock levels" makes a request for the V-belts; the production manager asks for impellers, seals and copper wire. The run
 goes through approval by value (the request above Rs 1,00,000 to the director), a contract price and two quotation
 requests (one with a single quote, awarded with a reason), four orders with GST (one interstate, one above the purchase
-manager's threshold), receipt with an inspection, four matched invoices, one payment run approved by the director, the
+manager's threshold, the contract one issued and sent touchless), receipt with an inspection, four matched invoices, one payment run approved by the director, the
 bank file and "the bank has paid". Every figure that a decision used is checked against what the dataset's own files say
 (stock, reorder levels, item prices, approval bands, the suppliers asked, GST by state, payment terms), not against the
 platform's formulas.
@@ -20,6 +20,7 @@ from typing import Any
 
 import env
 import lib
+import yaml
 from lib import Outcome
 
 ID = "E33"
@@ -145,6 +146,8 @@ def _run(ctx: Any) -> Outcome:
     terms = {r["code"]: int(r["days"]) for r in lib.rows("master", "payment_terms", dataset)}
     rules = lib.rows("master", "approval_rule", dataset)
     plant_gstin = lib.rows("master", "gst_registration", dataset)[0]["gstin"]
+    profile = yaml.safe_load((lib.ROOT / "datagen" / "catalog" / "apex" / "company.yaml").read_text(encoding="utf-8"))
+    touchless_on = (profile.get("autonomy") or {}).get("po.issue") == "auto"
     prices = lib.rows("master", "price_record", dataset)
     approved_for = lib.rows("master", "supplier_category", dataset)
     on_hand = {r["item_code"]: lib.D(r["qty"]) for r in lib.rows("master", "stock_opening", dataset)}
@@ -349,11 +352,17 @@ def _run(ctx: Any) -> Outcome:
             (lib.D(po[6]) > 0) == interstate,
             f"{po[0]}: {'IGST' if interstate else 'CGST and SGST'} expected for {suppliers[supplier]['state_code']} -> 27",
         )
-        band = chain("po", taxable)
-        check(
-            po[2] == ("approved" if band == "auto" else "submitted"),
-            f"{po[0]} of {taxable} should be {'approved on the spot' if band == 'auto' else 'waiting'} (rule '{band}')",
-        )
+        band = chain("po", lib.D(po[7]))
+        # touchless (D35): the company's profile turns po.issue on; a contract line in the buyer's band goes out alone
+        touchless = band == "auto" and supplier == contract["supplier_code"] and touchless_on
+        want = "sent" if touchless else "approved" if band == "auto" else "submitted"
+        check(po[2] == want, f"{po[0]} of {po[7]} should be {want} (rule '{band}', touchless {touchless})")
+    sent_alone = [r[0] for r in orders.values() if r[2] == "sent"]
+    out.metrics["orders issued touchless"] = len(sent_alone)
+    for no in sent_alone:
+        flag = q("select touchless, approval_tier from po where no = :n", n=no)[0]
+        check(tuple(flag) == (True, "buyer"), f"{no} was sent without a buyer but is not marked touchless: {flag}")
+        refused(BUYER, "POST", f"/api/purchase-orders/{no}/send")  # already out
     waiting_pos = [r[0] for r in orders.values() if r[2] == "submitted"]
     out.metrics["orders waiting for the purchase manager"] = len(waiting_pos)
     check(len(waiting_pos) == 1, f"only the copper wire order is above Rs 1,00,000: {waiting_pos}")
@@ -362,9 +371,15 @@ def _run(ctx: Any) -> Outcome:
         refused(REQUESTER, "POST", f"/api/purchase-orders/{no}/approve", {})
         refused(BUYER, "POST", f"/api/purchase-orders/{no}/send")  # not approved yet
         call(PURCHASE_MANAGER, "POST", f"/api/purchase-orders/{no}/approve", {"comment": "ok"})
-    check(all(r[0] == "approved" for r in q("select status from po")), "every order should be approved")
+    check(
+        all(r[0] == "approved" or r[1] in sent_alone for r in q("select status, no from po")),
+        "every order should be approved",
+    )
     order_nos = [r[0] for r in orders.values()]
     for no in order_nos:
+        if no in sent_alone:
+            call(BUYER, "POST", f"/api/purchase-orders/{no}/acknowledge", {"promised_date": "2026-11-12"})
+            continue
         refused(PURCHASE_MANAGER, "POST", f"/api/purchase-orders/{no}/send")  # the approver does not send
         call(BUYER, "POST", f"/api/purchase-orders/{no}/send")
         call(BUYER, "POST", f"/api/purchase-orders/{no}/acknowledge", {"promised_date": "2026-11-12"})
