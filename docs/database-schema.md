@@ -59,7 +59,7 @@ Reading a line: `name*` is part of the primary key, `name?` may be empty, then t
 
 **bank** · code* text, name? text, ifsc_prefix? text
 
-**budget** · id* bigint, cost_centre_code? text, gl_code? text, project_code? text, period? text, amount? num, version? int, policy? text
+**budget** · id* bigint, cost_centre_code? text, gl_code? text, project_code? text, period? text, amount? num, version? int, policy? text, location_code? text
 
 **budget_actual** · id* bigint, invoice_no text, cost_centre_code? text, gl_code? text, period text, amount num
 
@@ -199,7 +199,7 @@ Reading a line: `name*` is part of the primary key, `name?` may be empty, then t
 
 **request_check** · id* bigint, request_no text, kind text, other_request text, similarity num, detail? jsonb, flagged_at timestamptz, override_reason? text, overridden_by? text, overridden_at? timestamptz
 
-**request_line** · request_no* text, line_no* int, item_code? text, free_text? text, attributes? jsonb, qty num, uom? text, base_qty? num, est_price? num, need_by? date, delivery_location? text, cost_centre_code? text, gl_code? text, category_code? text, project_code? text, reason? text, status text
+**request_line** · request_no* text, line_no* int, item_code? text, free_text? text, attributes? jsonb, qty num, uom? text, base_qty? num, est_price? num, need_by? date, delivery_location? text, cost_centre_code? text, gl_code? text, category_code? text, project_code? text, reason? text, status text, stock_qty? num
 
 **rfq** · no* text, buyer? text, request_no? text, category_code? text, created_at timestamptz, due_date date, type text, delivery_terms? text, payment_terms_proposed? text, status text, sent_at? timestamptz, proposal_id? bigint, note? text
 

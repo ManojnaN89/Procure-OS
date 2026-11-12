@@ -115,9 +115,10 @@ def submit(db: Session, tenant: str, no: str, actor: Actor, *, today: date | Non
     )
     checks = budget.check_request(db, no, today)
     over = [c for c in checks if c.check.status == "over"]
-    if any(c.policy == "block" for c in over):
+    if budget.blocked(checks):
         raise ApprovalError(f"request {no} cannot be submitted: {budget.summary(checks)} The budget policy blocks it.")
     budget_note = budget.summary(checks)
+    noted = over or any(c.check.status == "warn" for c in checks)
     if over and rule.is_automatic and _requires_budget(db):
         # a request that is over budget never approves itself: it goes to the first rule above the automatic band
         while rule.is_automatic:
@@ -215,7 +216,7 @@ def submit(db: Session, tenant: str, no: str, actor: Actor, *, today: date | Non
         {
             **common,
             "why": f"Waiting for approval by {names} under rule {rule.code} v{rule.version}."
-            + (f" {budget_note}" if over else ""),
+            + (f" {budget_note}" if noted else ""),
         },
     )
     db.commit()
@@ -375,6 +376,17 @@ def approve(
     actor = Actor("user", str(user_id))
     if quantities:
         _lower_quantities(db, req, quantities, actor, comment)
+    # the budget again: other requests may have used it since this one was submitted
+    checks = budget.check_request(db, no, business_today())
+    if budget.blocked(checks):
+        db.rollback()
+        raise ApprovalError(
+            f"request {no} cannot be approved now: {budget.summary(checks)} The budget policy blocks it."
+        )
+    db.execute(
+        text("update request set budget_check = cast(:b as jsonb) where no = :n"),
+        {"b": json.dumps([c.as_json() for c in checks]), "n": no},
+    )
     db.execute(
         text(
             "update approval_step set status = 'approved', acted_by = :me, acted_at = now(), comment = :c where id = :i"
@@ -393,6 +405,7 @@ def approve(
             "approver": me,
             "on_behalf_of": step["approver"] if me != step["approver"] else None,
             "via": via,
+            "budget": budget.summary(checks),
         },
         reason=comment,
         rule_version=f"{req['rule_code']}:v{req['rule_version']}",

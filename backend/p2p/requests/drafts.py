@@ -15,6 +15,7 @@ from sqlalchemy.orm import Session
 
 from p2p.approvals import rules as approval_rules
 from p2p.approvals import workflow
+from p2p.formulas.money import round_money
 from p2p.platform import audit, numbering
 from p2p.platform.sod import Actor
 
@@ -33,6 +34,7 @@ class DraftLine:
     reason: str
     stock_status: str = ""
     category_code: str | None = None  # when the lines of one request differ (else the request's)
+    stock_qty: Decimal = Decimal(0)  # stock unit: what the line buys for stock (the rest buys for material requests)
 
 
 @dataclass
@@ -143,8 +145,8 @@ def write(
         db.execute(
             text(
                 "insert into request_line (request_no, line_no, item_code, qty, uom, base_qty, est_price, need_by, "
-                "delivery_location, gl_code, category_code, reason, status) values (:no, :n, :item, :qty, :uom, "
-                ":base, :price, :need, :loc, :gl, :cat, :why, 'open')"
+                "delivery_location, gl_code, category_code, reason, status, stock_qty) values (:no, :n, :item, :qty, :uom, "
+                ":base, :price, :need, :loc, :gl, :cat, :why, 'open', :stock)"
             ),
             {
                 "no": req.no,
@@ -159,6 +161,7 @@ def write(
                 "gl": line.gl_code,
                 "cat": line.category_code or req.category_code,
                 "why": line.reason,
+                "stock": line.stock_qty,
             },
         )
     audit.record(
@@ -179,6 +182,21 @@ def write(
         },
     )
     return req.no
+
+
+def refresh(db: Session, req: DraftRequest, as_of: date) -> None:
+    """After lines were combined into a written request: its lines as they now stand, and the route for its new value."""
+    rows = db.execute(
+        text(
+            "select qty, base_qty, need_by from request_line where request_no = :n and status <> 'cancelled' "
+            "order by line_no"
+        ),
+        {"n": req.no},
+    ).all()
+    for line, row in zip(req.lines, rows, strict=True):
+        line.qty, line.base_qty, line.need_by = row.qty, row.base_qty, row.need_by
+        line.value = round_money(line.qty * line.est_price)
+    route(db, req, as_of)
 
 
 def submit(db: Session, tenant: str, requests: list[DraftRequest], actor: Actor, as_of: date) -> None:

@@ -30,7 +30,7 @@ from p2p.orders.quotes import last_prices
 from p2p.platform import audit, numbering
 from p2p.platform.sod import Actor, user
 from p2p.receiving import stock
-from p2p.requests import drafts
+from p2p.requests import combining, drafts
 from p2p.sourcing.service import contract_options
 
 QTY = Decimal("0.0001")
@@ -153,6 +153,8 @@ class Checked:
     lines: list[LineView] = field(default_factory=list)
     request: drafts.DraftRequest | None = None  # the purchase request made for what is short
     unpriced: list[str] = field(default_factory=list)  # items short with no price to estimate them with
+    combined: dict[str, str] = field(default_factory=dict)  # item -> the draft request whose line it joined
+    joined: dict[int, Decimal] = field(default_factory=dict)  # material request line -> quantity bought on such a line
 
 
 @dataclass
@@ -252,6 +254,35 @@ def _shortfall_request(
     return links
 
 
+def _combine(
+    db: Session, actor: Actor, checked: Checked, links: list[tuple[int, Decimal]], window: int, as_of: date
+) -> list[tuple[int, Decimal]]:
+    """Lines of the new request that an open draft line can take (same item and place, needed within the window) join
+    it; the rest stay on the new request, which goes when nothing is left on it. Returns the links of the lines kept."""
+    req = checked.request
+    if req is None:
+        return links
+    kept: list[tuple[drafts.DraftLine, tuple[int, Decimal]]] = []
+    for line, link in zip(req.lines, links, strict=True):
+        target = combining.open_line(db, line.item_code, req.location_code, line.need_by, window)
+        if target is None:
+            kept.append((line, link))
+            continue
+        note = f"{checked.order_no} ({checked.mr_no}) short {format_qty(link[1])}"
+        combining.join(db, actor, target, need_by=line.need_by, note=note, link=link)
+        checked.combined[line.item_code] = target["request_no"]
+        checked.joined[link[0]] = link[1]
+    if len(kept) != len(req.lines):
+        req.lines = [line for line, _ in kept]
+        if req.lines:
+            categories = {line.category_code for line in req.lines}
+            req.category_code = categories.pop() if len(categories) == 1 else None
+            drafts.route(db, req, as_of)
+        else:
+            checked.request = None
+    return [link for _, link in kept]
+
+
 def store_check(
     db: Session,
     actor: Actor = audit.SYSTEM,
@@ -302,8 +333,13 @@ def store_check(
         if lacking:
             short.setdefault(r["mr_no"], []).append((r, lacking))
     department = drafts.planning_department(db)
+    window = combining.window_days(db)
+    written: dict[str, drafts.DraftRequest] = {}
+    grown: set[str] = set()  # requests written in this check that later lines were combined into
     for mr_no, checked in by_request.items():
         links = _shortfall_request(db, checked, short[mr_no], as_of, department) if mr_no in short else []
+        links = _combine(db, actor, checked, links, window, as_of)
+        grown |= set(checked.combined.values()) & set(written)
         if checked.request is not None:
             no = drafts.write(
                 db,
@@ -322,7 +358,8 @@ def store_check(
                     ),
                     {"l": line_id, "r": no, "n": n, "q": qty},
                 )
-        added = dict(links) if checked.request is not None else {}
+            written[no] = checked.request
+        added = dict(links) | checked.joined
         for line in checked.lines:
             line.requested += added.get(line.id, Decimal(0))
         audit.record(
@@ -335,10 +372,13 @@ def store_check(
                 "reserved_now": {ln.item_code: str(ln.reserved_now) for ln in checked.lines if ln.reserved_now},
                 "short": {ln.item_code: str(ln.short) for ln in checked.lines if ln.short},
                 "purchase_request": checked.request.no if checked.request else None,
+                "combined_into": checked.combined,
                 "unpriced": checked.unpriced,
             },
         )
         result.requests.append(checked)
+    for no in grown:
+        drafts.refresh(db, written[no], as_of)
     db.commit()
     if submit and tenant:
         drafts.submit(db, tenant, result.purchase_requests, actor, as_of)
@@ -450,8 +490,9 @@ def issue(
 
 
 def cancel(db: Session, user_id: int, mr_no: str, reason: str) -> list[str]:
-    """The production order is called off: its open lines release their stock and the order stops being demand. Purchase
-    requests already made for it stay for the buyer to cancel or keep; their numbers are returned."""
+    """The production order is called off: its open lines release their stock and the order stops being demand. A
+    combined request line that also buys for other orders or for stock is made smaller by this order's part. Purchase
+    requests made only for it stay for the buyer to cancel or keep; their numbers are returned."""
     if not (reason or "").strip():
         raise MaterialError("say why the material request is cancelled")
     head = _head(db, mr_no)
@@ -472,25 +513,21 @@ def cancel(db: Session, user_id: int, mr_no: str, reason: str) -> list[str]:
     db.execute(
         text("update production_order set status = 'cancelled' where id = :o"), {"o": head["production_order_id"]}
     )
-    still = [
-        str(r[0])
-        for r in db.execute(
-            text(
-                "select distinct b.request_no from material_request_buy b "
-                "join material_request_line l on l.id = b.mr_line_id join request r on r.no = b.request_no "
-                "where l.mr_no = :n and r.status not in ('cancelled', 'rejected', 'closed') order by 1"
-            ),
-            {"n": mr_no},
-        )
-    ]
+    actor = user(user_id)
+    reduced, still = combining.release(db, actor, mr_no, reason.strip())
     audit.record(
         db,
-        user(user_id),
+        actor,
         "material_request.cancel",
         "material_request",
         mr_no,
         before={"status": "open"},
-        after={"status": "cancelled", "released": released, "purchase_requests_left": still},
+        after={
+            "status": "cancelled",
+            "released": released,
+            "purchase_requests_reduced": reduced,
+            "purchase_requests_left": still,
+        },
         reason=reason.strip(),
     )
     db.commit()

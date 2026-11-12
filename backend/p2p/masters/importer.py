@@ -130,7 +130,13 @@ CHECKS: dict[str, Callable[[dict[str, Any]], str | None]] = {
     "price_record": _check_price_record,
     "contract": lambda r: _check_dates(r, "valid_from", "valid_to"),
     "item_location": _check_item_location,
-    "budget": lambda r: "amount must not be negative" if r.get("amount") is not None and r["amount"] < 0 else None,
+    "budget": lambda r: (
+        "amount must not be negative"
+        if r.get("amount") is not None and r["amount"] < 0
+        else "a budget belongs to a cost centre or to a location, not both and not neither"
+        if (r.get("cost_centre_code") is None) == (r.get("location_code") is None)
+        else None
+    ),
     "stock_opening": lambda r: "qty must not be negative" if r.get("qty") is not None and r["qty"] < 0 else None,
 }
 

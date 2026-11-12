@@ -230,6 +230,8 @@ class MasterWriter:
             ],
         )
         b = self.p["budgets"]
+        held = [(cc, "", plan) for cc, plan in b["per_month"].items()]
+        held += [("", loc, plan) for loc, plan in b["per_location"].items()]  # the location's own budget
         self.put(
             "budget",
             [
@@ -241,8 +243,9 @@ class MasterWriter:
                     "amount": amount,
                     "version": "1",
                     "policy": b["policy"],
+                    "location_code": loc,
                 }
-                for cc, plan in b["per_month"].items()
+                for cc, loc, plan in held
                 for gl, amount in plan["gl"].items()
                 for period in months(*b["periods"])
             ],
@@ -587,18 +590,21 @@ def check(out: Path, profile: CompanyProfile | None = None) -> list[str]:
         if not any(k[0] == document for k in bands):
             problems.append(f"no approval rule for {document}")
 
-    # budgets: every cost centre has every month, the same amount each month
+    # budgets: every cost centre and every location with cost centres has every month, the same amount each month; a row
+    # belongs to a cost centre or to a location, never both
     per_month: dict[tuple[str, str], Decimal] = defaultdict(Decimal)
     for r in t["budget"]:
+        holder = r["cost_centre_code"] or r["location_code"]
+        if bool(r["cost_centre_code"]) == bool(r["location_code"]):
+            problems.append(f"budget row {r['gl_code']} {r['period']}: neither or both of cost centre and location")
         if not MONEY.match(r["amount"]):
-            problems.append(
-                f"budget {r['cost_centre_code']} {r['period']}: amount {r['amount']} is not rupees and paise"
-            )
-        per_month[(r["cost_centre_code"], r["period"])] += Decimal(r["amount"])
-    for cc in {r["code"] for r in t["cost_centre"]}:
-        amounts = {amount for (c, _), amount in per_month.items() if c == cc}
+            problems.append(f"budget {holder} {r['period']}: amount {r['amount']} is not rupees and paise")
+        per_month[(holder, r["period"])] += Decimal(r["amount"])
+    holders = {r["code"] for r in t["cost_centre"]} | {r["location_code"] for r in t["cost_centre"]}
+    for holder in holders:
+        amounts = {amount for (c, _), amount in per_month.items() if c == holder}
         if len(amounts) != 1:
-            problems.append(f"cost centre {cc} has no budget or a different budget in different months")
+            problems.append(f"{holder} has no budget or a different budget in different months")
 
     # stock: a stocked item has a plan and an opening balance at the location; min-max reaches above its point
     planned = {r["item_code"]: r for r in t["item_location"]}
@@ -687,11 +693,12 @@ def _profile_problems(
             problems.append(f"role {role}: not exactly one person is '{value}'")
         if source == "department_head" and any(not d["head_user"] for d in t["department"]):
             problems.append(f"role {role}: a department has no head")
-    for cc, plan in profile["budgets"]["per_month"].items():
+    plans = {**profile["budgets"]["per_month"], **profile["budgets"]["per_location"]}
+    for holder, plan in plans.items():
         if sum((Decimal(v) for v in plan["gl"].values()), Decimal(0)) != Decimal(plan["total"]):
-            problems.append(f"budget of {cc}: the GL split does not add up to {plan['total']}")
-        if {a for (c, _), a in per_month.items() if c == cc} != {Decimal(plan["total"])}:
-            problems.append(f"budget of {cc} is not {plan['total']} every month")
+            problems.append(f"budget of {holder}: the GL split does not add up to {plan['total']}")
+        if {a for (c, _), a in per_month.items() if c == holder} != {Decimal(plan["total"])}:
+            problems.append(f"budget of {holder} is not {plan['total']} every month")
     return problems
 
 

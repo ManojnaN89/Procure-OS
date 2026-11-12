@@ -41,7 +41,7 @@ from p2p.platform.rows import rows as _rows
 from p2p.platform.tokens import decode_access_token
 from p2p.receiving import goods
 from p2p.receiving.stock import StockError, post_count, post_issue, stock_levels
-from p2p.requests import duplicates, jobs, lifecycle, replenishment
+from p2p.requests import combining, duplicates, jobs, lifecycle, replenishment
 from p2p.sourcing import documents as supplier_documents
 from p2p.sourcing import replies
 from p2p.sourcing import service as sourcing
@@ -658,6 +658,7 @@ def get_requisition(no: str, db: Db, ctx: Ctx) -> dict[str, Any]:
         "on d.request_no = rl.request_no and d.line_no = rl.line_no where rl.request_no = :n order by rl.line_no",
         n=no,
     )
+    bought_for = combining.sources(db, no)
     return {
         **_requisition(rows[0]),
         "checks": {
@@ -695,6 +696,7 @@ def get_requisition(no: str, db: Db, ctx: Ctx) -> dict[str, Any]:
                 "need_by": line["need_by"].isoformat() if line["need_by"] else None,
                 "reason": line["reason"],
                 "status": line["status"],
+                "bought_for": bought_for.get(line["line_no"], []),
                 "source": {
                     "method": line["source_method"],
                     "reason": line["source_reason"],

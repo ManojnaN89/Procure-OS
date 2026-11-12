@@ -63,7 +63,11 @@ FOREIGN_KEYS: dict[str, list[tuple[str, str, str]]] = {
     "org_user_role": [("user_code", "org_user", "code")],
     "delegation": [("from_user", "org_user", "code"), ("to_user", "org_user", "code")],
     "project": [("cost_centre_code", "cost_centre", "code")],
-    "budget": [("cost_centre_code", "cost_centre", "code"), ("gl_code", "gl_account", "code")],
+    "budget": [
+        ("cost_centre_code", "cost_centre", "code"),
+        ("gl_code", "gl_account", "code"),
+        ("location_code", "location", "code"),
+    ],
     "item": [("category_code", "item_category", "code")],
     "item_location": [("item_code", "item", "code"), ("location_code", "location", "code")],
     "item_substitute": [("item_code", "item", "code"), ("substitute_code", "item", "code")],

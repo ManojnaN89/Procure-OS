@@ -90,6 +90,9 @@ approval_rules: |
 
 settings:
   - [budget_policy, block, Budget check result when a request exceeds the available budget (warn or block)]
+  - [budget_warn_pct, "90", A request that brings the budget used to this percent or more carries a warning (decision D36)]
+  - [budget_block_pct, "100", A request that brings the budget used above this percent is over budget and follows budget_policy (decision D36)]
+  - [combine_window_days, "7", Shortfall and restock lines for the same item and delivery location needed within this many days of each other are bought on one requisition line]
   - [duplicate_window_days, "14", A request for the same item and location within this many days is flagged as a possible duplicate]
   - [split_order_window_days, "7", Requests to the same supplier or category within this window are summed to detect split orders]
   - [default_rfq_response_days, "5", Working days suppliers get to respond to an RFQ]
@@ -125,6 +128,8 @@ budgets:
     CC-ENG: {total: "600000.00", gl: {"1230": "400000.00", "5320": "50000.00", "5440": "150000.00"}}
     CC-ITO: {total: "900000.00", gl: {"1230": "250000.00", "5320": "50000.00", "5440": "600000.00"}}
     CC-ADM: {total: "450000.00", gl: {"1230": "100000.00", "5320": "100000.00", "5340": "100000.00", "5350": "120000.00", "5260": "30000.00"}}
+  per_location:  # the office's own budget across its departments, checked as well as the cost centre's
+    OFF-BLR: {total: "1950000.00", gl: {"1230": "750000.00", "5320": "200000.00", "5440": "750000.00", "5340": "100000.00", "5350": "120000.00", "5260": "30000.00"}}
 
 categories:
   - {code: ITH, name: IT hardware, kind: goods, gl: 1230, stocked: true, approval_category: capex_it, tds: 194Q}

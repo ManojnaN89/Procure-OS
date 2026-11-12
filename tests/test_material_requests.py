@@ -411,7 +411,7 @@ def test_cancelling_names_the_purchase_requests_left_for_the_buyer(apex: Apex) -
 # ---- replenishment and the repeat check ----------------------------------------------------------
 
 
-def test_replenishment_counts_stock_set_aside_and_never_buys_a_shortfall_twice(apex: Apex) -> None:
+def test_replenishment_counts_stock_set_aside_and_restocks_beside_a_shortfall_bought_for_an_order(apex: Apex) -> None:
     # given V-belts planned min/max (reorder at 5, up to 15) with 12 on the shelf: nothing to order
     _set_stock(apex, "SP-01", "12")
     planned, _ = replenishment.plan(apex.db, business_today())
@@ -432,12 +432,19 @@ def test_replenishment_counts_stock_set_aside_and_never_buys_a_shortfall_twice(a
     _check(apex)
     assert _lines(apex, mr)["SP-01"][1:] == (D(2), D(0), D(18))
 
-    # then the 18 on order are held for the order, not counted as stock on the way, and the item is not bought again
+    # then the 18 on order are held for the order, not counted as stock on the way
     (level,) = stock_levels(apex.db, item="SP-01")
     assert (level.on_order, level.for_requests, level.free_on_order, level.free) == (D(18), D(18), D(0), D(0))
+
+    # and the order's request line does not stop the restock (it buys nothing for stock): the shelf is refilled to 15,
+    # and the 18 are not bought again
+    result = replenishment.run(apex.db, as_of=business_today())
+    (line,) = [ln for r in result.requests for ln in r.lines if ln.item_code == "SP-01"]
+    assert (line.qty, line.stock_qty) == (D(15), D(15))
     planned, skipped = replenishment.plan(apex.db, business_today())
     assert "SP-01" not in {ln.item_code for r in planned for ln in r.lines}
     assert any(s.item_code == "SP-01" and s.reason.startswith("Already requested") for s in skipped)
+    assert _lines(apex, mr)["SP-01"][3] == D(18)
 
 
 def test_requests_for_different_orders_are_not_repeats_but_a_hand_made_one_still_is(apex: Apex) -> None:

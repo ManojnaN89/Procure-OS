@@ -35,7 +35,7 @@ HEADERS = {
     "tolerance": "key,value,category_code,note",
     "company_bank_account": "code,bank_code,account_no,ifsc,purpose,payment_file_format",
     "gst_registration": "gstin,state_code,legal_address,pincode,is_default",
-    "budget": "cost_centre_code,gl_code,project_code,period,amount,version,policy",
+    "budget": "cost_centre_code,gl_code,project_code,period,amount,version,policy,location_code",
     "category": "code,name,parent_code,kind,default_gl,stocked,capex,min_quotes,buyer_user,approval_category,required_attributes,required_supplier_docs,inspection_required,default_tds_section,reverse_charge_default",
     "item": "code,name,description,category_code,kind,default_gl,brand,base_uom,purchase_uom,pack_size,moq,hsn_sac,gst_rate_before,gst_rate_after,gst_rate_alt_before,gst_rate_alt_after,gst_rate_change_date,gst_rate_confidence,gst_reverse_charge,gst_note,standard_price,abc_class,stocked,capex,inspection_required,hazardous,default_lead_days,attributes,active",
     "item_location": "item_code,location_code,reorder_policy,reorder_point,safety_stock,min_qty,max_qty,order_qty,service_level_pct,lead_days_override",

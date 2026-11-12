@@ -217,9 +217,14 @@ TABLES: tuple[Table, ...] = (
             ("amount", "numeric(18,4)"),
             ("version", "integer"),
             ("policy", "text"),
+            ("location_code", "text"),
         ),
         None,
-        (("cost_centre_code", "cost_centre", "code"), ("gl_code", "gl_account", "code")),
+        (
+            ("cost_centre_code", "cost_centre", "code"),
+            ("gl_code", "gl_account", "code"),
+            ("location_code", "location", "code"),
+        ),
     ),
     Table(
         "company_bank_account",

@@ -7,7 +7,7 @@ from decimal import Decimal
 import pytest
 from sqlalchemy import text
 from sqlalchemy.orm import Session
-from test_approvals import TODAY, _request, _row, _submit, db  # noqa: F401
+from test_approvals import TODAY, Logins, _request, _row, _submit, db, logins  # noqa: F401
 
 from p2p.approvals import budget, workflow
 from p2p.formulas.budget import check_budget
@@ -19,7 +19,7 @@ D = Decimal
 
 
 def test_a_request_equal_to_what_is_left_fits_and_one_paisa_more_does_not() -> None:
-    assert check_budget(D("1000"), D("400"), D("600")).status == "ok"
+    assert check_budget(D("1000"), D("400"), D("600")).status == "warn"  # fits, at 100% used it warns
     over = check_budget(D("1000"), D("400"), D("600.01"))
     assert over.status == "over" and over.over_by == D("0.01") and over.available == D("600")
 
@@ -28,6 +28,35 @@ def test_no_budget_means_not_checked_and_commitments_beyond_the_budget_leave_not
     assert check_budget(None, D("0"), D("5")).status == "unchecked"
     assert check_budget(D("100"), D("150"), D("1")).status == "over"  # already overspent
     assert check_budget(D("100"), D("150"), D("0")).status == "ok"  # nothing asked, nothing over
+
+
+@pytest.mark.parametrize(
+    ("requested", "status", "used"),
+    [
+        ("499.00", "ok", "89.99"),  # 89.99% used
+        ("500.00", "warn", "90.00"),  # exactly 90%: the warning starts (D36)
+        ("1500.00", "warn", "100.00"),  # exactly 100%: within budget, still a warning
+        ("1501.00", "over", "100.01"),  # 100.01%: over
+    ],
+)
+def test_the_budget_warns_at_90_percent_used_and_is_over_above_100(requested: str, status: str, used: str) -> None:
+    # given a budget of 10,000 of which 8,500 is committed
+    got = check_budget(D("10000"), D("8500"), D(requested))
+
+    # then the share used decides: 90% warns, above 100% is over
+    assert got.status == status
+    assert got.used_pct is not None and got.used_pct.quantize(D("0.01")) == D(used)
+    assert got.over_by == (D("1.00") if status == "over" else D("0.00"))
+
+
+def test_the_thresholds_are_settings_not_fixed() -> None:
+    # a company that warns at 80% and allows 110%
+    assert check_budget(D("1000"), D("0"), D("799.99"), warn_pct=D(80), block_pct=D(110)).status == "ok"
+    assert check_budget(D("1000"), D("0"), D("800"), warn_pct=D(80), block_pct=D(110)).status == "warn"
+    assert check_budget(D("1000"), D("0"), D("1100"), warn_pct=D(80), block_pct=D(110)).status == "warn"
+    over = check_budget(D("1000"), D("0"), D("1100.01"), warn_pct=D(80), block_pct=D(110))
+    assert over.status == "over" and over.over_by == D("0.01")
+    assert check_budget(D("1000"), D("950"), D("0")).status == "ok"  # asking for nothing never warns
 
 
 # ---- a company with budgets -------------------------------------------------------------------
@@ -98,7 +127,7 @@ def test_the_budget_counts_from_april_to_the_current_month_not_the_whole_year(
     _budgets(db)
     # April to November is eight months: 800,000 in CC1
     (fits,) = _check(db, _ask(db, "R-1", "800000", cc="CC1"))
-    assert (fits.check.status, fits.check.budget) == ("ok", D("800000"))
+    assert (fits.check.status, fits.check.budget) == ("warn", D("800000"))  # fits, all of it used
     (over,) = _check(db, _ask(db, "R-2", "800000.01", cc="CC1"))
     assert over.check.status == "over" and over.check.over_by == D("0.01")
     # the same request a month earlier has one month less
@@ -333,3 +362,125 @@ def test_only_those_who_may_see_budgets_get_the_variance_over_the_api(db: Sessio
 
     assert get(finance, "Finance") == 200
     assert get(buyer, "Buyer") == 403
+
+
+# ---- budget per location, per department, and on approval (P1-31) -------------------------------
+
+
+def _location_budget(db: Session, location: str, monthly: str, policy: str = "warn") -> None:
+    """The location's own budget for GL G1, April 2026 to March 2027."""
+    for month in range(12):
+        year, mon = (2026, 4 + month) if month < 9 else (2027, month - 8)
+        db.execute(
+            text(
+                "insert into budget (location_code, gl_code, period, amount, version, policy) "
+                "values (:l, 'G1', :p, :a, 1, :pol)"
+            ),
+            {"l": location, "p": f"{year}-{mon:02d}", "a": monthly, "pol": policy},
+        )
+    db.commit()
+
+
+def test_a_line_within_its_cost_centre_can_still_be_over_the_location_budget(db: Session) -> None:  # noqa: F811
+    # given the store's own budget of 120,000 a month (960,000 to November), below its two cost centres' 150,000
+    _budgets(db)
+    _location_budget(db, "WH-BLR", "120000", policy="block")
+    _ask(db, "R-A", "200000", cc="CC2", status="approved")  # Maintenance has used 200,000 of the location's money
+
+    # when Production asks for 770,000, within its own 800,000
+    no = _ask(db, "R-1", "770000", cc="CC1")
+    checks = _check(db, no)
+
+    # then the cost centre is nearly used, and the location is over by 10,000, its budget named in words
+    by_level = {c.level: c for c in checks}
+    assert set(by_level) == {"cost_centre", "location"}
+    assert by_level["cost_centre"].check.status == "warn"
+    loc = by_level["location"]
+    assert (loc.location, loc.check.budget, loc.check.committed, loc.check.over_by) == (
+        "WH-BLR", D("960000"), D("200000"), D("10000.00"),
+    )  # fmt: skip
+    said = budget.summary(checks)
+    assert "GL G1 by 10,000.00 (location WH-BLR, Apr 2026 to Nov 2026 (FY 2026-27))" in said
+
+    # and the location's policy blocks the submit
+    with pytest.raises(workflow.ApprovalError, match="location WH-BLR"):
+        _submit(db, no)
+
+
+def test_a_location_with_no_budget_of_its_own_is_checked_by_its_cost_centres_only(db: Session) -> None:  # noqa: F811
+    _budgets(db)
+
+    checks = _check(db, _ask(db, "R-1", "1000", cc="CC1"))
+
+    assert [c.level for c in checks] == ["cost_centre"]
+
+
+def test_a_line_without_a_cost_centre_is_charged_to_its_departments_cost_centres_at_the_location(
+    db: Session,  # noqa: F811
+) -> None:
+    # given CC2 belongs to the stores department (LOG), CC1 to production
+    _budgets(db)
+    db.execute(text("insert into department (code, name) values ('PRD', 'Production') on conflict do nothing"))
+    db.execute(text("update cost_centre set department_code = 'PRD' where code = 'CC1'"))
+    db.execute(text("update cost_centre set department_code = 'LOG' where code = 'CC2'"))
+    db.commit()
+
+    # when a stores request without a cost centre is checked
+    (group,) = _check(db, _ask(db, "R-1", "1000", cc=None))
+
+    # then only the department's cost centre holds it: 8 months of 50,000
+    assert (group.level, group.department, group.cost_centres, group.check.budget) == (
+        "department", "LOG", ("CC2",), D("400000"),
+    )  # fmt: skip
+    assert group.holder == "department LOG at WH-BLR"
+
+
+def test_a_request_near_its_budget_is_sent_with_the_warning(db: Session) -> None:  # noqa: F811
+    _budgets(db)
+    _ask(db, "R-A", "700000", cc="CC1", status="approved")
+
+    no = _ask(db, "R-1", "50000", cc="CC1")  # 750,000 of 800,000: 93.75%
+    result = _submit(db, no)
+
+    assert result.status == "submitted"
+    reason = _row(db, no)["decision_reason"]
+    assert "nearly used up: GL G1 93.75% used (cost centre CC1, Apr 2026 to Nov 2026 (FY 2026-27))" in reason
+    (saved,) = _row(db, no)["budget_check"]
+    assert (saved["status"], saved["used_pct"], saved["warn_pct"], saved["block_pct"]) == ("warn", "93.75", "90", "100")
+
+
+def test_the_warning_threshold_is_a_company_setting(db: Session) -> None:  # noqa: F811
+    _budgets(db)
+    db.execute(text("insert into org_setting (key, value) values ('budget_warn_pct', '95')"))
+    db.commit()
+    _ask(db, "R-A", "700000", cc="CC1", status="approved")
+
+    (group,) = _check(db, _ask(db, "R-1", "50000", cc="CC1"))  # 93.75% is below 95
+
+    assert group.check.status == "ok" and group.warn_pct == D(95)
+
+
+def test_the_budget_is_checked_again_when_the_approver_decides(db: Session, logins: Logins) -> None:  # noqa: F811
+    # given a request of 600,000 that fitted when submitted (policy block)
+    _budgets(db, policy="block")
+    no = _ask(db, "R-1", "600000", cc="CC1")
+    assert _submit(db, no).status == "submitted"
+
+    # when another request of 250,000 is approved meanwhile
+    _ask(db, "R-A", "250000", cc="CC1", status="approved")
+
+    # then the approver cannot approve it: the budget is now over by 50,000, and nothing changed
+    with pytest.raises(workflow.ApprovalError, match="cannot be approved now: Over budget: GL G1 by 50,000.00"):
+        workflow.approve(db, db.info["slug"], no, logins.stores)
+    assert _row(db, no)["status"] == "submitted"
+    assert db.execute(text("select count(*) from audit_event where action = 'request.approve'")).scalar_one() == 0
+
+    # when the other request is cancelled, then the approval goes through and the check is kept with it
+    db.execute(text("update request set status = 'cancelled' where no = 'R-A'"))
+    db.commit()
+    assert workflow.approve(db, db.info["slug"], no, logins.stores) == "submitted"  # the director is next
+    assert _row(db, no)["budget_check"][0]["used_pct"] == "75.00"  # 600,000 of 800,000
+    approved = db.execute(
+        text("select after->>'budget' from audit_event where action = 'request.approve' and entity_id = :n"), {"n": no}
+    ).scalar_one()
+    assert approved.startswith("Within budget")

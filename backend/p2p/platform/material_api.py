@@ -72,6 +72,7 @@ def check(db: Db, ctx: Store, payload: dict[str, Any] | None = None) -> dict[str
                 "reserved_now": {ln.item_code: format_qty(ln.reserved_now) for ln in c.lines if ln.reserved_now},
                 "short": {ln.item_code: format_qty(ln.short) for ln in c.lines if ln.short},
                 "unpriced": c.unpriced,
+                "combined_into": c.combined,
                 "purchase_request": None
                 if c.request is None
                 else {

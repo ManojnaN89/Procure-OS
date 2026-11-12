@@ -83,6 +83,9 @@ approval_rules: |
 
 settings:
   - [budget_policy, block, Budget check result when a request exceeds the available budget (warn or block)]
+  - [budget_warn_pct, "90", A request that brings the budget used to this percent or more carries a warning (decision D36)]
+  - [budget_block_pct, "100", A request that brings the budget used above this percent is over budget and follows budget_policy (decision D36)]
+  - [combine_window_days, "7", Shortfall and restock lines for the same item and delivery location needed within this many days of each other are bought on one requisition line]
   - [duplicate_window_days, "14", A request for the same item and location within this many days is flagged as a possible duplicate]
   - [split_order_window_days, "7", Requests to the same supplier or category within this window are summed to detect split orders]
   - [default_rfq_response_days, "5", Working days suppliers get to respond to an RFQ]
@@ -116,6 +119,8 @@ budgets:
   per_month:  # cost centre: total, then the total split by GL account (budgets are kept per GL)
     CC-PRD: {total: "1500000.00", gl: {"1410": "1450000.00", "1420": "50000.00"}}
     CC-MNT: {total: "150000.00", gl: {"1430": "100000.00", "5240": "50000.00"}}
+  per_location:  # the plant's own budget across its departments, checked as well as the cost centre's
+    PLT-CKN: {total: "1650000.00", gl: {"1410": "1450000.00", "1420": "50000.00", "1430": "100000.00", "5240": "50000.00"}}
 
 categories:
   - {code: RAW, name: Raw materials, kind: goods, gl: 1410, stocked: true, approval_category: materials, tds: 194Q}

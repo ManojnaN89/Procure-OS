@@ -140,7 +140,7 @@ def budget(ctx, world, out: Outcome) -> None:
 
     db = world.db
     lines = rows("master", "budget")
-    pairs = sorted({(r["cost_centre_code"], r["gl_code"]) for r in lines if not r["project_code"]})
+    pairs = sorted({(r["cost_centre_code"], r["gl_code"]) for r in lines if not r["project_code"] and r["cost_centre_code"]})
     rng = random.Random(17)
     first, last = "2026-04", TODAY.strftime("%Y-%m")
     location = rows("master", "location")[0]["code"]
@@ -189,7 +189,8 @@ def budget(ctx, world, out: Outcome) -> None:
             {"v": ask, "c": cc, "g": gl},
         )
         db.commit()
-        (got,) = platform_budget.check_request(db, "EVB-N", TODAY)
+        # the cost centre's own check (the location's budget is checked beside it, see E38)
+        got = next(c for c in platform_budget.check_request(db, "EVB-N", TODAY) if c.level == "cost_centre")
         want_over = ask > ytd - committed
         want_by = (ask - (ytd - committed)) if want_over else Decimal("0.00")
         over_seen += want_over

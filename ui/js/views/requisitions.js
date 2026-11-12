@@ -288,7 +288,7 @@ const RequisitionsView = {
       <div class="panel" style="margin-bottom:12px;">
         <div class="panel-title">Approval</div>
         ${a.decision ? `<p style="margin:0 0 10px;font-size:12.5px;color:var(--text-secondary);">${this.esc(String(a.decision).replace(/ under rule [A-Za-z0-9-]+ v\d+/, ""))}</p>` : `<p style="margin:0 0 10px;font-size:12.5px;color:var(--text-muted);">Not submitted yet.</p>`}
-        ${(a.budget || []).filter((b) => b.status !== "unchecked").map((b) => `<div style="margin:0 0 6px;font-size:12px;color:${b.status === "over" ? "var(--warning-text)" : "var(--text-secondary)"};">Budget account ${this.esc(b.gl_code)}: ${formatCurrency(b.budget)} in all, ${formatCurrency(b.committed)} already committed, this request asks for ${formatCurrency(b.requested)}${b.status === "over" ? ` · over the budget by ${formatCurrency(b.over_by)}` : ""}</div>`).join("")}
+        ${(a.budget || []).filter((b) => b.status !== "unchecked").map((b) => `<div class="budget-check" style="margin:0 0 6px;font-size:12px;color:${b.status === "ok" ? "var(--text-secondary)" : "var(--warning-text)"};">Budget account ${this.esc(b.gl_code)}${b.holder ? ` of ${this.esc(b.holder)}` : ""}${b.period ? `, ${this.esc(b.period)}` : ""}: ${formatCurrency(b.budget)} in all, ${formatCurrency(b.committed)} already committed, this request asks for ${formatCurrency(b.requested)}${b.used_pct ? ` · ${this.esc(b.used_pct)}% used` : ""}${b.status === "over" ? ` · over the budget by ${formatCurrency(b.over_by)}` : b.status === "warn" ? " · nearly used up" : ""}</div>`).join("")}
         ${trail}${rule}${actions}
         ${own ? `<div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:10px;">${own}</div>` : ""}
         ${a.can_source ? `<div class="btn btn-primary btn-sm" id="sourceBtn" style="display:inline-flex;margin-top:6px;"><i class="ti ti-search"></i>Find suppliers</div>` : ""}
@@ -307,6 +307,15 @@ const RequisitionsView = {
           <div style="display:flex;gap:8px;margin-top:8px;"><div class="btn btn-primary btn-sm" id="reasonOk">Confirm</div><div class="btn btn-sm" id="reasonCancel">Cancel</div></div>
         </div>
       </div>`;
+  },
+
+  boughtFor(sources) {
+    // a combined line: what it buys for each production order and for stock
+    if (!sources || !sources.length) return "";
+    const part = (x) => x.stock
+      ? `stock ${this.esc(x.qty)} ${this.esc(x.uom || "")}`
+      : `<a href="#/material-requests" style="color:var(--accent-tint)">${this.esc(x.order_no)}</a> ${this.esc(x.qty)} ${this.esc(x.uom || "")}${x.cancelled ? " (cancelled)" : ""}`;
+    return `<div class="bought-for cell-muted" style="font-size:11px;">For ${sources.map(part).join(" · ")}</div>`;
   },
 
   checksPanel(r) {
@@ -399,7 +408,7 @@ const RequisitionsView = {
             <tbody>
               ${lines.map((l) => `
                 <tr>
-                  <td>${this.esc(l.name)}<div class="cell-muted" style="font-size:11px;">${this.esc(l.item_code || "")}${l.reason ? ` · ${this.esc(l.reason)}` : ""}</div></td>
+                  <td>${this.esc(l.name)}<div class="cell-muted" style="font-size:11px;">${this.esc(l.item_code || "")}${l.reason ? ` · ${this.esc(l.reason)}` : ""}</div>${this.boughtFor(l.bought_for)}</td>
                   <td>${this.esc(l.qty)} <span class="cell-muted">${this.esc(l.uom)}</span></td>
                   <td class="cell-muted">${l.est_price === null ? "—" : formatCurrency(l.est_price)}</td>
                   <td>${l.value === null ? "—" : formatCurrency(l.value)}</td>
