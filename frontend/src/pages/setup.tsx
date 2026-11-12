@@ -8,6 +8,12 @@ import { Table, Td, Th } from "../components/ui/table";
 import { api } from "../lib/api";
 import { can, useMe } from "../lib/me";
 import { ApprovalChains, Approvers } from "./setup-approvals";
+import {
+	BuyingRoute,
+	SingleSource,
+	SupplierSelection,
+	Touchless,
+} from "./setup-buying";
 import { History, Policies } from "./setup-policies";
 import { type Shared, select, useChange } from "./setup-shared";
 
@@ -42,6 +48,10 @@ const TABS = [
 	{ id: "roles", label: "Roles", need: ["admin.users"] },
 	{ id: "approvers", label: "Approvers", need: ["admin.rules"] },
 	{ id: "chains", label: "Approval chains", need: ["admin.rules"] },
+	{ id: "route", label: "Buying route", need: ["admin.rules"] },
+	{ id: "selection", label: "Supplier selection", need: ["admin.rules"] },
+	{ id: "touchless", label: "Touchless orders", need: ["admin.rules"] },
+	{ id: "single", label: "Single-source items", need: ["admin.rules"] },
 	{ id: "policies", label: "Policies", need: ["admin.settings"] },
 	{ id: "history", label: "History", need: ["audit.view", "admin.settings"] },
 ];
@@ -60,7 +70,7 @@ export function SetupPage() {
 
 	return (
 		<>
-			<PageTitle sub="Who the people are and what they may do, who approves what, and the company's policies. Every change is logged with its reason.">
+			<PageTitle sub="Who the people are and what they may do, who approves what, how things are bought, and the company's policies. Every change is logged with its reason.">
 				Company setup
 			</PageTitle>
 			<Card className="mb-4">
@@ -104,6 +114,10 @@ export function SetupPage() {
 			{active === "roles" ? <RolesTab {...shared} /> : null}
 			{active === "approvers" ? <Approvers {...shared} /> : null}
 			{active === "chains" ? <ApprovalChains {...shared} /> : null}
+			{active === "route" ? <BuyingRoute {...shared} /> : null}
+			{active === "selection" ? <SupplierSelection {...shared} /> : null}
+			{active === "touchless" ? <Touchless {...shared} /> : null}
+			{active === "single" ? <SingleSource {...shared} /> : null}
 			{active === "policies" ? <Policies {...shared} /> : null}
 			{active === "history" ? <History /> : null}
 		</>

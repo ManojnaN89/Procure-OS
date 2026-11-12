@@ -68,6 +68,8 @@ def save_rule(
     current = _row(db, effective_from)
     if price_pct < 0 or (value_limit is not None and value_limit < 0):
         raise TouchlessRuleError("the limit and the price tolerance cannot be negative")
+    if price_pct > 100:
+        raise TouchlessRuleError("the price tolerance cannot be above 100%")
     version = int(db.execute(text("select coalesce(max(version), 0) + 1 from touchless_rule")).scalar_one())
     if current is not None:
         db.execute(
@@ -111,8 +113,11 @@ def tier_of(rule: rules.ApprovalRule) -> str:
 
 
 def _buyer_tier_max(db: Session, rule: rules.ApprovalRule, today: date) -> Decimal | None:
-    if rule.is_automatic:
-        return rule.max_value
+    return rule.max_value if rule.is_automatic else buyer_tier_top(db, today)
+
+
+def buyer_tier_top(db: Session, today: date) -> Decimal | None:
+    """The top of the buyer's tier (the order rule that needs no approver), or None when every order needs one."""
     try:
         lowest = rules.find_rule(db, "po", Decimal(0), today)
     except rules.ApprovalRuleError:

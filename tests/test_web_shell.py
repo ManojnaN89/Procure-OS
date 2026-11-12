@@ -277,7 +277,18 @@ def test_company_setup_opens_every_tab_for_the_admin(company: Company, browser: 
     expect(page.get_by_role("heading", name="Company setup")).to_be_visible()
 
     expect(page.get_by_role("tab")).to_have_text(
-        ["People", "Roles", "Approvers", "Approval chains", "Policies", "History"]
+        [
+            "People",
+            "Roles",
+            "Approvers",
+            "Approval chains",
+            "Buying route",
+            "Supplier selection",
+            "Touchless orders",
+            "Single-source items",
+            "Policies",
+            "History",
+        ]
     )
     expect(page.get_by_role("button", name="Add person")).to_be_visible()  # People opens first
     expect(page.get_by_text("Finance Person").first).to_be_visible()
@@ -285,6 +296,10 @@ def test_company_setup_opens_every_tab_for_the_admin(company: Company, browser: 
         ("Roles", "Save Admin"),  # one box per role, the Admin first
         ("Approvers", "Set head"),
         ("Approval chains", "Save new version"),
+        ("Buying route", "Save new buying route version"),
+        ("Supplier selection", "Save new selection rule version"),
+        ("Touchless orders", "Save new touchless version"),
+        ("Single-source items", "Mark single source"),
         ("Policies", "Save tolerance"),
     ):
         page.get_by_role("tab", name=tab).click()
@@ -330,6 +345,41 @@ def test_a_policy_change_needs_a_reason_is_checked_and_shows_in_the_history_and_
     page.get_by_role("button", name="Search").click()
     expect(page.get_by_role("cell", name="setup.policy").first).to_be_visible()
     assert page.get_by_role("cell", name="setup.policy").count() >= 2
+    assert page.errors == []  # type: ignore[attr-defined]
+
+
+def test_a_new_touchless_version_takes_effect_and_the_old_one_stays_in_the_history(
+    company: Company, browser: Any
+) -> None:
+    page = open_page(browser, LAPTOP)
+    sign_in(page, company.emails["Admin"])
+    page.get_by_role("link", name="Company setup").click()
+    page.get_by_role("tab", name="Supplier selection").click()
+    page.get_by_label(REASON).fill("limits reviewed with the purchase manager")
+    page.get_by_label("Price weight (%)").fill("50")
+    expect(page.get_by_text("Weights add up to 110 of 100.")).to_be_visible()
+    page.get_by_role("button", name="Save new selection rule version").click()
+    expect(page.get_by_role("alert")).to_have_text("The weights must add up to 100; they add up to 110.")
+
+    page.get_by_role("tab", name="Touchless orders").click()
+    now = page.get_by_test_id("touchless-in-force")
+    expect(now).to_contain_text("Version 1")
+    expect(now).to_contain_text("up to the buyer's tier")
+    page.get_by_label("Limit (₹", exact=False).fill("50000")
+    page.get_by_role("button", name="Save new touchless version").click()
+
+    expect(now).to_contain_text("Version 2")
+    expect(now).to_contain_text("up to ₹50,000.00 and every price is within 2%")
+    expect(_row(page, "Version 2")).to_contain_text("limits reviewed with the purchase manager")
+    expect(_row(page, "Version 1")).to_contain_text("Set up with the company")
+    expect(_row(page, "Version 1")).not_to_contain_text("In force")
+    with Session(routing.engine_for(company.slug)) as s:
+        assert s.execute(text("select count(*) from touchless_rule")).scalar_one() == 2
+        assert (
+            s.execute(text("select count(*) from audit_event where action = 'touchless_rule.change'")).scalar_one() == 1
+        )
+    page.get_by_role("tab", name="History").click()
+    expect(_row(page, "touchless_rule")).to_contain_text("limits reviewed with the purchase manager")
     assert page.errors == []  # type: ignore[attr-defined]
 
 

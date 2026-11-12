@@ -97,6 +97,9 @@ def save_rule(
         if current is None:
             raise RouteError("the company has no buying route rule to change")
         values = {k: values.get(k, current[k]) for k in THRESHOLDS}
+    problems = br.check_rule(values)
+    if problems:
+        raise RouteError("; ".join(problems))
     version = int(
         db.execute(
             text(

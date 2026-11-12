@@ -53,6 +53,26 @@ def stricter(rule: RouteRule, override: Mapping[str, Any], version: str) -> Rout
     return replace(rule, **changes)
 
 
+_PCTS = ("reorder_on_time_pct", "reorder_price_pct")
+_DAYS = ("reorder_within_days", "window_days")
+
+
+def check_rule(values: Mapping[str, Any]) -> list[str]:
+    """What is wrong with a set of thresholds, in words (empty when they are fine). A category row names only some."""
+    given = {k: D(str(v)) for k, v in values.items() if v is not None}
+    found: list[str] = []
+    if any(v < 0 for v in given.values()):
+        found.append("a threshold cannot be negative")
+    if any(given.get(k, D(0)) > 100 for k in _PCTS):
+        found.append("a percentage cannot be above 100")
+    if any(k in given and (given[k] < 1 or given[k] != given[k].to_integral_value()) for k in _DAYS):
+        found.append("a number of days is a whole number of at least 1")
+    two, three = given.get("two_quotes_from"), given.get("three_quotes_above")
+    if two is not None and three is not None and three <= two:
+        found.append("the value above which three quotes are needed must be higher than the value for two quotes")
+    return found
+
+
 def quotes_needed(value: Decimal | None, rule: RouteRule) -> int:
     """Quotes a quotation request needs for a 30-day value: 1 below the first band, 2 up to and including the second
     band's start, 3 above it. An unknown value is treated as the middle band."""
