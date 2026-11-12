@@ -382,7 +382,7 @@ def test_the_mode_and_weights_are_settings_with_checks(shop: Session) -> None:
     assert (
         client.post("/api/settings", json={"sourcing_mode": "cheapest"}, headers=h)
         .json()["error"]
-        .startswith("sourcing_mode must be")
+        .startswith("sourcing_mode: choose Compare quotations")
     )
     assert client.post(
         "/api/settings", json={"sourcing_mode": "best_vendor", "score_weight_price": "50"}, headers=h

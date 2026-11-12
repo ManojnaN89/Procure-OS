@@ -106,23 +106,23 @@ def update_settings(
     for key, value in payload.items():
         value = str(value)
         if key == "currency_preset" and value not in CURRENCIES:
-            return {"error": f"currency_preset must be one of {', '.join(sorted(CURRENCIES))}"}
+            return {"error": "currency_preset: choose one of the currencies in the list"}
         if key in BOOLEAN_SETTINGS and value not in ("true", "false"):
-            return {"error": f"{key} must be true or false"}
+            return {"error": f"{key}: choose on or off"}
         if key == "sourcing_mode" and value not in ("compare", "best_vendor"):
-            return {"error": "sourcing_mode must be compare or best_vendor"}
+            return {"error": "sourcing_mode: choose Compare quotations or Order from the best-scored vendor"}
         if (
             key == "replenishment_department"
             and value
             and not db.execute(text("select 1 from department where code = :c"), {"c": value}).first()
         ):
-            return {"error": f"replenishment_department: there is no department with code {value}"}
+            return {"error": f"replenishment_department: there is no department with the code {value}"}
         if (
             key != "currency_preset"
             and key not in BOOLEAN_SETTINGS | TEXT_SETTINGS
             and not value.replace(".", "", 1).isdigit()
         ):
-            return {"error": f"{key} must be a number"}
+            return {"error": f"{key}: must be a number"}
         db.execute(
             text(
                 "insert into app_setting (key, value) values (:k, :v) "

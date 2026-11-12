@@ -43,6 +43,8 @@ import sys
 from pathlib import Path
 
 from p2p.formulas.calendar import business_today
+from p2p.formulas.money import format_inr
+from p2p.formulas.words import count
 from p2p.platform import routing, tenants, users, worker
 
 
@@ -157,7 +159,7 @@ def main(argv: list[str] | None = None) -> int:
         with Session(routing.engine_for(args.tenant)) as db:
             if args.cmd == "make":
                 numbers = material.make_requests(db)
-                print(f"{len(numbers)} material request(s) made or added to: {', '.join(numbers) or '-'}")
+                print(f"{count(len(numbers), 'material request')} made or added to: {', '.join(numbers) or '-'}")
                 return 0
             checked = material.store_check(db, tenant=args.tenant, submit=not args.no_submit)
         for c in checked.requests:
@@ -168,7 +170,7 @@ def main(argv: list[str] | None = None) -> int:
             if c.unpriced:
                 print(f"    no price to estimate: {', '.join(c.unpriced)}")
         print(
-            f"{len(checked.requests)} material request(s) checked, {len(checked.purchase_requests)} purchase request(s)"
+            f"{count(len(checked.requests), 'material request')} checked, {count(len(checked.purchase_requests), 'purchase request')}"
         )
         return 0
     if args.group == "replenish":
@@ -185,15 +187,17 @@ def main(argv: list[str] | None = None) -> int:
                 db, as_of=business_today(), dry_run=args.dry_run, tenant=args.tenant, submit=not args.no_submit
             )
         verb = "would create" if args.dry_run else "created"
-        print(f"{verb} {len(result.requests)} request(s) with {result.line_count} line(s), total {result.total_value}")
+        print(
+            f"{verb} {count(len(result.requests), 'request')} with {count(result.line_count, 'line')}, total {format_inr(result.total_value)}"
+        )
         for req in result.requests:
             fate = req.outcome or (f"left as a draft: {req.submit_error}" if req.submit_error else req.route)
             print(
                 f"  {req.no or '(no number yet)'}  {req.location_code}  {req.category_code}  {req.priority}  "
                 f"{len(req.lines)} lines  {req.total_value}  {fate}"
             )
-        for reason, count in replenishment.summary(result)["skipped"].items():
-            print(f"  skipped {count}: {reason}")
+        for reason, n in replenishment.summary(result)["skipped"].items():
+            print(f"  skipped {n}: {reason}")
         return 0
     if args.group == "remind":
         from sqlalchemy.orm import Session
@@ -213,7 +217,7 @@ def main(argv: list[str] | None = None) -> int:
             print(f"  {verb} {supplier} about {rfq_no}")
         for rfq_no, supplier in reminded.failed:
             print(f"  could not reach {supplier} about {rfq_no}")
-        print(f"{len(reminded.sent)} reminder(s)")
+        print(count(len(reminded.sent), "reminder"))
         return 0
     if args.group == "confirm-services":
         from sqlalchemy.orm import Session
@@ -222,9 +226,9 @@ def main(argv: list[str] | None = None) -> int:
 
         with Session(routing.engine_for(args.tenant)) as db:
             told = service_links.ask_requesters(db, args.tenant, dry_run=args.dry_run)
-        for code, count in told:
-            print(f"  {'would ask' if args.dry_run else 'asked'} {code} to confirm {count} service(s)")
-        print(f"{len(told)} person(s)")
+        for code, services in told:
+            print(f"  {'would ask' if args.dry_run else 'asked'} {code} to confirm {count(services, 'service')}")
+        print(count(len(told), "person", "people"))
         return 0
     if args.group == "order":
         from sqlalchemy.orm import Session
@@ -244,7 +248,7 @@ def main(argv: list[str] | None = None) -> int:
             )
             for note in made.skipped:
                 print(f"  note: {note}")
-        print(f"{len(ordered)} request(s) ordered")
+        print(f"{count(len(ordered), 'request')} ordered")
         return 0
     if args.group == "source":
         from sqlalchemy.orm import Session
@@ -268,7 +272,7 @@ def main(argv: list[str] | None = None) -> int:
             )
             for note in info["notes"]:
                 print(f"  note: {note}")
-        print(f"{len(sourced)} request(s) sourced")
+        print(f"{count(len(sourced), 'request')} sourced")
         return 0
     if args.group == "import":
         from sqlalchemy.orm import Session
@@ -286,8 +290,8 @@ def main(argv: list[str] | None = None) -> int:
                 report = load(db, Path(args.dataset), dry_run=args.dry_run)
         if isinstance(report, demand.DemandReport):
             print(f"{demand.summary(report)} ({report.seconds} s)")
-            for kind, count in report.loaded.items():
-                print(f"  {kind}: {count} new, {report.already[kind]} loaded before")
+            for kind, n in report.loaded.items():
+                print(f"  {kind}: {n} new, {report.already[kind]} loaded before")
         else:
             verb = "would load" if args.dry_run else "loaded"
             print(

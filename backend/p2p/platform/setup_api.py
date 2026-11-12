@@ -677,7 +677,7 @@ class LimitBody(BaseModel):
 def put_limit(user_id: int, body: LimitBody, db: Db, ctx: PeopleAdmin) -> dict[str, str]:
     reason = need_reason(body.reason)
     if body.document not in ("request", "po", "invoice", "payment_run"):
-        raise _422("document must be request, po, invoice or payment_run")
+        raise _422("the document must be a request, a purchase order, an invoice or a payment run")
     if body.max_value < 0:
         raise _422("a limit cannot be negative")
     if db.execute(text("select 1 from user_profile where user_id = :i"), {"i": user_id}).first() is None:
@@ -862,7 +862,7 @@ def put_approver(role: str, body: ApproverBody, db: Db, ctx: RulesAdmin) -> dict
     if not role.replace("_", "").isalnum() or role != role.lower() or role == "auto":
         raise _422("a role name is lower case letters, digits and underscores, and cannot be 'auto'")
     if body.source not in APPROVER_SOURCES:
-        raise _422(f"source must be one of {', '.join(APPROVER_SOURCES)}")
+        raise _422("choose who stands behind the role from the list")
     value = (body.value or "").strip() or None
     if body.source in ("requester_manager", "department_head", "location_head"):
         value = None
@@ -1372,11 +1372,13 @@ def put_automation(decision_type: str, body: AutomationBody, db: Db, ctx: Settin
     reason = need_reason(body.reason)
     actor = user_actor(ctx.user_id)
     if decision_type in autonomy.LOCKED:
-        raise _422(f"'{decision_type}' is always decided by a person and can never be set to act alone")
+        raise _422(
+            f"{autonomy.LABELS.get(decision_type, decision_type)} is always decided by a person and can never be set to act alone"
+        )
     if decision_type not in DECISIONS:
         raise HTTPException(404, f"there is no decision type '{decision_type}'")
     if body.level not in LEVELS:
-        raise _422(f"the level must be one of {', '.join(LEVELS)}")
+        raise _422("the level must be Off, Recommend or Act within the limits")
     if body.value_cap is not None and body.value_cap < 0:
         raise _422("a cap cannot be negative")
     if not D(0) <= body.min_confidence <= D(1):
@@ -1385,7 +1387,9 @@ def put_automation(decision_type: str, body: AutomationBody, db: Db, ctx: Settin
         raise _422("the wrong-decision rate is between 0 and 1")
     if decision_type == "po.send":
         if body.level == "off":
-            raise _422("orders have to be sent by someone: choose 'propose' (a person sends) or 'auto'")
+            raise _422(
+                "orders have to be sent by someone: choose Recommend (a person sends each one) or Act within the limits"
+            )
         return _write_policy(
             db,
             actor,

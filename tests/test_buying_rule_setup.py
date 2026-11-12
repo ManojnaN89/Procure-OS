@@ -135,6 +135,30 @@ def test_a_new_route_version_decides_the_next_line_and_the_earlier_decision_keep
     assert versions[0]["by"] == "A Admin" and versions[0]["note"] == "Smaller safe reorders"
 
 
+def test_a_category_version_tightens_only_its_items_and_names_only_its_thresholds(apex: Session) -> None:
+    admin = _login(apex, "Admin")
+    body = {**ROUTE, "category": "C1", "reason": "Raw material reorders smaller"}
+
+    r = client.post("/api/setup/buying-route", json=body, headers=admin)
+
+    assert r.status_code == 201 and r.json() == {"version": 1}
+    (line,) = _source(apex, _ask(apex, "R-1", [("RM-06", "100", None)]), dispatch=False).lines
+    assert line.route == "rfq" and line.route_rule == "buying_route v1 + C1 v1"
+    apex.expire_all()
+    row = apex.execute(
+        text("select reorder_below, agree_above from buying_route_rule where category_code = 'C1'")
+    ).one()
+    assert row == (D("3000.00"), None)  # the company's other thresholds still apply
+    (change,) = _changes(apex, "buying_route_rule")
+    assert (change["key"], change["old_value"], change["new_value"]) == ("C1", None, {"reorder_below": "3000"})
+    shown = client.get("/api/setup/buying-route", headers=admin).json()
+    assert "C1" in [c["code"] for c in shown["categories"]]
+    assert [(v["category"], v["version"]) for v in shown["versions"]] == [(None, 1), ("C1", 1)]
+    for bad, says in (({"category": "NOPE"}, "no item category NOPE"), ({"values": {"agree_above": "-5"}}, "negative")):
+        r = client.post("/api/setup/buying-route", json={**body, **bad}, headers=admin)
+        assert r.status_code == 422 and says in r.json()["detail"]
+
+
 @pytest.mark.parametrize(
     ("values", "says"),
     [
@@ -200,8 +224,8 @@ def test_a_new_selection_rule_ranks_the_next_rfq_and_the_earlier_award_keeps_ver
         ({"weights": {"price": "40", "delivery": "30", "quality": "20", "payment_terms": "5"}}, "add up to 100"),
         ({"weights": {"price": "110", "delivery": "-10", "quality": "0", "payment_terms": "0"}}, "not be negative"),
         ({"weights": {"price": "100"}}, "the four weights"),
-        ({"method": "cheapest"}, "the method must be one of"),
-        ({"tie_break": ["delivery", "delivery"]}, "tie-break"),
+        ({"method": "cheapest"}, "lowest total cost or weighted score"),
+        ({"tie_break": ["delivery", "delivery"]}, "a tie is broken"),
     ],
 )
 def test_a_selection_rule_that_makes_no_sense_is_refused(db: Session, change: dict, says: str) -> None:  # noqa: F811

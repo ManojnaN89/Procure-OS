@@ -24,6 +24,7 @@ type Version = {
 };
 type RouteField = { key: string; label: string; kind: "inr" | "pct" | "days" };
 type RouteData = {
+	categories: { code: string; name: string | null }[];
 	fields: RouteField[];
 	versions: (Version & {
 		category: string | null;
@@ -196,27 +197,44 @@ export function BuyingRoute(shared: Shared) {
 		queryFn: () => api<RouteData>("/api/setup/buying-route"),
 	});
 	const [values, setValues] = useState<Record<string, string>>({});
+	const [category, setCategory] = useState(""); // empty: the company-wide rule
 	const [from, setFrom] = useState(today());
 	const d = data.data;
-	const company = d?.versions.filter((v) => v.category === null) ?? [];
-	const now = company.find((v) => v.in_force) ?? company[0];
-	const merged = { ...(now?.values ?? {}), ...values };
+	const inForce = (cat: string | null) => {
+		const rows = d?.versions.filter((v) => v.category === cat) ?? [];
+		return rows.find((v) => v.in_force) ?? (cat ? undefined : rows[0]);
+	};
+	const now = inForce(null);
+	const own = category ? inForce(category) : now;
+	const merged: Record<string, string> = { ...values };
+	for (const [k, x] of Object.entries(own?.values ?? {}))
+		if (merged[k] === undefined && x !== null) merged[k] = x;
 	const save = useChange(
 		shared,
 		"setup-buying-route",
 		(reason) => {
-			const fields = d?.fields ?? [];
-			if (fields.some((f) => !isNumber(merged[f.key] ?? "")))
+			// a category names only the thresholds it tightens; the company's rule needs every one
+			const given = (d?.fields ?? []).filter(
+				(f) => !category || (merged[f.key] ?? "").trim() !== "",
+			);
+			if (given.some((f) => !isNumber(merged[f.key] ?? "")))
 				throw new Error("Every threshold needs a number.");
-			if (fields.some((f) => Number(merged[f.key]) < 0))
+			if (given.some((f) => Number(merged[f.key]) < 0))
 				throw new Error("A threshold cannot be negative.");
-			if (Number(merged.three_quotes_above) <= Number(merged.two_quotes_from))
+			const two = merged.two_quotes_from;
+			const three = merged.three_quotes_above;
+			if (two && three && Number(three) <= Number(two))
 				throw new Error(
 					"The value for three quotes must be higher than the value for two quotes.",
 				);
 			return api("/api/setup/buying-route", {
 				method: "POST",
-				json: { values: merged, effective_from: from, reason },
+				json: {
+					values: Object.fromEntries(given.map((f) => [f.key, merged[f.key]])),
+					category: category || null,
+					effective_from: from,
+					reason,
+				},
 			});
 		},
 		() => setValues({}),
@@ -278,6 +296,28 @@ export function BuyingRoute(shared: Shared) {
 			}}
 			form={
 				<div className="grid gap-3 md:grid-cols-3">
+					<Field label="Applies to">
+						<select
+							className={select}
+							value={category}
+							onChange={(e) => {
+								setCategory(e.target.value);
+								setValues({});
+							}}
+						>
+							<option value="">The whole company</option>
+							{d.categories.map((c) => (
+								<option key={c.code} value={c.code}>
+									Category {c.name ?? c.code} (only where stricter)
+								</option>
+							))}
+						</select>
+						{category ? (
+							<span className="text-xs text-muted-foreground">
+								Leave a box empty to keep the company's threshold.
+							</span>
+						) : null}
+					</Field>
 					{d.fields.map((f) => (
 						<Field
 							key={f.key}
@@ -292,7 +332,7 @@ export function BuyingRoute(shared: Shared) {
 								}
 							/>
 							<span className="text-xs text-muted-foreground">
-								Now {shown(kind[f.key], v[f.key])}
+								Company now {shown(kind[f.key], v[f.key])}
 							</span>
 						</Field>
 					))}

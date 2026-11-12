@@ -136,7 +136,7 @@ def test_the_weighted_score_counts_price_delivery_quality_and_payment_terms_by_t
 def test_a_rule_that_makes_no_sense_is_refused() -> None:
     zero = sel.Weights(D(0), D(0), D(0), D(0))
     assert sel.check_rule("weighted", zero, ()) == ["a weighted comparison needs at least one weight above zero"]
-    assert sel.check_rule("cheapest", RULE.weights, ()) == ["the method must be one of total_cost, weighted"]
+    assert sel.check_rule("cheapest", RULE.weights, ()) == ["the method must be lowest total cost or weighted score"]
     assert sel.check_rule("total_cost", RULE.weights, ("delivery", "delivery"))
     assert sel.check_rule("total_cost", sel.Weights(D(-1), D(0), D(0), D(0)), ()) == ["a weight must not be negative"]
     assert sel.check_rule("total_cost", zero, ("vendor_score",)) == []
@@ -434,7 +434,7 @@ def test_a_rule_change_applies_from_its_date_and_the_old_version_before_it(shop:
     assert v == 2
     assert selection_rule.rule_for(shop, TODAY).method == "total_cost"
     assert selection_rule.rule_for(shop, TODAY + timedelta(days=1)).label == "supplier_selection v2"
-    with pytest.raises(selection_rule.SelectionRuleError, match="tie-break"):
+    with pytest.raises(selection_rule.SelectionRuleError, match="a tie is broken"):
         selection_rule.save_rule(shop, sod.user(1), effective_from=TODAY, tie_break=("price",))
 
 

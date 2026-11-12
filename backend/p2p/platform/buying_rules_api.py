@@ -77,11 +77,11 @@ def _version(r: dict[str, Any], today: date, names: dict[str, str]) -> dict[str,
     }
 
 
-def _check_start(db: Session, table: str, effective_from: date, where: str = "true") -> None:
+def _check_start(db: Session, table: str, effective_from: date, where: str = "true", **params: Any) -> None:
     """A new version starts today or later, and not before the latest version: versions stay in date order."""
     if effective_from < business_today():
         raise _422("a new version starts today or later: decisions already made keep the version they were made under")
-    latest = db.execute(text(f"select max(effective_from) from {table} where {where}")).scalar()  # noqa: S608 - fixed names
+    latest = db.execute(text(f"select max(effective_from) from {table} where {where}"), params).scalar()  # noqa: S608 - fixed names
     if latest is not None and effective_from < latest:
         raise _422(f"the latest version starts on {latest:%d %b %Y}; a new one cannot start before it")
 
@@ -105,11 +105,13 @@ def get_buying_route(db: Db, ctx: RulesAdmin) -> dict[str, Any]:
     return {
         "fields": [{"key": k, "label": label, "kind": kind} for k, (label, kind) in ROUTE_FIELDS.items()],
         "versions": versions,
+        "categories": _rows(db, "select code, name from item_category order by code"),
     }
 
 
 class RouteVersion(BaseModel):
     values: dict[str, Decimal]
+    category: str | None = None  # None: the company's rule; a category's row names only the thresholds it tightens
     effective_from: date
     reason: str | None = None
 
@@ -117,13 +119,18 @@ class RouteVersion(BaseModel):
 @router.post("/buying-route", status_code=201)
 def new_buying_route(body: RouteVersion, db: Db, ctx: RulesAdmin) -> dict[str, Any]:
     reason = need_reason(body.reason)
-    _check_start(db, "buying_route_rule", body.effective_from, "category_code is null")
+    category = body.category or None
+    if category and db.execute(text("select 1 from item_category where code = :c"), {"c": category}).first() is None:
+        raise _422(f"there is no item category {category}")
+    _check_start(db, "buying_route_rule", body.effective_from, "category_code is not distinct from :c", c=category)
     actor = user_actor(ctx.user_id)
-    old = route.rule_for(db, None, body.effective_from)
-    before = _plain({k: getattr(old, k) for k in ROUTE_FIELDS})
-    record_history(db, actor, "buying_route_rule", "company", before, _plain(dict(body.values)), reason)
+    old = route.in_force_row(db, category, body.effective_from)
+    before = _plain({k: old[k] for k in ROUTE_FIELDS}) if old else None
+    record_history(db, actor, "buying_route_rule", category or "company", before, _plain(dict(body.values)), reason)
     try:
-        version = route.save_rule(db, actor, dict(body.values), effective_from=body.effective_from, note=reason)
+        version = route.save_rule(
+            db, actor, dict(body.values), category=category, effective_from=body.effective_from, note=reason
+        )
     except route.RouteError as exc:
         db.rollback()
         raise _422(str(exc)) from None

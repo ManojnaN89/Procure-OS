@@ -41,7 +41,8 @@ class RouteError(Exception):
 # ---- the rule ---------------------------------------------------------------------------------
 
 
-def _in_force(db: Session, category: str | None, as_of: date) -> dict[str, Any] | None:
+def in_force_row(db: Session, category: str | None, as_of: date) -> dict[str, Any] | None:
+    """The row in force on the date: the company's (category None) or a category's own."""
     row = (
         db.execute(
             text(
@@ -58,7 +59,7 @@ def _in_force(db: Session, category: str | None, as_of: date) -> dict[str, Any] 
 
 def rule_for(db: Session, category: str | None, as_of: date) -> br.RouteRule:
     """The company's rule in force on the date, made stricter by the category's row when it has one."""
-    base = _in_force(db, None, as_of)
+    base = in_force_row(db, None, as_of)
     if base is None:
         raise RouteError(f"no buying route rule is in force on {as_of}")
     rule = br.RouteRule(
@@ -72,7 +73,7 @@ def rule_for(db: Session, category: str | None, as_of: date) -> br.RouteRule:
         three_quotes_above=Decimal(base["three_quotes_above"]),
         window_days=int(base["window_days"]),
     )
-    own = _in_force(db, category, as_of) if category else None
+    own = in_force_row(db, category, as_of) if category else None
     if own is None:
         return rule
     return br.stricter(rule, own, f"{rule.version} + {category} v{own['version']}")
@@ -92,7 +93,7 @@ def save_rule(
     unknown = set(values) - set(THRESHOLDS)
     if unknown:
         raise RouteError(f"not a threshold of the buying route: {', '.join(sorted(unknown))}")
-    current = _in_force(db, category, effective_from)
+    current = in_force_row(db, category, effective_from)
     if category is None:
         if current is None:
             raise RouteError("the company has no buying route rule to change")

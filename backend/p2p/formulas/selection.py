@@ -54,14 +54,14 @@ def check_rule(method: str, weights: Weights, tie_break: Sequence[str]) -> list[
     """What is wrong with a rule, in words (empty when it is fine)."""
     found: list[str] = []
     if method not in METHODS:
-        found.append(f"the method must be one of {', '.join(METHODS)}")
+        found.append("the method must be lowest total cost or weighted score")
     if any(w < 0 for w in (weights.price, weights.delivery, weights.quality, weights.payment_terms)):
         found.append("a weight must not be negative")
     if method == "weighted" and weights.total <= 0:
         found.append("a weighted comparison needs at least one weight above zero")
     unknown = [t for t in tie_break if t not in TIE_BREAKS]
     if unknown or len(set(tie_break)) != len(tie_break):
-        found.append(f"the tie-break is a list of {', '.join(TIE_BREAKS)}, each at most once")
+        found.append("a tie is broken by earlier delivery and higher vendor score, each at most once")
     return found
 
 

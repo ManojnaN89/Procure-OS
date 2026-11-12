@@ -77,8 +77,8 @@ def precedence(db: Session) -> tuple[str, ...]:
     order = tuple(p.strip() for p in settings.value(db, "approval_precedence", DEFAULT_PRECEDENCE).split(">"))
     if sorted(order) != sorted(DIMENSIONS):
         raise ApprovalRuleError(
-            "the setting approval_precedence must name category, department, location and spend_type once each, "
-            "separated by '>'"
+            "the approval precedence setting must list category, department, location and spend type once each, "
+            "with '>' between them"
         )
     return order
 
