@@ -1,7 +1,8 @@
 """Purchase orders: one per supplier, made from the lines of an approved request that are ready to be bought.
 
-A line is ready when it was sourced on a contract, or its quotation was awarded. The price is the contract price or
-the awarded net price, never an estimate; the GST rate is the item's (contract) or the quote's (award); the tax split
+A line is ready when it was sourced on a contract, bought directly by its buying route (once the purchase manager has
+agreed, when that was needed), or its quotation was awarded. The price is the contract price, the route's price on
+file or last price, or the awarded net price, never an estimate; the GST rate is the item's (contract) or the quote's (award); the tax split
 follows the supplier's state, the place of supply and the supplier's registration. A price well above the estimate
 holds the order until a person accepts the variance (rule 5), then it goes for approval by the rule table.
 """
@@ -50,8 +51,8 @@ class ReadyLine:
     supplier_code: str
     unit_price: Decimal
     gst_rate: Decimal
-    source: str  # contract or award
-    source_ref: str  # the contract code or the quote number
+    source: str  # contract, direct (a buying route without quotes) or award
+    source_ref: str  # the contract code, the route or the quote number
     quote_no: str | None = None
 
 
@@ -76,11 +77,13 @@ def ready_lines(db: Session, request_no: str, as_of: date) -> tuple[list[ReadyLi
         text(
             "select rl.line_no, rl.item_code, coalesce(i.name, rl.free_text) as name, rl.qty, rl.uom, rl.base_qty, "
             "rl.est_price, rl.need_by, rl.gl_code, coalesce(nullif(rl.category_code, ''), i.category_code) as category, "
-            "d.method, d.supplier_code as d_supplier, d.contract_code, d.price as d_price, d.rfq_no, "
+            "d.method, d.supplier_code as d_supplier, d.contract_code, d.price as d_price, d.rfq_no, d.route, "
+            "(not d.needs_agreement or exists (select 1 from proposal p where p.id = d.proposal_id "
+            "and p.status in ('approved', 'edited'))) as agreed, "
             "i.gst_rate_before, i.gst_rate_after, i.gst_rate_change_date "
             "from request_line rl join sourcing_decision d on d.request_no = rl.request_no and d.line_no = rl.line_no "
             "left join item i on i.code = rl.item_code "
-            "where rl.request_no = :n and rl.status = 'sourcing' and d.method in ('contract', 'rfq') "
+            "where rl.request_no = :n and rl.status = 'sourcing' and d.method in ('contract', 'direct', 'rfq') "
             "and not exists (select 1 from po_line p where p.request_no = rl.request_no "
             "and p.request_line_no = rl.line_no and p.status <> 'cancelled') order by rl.line_no"
         ),
@@ -102,7 +105,12 @@ def ready_lines(db: Session, request_no: str, as_of: date) -> tuple[list[ReadyLi
             "gl_code": r["gl_code"],
             "category": r["category"],
         }
-        if r["method"] == "contract":
+        if r["method"] in ("contract", "direct"):
+            if not r["agreed"]:
+                notes.append(
+                    f"line {r['line_no']} ({r['name']}): waiting for the purchase manager to agree to the direct buy"
+                )
+                continue
             rate = current_gst_rate(r["gst_rate_before"], r["gst_rate_after"], r["gst_rate_change_date"], as_of)
             if rate is None:
                 notes.append(
@@ -115,8 +123,8 @@ def ready_lines(db: Session, request_no: str, as_of: date) -> tuple[list[ReadyLi
                     supplier_code=r["d_supplier"],
                     unit_price=r["d_price"],
                     gst_rate=rate,
-                    source="contract",
-                    source_ref=r["contract_code"],
+                    source=r["method"],
+                    source_ref=r["contract_code"] if r["method"] == "contract" else r["route"],
                 )
             )
             continue

@@ -651,7 +651,9 @@ def get_requisition(no: str, db: Db, ctx: Ctx) -> dict[str, Any]:
         db,
         "select rl.line_no, rl.item_code, coalesce(i.name, rl.free_text) as name, rl.qty, rl.uom, rl.est_price, rl.need_by, "
         "rl.reason, rl.status, rl.delivery_location, d.method as source_method, d.reason as source_reason, "
-        "d.rfq_no as source_rfq, d.contract_code as source_contract, (select p.po_no from po_line p "
+        "d.rfq_no as source_rfq, d.contract_code as source_contract, d.route, d.route_rule, d.checks as route_checks, "
+        "d.min_quotes, d.window_value, (select status from proposal where id = d.proposal_id) as agreement, "
+        "(select p.po_no from po_line p "
         "where p.request_no = rl.request_no and p.request_line_no = rl.line_no and p.status <> 'cancelled' limit 1) as po_no "
         "from request_line rl "
         "left join item i on i.code = rl.item_code left join sourcing_decision d "
@@ -703,6 +705,12 @@ def get_requisition(no: str, db: Db, ctx: Ctx) -> dict[str, Any]:
                     "rfq_no": line["source_rfq"],
                     "contract": line["source_contract"],
                     "po_no": line["po_no"],
+                    "route": line["route"],
+                    "rule": line["route_rule"],
+                    "checks": line["route_checks"] or [],
+                    "min_quotes": line["min_quotes"],
+                    "window_value": str(line["window_value"]) if line["window_value"] is not None else None,
+                    "agreement": line["agreement"],  # the purchase manager's answer on a direct buy, if one was needed
                 }
                 if line["source_method"]
                 else None,
@@ -912,6 +920,38 @@ def source_requisition(
     except sourcing.SourcingError as exc:
         raise HTTPException(409, str(exc)) from None
     return sourcing.summary(result)
+
+
+@router.post("/requisitions/{no}/lines/{line_no}/route")
+def change_route(
+    no: str,
+    line_no: int,
+    payload: dict[str, Any],
+    db: Db,
+    ctx: Annotated[routing.TenantContext, Depends(require("rfq.create"))],
+) -> dict[str, Any]:
+    """A buyer tightens a line's buying route ('rfq', at once) or asks to loosen it ('direct' with a supplier and a
+    price, which the purchase manager agrees to)."""
+    try:
+        price = Decimal(str(payload["price"])) if payload.get("price") not in (None, "") else None
+    except InvalidOperation:
+        raise HTTPException(422, "price is not a number") from None
+    try:
+        return sourcing.change_route(
+            db,
+            ctx.slug,
+            no,
+            line_no,
+            str(payload.get("route") or ""),
+            sod.user(ctx.user_id),
+            reason=str(payload.get("reason") or ""),
+            as_of=business_today(),
+            supplier_code=payload.get("supplier_code"),
+            price=price,
+        )
+    except sourcing.SourcingError as exc:
+        db.rollback()
+        raise HTTPException(409, str(exc)) from None
 
 
 @router.get("/rfqs")

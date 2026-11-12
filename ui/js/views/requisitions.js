@@ -239,12 +239,24 @@ const RequisitionsView = {
     }
   },
 
+  ROUTE_LABEL: { contract: "contract", single_source: "single source", emergency: "emergency", reorder: "safe reorder", rfq: "quotes", direct: "direct buy", best_vendor: "best vendor" },
+
+  // The buying route, why it was chosen and every test it ran (D37), under the line's sourcing.
+  routeNote(s) {
+    if (!s.route) return "";
+    const checks = (s.checks || []).map((c) => `<div>${c.passed ? "\u2713" : "\u2717"} ${this.esc(c.detail)}</div>`).join("");
+    const waiting = s.agreement === "pending" ? ` <span class="badge badge-pending" style="font-size:10px;">purchase manager to agree</span>` : "";
+    return `${waiting}<details class="cell-muted" style="font-size:11px;margin-top:2px;"><summary>${this.esc(this.ROUTE_LABEL[s.route] || s.route)} \u00b7 ${this.esc(s.rule || "")}${s.min_quotes ? ` \u00b7 ${this.esc(s.min_quotes)} quotes` : ""}</summary><div>${this.esc(s.reason)}</div>${checks}</details>`;
+  },
+
   sourceCell(s) {
     if (!s) return `<span class="cell-muted">\u2014</span>`;
     const order = s.po_no ? ` <span class="badge badge-approved" style="font-size:10px;">ordered</span> <a href="#/purchase-orders/${this.esc(s.po_no)}" style="color:var(--accent-tint)">${this.esc(s.po_no)}</a>` : "";
-    if (s.method === "contract") return `<span class="badge badge-approved" style="font-size:10px;">contract</span> <span class="cell-muted">${this.esc(s.reason)}</span>${order}`;
-    if (s.method === "rfq") return `<span class="badge badge-pending" style="font-size:10px;">quotes</span> <a href="#/rfqs/${this.esc(s.rfq_no)}" style="color:var(--accent-tint)">${this.esc(s.rfq_no)}</a>${order}`;
-    return `<span class="badge badge-rejected" style="font-size:10px;">buyer</span> <span class="cell-muted">${this.esc(s.reason)}</span>`;
+    const route = this.routeNote(s);
+    if (s.method === "contract") return `<span class="badge badge-approved" style="font-size:10px;">contract</span> <span class="cell-muted">${s.route ? "" : this.esc(s.reason)}</span>${order}${route}`;
+    if (s.method === "direct") return `<span class="badge badge-approved" style="font-size:10px;">${this.esc(this.ROUTE_LABEL[s.route] || "direct buy")}</span>${order}${route}`;
+    if (s.method === "rfq") return `<span class="badge badge-pending" style="font-size:10px;">quotes</span> <a href="#/rfqs/${this.esc(s.rfq_no)}" style="color:var(--accent-tint)">${this.esc(s.rfq_no)}</a>${order}${route}`;
+    return `<span class="badge badge-rejected" style="font-size:10px;">buyer</span> <span class="cell-muted">${this.esc(s.reason)}</span>${route}`;
   },
 
   STEP_LABEL: { pending: "Waiting", waiting: "Later", approved: "Approved", rejected: "Rejected", returned: "Returned", cancelled: "Cancelled" },

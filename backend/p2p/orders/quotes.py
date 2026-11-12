@@ -433,7 +433,7 @@ def comparison(db: Session, rfq_no: str, as_of: date) -> Comparison:
     ]
     return Comparison(
         rfq_no=rfq_no,
-        min_quotes=_min_quotes(db, rfq["category_code"]),
+        min_quotes=rfq["min_quotes"] or _min_quotes(db, rfq["category_code"]),  # the buying route's, when it set one
         quotes_received=len(quotes),
         invited=len(invited),
         waiting_for=sorted(i["supplier_code"] for i in invited if not i["responded_at"] and not i["declined"]),

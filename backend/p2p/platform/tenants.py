@@ -1,5 +1,6 @@
 """Tenant provisioning: one database per tenant, tracked in the control database."""
 
+import os
 import re
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -87,7 +88,8 @@ def _admin_connection() -> Iterator["object"]:
 
 
 def tenant_db_name(slug: str) -> str:
-    return f"p2p_t_{slug}"
+    # a second test or eval run on the same Postgres sets its own prefix, so the two never share a company database
+    return f"{os.environ.get('P2P_TENANT_DB_PREFIX', 'p2p_t_')}{slug}"
 
 
 def create_tenant(
