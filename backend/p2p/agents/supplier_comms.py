@@ -8,7 +8,11 @@ the rest:
 - a change of delivery date or a delay within 'supplier_date_days' moves the promised date, and a quantity within
   'supplier_change_pct' is noted as a commitment: the order itself, and so its value, is never changed here;
 - a price change, a substitution, a rejection, a question, a larger change, a request to change bank details: a task
-  for the right person with a drafted reply, and nothing applied. A bank change is never applied by anything.
+  for the right person with a drafted reply, and nothing applied. A bank change is never applied by anything;
+- a date, quantity or price change and a refusal that are not applied also become proposed changes, old value to new,
+  that the buyer accepts or rejects on the order page (orders/confirmation.py): only an accepted one changes the order;
+- a dispatch (all of it, or part) is stored as a dispatch note for the store (orders/dispatch_notes.py), checked against
+  what is still to ship.
 
 Applying a small change and sending a reminder go through the autonomy gate ('supplier.change', 'supplier.remind'); when
 the gate says no, the same thing becomes a task for a buyer. Mail from anyone but a known contact of the supplier is not
@@ -31,7 +35,7 @@ from p2p.ai_steps.runner import run_step
 from p2p.formulas import supplier_changes as rules
 from p2p.formulas.calendar import IST, business_today
 from p2p.formulas.money import format_inr, format_qty
-from p2p.orders import dispatch
+from p2p.orders import confirmation, dispatch, dispatch_notes
 from p2p.platform import audit, emails, routing, tasks, worker
 from p2p.platform.sod import Actor
 
@@ -486,7 +490,7 @@ def _on_order(
             {"po_no": po_no, "email_id": int(mail["id"])},
         )  # fmt: skip
         return Handled("task", kind, f"the order is {order['status']}, so nothing was changed", task)
-    if kind in ("ack", "date_change", "delay", "partial_dispatch", "qty_change") and _CONDITION.search(
+    if kind in ("ack", "date_change", "delay", "partial_dispatch", "qty_change", "dispatch") and _CONDITION.search(
         f"{mail['subject'] or ''} {mail['body_text'] or ''}"
     ):
         # "Confirmed, but only if payment is made in advance" is not an acknowledgement: it changes the terms. Code decides this, not the model.
@@ -499,8 +503,13 @@ def _on_order(
         )
     if kind == "ack":
         return _ack(db, tenant, order, supplier, reading, mail, as_of)
+    if kind == "dispatch":
+        return _dispatched(db, tenant, order, supplier, reading, mail, as_of)
     if kind in ("date_change", "delay", "partial_dispatch"):
-        return _date(db, tenant, order, supplier, contact_name, reading, mail)
+        handled = _date(db, tenant, order, supplier, contact_name, reading, mail)
+        if kind == "partial_dispatch" and reading.qty is not None and _line_for(order, reading.item) is not None:
+            handled.notes.append(_note_dispatch(db, tenant, order, reading, mail, as_of, whole=False)[1])
+        return handled
     if kind == "qty_change":
         return _quantity(db, tenant, order, supplier, contact_name, reading, mail)
     return Handled("noted", kind, "nothing to do")
@@ -537,7 +546,29 @@ def _for_a_person(
             "old_price": reading.old_price, "new_price": reading.new_price, "line": line["line_no"] if line else None,
         },
     )  # fmt: skip
+    if reading.type == "price_change" and line is not None and reading.new_price is not None:
+        asked = [confirmation.Proposed("price", line["line_no"], str(reading.new_price))]
+        _propose(db, tenant, order, asked, reading, mail, task)
+    elif reading.type == "reject":
+        _propose(db, tenant, order, [confirmation.Proposed("decline")], reading, mail, task)
     return Handled("task", reading.type, "a buyer decides; nothing on the order was changed", task, draft)
+
+
+def _propose(
+    db: Session, tenant: str, order: dict[str, Any], asked: list[confirmation.Proposed], reading: step.SupplierMessage,
+    mail: Any, task: int,
+) -> None:  # fmt: skip
+    """What the email asks for also goes to the buyer as proposed changes, old value to new, on the buyer's task. The
+    values are the ones the evidence check found in the email; the buyer decides."""
+    if not asked:
+        return
+    try:
+        confirmation.propose(
+            db, tenant, order["no"], asked, source="email", reason=reading.reason, actor=AGENT, email_id=int(mail["id"]),
+            task_id=task,
+        )  # fmt: skip
+    except confirmation.ConfirmationError:
+        db.rollback()  # nothing to propose (the same value, or a line no longer open): the task alone stays
 
 
 def _gate(db: Session, decision: str, order: dict[str, Any], reading: step.SupplierMessage) -> autonomy.GateDecision:
@@ -610,6 +641,12 @@ def _date(
             "within_tolerance": verdict.ok, "reply_draft": draft,
         },
     )  # fmt: skip
+    if requested is not None:
+        line = _line_for(order, reading.item)
+        lines = [line] if line else [ln for ln in order["lines"] if ln["status"] in ("open", "part_received")]
+        moved = [ln for ln in lines if (ln["promised_date"] or ln["need_by"]) != requested]
+        asked = [confirmation.Proposed("date", ln["line_no"], requested.isoformat()) for ln in moved]
+        _propose(db, tenant, order, asked, reading, mail, task)
     return Handled("task", reading.type, f"not applied: {why}", task, draft)
 
 
@@ -693,7 +730,64 @@ def _quantity(
         db, tenant, "supplier_change", f"{supplier} can supply a different quantity on {po_no}: {why}"[:200], ("Buyer",), 24,
         {"po_no": po_no, "email_id": int(mail["id"]), "qty": reading.qty, "line": line["line_no"] if line else None, "reply_draft": draft},
     )  # fmt: skip
+    if line is not None and reading.qty is not None:
+        asked = [confirmation.Proposed("qty", line["line_no"], str(reading.qty))]
+        _propose(db, tenant, order, asked, reading, mail, task)
     return Handled("task", "qty_change", f"not applied: {why}", task, draft)
+
+
+def _note_dispatch(
+    db: Session,
+    tenant: str,
+    order: dict[str, Any],
+    reading: step.SupplierMessage,
+    mail: Any,
+    as_of: date,
+    *,
+    whole: bool,
+) -> tuple[bool, str]:
+    """Store what the email says was shipped as a dispatch note. With `whole` and no quantity written, the email says the
+    order went out: everything still to ship. Returns whether it was stored, and what happened in words."""
+    po_no = order["no"]
+    line = _line_for(order, reading.item)
+    if reading.qty is not None:
+        if line is None:
+            return False, "the email gives a quantity shipped but not which line"
+        quantities = {int(line["line_no"]): reading.qty}
+    elif whole:
+        quantities = {n: ln["left"] for n, ln in dispatch_notes.to_ship(db, po_no).items() if ln["left"] > 0}
+    else:
+        return False, "the email gives no quantity shipped"
+    shipped = reading.shipped_on or as_of
+    expected = reading.new_date if reading.new_date and reading.new_date >= shipped else None
+    try:
+        recorded = dispatch_notes.record(
+            db, tenant, po_no, quantities, shipped_on=shipped, actor=AGENT, source="email", expected_on=expected,
+            vehicle=reading.vehicle, lr_no=reading.lr_no, invoice_no=reading.invoice_no, email_id=int(mail["id"]),
+        )  # fmt: skip
+    except dispatch_notes.DispatchNoteError as exc:
+        db.rollback()
+        return False, f"the dispatch was not recorded: {exc}"
+    return True, f"dispatch note {recorded.note_id} recorded for the store" + (" (part)" if recorded.partial else "")
+
+
+def _dispatched(
+    db: Session,
+    tenant: str,
+    order: dict[str, Any],
+    supplier: str,
+    reading: step.SupplierMessage,
+    mail: Any,
+    as_of: date,
+) -> Handled:
+    stored, said = _note_dispatch(db, tenant, order, reading, mail, as_of, whole=True)
+    if stored:
+        return Handled("applied", "dispatch", said)
+    task = _task(
+        db, tenant, "supplier_dispatch", f"{supplier} says it shipped against {order['no']}: {said}"[:200], ("Buyer",), 24,
+        {"po_no": order["no"], "email_id": int(mail["id"]), "qty": reading.qty, "why": said},
+    )  # fmt: skip
+    return Handled("task", "dispatch", said, task)
 
 
 def _send(db: Session, supplier: str, po_no: str, subject: str, body: str) -> bool:

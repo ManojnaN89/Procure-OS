@@ -58,6 +58,8 @@ const ReceivingView = {
           </div>
           <div class="btn btn-secondary btn-sm recv-open" data-po="${this.esc(o.id)}">Receive goods</div>
         </div>
+        ${(o.dispatches || []).map((n) => `
+          <div style="font-size:12px;margin-top:6px;color:var(--text-secondary);"><i class="ti ti-truck"></i> On the way: shipped ${formatDate(n.shipped_on)}${n.expected_on ? `, expected ${formatDate(n.expected_on)}` : ""} · ${n.lines.map((l) => `${this.esc(l.qty)} ${this.esc(l.uom || "")} ${this.esc(l.name)}`).join(", ")}${n.vehicle ? ` · vehicle ${this.esc(n.vehicle)}` : ""}${n.lr_no ? ` · LR/AWB ${this.esc(n.lr_no)}` : ""}${n.invoice_no ? ` · invoice ${this.esc(n.invoice_no)}` : ""}</div>`).join("")}
         <div id="recv-${this.esc(o.id)}" style="display:none;margin-top:12px;">
           <table class="data-table"><thead><tr><th>ITEM</th><th>ORDERED</th><th>RECEIVED SO FAR</th><th>ARRIVED NOW</th><th>REJECTED</th><th>REASON FOR REJECTION</th></tr></thead><tbody>
             ${o.lines.map((l) => `

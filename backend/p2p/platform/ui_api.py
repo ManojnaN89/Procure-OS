@@ -32,7 +32,7 @@ from p2p.formulas.scoring import risk_level
 from p2p.formulas.suppliers import LABELS
 from p2p.masters import supplier_status
 from p2p.orders import contracts as contract_usage
-from p2p.orders import dispatch, quotes
+from p2p.orders import dispatch, dispatch_notes, quotes
 from p2p.orders import service as orders  # noqa: F401 - registers the price-variance proposal executor
 from p2p.orders import workflow as po_workflow
 from p2p.platform import audit, ratelimit, routing, sod
@@ -1553,6 +1553,7 @@ def goods_waiting(db: Db, ctx: Ctx) -> list[dict[str, Any]]:
                 "supplier": o["supplier"],
                 "ship_to": o["ship_to_location"],
                 "promised_date": o["promised"].isoformat() if o["promised"] else None,
+                "dispatches": dispatch_notes.notes(db, o["no"]),  # what the supplier says is on the way
                 "lines": [
                     {
                         "line_no": ln["line_no"],
@@ -1718,7 +1719,9 @@ def _dispatch_action(call: Callable[[], dict[str, Any]]) -> dict[str, Any]:
 def send_purchase_order(
     no: str, db: Db, ctx: Annotated[routing.TenantContext, Depends(require("po.send"))]
 ) -> dict[str, Any]:
-    return _dispatch_action(lambda: {"sent_to": dispatch.send_po(db, no, sod.user(ctx.user_id)), "status": "sent"})
+    return _dispatch_action(
+        lambda: {"sent_to": dispatch.send_po(db, no, sod.user(ctx.user_id), tenant=ctx.slug), "status": "sent"}
+    )
 
 
 @router.post("/purchase-orders/{no}/acknowledge")

@@ -15,6 +15,8 @@ You receive the goods and say what is wrong with them.
 
 More than the tolerance allows over the order is refused. The tolerance is set per item category by the Admin.
 
+When the supplier has recorded a dispatch, the order says "On the way": what was shipped, when, the vehicle or LR/AWB number and when it should arrive. You also get a notification. It is only what the supplier says: count what actually arrives.
+
 ## Inspect
 
 Items marked for inspection wait. Open the receipt and click **Record inspection** with the result.

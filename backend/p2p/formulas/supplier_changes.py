@@ -1,7 +1,9 @@
-"""When a change a supplier asks for is small enough to accept without a person. Plain rules on dates and quantities.
+"""When a change a supplier asks for is small enough to accept without a person, or a price change small enough for a
+buyer alone. Plain rules on dates, quantities and prices.
 
-The limits come from the company's tolerance table ('supplier_date_days' and 'supplier_change_pct'). A price is never in
-here: a price change is a change of the order's value, so it always goes to a person.
+The limits come from the company's tolerance table ('supplier_date_days', 'supplier_change_pct', 'supplier_price_pct').
+A price change is never applied without a person: judge_price only says whether the buyer may accept it or the purchase
+manager has to.
 """
 
 from dataclasses import dataclass
@@ -62,6 +64,19 @@ def judge_quantity(ordered: Decimal, offered: Decimal, tolerance_pct: Decimal) -
     return Verdict(
         OUT,
         f"{offered} against {ordered} ordered is a difference of {difference}, more than the {tolerance_pct}% accepted",
+    )
+
+
+def judge_price(old: Decimal, new: Decimal, tolerance_pct: Decimal) -> Verdict:
+    """Whether a buyer may accept a new unit price alone ('supplier_price_pct'): a lower price always, a higher one up to
+    the tolerance (the percentage itself included). Above it the purchase manager decides. Exact: no rounding."""
+    if old <= 0 or new <= 0:
+        return Verdict(OUT, "the price is not known")
+    allowed = old * tolerance_pct / 100
+    if new - old <= allowed:
+        return Verdict(IN_TOLERANCE, f"{new} against {old} is within {tolerance_pct}%")
+    return Verdict(
+        OUT, f"{new} against {old} is a rise of {new - old}, more than the {tolerance_pct}% a buyer may accept"
     )
 
 

@@ -3,7 +3,9 @@
 An order goes out only when it is approved, not held, and the supplier is still active with good documents. By default a
 buyer clicks Send (the setting 'po_send_requires_confirmation'); when a company turns that off, the worker sends the order
 as soon as it is approved, unless the kill switch is on. The acknowledgement carries the date the supplier promises, which
-is copied to the open lines and checked against the date the goods are needed.
+is copied to the open lines and checked against the date the goods are needed. The email carries a signed link where the
+supplier accepts, declines or asks for a change (orders/supplier_links.py, orders/confirmation.py), and sending an order
+starts the daily delivery reminders (orders/delivery_reminders.py).
 """
 
 import logging
@@ -16,7 +18,7 @@ from sqlalchemy.orm import Session
 
 from p2p.formulas.calendar import IST, business_today
 from p2p.formulas.money import format_inr, format_qty
-from p2p.orders import document
+from p2p.orders import delivery_reminders, document, supplier_links
 from p2p.platform import audit, emails, reference, routing, worker
 from p2p.platform.sod import Actor
 from p2p.sourcing import documents
@@ -46,6 +48,7 @@ def _body(
     contact: str | None,
     company: str,
     ship_to: str,
+    link: str | None = None,
 ) -> str:
     rows = "\n".join(
         f"{n:>3}. {ln['description']}"
@@ -71,12 +74,14 @@ def _body(
         f"GST: {format_inr(tax)}\n"
         f"Order total: {format_inr(po['total'])}\n\n"
         "Please acknowledge this order by replying to this email, keeping the subject line, with the date you will deliver.\n\n"
-        f"Regards,\nProcurement, {company}\n"
+        + (f"Or accept it, decline it or ask for a change here (the link works once):\n{link}\n\n" if link else "")
+        + f"Regards,\nProcurement, {company}\n"
     )
 
 
-def send_po(db: Session, po_no: str, actor: Actor = SERVICE) -> str:
-    """Email the order to the supplier's main contact and mark it sent. Returns the address it went to."""
+def send_po(db: Session, po_no: str, actor: Actor = SERVICE, *, tenant: str | None = None) -> str:
+    """Email the order to the supplier's main contact and mark it sent. Returns the address it went to. With the tenant,
+    the email carries the supplier's link to answer it, and the delivery reminders are scheduled."""
     po = db.execute(text("select * from po where no = :n for update"), {"n": po_no}).mappings().first()
     if po is None:
         raise DispatchError(f"{po_no} does not exist")
@@ -123,12 +128,13 @@ def send_po(db: Session, po_no: str, actor: Actor = SERVICE) -> str:
         po = db.execute(text("select * from po where no = :n for update"), {"n": po_no}).mappings().one()
         pdf = []
     version = f" (version {po['version']})" if int(po["version"]) > 1 else ""
+    link = supplier_links.url(supplier_links.issue(db, tenant, po_no, "respond")) if tenant else None
     try:
         emails.send_linked_email(
             db,
             contact[0],
             f"Purchase order {po_no}{version}",
-            _body(dict(po), lines, charges, contact[1], str(company), str(ship_to)),
+            _body(dict(po), lines, charges, contact[1], str(company), str(ship_to), link),
             linked_type="po",
             linked_ref=po_no,
             attachments=pdf or None,
@@ -144,6 +150,8 @@ def send_po(db: Session, po_no: str, actor: Actor = SERVICE) -> str:
         db, actor, "po.send", "po", po_no, before={"status": "approved"}, after={"status": "sent", "to": contact[0]}
     )
     db.commit()
+    if tenant:
+        delivery_reminders.schedule(tenant)
     return str(contact[0])
 
 
@@ -208,7 +216,7 @@ def _auto_send(ctx: worker.JobContext) -> None:
         if db.execute(text("select kill_switch from autonomy_global where id = 1")).scalar_one():
             return
         try:
-            send_po(db, str(ctx.payload["po_no"]))
+            send_po(db, str(ctx.payload["po_no"]), tenant=ctx.tenant)
         except DispatchError as exc:
             db.rollback()
             log.info("order %s was not sent: %s", ctx.payload.get("po_no"), exc)

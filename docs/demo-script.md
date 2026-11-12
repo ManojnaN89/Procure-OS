@@ -41,6 +41,19 @@ Apex Pumps is the main demo company: one pump plant at Chakan, nine people, sixt
 | 17 | director@ | **Control tower**, **Dashboard → Where things stand** | Nothing left in any stage; the cycle KPIs count the four requests |
 | 18 | admin@ | **Admin** → **Company setup** → **Policies** → reason, change **Days suppliers get to quote**, **Save**; then **Audit** and **History** | The change is in both, with its reason |
 
+## The supplier's answer (step 8)
+
+Instead of **Record acknowledgement** in step 11, let the suppliers answer. Each order email in Mailpit has a link (it works once):
+
+| # | Who | Where and what | You should see |
+|---|---|---|---|
+| 1 | the suppliers | Open the belt and wire order emails → the link → **Accept the order** | The orders are acknowledged; each supplier gets a second email with a link to record the dispatch |
+| 2 | Gujarat Bearings and Seals | Open the seal order email → the link → **Ask for a change**: new date 6 Dec → **Send the change to the buyer** | The order is unchanged: version 1 |
+| 3 | buyer@ | **Purchase orders** → the seal order → **Supplier's answer**: "delivery date ... to 06 Dec 2026" → **Accept** | Version 2 with the new date; the supplier gets the revised order. A price rise above 2% would go on to purchasemanager@ instead |
+| 4 | Western Industrial | The dispatch link → part of the belts, a vehicle and LR number → **Record the dispatch** | store@ sees **On the way** on **Goods receipt**; the supplier gets a link for the rest |
+
+Two working days before a promised date the supplier is reminded, and while nothing has arrived after it (the job worker sends these each morning).
+
 ## Production orders: the store check
 
 Steps 1 to 3 of the flow, on their own (after `demo reset apex`; they add two requests, so do them after the journey or on a fresh reset):

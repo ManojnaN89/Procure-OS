@@ -90,7 +90,7 @@ def submit(db: Session, tenant: str, po_no: str, actor: Actor, *, today: date | 
         )
         db.commit()
         if touchless.decide(db, po_no, rule, today):
-            touchless.issue(db, po_no)
+            touchless.issue(db, po_no, tenant)
         else:
             dispatch.queue_if_automatic(db, tenant, po_no)
         return "approved"

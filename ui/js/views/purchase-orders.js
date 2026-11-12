@@ -221,6 +221,57 @@ const PurchaseOrdersView = {
     });
   },
 
+  CHANGE_STATUS: { proposed: "To decide", waiting_approval: "Waiting", accepted: "Accepted", rejected: "Rejected", withdrawn: "Withdrawn" },
+
+  // What the supplier asked for (old value to new, a buyer accepts or rejects) and what it says it has shipped.
+  async mountSupplierAnswer(po) {
+    const box = document.getElementById("poAnswerBox");
+    if (!box) return;
+    const res = await Auth.fetch(`${API.base}/api/purchase-orders/${encodeURIComponent(po.id)}/supplier-answer`);
+    if (!res.ok) return;
+    const a = await res.json();
+    if (!a.changes.length && !a.dispatch_notes.length) { box.innerHTML = ""; return; }
+    const changes = a.changes.map((c) => `
+      <div style="padding:8px 0;border-bottom:1px solid var(--border);font-size:12.5px;" data-change="${this.esc(c.id)}">
+        <div style="display:flex;justify-content:space-between;gap:12px;">
+          <div><span style="color:var(--text-primary);">${this.esc(c.what)}</span>
+            <span class="cell-muted"> · by ${c.source === "email" ? "email" : "the supplier's link"} · ${formatDate(c.at)}</span>
+            ${c.kind === "price" && c.status === "proposed" ? `<div class="cell-muted" style="font-size:11.5px;">${c.within_tolerance ? "Within the price tolerance: yours to accept" : "Above the price tolerance: accepting sends it to the purchase manager"}</div>` : ""}
+            ${c.reason ? `<div class="cell-muted" style="font-size:11.5px;">“${this.esc(c.reason)}”</div>` : ""}
+            ${c.waiting_for ? `<div class="cell-muted" style="font-size:11.5px;">Waiting for ${this.esc(c.waiting_for)}</div>` : ""}
+            ${c.decision_note ? `<div class="cell-muted" style="font-size:11.5px;">${this.esc(c.decision_note)}</div>` : ""}
+            ${c.version_made ? `<div class="cell-muted" style="font-size:11.5px;">Made version ${this.esc(c.version_made)}</div>` : ""}
+          </div>
+          <span class="badge badge-${c.status === "accepted" ? "approved" : c.status === "rejected" ? "rejected" : "waiting"}" style="white-space:nowrap;align-self:flex-start;">${this.esc(this.CHANGE_STATUS[c.status] || c.status)}</span>
+        </div>
+        ${c.can_decide ? `<div style="display:flex;gap:8px;margin-top:6px;align-items:center;flex-wrap:wrap;">
+          <input class="chg-note" placeholder="Reason (needed to reject)" style="padding:6px;font-size:12.5px;flex:1;min-width:160px;">
+          <div class="btn btn-primary btn-sm chg-yes">Accept</div><div class="btn btn-sm chg-no">Reject</div></div>` : ""}
+      </div>`).join("");
+    const notes = a.dispatch_notes.map((n) => `
+      <div style="padding:6px 0;border-bottom:1px solid var(--border);font-size:12.5px;">
+        Shipped ${formatDate(n.shipped_on)}: ${n.lines.map((l) => `${this.esc(l.qty)} ${this.esc(l.uom || "")} ${this.esc(l.name)}`).join(", ")}
+        <div class="cell-muted" style="font-size:11.5px;">${[n.vehicle && `vehicle ${this.esc(n.vehicle)}`, n.lr_no && `LR/AWB ${this.esc(n.lr_no)}`, n.invoice_no && `invoice ${this.esc(n.invoice_no)}`, n.expected_on && `expected ${formatDate(n.expected_on)}`].filter(Boolean).join(" · ")}</div>
+      </div>`).join("");
+    box.innerHTML = `
+      <div class="panel" style="margin-bottom:12px;">
+        <div class="panel-title">Supplier's answer</div>
+        ${changes ? `<div class="cell-muted" style="font-size:11.5px;margin-bottom:4px;">CHANGES ASKED FOR</div>${changes}` : ""}
+        ${notes ? `<div class="cell-muted" style="font-size:11.5px;margin:10px 0 4px;">DISPATCHED</div>${notes}` : ""}
+        <div id="poAnswerNote" style="font-size:12px;color:var(--warning-text);margin-top:8px;"></div>
+      </div>`;
+    const decide = async (row, accept) => {
+      const r = await API.postJSON(`/api/supplier-changes/${row.dataset.change}/decide`, { accept, note: row.querySelector(".chg-note").value });
+      if (r.ok) return this.renderDetail(document.getElementById("appContent"), po.id);
+      document.getElementById("poAnswerNote").textContent = r.data.detail || "That did not work.";
+    };
+    box.querySelectorAll("[data-change]").forEach((row) => {
+      const yes = row.querySelector(".chg-yes"), no = row.querySelector(".chg-no");
+      if (yes) yes.addEventListener("click", () => decide(row, true));
+      if (no) no.addEventListener("click", () => decide(row, false));
+    });
+  },
+
   async renderDetail(container, id) {
     container.innerHTML = `<div class="page-header"><h1>${this.esc(id)}</h1></div><div class="panel">Loading…</div>`;
     try {
@@ -240,6 +291,7 @@ const PurchaseOrdersView = {
         ${this.approvalPanel(po)}
         ${this.touchlessPanel(po)}
         ${this.dispatchPanel(po)}
+        <div id="poAnswerBox"></div>
         <div id="poChangesBox"></div>
         <div id="supplierMessagesBox"></div>
         <div class="panel" style="margin-bottom:12px;font-size:12.5px;color:var(--text-secondary);">
@@ -278,6 +330,7 @@ const PurchaseOrdersView = {
       `;
       this.wire(po);
       this.mountChanges(po);
+      if (po.sent_at) this.mountSupplierAnswer(po);
       if (po.sent_at) SupplierMessages.mount(document.getElementById("supplierMessagesBox"), "orders", po.id);
     } catch {
       container.innerHTML = `<div class="empty-state">Couldn't load this purchase order.</div>`;

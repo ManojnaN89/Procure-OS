@@ -212,12 +212,12 @@ def decide(db: Session, po_no: str, rule: rules.ApprovalRule, today: date) -> bo
     return ok
 
 
-def issue(db: Session, po_no: str) -> bool:
+def issue(db: Session, po_no: str, tenant: str | None = None) -> bool:
     """Send a touchless order to its supplier, as the system. If it cannot go, it waits for the buyer, and says why."""
     label = db.execute(text("select touchless_rule from po where no = :n"), {"n": po_no}).scalar()
     actor = Actor("rule", str(label))
     try:
-        dispatch.send_po(db, po_no, actor)
+        dispatch.send_po(db, po_no, actor, tenant=tenant)
     except dispatch.DispatchError as exc:
         db.rollback()
         note = f"Touchless, but it could not be sent ({exc}), so a buyer sends it"

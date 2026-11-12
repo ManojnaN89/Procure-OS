@@ -9,10 +9,6 @@ Approving a request above the setting `approval_otp_above` also needs a one-time
 (platform/otp.py); rejecting or returning needs a reason, never a code.
 """
 
-import base64
-import hashlib
-import hmac
-import json
 import time
 from dataclasses import dataclass
 from decimal import Decimal
@@ -26,11 +22,13 @@ from p2p.config import get_settings
 from p2p.formulas.calendar import business_today
 from p2p.formulas.money import format_inr, format_qty
 from p2p.platform import otp, permissions
+from p2p.platform.signing import SignatureError, Signer
 
 EXPIRES_DAYS = 7
 VIA = "emailed link"
 CODES = otp.OneTimeCodes("approval")
 ACTIONS = ("approve", "reject", "return")
+SIGNER = Signer("approval-link")
 
 
 class LinkError(Exception):
@@ -52,39 +50,22 @@ class Link:
         return f"{self.request_no}:{self.round_no}:{self.step}"
 
 
-def _key() -> bytes:
-    secret = get_settings().jwt_secret
-    if not secret:
-        raise LinkError("approval links are not available: no signing secret is set")
-    return hashlib.sha256(b"approval-link:" + secret.encode()).digest()
-
-
-def _b64(data: bytes) -> str:
-    return base64.urlsafe_b64encode(data).decode().rstrip("=")
-
-
-def _unb64(text_: str) -> bytes:
-    return base64.urlsafe_b64decode(text_ + "=" * (-len(text_) % 4))
-
-
 def make(tenant: str, request_no: str, round_no: int, step: int, user_id: int, *, now: float | None = None) -> str:
     expires = int((time.time() if now is None else now) + EXPIRES_DAYS * 86400)
-    body = _b64(json.dumps([tenant, request_no, round_no, step, user_id, expires], separators=(",", ":")).encode())
-    return f"{body}.{_b64(hmac.new(_key(), body.encode(), hashlib.sha256).digest())}"
+    try:
+        return SIGNER.sign([tenant, request_no, round_no, step, user_id, expires])
+    except SignatureError as exc:
+        raise LinkError(str(exc)) from None
 
 
 def read(token: str, *, now: float | None = None) -> Link:
     """The link a token stands for. Raises LinkError for anything altered, malformed or expired."""
     try:
-        body, signature = token.split(".")
-        good = hmac.compare_digest(_unb64(signature), hmac.new(_key(), body.encode(), hashlib.sha256).digest())
-        tenant, no, round_no, step, user_id, expires = json.loads(_unb64(body))
-    except LinkError:
-        raise
-    except Exception:  # noqa: BLE001 - whatever is wrong with the text, it is not a link we made
+        tenant, no, round_no, step, user_id, expires = SIGNER.read(token)
+    except SignatureError as exc:
+        raise LinkError(str(exc)) from None
+    except ValueError:
         raise LinkError("this link is not valid") from None
-    if not good:
-        raise LinkError("this link is not valid")
     if (time.time() if now is None else now) > int(expires):
         raise LinkError("this link has expired: open the request in the app")
     return Link(str(tenant), str(no), int(round_no), int(step), int(user_id), int(expires))

@@ -104,6 +104,10 @@ settings:
   - [default_rfq_response_days, "5", Working days suppliers get to respond to an RFQ]
   - [rfq_reminder_after_days, "2", Working days after which a silent supplier is reminded]
   - [supplier_ack_due_days, "2", Working days within which a PO acknowledgement is expected]
+  - [delivery_reminder_before_days, "2", Working days before the promised date a supplier is reminded (once)]
+  - [delivery_overdue_after_days, "1", Working days after a missed promised date the first reminder goes while nothing has arrived]
+  - [delivery_overdue_every_days, "3", Working days between further reminders about a missed delivery]
+  - [delivery_overdue_max, "3", Reminders about a missed delivery at most]
   - [price_band_pct, "15", A quote deviating more than this percent from the benchmark price is flagged]
   - [cost_of_capital_pct, "12", Used for early-payment discount decisions]
   - [min_quotes_default, "2", Minimum quotes when the category does not say]
@@ -126,7 +130,8 @@ tolerances:
   - [qty_pct, "0.00", Invoiced quantity above received quantity is not allowed]
   - [small_diff_abs, "100.00", Total invoice difference up to this amount is accepted]
   - [receipt_over_pct, "0.00", Receipt above ordered quantity is not accepted]
-  - [supplier_change_pct, "5.00", Supplier quantity or price change accepted by the agent up to this percent]
+  - [supplier_change_pct, "5.00", Supplier quantity change noted by the agent up to this percent]
+  - [supplier_price_pct, "2.00", Supplier price rise a buyer may accept up to this percent; above it the purchase manager decides]
   - [supplier_date_days, "3", Supplier delivery date slip accepted by the agent up to this many days]
 
 budgets:

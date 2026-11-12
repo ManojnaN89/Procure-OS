@@ -242,6 +242,37 @@ POLICIES: dict[str, tuple[str, str, str, str, str, float | None, float | None, t
         60,
         (),
     ),
+    "delivery_reminder_before_days": (
+        "org",
+        "int",
+        "Remind a supplier before delivery (working days)",
+        "One email this many working days before the promised date",
+        "2",
+        0,
+        30,
+        (),
+    ),
+    "delivery_overdue_after_days": (
+        "org",
+        "int",
+        "Remind about a missed delivery after (working days)",
+        "The first reminder when nothing has arrived by the promised date",
+        "1",
+        0,
+        30,
+        (),
+    ),
+    "delivery_overdue_every_days": (
+        "org",
+        "int",
+        "Then remind every (working days)",
+        "Until the goods arrive or the maximum is reached",
+        "3",
+        1,
+        30,
+        (),
+    ),
+    "delivery_overdue_max": ("org", "int", "Reminders about a missed delivery, at most", "", "3", 0, 10, ()),
     "po_send_requires_confirmation": (
         "org",
         "bool",
@@ -352,7 +383,8 @@ TOLERANCES: dict[str, tuple[str, str, float | None, float | None]] = {
     "qty_pct": ("Invoice quantity above what was received (%)", "decimal", 0, 100),
     "receipt_over_pct": ("Goods received above the quantity ordered (%)", "decimal", 0, 100),
     "small_diff_abs": ("Small invoice difference accepted (rupees)", "decimal", 0, None),
-    "supplier_change_pct": ("Supplier's quantity or price change accepted (%)", "decimal", 0, 100),
+    "supplier_change_pct": ("Supplier's quantity change noted by the agent (%)", "decimal", 0, 100),
+    "supplier_price_pct": ("Supplier's price rise a buyer may accept (%)", "decimal", 0, 100),
 }
 
 # decision type -> (label, what it does, how its level is stored)

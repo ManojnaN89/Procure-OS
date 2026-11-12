@@ -26,6 +26,10 @@ A price far below the other quotes or the last price paid shows "Ask the supplie
 
 **Purchase orders** → open the order. Lines that share a supplier, the same payment and delivery terms and the same delivery place are on one order; a different set of terms (for example a contract line and a quoted line) or a line for another location makes a second order. The delivery place is printed on the order and in the email. The tier says who approves by the total: up to Rs 1,00,000 it is yours (your **Send to supplier** is the approval), then the purchase manager, above Rs 5,00,000 the director. **Touchless** orders go out without you: contract or safe-reorder lines within your tier and the touchless limit, an active supplier, the contract within its ceiling, prices at most 2% above the estimate, the budget fine, and touchless orders turned on. Single-source and emergency lines never do. Otherwise the **Touchless check** panel says why the order waits for you. **Open the order document (PDF)** shows what the supplier gets; it goes with the email. When it is approved click **Send to supplier**. When the supplier confirms click **Record acknowledgement** and enter the promised date. If the supplier writes about the order, the panel **Supplier messages** on the order shows what the system understood, and **Chase suppliers now** sends the reminders that are due.
 
+## The supplier's answer
+
+The order email has a link where the supplier accepts the order, declines it or asks for a new date, quantity or price; it may also reply by email. Nothing changes by itself: the panel **Supplier's answer** on the order lists each change, old value to new. Click **Accept**, or write a reason and click **Reject** (the supplier gets a new link). An accepted change makes a new version of the order and the requester is told; a price rise above 2% goes on to the purchase manager; an accepted decline cancels the order and gives you a task to source the line again. The panel also shows what the supplier says it has shipped. Reminders about the delivery date go to the supplier by themselves.
+
 ## Change or end an order
 
 On the order page, the panel **Order document and changes** keeps the version and its history. Every change needs a reason.
@@ -36,14 +40,8 @@ On the order page, the panel **Order document and changes** keeps the version an
 
 ## Suppliers and contracts
 
-**Vendors** → **Onboard vendor**: fill in the form and click **Save as draft**. The checks name any wrong PAN, GSTIN, Udyam number or bank detail. On the vendor page click **Add a document** for each paper (PAN, bank proof, GST and Udyam certificates) and **Attach** its scan. A different person verifies each document, and a person with approval rights activates the supplier. The bank account of a supplier already in use can only change with another person's approval.
-
-**Contracts** → **Store contract**, **Add a price**. A different person activates the contract.
+**Vendors** → **Onboard vendor**: fill in the form and click **Save as draft**. The checks name any wrong PAN, GSTIN, Udyam number or bank detail. On the vendor page click **Add a document** for each paper (PAN, bank proof, GST and Udyam certificates) and **Attach** its scan. A different person verifies each document, and a person with approval rights activates the supplier. The bank account of a supplier already in use can only change with another person's approval. **Contracts** → **Store contract**, **Add a price**. A different person activates the contract.
 
 ## What you cannot do
 
-You cannot approve an order, verify a document you added, or activate a contract.
-
-## If you are stuck
-
-An order held for a price waits for an Approver. A supplier with a missing or unverified document cannot be used: open the vendor to see which one.
+You cannot approve an order, verify a document you added, or activate a contract. An order held for a price waits for an Approver. A supplier with a missing or unverified document cannot be used: open the vendor to see which one.

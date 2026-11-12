@@ -1,4 +1,5 @@
-"""The order's document, its versions, and changing it after it was made: revise, cancel, close the balance."""
+"""The order's document, its versions, and changing it after it was made: revise, cancel, close the balance; the changes a
+supplier asked for and its dispatch notes."""
 
 from collections.abc import Callable
 from datetime import date
@@ -10,9 +11,9 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from p2p.approvals.workflow import ApprovalError
-from p2p.orders import changes, document
+from p2p.orders import changes, confirmation, dispatch_notes, document
 from p2p.platform import routing
-from p2p.platform.permissions import can_anywhere, require
+from p2p.platform.permissions import PermissionDenied, can_anywhere, require
 
 router = APIRouter(prefix="/api", tags=["orders"])
 Db = Annotated[Session, Depends(routing.tenant_session)]
@@ -108,3 +109,31 @@ def cancel_order(no: str, payload: dict[str, Any], db: Db, ctx: Buyer) -> dict[s
 @router.post("/purchase-orders/{no}/close-balance")
 def close_balance(no: str, payload: dict[str, Any], db: Db, ctx: Buyer) -> dict[str, Any]:
     return _guard(lambda: changes.close_balance(db, ctx.slug, no, ctx.user_id, payload.get("reason")))
+
+
+# ---- the supplier's answer: proposed changes and dispatch notes -------------------------------------
+
+
+@router.get("/purchase-orders/{no}/supplier-answer")
+def supplier_answer(no: str, db: Db, ctx: Ctx) -> dict[str, Any]:
+    """The changes the supplier asked for (and who may decide them) and its dispatch notes."""
+    if db.execute(text("select 1 from po where no = :n"), {"n": no}).first() is None:
+        raise HTTPException(404, "Not found")
+    return {
+        "changes": confirmation.list_changes(db, no, ctx.user_id),
+        "dispatch_notes": dispatch_notes.notes(db, no),
+    }
+
+
+@router.post("/supplier-changes/{change_id}/decide")
+def decide_supplier_change(change_id: int, payload: dict[str, Any], db: Db, ctx: Ctx) -> dict[str, Any]:
+    """A buyer accepts or rejects a change; a price above the tolerance then waits for the purchase manager."""
+    accept = payload.get("accept")
+    if not isinstance(accept, bool):
+        raise HTTPException(422, "accept must be true or false")
+    try:
+        return confirmation.decide(db, ctx.slug, change_id, ctx.user_id, accept=accept, note=payload.get("note"))
+    except confirmation.ConfirmationError as exc:
+        raise HTTPException(404 if "does not exist" in str(exc) else 409, str(exc)) from None
+    except PermissionDenied as exc:
+        raise HTTPException(403, str(exc)) from None

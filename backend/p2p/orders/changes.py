@@ -1,9 +1,10 @@
 """Changes to an order after it was made: a revision (a new version), cancelling it, and closing what is still to come.
 
-* A revision changes the quantity or the need-by date of open lines, never a price (a price comes from a contract or an
-  award). Every revision is a new version with its own history row. If the order's total goes up it goes through approval
-  again on the new total; a lower total or a date change needs no new approval. A supplier who already has the order gets
-  the revised order by email.
+* A revision changes the quantity or the need-by date of open lines. A buyer never changes a price (a price comes from a
+  contract or an award); only a price the supplier asked for and a person accepted (orders/confirmation.py) does. Every
+  revision is a new version with its own history row. If the order's total goes up it goes through approval again on the
+  new total; a lower total or a date change needs no new approval, nor does a supplier's change that was approved on its
+  own. A supplier who already has the order gets the revised order by email.
 * Cancelling is for an order nothing has been received or invoiced against. It gives back the budget commitment and the
   open supply, and either frees the lines to be ordered again or ends the need.
 * Closing is for an order that was partly delivered: the part still to come is closed, so it no longer counts as supply or
@@ -46,6 +47,8 @@ class LineChange:
     line_no: int
     qty: Decimal | None = None
     need_by: date | None = None
+    unit_price: Decimal | None = None  # only a supplier's change that a person accepted
+    promised_date: date | None = None  # the supplier's new date, written with the need-by date it asked for
 
 
 def _locked(db: Session, po_no: str) -> dict[str, Any]:
@@ -61,7 +64,7 @@ def _reason(reason: str | None) -> str:
     return reason.strip()
 
 
-def _tell_supplier(
+def tell_supplier(
     db: Session, po: dict[str, Any], subject: str, body: str, attachments: list[tuple[str, str, bytes]] | None = None
 ) -> bool:
     """Email the supplier's main contact. A mail fault never undoes the change: the page says the supplier was not told."""
@@ -92,7 +95,7 @@ def _tell_supplier(
     return True
 
 
-def _tell_people(db: Session, tenant: str | None, po_no: str, title: str, body: str, *, buyer: str | None) -> None:
+def tell_people(db: Session, tenant: str | None, po_no: str, title: str, body: str, *, buyer: str | None) -> None:
     """The people who asked for the goods and the buyer hear about it (in the app and by email)."""
     codes = {
         r[0]
@@ -191,13 +194,13 @@ def cancel(
     _drop_open_decisions(db, po, user_id, f"{po_no} was cancelled")
     told = False
     if was in WITH_SUPPLIER:
-        told = _tell_supplier(
+        told = tell_supplier(
             db,
             po,
             f"Purchase order {po_no} is cancelled",
             f"Please do not supply against order {po_no}. It is cancelled. Reason: {why}",
         )
-    _tell_people(
+    tell_people(
         db,
         tenant,
         po_no,
@@ -270,11 +273,11 @@ def close_balance(db: Session, tenant: str | None, po_no: str, user_id: int, rea
         before={"status": po["status"]}, after={"closed": closed}, reason=why,
     )  # fmt: skip
     db.commit()
-    told = _tell_supplier(
+    told = tell_supplier(
         db, po, f"Purchase order {po_no}: balance closed",
         f"We are closing the balance of order {po_no}; no further supply is expected on:\n" + "\n".join(closed) + f"\nReason: {why}",
     )  # fmt: skip
-    _tell_people(db, tenant, po_no, f"The balance of order {po_no} was closed", why, buyer=po["buyer"])
+    tell_people(db, tenant, po_no, f"The balance of order {po_no} was closed", why, buyer=po["buyer"])
     return {"status": "closed" if not still_open else po["status"], "closed": closed, "supplier_told": told}
 
 
@@ -288,8 +291,11 @@ def revise(
     user_id: int,
     reason: str | None,
     changes: list[LineChange],
+    *,
+    approved_change: bool = False,
 ) -> dict[str, Any]:
-    """Make a new version of the order: change the quantity or the need-by date of open lines."""
+    """Make a new version of the order: change the quantity or the need-by date of open lines. `approved_change` is a
+    supplier's change a person has already accepted: it may change the price and is not approved again."""
     why = _reason(reason)
     if not changes:
         raise ChangeError("nothing to change")
@@ -325,7 +331,10 @@ def revise(
             db.rollback()
             raise ChangeError(f"line {ch.line_no} is changed twice")
         seen.add(ch.line_no)
-        if ch.qty is None and ch.need_by is None:
+        if ch.unit_price is not None and not approved_change:
+            db.rollback()
+            raise ChangeError(f"line {ch.line_no}: a price is not changed by a revision")
+        if ch.qty is None and ch.need_by is None and ch.unit_price is None:
             db.rollback()
             raise ChangeError(f"line {ch.line_no}: nothing to change")
         entry: dict[str, Any] = {"line": ch.line_no}
@@ -345,14 +354,24 @@ def revise(
             if ask is not None and ch.qty > Decimal(ask):
                 db.rollback()
                 raise ChangeError(f"line {ch.line_no}: more than the request asked for ({format_qty(ask)})")
-            amounts = line_amounts(ch.qty, ln["unit_price"], ln["gst_rate"], supplier_state, place, registration)
+            entry["qty"] = {"from": str(ln["qty"]), "to": str(ch.qty)}
+        if ch.unit_price is not None:
+            if ch.unit_price <= 0:
+                db.rollback()
+                raise ChangeError(f"line {ch.line_no}: the price must be more than zero")
+            entry["unit_price"] = {"from": str(ln["unit_price"]), "to": str(ch.unit_price)}
+        if ch.qty is not None or ch.unit_price is not None:
+            qty = ch.qty if ch.qty is not None else Decimal(ln["qty"])
+            price = ch.unit_price if ch.unit_price is not None else Decimal(ln["unit_price"])
+            amounts = line_amounts(qty, price, ln["gst_rate"], supplier_state, place, registration)
             db.execute(
                 text(
-                    "update po_line set qty = :q, taxable = :t, cgst = :c, sgst = :s, igst = :i "
+                    "update po_line set qty = :q, unit_price = :p, taxable = :t, cgst = :c, sgst = :s, igst = :i "
                     "where po_no = :n and line_no = :l"
                 ),
                 {
-                    "q": ch.qty,
+                    "q": qty,
+                    "p": price,
                     "t": amounts.taxable,
                     "c": amounts.cgst,
                     "s": amounts.sgst,
@@ -361,11 +380,13 @@ def revise(
                     "l": ch.line_no,
                 },
             )
-            entry["qty"] = {"from": str(ln["qty"]), "to": str(ch.qty)}
         if ch.need_by is not None:
             db.execute(
-                text("update po_line set need_by = :d where po_no = :n and line_no = :l"),
-                {"d": ch.need_by, "n": po_no, "l": ch.line_no},
+                text(
+                    "update po_line set need_by = :d, promised_date = coalesce(:p, promised_date) "
+                    "where po_no = :n and line_no = :l"
+                ),
+                {"d": ch.need_by, "p": ch.promised_date, "n": po_no, "l": ch.line_no},
             )
             entry["need_by"] = {
                 "from": ln["need_by"].isoformat() if ln["need_by"] else None,
@@ -385,7 +406,7 @@ def revise(
     totals = order_totals(parts)
     after_total = totals.total
     version = int(po["version"]) + 1
-    reapprove = after_total > before_total and po["status"] != "draft"
+    reapprove = after_total > before_total and po["status"] != "draft" and not approved_change
     db.execute(
         text("update po set taxable = :t, cgst = :c, sgst = :s, igst = :i, total = :tot, version = :v where no = :n"),
         {
@@ -436,7 +457,7 @@ def revise(
         new_status = was
     told = False
     if was in WITH_SUPPLIER and not reapprove:
-        told = _tell_supplier(
+        told = tell_supplier(
             db,
             po,
             f"Purchase order {po_no} (version {version}): revised",
