@@ -81,6 +81,11 @@ approval_rules: |
   PAY-01,payment_run,0.00,999999999.00,ANY,ANY,ANY,director,1,2025-04-01,
   SUP-01,supplier_activation,0.00,999999999.00,ANY,ANY,ANY,director,1,2025-04-01,
 
+# the autonomy gate (not master data; set by `demo reset`). po.issue: touchless orders (D35), issued and sent with no
+# buyer for contract and safe-reorder lines within the buyer's tier; the tests and limits are rows of touchless_rule
+autonomy:
+  po.issue: auto
+
 settings:
   - [budget_policy, block, Budget check result when a request exceeds the available budget (warn or block)]
   - [duplicate_window_days, "14", A request for the same item and location within this many days is flagged as a possible duplicate]

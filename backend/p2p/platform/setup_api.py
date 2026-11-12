@@ -297,6 +297,11 @@ DECISIONS: dict[str, tuple[str, str]] = {
     "rfq.award": ("Award to the recommended supplier", "Awards a quotation when there is a clear winner"),
     "quote.read": ("Accept a quote read from an email", "Turns a clean reading of a supplier's reply into a quote"),
     "po.send": ("Send an approved purchase order", "Emails the order to the supplier"),
+    "po.issue": (
+        "Issue a touchless purchase order",
+        "Issues and sends a contract or safe-reorder order within the buyer's tier and the touchless limit, "
+        "with no buyer",
+    ),
     "invoice.read": (
         "Enter an invoice read from a document",
         "Enters a clean reading of a supplier's invoice without AP",

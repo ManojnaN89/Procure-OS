@@ -19,6 +19,7 @@ from typing import Any
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
+from p2p.agents import autonomy
 from p2p.config import REPO_ROOT
 from p2p.masters.importer import ImportReport, import_masters
 from p2p.platform import audit, routing, tenants, users
@@ -60,6 +61,7 @@ class DemoCompany:
     approver_roles: list[tuple[str, str, str | None]]
     replenishment_department: str
     build: Callable[[Path], list[str]]  # writes the dataset into a folder and returns what is wrong with it
+    autonomy: dict[str, str] = field(default_factory=dict)  # decision type -> level of the autonomy gate
 
 
 def _generator(path: Path) -> Any:
@@ -95,6 +97,7 @@ def company(name: str) -> DemoCompany:
         approver_roles=profile.approver_roles,
         replenishment_department=profile["replenishment_department"],
         build=build,
+        autonomy={str(k): str(v) for k, v in (profile.data.get("autonomy") or {}).items()},
     )
 
 
@@ -155,6 +158,12 @@ def configure(db: Session, demo: DemoCompany, slug: str) -> None:
     db.commit()
 
 
+def configure_autonomy(db: Session, demo: DemoCompany) -> None:
+    """What the demo company lets happen without a person (its profile's `autonomy`), e.g. touchless orders (po.issue)."""
+    for decision_type, level in sorted(demo.autonomy.items()):
+        autonomy.configure(db, audit.SYSTEM, decision_type, level=level)
+
+
 def _write_credentials(path: Path, slug: str, rows: list[tuple[str, str, str, str]]) -> None:
     """Replace the section of this company in the credentials file (other companies' sections stay as they are)."""
     header = f"# local logins for tenant '{slug}' (a demo company; git-ignored)"
@@ -213,6 +222,7 @@ def reset_company(
                     f"{len(result.stock.rejected)} stock movement(s) left out; first: line {first.line}: {first.reason}"
                 )
         configure(db, demo, slug)
+        configure_autonomy(db, demo)
         people = db.execute(text("select code, name, designation, email from org_user order by code")).all()
         held: dict[str, set[str]] = {}
         for code, role in db.execute(text("select user_code, role from org_user_role")):

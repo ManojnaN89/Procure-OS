@@ -115,7 +115,9 @@ def test_nothing_is_open_yet_and_the_settings_are_in_place(apex: Apex) -> None:
         "purchase_manager",
         "director",
     }
-    assert db.execute(text("select count(*) from autonomy_setting where level = 'auto'")).scalar_one() == 0
+    # only touchless orders act alone (the profile's `autonomy`); everything else waits for a person
+    auto = db.execute(text("select decision_type from autonomy_setting where level = 'auto'")).scalars().all()
+    assert auto == ["po.issue"]
 
 
 def test_check_stock_levels_makes_one_request_for_the_v_belts_and_it_approves_itself(apex: Apex) -> None:

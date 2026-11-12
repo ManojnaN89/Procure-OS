@@ -15,7 +15,7 @@ from sqlalchemy.orm import Session
 from p2p.approvals import budget, rules
 from p2p.approvals.workflow import ApprovalError, name_of, org_code_of
 from p2p.formulas.calendar import business_today
-from p2p.orders import dispatch
+from p2p.orders import dispatch, touchless
 from p2p.platform import audit, permissions, proposals, tasks, users
 from p2p.platform.sod import Actor
 
@@ -68,7 +68,10 @@ def submit(db: Session, tenant: str, po_no: str, actor: Actor, *, today: date | 
         rule_version=f"{rule.code}:v{rule.version}",
     )
     if rule.is_automatic:
-        reason = f"Auto-approved under rule {rule.code} v{rule.version}: the total {po['total']} is within the automatic band.{budget_note}"
+        reason = (
+            f"Within the buyer's tier under rule {rule.code} v{rule.version} (up to {rule.max_value}): the total "
+            f"{po['total']} needs no approver, the buyer's issue is the approval.{budget_note}"
+        )
         db.execute(
             text(
                 "update po set status = 'approved', approved_at = now(), rule_code = :rc, rule_version = :rv, "
@@ -86,7 +89,10 @@ def submit(db: Session, tenant: str, po_no: str, actor: Actor, *, today: date | 
             rule_version=f"{rule.code}:v{rule.version}",
         )
         db.commit()
-        dispatch.queue_if_automatic(db, tenant, po_no)
+        if touchless.decide(db, po_no, rule, today):
+            touchless.issue(db, po_no)
+        else:
+            dispatch.queue_if_automatic(db, tenant, po_no)
         return "approved"
     for n, step in enumerate(steps, start=1):
         db.execute(
@@ -120,6 +126,7 @@ def submit(db: Session, tenant: str, po_no: str, actor: Actor, *, today: date | 
         },
     )
     db.commit()
+    touchless.decide(db, po_no, rule, today)  # never touchless above the buyer's tier; the note says so
     _open_step(db, tenant, po_no, po["total"], 1, round_no)
     return "submitted"
 
@@ -215,6 +222,8 @@ def can_act(db: Session, po_no: str, user_id: int) -> bool:
 
 
 def approve(db: Session, tenant: str, po_no: str, user_id: int, comment: str | None = None) -> str:
+    # Hook: the one-time password for approvals above Rs 5,00,000 (the director's tier) belongs to the email approvals
+    # step; it is checked here, before the decision is written, once that step is built.
     po, step, me = _acting(db, po_no, user_id)
     actor = Actor("user", str(user_id))
     db.execute(

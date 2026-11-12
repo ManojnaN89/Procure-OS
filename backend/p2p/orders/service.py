@@ -49,6 +49,7 @@ class ReadyLine:
     need_by: date | None
     gl_code: str | None
     category: str | None
+    location: str  # where the line is delivered: its own delivery location, else the request's
     supplier_code: str
     unit_price: Decimal
     gst_rate: Decimal
@@ -78,11 +79,13 @@ def ready_lines(db: Session, request_no: str, as_of: date) -> tuple[list[ReadyLi
         text(
             "select rl.line_no, rl.item_code, coalesce(i.name, rl.free_text) as name, rl.qty, rl.uom, rl.base_qty, "
             "rl.est_price, rl.need_by, rl.gl_code, coalesce(nullif(rl.category_code, ''), i.category_code) as category, "
+            "coalesce(rl.delivery_location, r.ship_to_location) as location, "
             "d.method, d.supplier_code as d_supplier, d.contract_code, d.price as d_price, d.rfq_no, d.route, "
             "(not d.needs_agreement or exists (select 1 from proposal p where p.id = d.proposal_id "
             "and p.status in ('approved', 'edited'))) as agreed, "
             "i.gst_rate_before, i.gst_rate_after, i.gst_rate_change_date "
-            "from request_line rl join sourcing_decision d on d.request_no = rl.request_no and d.line_no = rl.line_no "
+            "from request_line rl join request r on r.no = rl.request_no "
+            "join sourcing_decision d on d.request_no = rl.request_no and d.line_no = rl.line_no "
             "left join item i on i.code = rl.item_code "
             "where rl.request_no = :n and rl.status = 'sourcing' and d.method in ('contract', 'direct', 'rfq') "
             "and (d.method = 'rfq' or not exists (select 1 from po_line p where p.request_no = rl.request_no "
@@ -105,6 +108,7 @@ def ready_lines(db: Session, request_no: str, as_of: date) -> tuple[list[ReadyLi
             "need_by": r["need_by"],
             "gl_code": r["gl_code"],
             "category": r["category"],
+            "location": r["location"],
         }
         if r["method"] in ("contract", "direct"):
             if not r["agreed"]:
@@ -171,10 +175,11 @@ def order_request(db: Session, tenant: str, request_no: str, actor: Actor = SERV
         return result
     lines, notes = ready_lines(db, request_no, as_of)
     result.skipped.extend(notes)
-    # One order per supplier and set of terms (the delivery place is the request's, so it is the same for every line).
-    # A contract's payment and delivery terms are not dropped because another line of the same supplier has none.
+    # One order per supplier, set of terms and delivery location. A contract's payment and delivery terms are not dropped
+    # because another line of the same supplier has none. A location has its own GST registration and place of supply,
+    # and its own goods receipt, so lines for two locations are two orders rather than one order with a place per line.
     own_terms: dict[str, str | None] = {}
-    by_group: dict[tuple[str, str | None, str | None], list[ReadyLine]] = {}
+    by_group: dict[tuple[str, str | None, str | None, str], list[ReadyLine]] = {}
     for line in lines:
         if line.supplier_code not in own_terms:
             own_terms[line.supplier_code] = db.execute(
@@ -183,9 +188,9 @@ def order_request(db: Session, tenant: str, request_no: str, actor: Actor = SERV
         payment, delivery = _terms(
             db, [line], line.source_ref if line.source == "contract" else None, own_terms[line.supplier_code]
         )
-        by_group.setdefault((line.supplier_code, payment, delivery), []).append(line)
+        by_group.setdefault((line.supplier_code, payment, delivery, line.location), []).append(line)
     created: list[tuple[str, bool]] = []
-    for (supplier, _payment, _delivery), group in sorted(
+    for (supplier, _payment, _delivery, _location), group in sorted(
         by_group.items(), key=lambda kv: tuple(str(x or "") for x in kv[0])
     ):
         outcome = _create_po(db, tenant, dict(req), supplier, group, as_of, actor, result)
@@ -218,8 +223,9 @@ def _create_po(
         .mappings()
         .one()
     )
+    ship_to = lines[0].location  # every line of the group goes to the same place
     loc = (
-        db.execute(text("select code, gstin, state_code from location where code = :c"), {"c": req["ship_to_location"]})
+        db.execute(text("select code, gstin, state_code from location where code = :c"), {"c": ship_to})
         .mappings()
         .one()
     )
@@ -262,7 +268,7 @@ def _create_po(
         for r in db.execute(text("select rfq_no from quote where no = :n"), {"n": ln.quote_no})
     }
     buyer = db.execute(text("select buyer_user from item_category where code = :c"), {"c": lines[0].category}).scalar()
-    po_no = numbering.next_number(db, "po", as_of, location_code=req["ship_to_location"])
+    po_no = numbering.next_number(db, "po", as_of, location_code=ship_to)
 
     band = Decimal(_org_setting(db, "price_band_pct", "15"))
     over: list[str] = []
@@ -294,7 +300,7 @@ def _create_po(
             "sup": supplier_code,
             "sg": sup["gstin"],
             "bg": buyer_gstin,
-            "loc": req["ship_to_location"],
+            "loc": ship_to,
             "buyer": buyer,
             "req": req["no"],
             "rfq": next(iter(rfqs)) if len(rfqs) == 1 else None,

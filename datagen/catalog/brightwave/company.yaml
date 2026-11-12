@@ -88,6 +88,10 @@ approval_rules: |
   PAY-01,payment_run,0.00,999999999.00,ANY,ANY,ANY,cfo,1,2025-04-01,
   SUP-01,supplier_activation,0.00,999999999.00,ANY,ANY,ANY,cfo,1,2025-04-01,
 
+# the autonomy gate (set by `demo reset`): no touchless orders here, a buyer issues every order
+autonomy:
+  po.issue: propose
+
 settings:
   - [budget_policy, block, Budget check result when a request exceeds the available budget (warn or block)]
   - [duplicate_window_days, "14", A request for the same item and location within this many days is flagged as a possible duplicate]

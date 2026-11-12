@@ -113,10 +113,8 @@ def send_po(db: Session, po_no: str, actor: Actor = SERVICE) -> str:
         for r in db.execute(text("select * from po_charge where po_no = :n order by id"), {"n": po_no}).mappings()
     ]
     company = db.execute(text("select coalesce(short_name, legal_name) from company limit 1")).scalar() or "Our company"
-    ship_to = (
-        db.execute(text("select name from location where code = :c"), {"c": po["ship_to_location"]}).scalar()
-        or po["ship_to_location"]
-    )
+    name, address = document.delivery_place(db, po["ship_to_location"])
+    ship_to = f"{name} ({po['ship_to_location']})" + (f", {address}" if address else "")
     try:
         pdf = [(f"{po_no}.pdf", "application/pdf", document.order_document(db, po_no))]
     except Exception:  # noqa: BLE001 - the order still goes out as text; a fault in the document must not stop it

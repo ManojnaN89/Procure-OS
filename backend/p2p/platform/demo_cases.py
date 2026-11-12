@@ -31,9 +31,10 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 import p2p.platform.demo as demo
+from p2p.agents import autonomy
 from p2p.formulas.calendar import business_today
 from p2p.main import app
-from p2p.platform import routing, tenants, worker
+from p2p.platform import audit, routing, tenants, worker
 from p2p.requests import replenishment
 
 REQUESTER, STORE, BUYER = "Production Manager", "Storekeeper", "Buyer"
@@ -306,6 +307,10 @@ def populate(slug: str = demo.MAIN) -> Populated:
             raise demo.DemoError(f"'{slug}' already has requests; use `demo populate {slug} --reset` to start over")
 
     run = _Run(slug)
+    # Touchless orders (po.issue) would send the contract orders before they reach the stages named above, so they
+    # are off while the cases are made and set back as the company had them afterwards.
+    level = run.db.execute(text("select level from autonomy_setting where decision_type = 'po.issue'")).scalar()
+    autonomy.configure(run.db, audit.SYSTEM, "po.issue", level="propose")
     try:
         _early(run)
         try:
@@ -315,6 +320,8 @@ def populate(slug: str = demo.MAIN) -> Populated:
         run.work()
         run.out.low_items_left = _still_low(run)
     finally:
+        run.db.rollback()
+        autonomy.configure(run.db, audit.SYSTEM, "po.issue", level=str(level or "propose"))
         run.db.close()
     return run.out
 

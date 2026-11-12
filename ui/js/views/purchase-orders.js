@@ -26,14 +26,16 @@ const PurchaseOrdersView = {
       }
       wrap.innerHTML = `
         <table class="data-table">
-          <thead><tr><th>NUMBER</th><th>SUPPLIER</th><th>FOR REQUEST</th><th>AMOUNT</th><th>STATUS</th></tr></thead>
+          <thead><tr><th>NUMBER</th><th>SUPPLIER</th><th>FOR REQUEST</th><th>DELIVER TO</th><th>AMOUNT</th><th>TIER</th><th>STATUS</th></tr></thead>
           <tbody>
             ${rows.map((r) => `
               <tr data-id="${this.esc(r.id)}">
                 <td class="cell-muted" style="white-space:nowrap;">${this.esc(r.id)}</td>
                 <td>${this.esc(r.supplier)}<div class="cell-muted" style="font-size:11px;">${this.esc(r.supplier_code)}</div></td>
                 <td class="cell-muted" style="white-space:nowrap;">${this.esc(r.request_no)}</td>
+                <td class="cell-muted">${this.esc(r.ship_to_name || r.ship_to)}</td>
                 <td>${formatCurrency(r.amount)}</td>
+                <td>${this.tierCell(r)}</td>
                 <td>${statusBadge(r.status)}${r.waiting_for ? `<div class="cell-muted" style="font-size:11px;margin-top:3px;">waiting for ${this.esc(r.waiting_for)}</div>` : ""}${r.held ? `<div style="font-size:11px;margin-top:3px;color:var(--warning-text);">held: price above the estimate</div>` : ""}</td>
               </tr>
             `).join("")}
@@ -47,6 +49,31 @@ const PurchaseOrdersView = {
       const gone = document.getElementById("tableWrap");
       if (gone) gone.innerHTML = `<div class="empty-state">Couldn't load purchase orders.</div>`;
     }
+  },
+
+  TIER_LABEL: { buyer: "Buyer", purchase_manager: "Purchase manager", director: "Director", cfo: "CFO" },
+
+  tierLabel(tier) {
+    return this.TIER_LABEL[tier] || String(tier || "").replace(/_/g, " ");
+  },
+
+  // The tier, who approves at it, and the Touchless badge with its reason on hover
+  tierCell(po) {
+    if (!po.tier) return "";
+    const badge = po.touchless ? ` <span class="badge badge-approved" title="${this.esc(po.touchless_note)}">Touchless</span>` : "";
+    return `${this.esc(this.tierLabel(po.tier))}${badge}${po.approver ? `<div class="cell-muted" style="font-size:11px;">${this.esc(po.approver)}</div>` : ""}`;
+  },
+
+  touchlessPanel(po) {
+    if (!po.touchless_note) return "";
+    const checks = (po.touchless_checks || []).map((c) => `
+      <div style="font-size:12px;padding:3px 0;"><i class="ti ti-${c.passed ? "check" : "x"}" style="color:var(${c.passed ? "--success-text" : "--warning-text"});"></i> ${this.esc(c.detail)}</div>`).join("");
+    return `
+      <div class="panel" style="margin-bottom:12px;">
+        <div class="panel-title">${po.touchless ? 'Issued without a buyer <span class="badge badge-approved">Touchless</span>' : "Touchless check"}</div>
+        <p style="margin:0 0 8px;font-size:12.5px;color:var(--text-secondary);">${this.esc(po.touchless_note)}</p>
+        <details class="more"><summary>The facts checked${po.touchless_rule ? ` (${this.esc(po.touchless_rule)})` : ""}</summary>${checks}</details>
+      </div>`;
   },
 
   STEP_LABEL: { pending: "Waiting", waiting: "Later", approved: "Approved", rejected: "Rejected", cancelled: "Cancelled" },
@@ -68,7 +95,8 @@ const PurchaseOrdersView = {
       </div>`).join("");
     return `
       <div class="panel" style="margin-bottom:12px;">
-        <div class="panel-title">Approval</div>
+        <div class="panel-title">Approval${po.tier ? ` · ${this.esc(this.tierLabel(po.tier))} tier` : ""}</div>
+        ${po.approver ? `<p style="margin:0 0 10px;font-size:12.5px;color:var(--text-secondary);">Approver: ${this.esc(po.approver)}</p>` : ""}
         ${po.hold_reason ? `<p style="margin:0 0 10px;font-size:12.5px;color:var(--warning-text);">On hold until a person accepts the price: ${this.esc(po.hold_reason)}</p>` : ""}
         ${a.decision ? `<p style="margin:0 0 10px;font-size:12.5px;color:var(--text-secondary);">${this.esc(a.decision)}</p>` : ""}
         ${trail}
@@ -204,17 +232,18 @@ const PurchaseOrdersView = {
         <div class="page-header">
           <a href="#/purchase-orders" style="color:var(--text-muted);font-size:12px;text-decoration:none;">← Purchase orders</a>
           <h1 style="margin-top:6px;">${this.esc(po.id)} · ${this.esc(po.supplier)}</h1>
-          <p>${statusBadge(po.status)} · ${formatCurrency(po.total)} · for <a href="#/requisitions/${this.esc(po.request_no)}" style="color:var(--accent-tint)">${this.esc(po.request_no)}</a>
+          <p>${statusBadge(po.status)}${po.touchless ? ' <span class="badge badge-approved">Touchless</span>' : ""} · ${formatCurrency(po.total)} · for <a href="#/requisitions/${this.esc(po.request_no)}" style="color:var(--accent-tint)">${this.esc(po.request_no)}</a>
              ${po.rfq_no ? ` · <a href="#/rfqs/${this.esc(po.rfq_no)}" style="color:var(--accent-tint)">${this.esc(po.rfq_no)}</a>` : ""}
              ${po.contract_code ? ` · contract ${this.esc(po.contract_code)}` : ""}</p>
         </div>
         ${FlowStrip.forOrder(po)}
         ${this.approvalPanel(po)}
+        ${this.touchlessPanel(po)}
         ${this.dispatchPanel(po)}
         <div id="poChangesBox"></div>
         <div id="supplierMessagesBox"></div>
         <div class="panel" style="margin-bottom:12px;font-size:12.5px;color:var(--text-secondary);">
-          Supplier GSTIN ${this.esc(po.supplier_gstin || "none")} · buyer GSTIN ${this.esc(po.buyer_gstin || "none")} · deliver to ${this.esc(po.ship_to)}
+          Supplier GSTIN ${this.esc(po.supplier_gstin || "none")} · buyer GSTIN ${this.esc(po.buyer_gstin || "none")} · deliver to ${this.esc(po.ship_to_name || po.ship_to)} (${this.esc(po.ship_to)})
           ${po.payment_terms ? ` · payment ${this.esc(po.payment_terms)}` : ""}${po.delivery_terms ? ` · ${this.esc(po.delivery_terms)}` : ""}
           ${po.cancel_reason ? `<div style="margin-top:6px;color:var(--warning-text);">Cancelled: ${this.esc(po.cancel_reason)}</div>` : ""}
         </div>
