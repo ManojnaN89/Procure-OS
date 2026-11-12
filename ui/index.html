@@ -25,16 +25,18 @@
   html.fm-boot-hide #app { opacity: 0; }
   html.fm-boot-hide .focus-mode-overlay { opacity: 1; transform: scale(1); pointer-events: auto; }
 </style>
-<link rel="stylesheet" href="vendor/fonts.css">
 <link rel="stylesheet" href="vendor/tabler/tabler-icons.min.css">
 <script src="vendor/chart.umd.js"></script>
+<!-- One stylesheet per layer, in this order: tokens, base, shell, components, assistant, focus mode, sign-in,
+     motion, phone. See docs/ui-guide.md. -->
 <link rel="stylesheet" href="css/tokens.css" />
+<link rel="stylesheet" href="css/base.css" />
 <link rel="stylesheet" href="css/layout.css" />
 <link rel="stylesheet" href="css/components.css" />
-<link rel="stylesheet" href="css/motion.css" />
+<link rel="stylesheet" href="css/assistant.css" />
 <link rel="stylesheet" href="css/focus-mode.css" />
 <link rel="stylesheet" href="css/auth.css" />
-<link rel="stylesheet" href="css/clean.css" />
+<link rel="stylesheet" href="css/motion.css" />
 <link rel="stylesheet" href="css/responsive.css" />
 </head>
 <body>
@@ -58,9 +60,9 @@
 <div id="app">
 
   <div class="nav-backdrop" id="navBackdrop"></div>
-  <nav class="sidebar">
+  <nav class="sidebar" aria-label="Main menu">
     <div class="sidebar-brand">
-      <div class="mark">P</div>
+      <div class="mark" aria-hidden="true">P</div>
       <span class="name">ProcureOS</span>
     </div>
     <div class="nav-list" id="navList">
@@ -88,41 +90,38 @@
   </nav>
 
   <div class="main">
-    <div class="topbar">
-      <div class="icon-btn menu-btn" id="menuBtn" title="Menu"><i class="ti ti-menu-2"></i></div>
-      <div class="search-box" id="searchBox">
-        <i class="ti ti-search"></i>
-        <input type="text" id="searchInput" placeholder="Search requests, orders, vendors..." autocomplete="off" />
+    <header class="topbar">
+      <button type="button" class="icon-btn menu-btn" id="menuBtn" title="Menu" aria-label="Open the menu"><i class="ti ti-menu-2" aria-hidden="true"></i></button>
+      <div class="search-box" id="searchBox" role="search">
+        <i class="ti ti-search" aria-hidden="true"></i>
+        <input type="text" id="searchInput" placeholder="Search requests, orders, suppliers…" aria-label="Search requests, orders and suppliers" autocomplete="off" />
         <div class="search-results" id="searchResults"></div>
       </div>
       <div class="topbar-actions">
-        <div class="icon-btn topbar-quiet" id="focusModeToggle" title="Focus mode">
-          <i class="ti ti-focus-2"></i>
-        </div>
-        <div class="icon-btn topbar-quiet" id="settingsBtn" title="Settings">
-          <i class="ti ti-settings"></i>
-        </div>
-        <div class="icon-btn topbar-quiet" id="trailBellBtn" title="Agent trail">
-          <i class="ti ti-history"></i>
-          <div class="dot" id="trailDot" style="display:none;"></div>
-        </div>
+        <span class="topbar-company" id="companyName" title="Company"></span>
+        <button type="button" class="icon-btn topbar-quiet" id="focusModeToggle" title="Focus mode" aria-label="Focus mode"><i class="ti ti-focus-2" aria-hidden="true"></i></button>
+        <button type="button" class="icon-btn topbar-quiet" id="settingsBtn" title="Settings" aria-label="Settings"><i class="ti ti-settings" aria-hidden="true"></i></button>
+        <button type="button" class="icon-btn topbar-quiet" id="trailBellBtn" title="Agent trail" aria-label="Agent trail">
+          <i class="ti ti-history" aria-hidden="true"></i>
+          <span class="dot" id="trailDot" style="display:none;"></span>
+        </button>
         <div class="notif-anchor">
-          <div class="icon-btn" id="notificationBellBtn" title="Notifications">
-            <i class="ti ti-bell"></i>
-            <div class="dot" id="notificationDot" style="display:none;"></div>
-          </div>
+          <button type="button" class="icon-btn" id="notificationBellBtn" title="Notifications" aria-label="Notifications">
+            <i class="ti ti-bell" aria-hidden="true"></i>
+            <span class="dot" id="notificationDot" style="display:none;"></span>
+          </button>
           <div class="notif-dropdown" id="notifDropdown"></div>
         </div>
         <div class="user-badge">
-          <div class="avatar-circle">…</div>
+          <div class="avatar-circle" aria-hidden="true">…</div>
           <div class="meta">
             <span class="who">&nbsp;</span>
             <span class="role">&nbsp;</span>
           </div>
-          <i class="ti ti-logout signout" id="signOutBtn" title="Sign out"></i>
+          <button type="button" class="icon-btn signout" id="signOutBtn" title="Sign out" aria-label="Sign out"><i class="ti ti-logout" aria-hidden="true"></i></button>
         </div>
       </div>
-    </div>
+    </header>
 
     <main id="appContent" class="page"></main>
   </div>
@@ -179,7 +178,7 @@
 <!-- Floating Assistant: present on every page, shares the same conversation as the Assistant page -->
 <div class="floating-assistant">
   <div class="ticker-pill" id="tickerPill" style="display:none;"><span id="tickerText"></span></div>
-  <div class="fab" id="assistantFab"><i class="ti ti-message-circle"></i></div>
+  <button type="button" class="fab" id="assistantFab" title="Assistant" aria-label="Open the assistant"><i class="ti ti-message-circle" aria-hidden="true"></i></button>
 </div>
 <div class="floating-panel" id="floatingPanel">
   <div class="floating-panel-header">
@@ -206,6 +205,7 @@
 <script src="js/badges.js"></script>
 <script src="js/flow-strip.js"></script>
 <script src="js/export-list.js"></script>
+<script src="js/ui-kit.js"></script>
 <script src="js/interactive-elements.js"></script>
 <script src="js/state.js"></script>
 <script src="js/trail.js"></script>

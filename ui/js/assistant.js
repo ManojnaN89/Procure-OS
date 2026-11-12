@@ -9,7 +9,7 @@
  * fires per-token. Fine at this scale (short replies, 0-1 charts each); a
  * larger rewrite would diff instead of rebuild if replies got much longer.
  */
-const CHART_COLORS = ["#6C5CE7", "#2ECC71", "#4f8dfd", "#F5A623", "#ff6b9d"];
+const CHART_COLORS = ["#2453C7", "#0E8A8E", "#C27803", "#7A5AF8", "#D92D20"];
 const BUBBLE_SIGNAL_ACTION_LABELS = {
   exception_flagged: "Review",
   vendor_risk: "View vendor",
@@ -214,10 +214,10 @@ const Assistant = {
           responsive: true,
           cutout: "62%",
           plugins: {
-            legend: { display: true, position: "bottom", labels: { color: "#B8BECC", font: { size: 10.5 } } },
+            legend: { display: true, position: "bottom", labels: { color: "#3B4554", font: { size: 10.5 } } },
             title: {
               display: !!chartSpec.title, text: chartSpec.title || "",
-              color: "#F3F4F8", font: { size: 12, weight: "600" }, padding: { bottom: 10 },
+              color: "#141C2B", font: { size: 12, weight: "600" }, padding: { bottom: 10 },
             },
           },
         },
@@ -241,15 +241,15 @@ const Assistant = {
       options: {
         responsive: true,
         plugins: {
-          legend: { display: datasets.length > 1, labels: { color: "#B8BECC", font: { size: 10.5 } } },
+          legend: { display: datasets.length > 1, labels: { color: "#3B4554", font: { size: 10.5 } } },
           title: {
             display: !!chartSpec.title, text: chartSpec.title || "",
-            color: "#F3F4F8", font: { size: 12, weight: "600" }, padding: { bottom: 10 },
+            color: "#141C2B", font: { size: 12, weight: "600" }, padding: { bottom: 10 },
           },
         },
         scales: {
-          x: { ticks: { color: "#8B93A7", font: { size: 10 } }, grid: { color: "#232733" } },
-          y: { ticks: { color: "#8B93A7", font: { size: 10 } }, grid: { color: "#232733" } },
+          x: { ticks: { color: "#5F6B7A", font: { size: 10 } }, grid: { color: "#E1E5EB" } },
+          y: { ticks: { color: "#5F6B7A", font: { size: 10 } }, grid: { color: "#E1E5EB" } },
         },
       },
     });

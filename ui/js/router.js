@@ -49,7 +49,11 @@ const Router = {
 
     const container = document.getElementById("appContent");
     Promise.resolve(view.render(container, id ? { id } : {}))
-      .then(() => { if (this.currentView === view) ExportList.attach(route, id); })
+      .then(() => {
+        if (this.currentView !== view) return;
+        ExportList.attach(route, id);
+        ListSearch.attach(route, id);
+      })
       .catch((err) => console.error(err)); // a page that failed to draw shows its own message
   },
 };

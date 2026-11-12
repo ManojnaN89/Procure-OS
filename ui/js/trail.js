@@ -5,11 +5,11 @@
  * ring buffer; each surface renders from it independently.
  */
 const AGENT_COLORS = {
-  "Orchestrator": "#9B8CFF",
-  "Auction Agent": "#f5a35c",
-  "RFQ Agent": "#4f8dfd",
-  "Requisition Agent": "#2ECC71",
-  "Source-to-Pay Agent": "#ff6b9d",
+  "Orchestrator": "#5B47D6",
+  "Auction Agent": "#B45309",
+  "RFQ Agent": "#2453C7",
+  "Requisition Agent": "#13683A",
+  "Source-to-Pay Agent": "#BE185D",
 };
 
 const Trail = {
@@ -57,7 +57,7 @@ const Trail = {
   },
 
   colorFor(agent) {
-    return AGENT_COLORS[agent] || "#4f8dfd";
+    return AGENT_COLORS[agent] || "#2453C7";
   },
 
   summarize(result) {

@@ -3,13 +3,33 @@ function escapeHtml(value) {
   return String(value ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#39;");
 }
 
-/** Maps a status string to a badge CSS class + label. Shared across every list/detail view. */
-function statusBadge(status) {
-  const cls = `badge-${(status || "").toLowerCase().replace(/\s+/g, "-")}`;
-  const label = (status || "unknown").replace(/_/g, " ");
-  return `<span class="badge ${cls}">${label.charAt(0).toUpperCase() + label.slice(1)}</span>`;
+/**
+ * Every document state has one of eight tones, so a status looks the same on every screen (colours in css/tokens.css).
+ * A state not listed here shows as a draft (grey); the word is always shown, so colour is never the only signal.
+ */
+const STATUS_TONES = {
+  draft: "draft", returned: "draft", withdrawn: "draft", cancelled: "draft", closed: "draft", expired: "draft", inactive: "draft",
+  pending: "waiting", submitted: "waiting", waiting: "waiting", proposed: "waiting", sourcing: "waiting", processing: "waiting",
+  part_received: "waiting", part_paid: "waiting", onboarding: "waiting", rfq_out: "waiting",
+  approved: "approved", auto_approved: "approved", active: "approved", awarded: "approved", matched: "approved",
+  acknowledged: "approved", ordered: "approved",
+  sent: "sent", open: "sent", issued: "sent", file_generated: "sent",
+  received: "received",
+  blocked: "held", held: "held", on_hold: "held", suspended: "held",
+  paid: "paid",
+  rejected: "rejected", failed: "rejected", blacklisted: "rejected",
+};
+
+function statusTone(status) {
+  return STATUS_TONES[String(status || "").toLowerCase().replace(/[\s-]+/g, "_")] || "draft";
 }
 
+/** A status as a badge: the tone's colour, a dot and the word. Shared across every list and detail view. */
+function statusBadge(status) {
+  const key = String(status || "").toLowerCase().replace(/\s+/g, "-");
+  const label = (status || "unknown").replace(/_/g, " ");
+  return `<span class="badge badge-${escapeHtml(key)} badge-${statusTone(status)}">${escapeHtml(label.charAt(0).toUpperCase() + label.slice(1))}</span>`;
+}
 /**
  * Currency was previously a free-text symbol with no matching number-
  * grouping logic — someone could set "$" and still get Indian-style digit

@@ -7,9 +7,9 @@
  * Pulse Rail — all reading from this one module, never recomputing separately.
  */
 const SEVERITY_COLORS = {
-  high: "#EF4444",
-  medium: "#F5A623",
-  low: "#6C5CE7",
+  high: "var(--color-danger)",
+  medium: "var(--color-warning)",
+  low: "var(--color-primary)",
 };
 
 const TYPE_LABELS = {
@@ -72,7 +72,7 @@ const Notifications = {
     });
   },
 
-  colorFor(severity) { return SEVERITY_COLORS[severity] || "#8B93A7"; },
+  colorFor(severity) { return SEVERITY_COLORS[severity] || "var(--color-text-muted)"; },
   labelFor(type) { return TYPE_LABELS[type] || type.replace(/_/g, " ").toUpperCase(); },
 
   async refreshUnreadCount() {

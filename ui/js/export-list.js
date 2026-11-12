@@ -26,9 +26,23 @@ const ExportList = {
     button.setAttribute("role", "button");
     button.innerHTML = '<i class="ti ti-download"></i>Export';
     button.addEventListener("click", () => this.download(name, button));
-    const host = bar.querySelector(".btn")?.parentElement ?? bar; // beside the page's own buttons, else under the title
-    if (host === bar) button.style.cssText = "display:inline-flex;margin-top:8px;";
-    host.appendChild(button);
+    this.actionsOf(bar).appendChild(button);
+  },
+
+  /** The box of the page's buttons, at the right of its header; made around a button that sits loose in the header. */
+  actionsOf(bar) {
+    const own = bar.querySelector(".page-actions") || bar.querySelector(".btn")?.parentElement;
+    if (own && own !== bar) return own;
+    const box = document.createElement("div");
+    box.className = "page-actions";
+    const loose = bar.querySelector(":scope > .btn");
+    if (loose) {
+      loose.replaceWith(box);
+      box.appendChild(loose);
+    } else {
+      bar.appendChild(box);
+    }
+    return box;
   },
 
   async download(name, button) {
