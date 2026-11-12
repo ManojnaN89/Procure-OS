@@ -1,6 +1,7 @@
 """Browser tests of the main interface (ui/, the Procure-OS look), served by the API behind the platform's login."""
 
 import json
+import re
 from typing import Any
 
 import pytest
@@ -65,7 +66,11 @@ def sign_in(page: Page, email: str, password: str = PASSWORD) -> None:
     page.locator("#loginEmail").fill(email)
     page.locator("#loginPassword").fill(password)
     page.locator("#loginButton").click()
-    expect(page.locator(".user-badge .who")).not_to_have_text(" ")
+    # wait for the result: the person's name in the corner, or the reason the login was refused
+    named = page.locator(".user-badge .who").filter(has_text=re.compile(r"\S"))
+    refused = page.locator("#loginError").filter(has_text=re.compile(r"\S"))
+    expect(named.or_(refused)).to_have_count(1)
+    assert refused.count() == 0, f"the login was refused: {refused.text_content()}"
 
 
 def test_the_main_interface_asks_for_a_login_and_shows_who_is_signed_in(company: Company, browser: Any) -> None:
