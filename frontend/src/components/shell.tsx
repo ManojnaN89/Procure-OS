@@ -146,7 +146,7 @@ export function Shell() {
 			{grouped.map((g) => (
 				<div key={g.title ?? "top"} className="flex flex-col gap-1">
 					{g.title ? (
-						<div className="mt-3 px-3 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+						<div className="mt-4 mb-0.5 px-3 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
 							{g.title}
 						</div>
 					) : null}
@@ -155,9 +155,10 @@ export function Shell() {
 							key={n.to}
 							to={n.to}
 							onClick={() => setOpen(false)}
-							className="rounded-md px-3 py-2 text-sm hover:bg-muted"
+							className="rounded-md px-3 py-2 text-sm font-medium text-[#3b4554] hover:bg-muted hover:text-foreground"
 							activeProps={{
-								className: "bg-primary/15 font-medium text-foreground",
+								className:
+									"bg-primary/10 font-semibold text-[#17398d] shadow-[inset_3px_0_0_var(--primary)]",
 							}}
 							activeOptions={{ exact: n.to === "/" }}
 						>
@@ -171,7 +172,7 @@ export function Shell() {
 
 	return (
 		<div className="min-h-screen">
-			<header className="sticky top-0 z-20 flex items-center gap-3 border-b border-border bg-background px-3 py-2 md:px-4">
+			<header className="sticky top-0 z-20 flex h-14 items-center gap-3 border-b border-border bg-background px-3 md:px-5">
 				<Button
 					variant="ghost"
 					className="md:hidden"
@@ -181,19 +182,27 @@ export function Shell() {
 				>
 					☰
 				</Button>
+				<span
+					aria-hidden="true"
+					className="hidden h-7 w-7 shrink-0 items-center justify-center rounded-md bg-primary text-sm font-bold text-primary-foreground sm:inline-flex"
+				>
+					P
+				</span>
 				<div className="min-w-0 flex-1">
 					<div className="truncate text-sm font-semibold">
 						{me.data?.tenant_name ?? "…"}
 					</div>
-					<div className="truncate text-xs text-muted-foreground">Admin</div>
+					<div className="truncate text-xs text-muted-foreground">
+						ProcureOS Admin
+					</div>
 				</div>
 				<div className="hidden text-right text-xs sm:block">
-					<div className="font-medium">{me.data?.display_name}</div>
+					<div className="font-semibold">{me.data?.display_name}</div>
 					<div className="text-muted-foreground">{me.data?.role}</div>
 				</div>
 				<a
 					href="/"
-					className="rounded-md border border-border px-3 py-1.5 text-sm hover:bg-muted"
+					className="inline-flex min-h-9 items-center rounded-md border border-[#cbd2db] bg-background px-3.5 text-sm font-medium shadow-xs hover:bg-muted"
 				>
 					Back to the app
 				</a>
@@ -202,18 +211,18 @@ export function Shell() {
 				</Button>
 			</header>
 			<div className="flex">
-				<aside className="sticky top-[53px] hidden h-[calc(100vh-53px)] w-52 shrink-0 border-r border-border md:block">
+				<aside className="sticky top-14 hidden h-[calc(100vh-3.5rem)] w-56 shrink-0 overflow-y-auto border-r border-border bg-background md:block">
 					{nav}
 				</aside>
 				<div
 					className={cn(
-						"fixed inset-x-0 top-[53px] z-10 border-b border-border bg-background md:hidden",
+						"fixed inset-x-0 top-14 z-10 border-b border-border bg-background shadow-lg md:hidden",
 						open ? "block" : "hidden",
 					)}
 				>
 					{nav}
 				</div>
-				<main className="min-w-0 flex-1 p-3 md:p-6">
+				<main className="mx-auto w-full max-w-[1280px] min-w-0 flex-1 p-3 md:px-8 md:py-6">
 					{me.isError ? (
 						<p className="text-danger">Could not load your profile.</p>
 					) : me.data === undefined ? (

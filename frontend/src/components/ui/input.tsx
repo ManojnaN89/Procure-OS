@@ -2,7 +2,7 @@ import type { InputHTMLAttributes, TextareaHTMLAttributes } from "react";
 import { cn } from "../../lib/utils";
 
 const field =
-	"w-full rounded-md border border-border bg-background px-3 py-1.5 text-sm min-h-9 focus:outline-none focus:ring-2 focus:ring-primary/40";
+	"w-full rounded-md border border-[#cbd2db] bg-background px-3 py-1.5 text-sm min-h-9 focus:outline-none focus:border-primary focus:ring-3 focus:ring-[var(--ring)]";
 
 export function Input({
 	className,
@@ -33,7 +33,7 @@ export function Field({
 	return (
 		// biome-ignore lint/a11y/noLabelWithoutControl: the form control is passed in as children
 		<label className="block space-y-1">
-			<span className="text-xs font-medium text-muted-foreground">{label}</span>
+			<span className="text-sm font-medium text-foreground">{label}</span>
 			{children}
 		</label>
 	);
