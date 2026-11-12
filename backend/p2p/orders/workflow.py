@@ -15,6 +15,7 @@ from sqlalchemy.orm import Session
 from p2p.approvals import budget, rules
 from p2p.approvals.workflow import ApprovalError, name_of, org_code_of
 from p2p.formulas.calendar import business_today
+from p2p.formulas.money import format_inr
 from p2p.orders import dispatch, touchless
 from p2p.platform import audit, permissions, proposals, tasks, users
 from p2p.platform.sod import Actor
@@ -69,8 +70,8 @@ def submit(db: Session, tenant: str, po_no: str, actor: Actor, *, today: date | 
     )
     if rule.is_automatic:
         reason = (
-            f"Within the buyer's tier under rule {rule.code} v{rule.version} (up to {rule.max_value}): the total "
-            f"{po['total']} needs no approver, the buyer's issue is the approval.{budget_note}"
+            f"Within the buyer's limit under rule {rule.code} v{rule.version} (up to {format_inr(rule.max_value)}): "
+            f"the total {format_inr(po['total'])} needs no approver; the buyer's issue is the approval.{budget_note}"
         )
         db.execute(
             text(
@@ -170,7 +171,7 @@ def _open_step(db: Session, tenant: str, po_no: str, total: Decimal, step: int, 
         db,
         tenant,
         kind="approval",
-        title=f"Approve purchase order {po_no} ({total})",
+        title=f"Approve purchase order {po_no} ({format_inr(total)})",
         assignee=user_id,
         sla_hours=_sla_hours(db),
         payload={"po_no": po_no, "step": step},

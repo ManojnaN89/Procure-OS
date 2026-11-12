@@ -122,7 +122,7 @@ def checks(facts: Facts, rule: TouchlessRule) -> list[Check]:
             "; ".join(priced) + f" (within {rule.price_pct.normalize():f}%)",
         ),
         Check("touchless.budget", facts.budget_over is None, facts.budget_over or "within budget"),
-        Check("touchless.gate", facts.gate_allowed, f"autonomy gate po.issue: {facts.gate_reason}"),
+        Check("touchless.gate", facts.gate_allowed, f"automatic issue: {facts.gate_reason}"),
     ]
 
 

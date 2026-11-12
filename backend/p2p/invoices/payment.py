@@ -21,6 +21,7 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from p2p.formulas import payment as rules
+from p2p.formulas.money import format_inr
 from p2p.invoices.service import InvoiceError
 from p2p.platform import audit, emails, notifications, numbering, proposals
 from p2p.platform.sod import Actor, user
@@ -30,6 +31,10 @@ D = Decimal
 RTGS_FROM = D("200000")  # a payment above this goes by RTGS, below it by NEFT
 OPEN_RUN = ("proposed", "approved", "file_generated")
 ADVANCE_STATUSES = ("acknowledged", "part_received")  # an order is advanced once the supplier has confirmed it
+
+
+def _count(n: int, noun: str) -> str:
+    return f"{n} {noun}{'' if n == 1 else 's'}"
 
 
 def _setting(db: Session, key: str, default: str) -> str:
@@ -445,15 +450,15 @@ def propose_run(
                     {"p": pay_no, "i": credit_no, "a": -credit},
                 )
         total += net + interest
-    what = f"{len(due)} invoice(s) to {len(by_supplier)} supplier(s)" if due else ""
+    what = f"{_count(len(due), 'invoice')} to {_count(len(by_supplier), 'supplier')}" if due else ""
     if advances:
-        what = (what + " and " if what else "") + f"{len(advances)} advance(s)"
+        what = (what + " and " if what else "") + _count(len(advances), "advance")
     pid = proposals.propose(
         db,
         user(user_id),
         action="payment_run.approve",
-        summary=f"Pay {what}, {total:,.2f} in all, on {run_date:%d %b %Y}"
-        + (f", saving {saving:,.2f} in early-payment discount" if saving else ""),
+        summary=f"Pay {what}, {format_inr(total)} in all, on {run_date:%d %b %Y}"
+        + (f", saving {format_inr(saving)} in early-payment discount" if saving else ""),
         payload={"run_no": run_no},
         required_permission="payment.approve",
         risk="high",
@@ -730,14 +735,14 @@ def _remit(db: Session, payment: dict[str, Any], paid_on: date, utr: str) -> Non
         lines = f"  Advance against order {payment['po_no']}"
     else:
         lines = "\n".join(
-            f"  {r[0]} ({r[1].replace('_', ' ')}): Rs {r[2]:,.2f}"
-            + (f", less early-payment discount Rs {r[3]:,.2f}" if D(r[3]) else "")
+            f"  {r[0]} ({r[1].replace('_', ' ')}): {format_inr(r[2])}"
+            + (f", less early-payment discount {format_inr(r[3])}" if D(r[3]) else "")
             for r in rows
         )
     body = (
-        f"Dear {contact[1] or 'Sir or Madam'},\n\n{company} has paid Rs {payment['amount']:,.2f} on {paid_on:%d %b %Y}.\n"
+        f"Dear {contact[1] or 'Sir or Madam'},\n\n{company} has paid {format_inr(payment['amount'])} on {paid_on:%d %b %Y}.\n"
         f"Bank reference: {utr}\n\nThis covers:\n{lines}\n"
-        + (f"\nTax deducted at source: Rs {payment['tds_amount']:,.2f}\n" if D(payment["tds_amount"]) else "")
+        + (f"\nTax deducted at source: {format_inr(payment['tds_amount'])}\n" if D(payment["tds_amount"]) else "")
         + f"\nRegards,\nAccounts, {company}\n"
     )
     try:

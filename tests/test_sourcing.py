@@ -473,7 +473,10 @@ def test_by_default_the_rfq_waits_for_a_buyer_to_approve_sending(db: Session, ou
         {"i": pid},
     ).one()
     assert proposal[:2] == ("rfq.send", "pending") and proposal[3:] == ("service", "rfq.send")
-    assert "set to propose" in proposal[2] and "RFQ-2627-00001" in proposal[2]
+    assert proposal[2] == (
+        "Send RFQ-2627-00001 to 3 suppliers: a person confirms it first "
+        "(automation setting “Send a request for quotation”: propose)"
+    )
     assert db.execute(text("select status, proposal_id from rfq")).one() == ("draft", pid)
 
 

@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from decimal import ROUND_DOWN, ROUND_HALF_UP, Decimal
 from statistics import median
 
-from p2p.formulas.money import round_money
+from p2p.formulas.money import format_inr, round_money
 
 PAISA = Decimal("0.01")
 
@@ -74,9 +74,9 @@ def price_questions(
         mid = Decimal(median(other_prices))
         gap = gap_pct(price, mid)
         if gap is not None and gap <= -threshold_pct:
-            out.append(f"{-gap}% below the other quotes (median {mid.quantize(PAISA, rounding=ROUND_HALF_UP)})")
+            out.append(f"{-gap}% below the other quotes (median {format_inr(mid)})")
     if last_price is not None:
         gap = gap_pct(price, last_price)
         if gap is not None and gap <= -threshold_pct:
-            out.append(f"{-gap}% below the last price paid ({last_price.quantize(PAISA, rounding=ROUND_HALF_UP)})")
+            out.append(f"{-gap}% below the last price paid ({format_inr(last_price)})")
     return out

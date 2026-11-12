@@ -19,6 +19,7 @@ from typing import Any
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
+from p2p.formulas.money import format_inr
 from p2p.invoices import payment as payments
 from p2p.invoices.service import InvoiceError
 from p2p.platform import audit, tasks
@@ -170,7 +171,8 @@ def import_statement(
             out.for_a_person.append(
                 {
                     **shown,
-                    "why": "the amount differs: payment " + ", ".join(f"{p['no']} is {p['amount']}" for p in named[:3]),
+                    "why": "the amount differs: payment "
+                    + ", ".join(f"{p['no']} is {format_inr(p['amount'])}" for p in named[:3]),
                 }
             )
         elif len({p["no"] for p in same}) > 1:

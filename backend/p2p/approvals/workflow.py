@@ -15,6 +15,7 @@ from sqlalchemy.orm import Session
 
 from p2p.approvals import budget, rules
 from p2p.formulas.calendar import business_today
+from p2p.formulas.money import format_inr
 from p2p.platform import audit, notifications, permissions, tasks, users, worker
 from p2p.platform.sod import Actor
 
@@ -155,8 +156,8 @@ def submit(db: Session, tenant: str, no: str, actor: Actor, *, today: date | Non
 
     if rule.is_automatic:
         reason = (
-            f"Auto-approved under rule {rule.code} v{rule.version}: the value {value} is within the automatic band "
-            f"(up to {rule.max_value:.2f}). {budget_note}"
+            f"Auto-approved under rule {rule.code} v{rule.version}: {format_inr(value)} is within the automatic limit "
+            f"of {format_inr(rule.max_value)}. {budget_note}"
         )
         db.execute(
             text(
@@ -268,7 +269,7 @@ def _open_step(db: Session, tenant: str, no: str, value: Decimal, step: int, rou
         db,
         tenant,
         kind="approval",
-        title=f"Approve request {no} ({value})",
+        title=f"Approve request {no} ({format_inr(value)})",
         assignee=user_id,
         sla_hours=chasing.escalation_days(db) * chasing.calendar(db).hours_per_day,
         escalation_chain=[boss] if boss else None,

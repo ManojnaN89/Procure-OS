@@ -187,7 +187,7 @@ def test_a_final_price_over_the_budget_is_only_a_warning_when_the_policy_warns(s
 
     assert made.held == [] and made.waiting  # it goes to a person, with the reason said
     reason = shop.execute(text("select decision_reason from po")).scalar_one()
-    assert "Over budget: GL G1 by 40.00" in reason
+    assert "Over budget: GL G1 by ₹ 40.00" in reason
 
 
 def test_a_final_price_over_the_budget_is_held_when_the_policy_blocks_until_a_person_accepts(shop: Session) -> None:  # noqa: F811
@@ -198,7 +198,7 @@ def test_a_final_price_over_the_budget_is_held_when_the_policy_blocks_until_a_pe
 
     (po_no,) = made.held
     po = shop.execute(text("select status, hold_reason, hold_proposal_id, budget_accepted from po")).one()
-    assert po[0] == "draft" and "Over budget: GL G1 by 40.00" in po[1] and po[2] and po[3] is False
+    assert po[0] == "draft" and "Over budget: GL G1 by ₹ 40.00" in po[1] and po[2] and po[3] is False
     with pytest.raises(Exception, match="on hold"):
         workflow.submit(shop, shop.info["slug"], po_no, sod.user(logins["buyer"]))
 

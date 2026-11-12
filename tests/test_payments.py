@@ -287,7 +287,7 @@ def test_a_run_pays_what_is_due_in_the_window_small_suppliers_first_and_goes_for
     assert pay == ("PAY-2627-000001", "S1", D("1180.00"), D("0.00"), "neft")
     assert ledger.execute(text("select invoice_no, amount from payment_allocation")).one() == (inv_no, D("1180.00"))
     assert (
-        "Pay 1 invoice(s) to 1 supplier(s), 1,180.00 in all"
+        "Pay 1 invoice to 1 supplier, ₹ 1,180.00 in all"
         in ledger.execute(text("select summary from proposal where id = :p"), {"p": row[3]}).scalar_one()
     )
     with pytest.raises(InvoiceError, match="no approved invoice is due"):
