@@ -1,12 +1,14 @@
-"""The page behind the link in an approval email: look at the request, then approve or reject.
+"""The page behind the links in an approval email: look at the request, then approve, reject or send it back.
 
 No sign-in: the signed link is the key (approvals/email_links.py). Opening the page changes nothing; the decision is a
-separate button. A page that is not for this person any more, or a link that was altered or has expired, says so and does
-nothing. Wrong links are counted per address, so guessing is stopped.
+separate button. The email's buttons open the same page for one decision (`?do=approve|reject|return`); rejecting or
+sending back asks for a reason there. Approving above the code limit asks for a one-time code, emailed on request. A page
+that is not for this person any more, or a link that was altered or has expired, says so and does nothing. Wrong links are
+counted per address, so guessing is stopped.
 """
 
 from html import escape
-from typing import Annotated
+from typing import Annotated, Any
 
 from fastapi import APIRouter, Form, Request
 from fastapi.responses import HTMLResponse
@@ -23,11 +25,18 @@ _STYLE = (
     "body{font-family:system-ui,sans-serif;background:#10151c;color:#e8edf3;margin:0;padding:24px}"
     "main{max-width:560px;margin:0 auto}h1{font-size:20px}table{width:100%;border-collapse:collapse;margin:12px 0}"
     "td,th{padding:6px 8px;border-bottom:1px solid #2a3340;text-align:left;font-size:14px}"
-    "textarea{width:100%;box-sizing:border-box;background:#18202b;color:inherit;border:1px solid #2a3340;border-radius:6px;padding:8px}"
-    "button{padding:9px 16px;border-radius:6px;border:0;font-size:14px;cursor:pointer;margin-right:8px}"
-    ".ok{background:#2f9e6e;color:#fff}.no{background:#b4443c;color:#fff}.muted{color:#93a0b1;font-size:13px}"
+    "textarea,input{width:100%;box-sizing:border-box;background:#18202b;color:inherit;border:1px solid #2a3340;"
+    "border-radius:6px;padding:8px;font-size:14px}"
+    "button{padding:9px 16px;border-radius:6px;border:0;font-size:14px;cursor:pointer;margin:0 8px 8px 0}"
+    ".ok{background:#2f9e6e;color:#fff}.no{background:#b4443c;color:#fff}.back{background:#5b6b7f;color:#fff}"
+    ".plain{background:#2a3340;color:#e8edf3}.muted{color:#93a0b1;font-size:13px}.note{color:#f0c36a}"
 )
 _HEADERS = {"Cache-Control": "no-store", "Referrer-Policy": "no-referrer", "X-Robots-Tag": "noindex"}
+_BUTTONS = {
+    "approve": "<button class=ok name=action value=approve>Approve</button>",
+    "reject": "<button class=no name=action value=reject>Reject</button>",
+    "return": "<button class=back name=action value=return>Send back for changes</button>",
+}
 
 
 def _page(title: str, body: str, status: int = 200) -> HTMLResponse:
@@ -66,45 +75,88 @@ def _link(token: str, key: str) -> email_links.Link:
         raise _Refused(400, str(exc)) from None
 
 
-@router.get("/approve/{token}", response_class=HTMLResponse)
-def show(token: str, request: Request) -> HTMLResponse:
-    try:
-        key = _guard(request)
-        link = _link(token, key)
-        with Session(routing.engine_for(link.tenant)) as db:
-            try:
-                data = email_links.summary(db, link)
-            except email_links.LinkError as exc:
-                raise _Refused(409, str(exc)) from None
-    except _Refused as error:
-        return _refuse(error)
+def _facts(token: str, request: Request) -> tuple[email_links.Link, dict[str, Any]]:
+    link = _link(token, _guard(request))
+    with Session(routing.engine_for(link.tenant)) as db:
+        try:
+            return link, email_links.summary(db, link)
+        except email_links.LinkError as exc:
+            raise _Refused(409, str(exc)) from None
+
+
+def _form(token: str, data: dict[str, Any], do: str | None, note: str = "") -> HTMLResponse:
     rows = "".join(
-        f"<tr><td>{escape(r['item'])}</td><td>{escape(r['qty'])} {escape(r['uom'])}</td></tr>" for r in data["lines"]
+        f"<tr><td>{escape(r['item'])}</td><td>{escape(r['qty'])} {escape(r['uom'])}</td><td>{escape(r['amount'])}</td></tr>"
+        for r in data["lines"]
+    )
+    actions = [do] if do in email_links.ACTIONS else list(email_links.ACTIONS)
+    needs_reason = "approve" not in actions
+    code = (
+        "<p class=note>Approving needs the one-time code we email you (it is above the limit). "
+        f"<button class=plain formaction='/approve/{escape(token)}/code' formmethod=post formnovalidate>"
+        "Email me a code</button></p><input name=code inputmode=numeric autocomplete=one-time-code maxlength=6 "
+        "placeholder='Six-digit code'>"
+        if data["otp"] and "approve" in actions
+        else ""
+    )
+    prompt = (
+        "Say why (the requester sees it)."
+        if needs_reason
+        else "A reason is needed to reject or send back, and welcome when you approve."
     )
     body = (
-        f"<p>From {escape(data['requester'])}. Total <b>{escape(data['total'])}</b>. "
-        f"<span class=muted>Rule {escape(data['rule'])}</span></p>"
-        + (f"<p>{escape(data['why'])}</p>" if data["why"] else "")
-        + f"<table><tr><th>Item</th><th>Quantity</th></tr>{rows}</table>"
-        f"<form method=post><p class=muted>A reason is needed to reject, and welcome when you approve.</p>"
-        f"<textarea name=reason rows=3 maxlength=500></textarea><p>"
-        f"<button class=ok name=action value=approve>Approve</button>"
-        f"<button class=no name=action value=reject>Reject</button></p></form>"
-        f"<p class=muted>This link works once. To change a quantity, open the request in the app.</p>"
+        f"<p>{escape(data['summary'])}</p>"
+        + (f"<p>{escape(data['justification'])}</p>" if data["justification"] else "")
+        + f"<table><tr><th>Item</th><th>Quantity</th><th>Amount</th></tr>{rows}</table>"
+        f"<p>Estimated total <b>{escape(data['total_inr'])}</b>. {escape(data['budget'])}</p>"
+        f"<p class=muted>{escape(data['why'])}</p>"
+        + (f"<p class=note>{escape(note)}</p>" if note else "")
+        + f"<form method=post action='/approve/{escape(token)}'>{code}<p class=muted>{escape(prompt)}</p>"
+        f"<textarea name=reason rows=3 maxlength=500{' required' if needs_reason else ''}></textarea><p>"
+        + "".join(_BUTTONS[a] for a in actions)
+        + "</p></form><p class=muted>This link works once. To change a quantity, open the request in the app.</p>"
     )
     return _page(f"Request {data['no']}", body)
 
 
+@router.get("/approve/{token}", response_class=HTMLResponse)
+def show(token: str, request: Request, do: str | None = None) -> HTMLResponse:
+    try:
+        _, data = _facts(token, request)
+    except _Refused as error:
+        return _refuse(error)
+    return _form(token, data, do)
+
+
+@router.post("/approve/{token}/code", response_class=HTMLResponse)
+def send_code(token: str, request: Request) -> HTMLResponse:
+    """Email the approver a one-time code, then show the approval form again to type it in."""
+    try:
+        link, data = _facts(token, request)
+        with Session(routing.engine_for(link.tenant)) as db:
+            try:
+                address = email_links.send_code(db, link)
+            except email_links.LinkError as exc:
+                return _form(token, data, "approve", str(exc))
+    except _Refused as error:
+        return _refuse(error)
+    return _form(token, data, "approve", f"A code was sent to {address}. It works once and expires in 10 minutes.")
+
+
 @router.post("/approve/{token}", response_class=HTMLResponse)
 def decide(
-    token: str, request: Request, action: Annotated[str, Form()], reason: Annotated[str, Form()] = ""
+    token: str,
+    request: Request,
+    action: Annotated[str, Form()],
+    reason: Annotated[str, Form()] = "",
+    code: Annotated[str, Form()] = "",
 ) -> HTMLResponse:
     try:
         key = _guard(request)
         link = _link(token, key)
         with Session(routing.engine_for(link.tenant)) as db:
             try:
-                status = email_links.decide(db, link, action, reason.strip()[:500] or None)
+                status = email_links.decide(db, link, action, reason.strip()[:500] or None, code.strip()[:12] or None)
             except email_links.LinkError as exc:
                 raise _Refused(409, str(exc)) from None
     except _Refused as error:
@@ -113,5 +165,6 @@ def decide(
         "approved": "Approved. The buyer takes it from here.",
         "submitted": "Approved. It goes on to the next approver.",
         "rejected": "Rejected. The requester has been told.",
+        "returned": "Sent back for changes. The requester has been told.",
     }.get(status, f"Recorded: {status}.")
     return _page(f"Request {link.request_no}", f"<p>{escape(done)}</p><p class=muted>You can close this page.</p>")

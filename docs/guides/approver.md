@@ -15,7 +15,9 @@ You decide requests, orders and the sensitive things that no program may decide 
 
 Several at once: under **Requests**, open **Needs my decision**, tick the requests and click **Approve selected**. Each is decided on its own, and anything that is not your turn is left alone and listed.
 
-By email: the mail about a request that waits for you has a link. It opens a page that shows the request, with **Approve** and **Reject**. The link works once and expires after a week. Opening it decides nothing.
+By email: the mail about a request that waits for you shows the lines, the estimated total, the budget and why it came to you, with Approve, Reject and "Send back for changes" buttons. Each opens a page about the request; rejecting or sending back asks for a reason there. Above Rs 5,00,000, approving also needs a one-time code: click "Email me a code" on that page, type the six digits from the mail (it works once, for 10 minutes, 5 tries) and click Approve. The links work once and expire after a week. Opening one decides nothing.
+
+If you do not decide, you get one reminder after a working day; after two working days the request also goes to your manager (or the next approver), who may then decide it.
 
 ## Approve an order
 
@@ -35,4 +37,4 @@ You cannot decide what you asked for, entered or proposed. You cannot verify a d
 
 ## If you are stuck
 
-If you will be away, ask the Admin to change who approves in **Company setup** → **Approvers**.
+If you will be away, open **Settings** (the gear at the top) → **Away? Name a deputy**, pick an approver and the days, and click **Name deputy**. Approvals that come up meanwhile go to them. To change who approves for good, ask the Admin (**Company setup** → **Approvers**).

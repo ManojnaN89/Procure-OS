@@ -27,7 +27,7 @@ Reading a line: `name*` is part of the primary key, `name?` may be empty, then t
 
 ## Tenant database (one per company)
 
-116 tables.
+117 tables.
 
 **advance** · payment_no* text, po_no text, gross num, taxable num, used_gross num, used_taxable num, paid_on? date
 
@@ -41,9 +41,9 @@ Reading a line: `name*` is part of the primary key, `name?` may be empty, then t
 
 **app_setting** · key* text, value text, updated_at timestamptz
 
-**approval_rule** · id* bigint, rule_code? text, document? text, min_value? num, max_value? num, category_code? text, department_code? text, spend_type? text, approver_chain? text, version? int, effective_from? date, effective_to? date
+**approval_rule** · id* bigint, rule_code? text, document? text, min_value? num, max_value? num, category_code? text, department_code? text, spend_type? text, approver_chain? text, version? int, effective_from? date, effective_to? date, location_code? text
 
-**approval_step** · id* bigint, request_no text, round int, step int, role text, approver text, delegate? text, status text, acted_by? text, acted_at? timestamptz, comment? text, task_id? bigint
+**approval_step** · id* bigint, request_no text, round int, step int, role text, approver text, delegate? text, status text, acted_by? text, acted_at? timestamptz, comment? text, task_id? bigint, rule_id? bigint, rule_code? text, rule_version? int, route_reason? text, opened_at? timestamptz, reminded_at? timestamptz
 
 **approver_role** · role* text, source text, value? text
 
@@ -117,7 +117,7 @@ Reading a line: `name*` is part of the primary key, `name?` may be empty, then t
 
 **item_substitute** · item_code* text, substitute_code* text, note? text
 
-**location** · code* text, name? text, type? text, gstin? text, address? text, city? text, state_code? text, pincode? text, is_stock_location? bool, working_days? text, receiving_hours? text, holiday_scope? text, loc_short? text
+**location** · code* text, name? text, type? text, gstin? text, address? text, city? text, state_code? text, pincode? text, is_stock_location? bool, working_days? text, receiving_hours? text, holiday_scope? text, loc_short? text, head_user? text
 
 **match_result** · id* bigint, invoice_no text, invoice_line_no? int, result text, reason_codes? text, price_var? num, qty_var? num, detail? text, created_at timestamptz, resolved_by? text, resolved_at? timestamptz, resolution? text
 
@@ -138,6 +138,8 @@ Reading a line: `name*` is part of the primary key, `name?` may be empty, then t
 **number_counter** · document_type* text, scope_key* text, fy* text, last_seq int
 
 **number_series** · id* bigint, document_type? text, prefix? text, scope? text, format? text, reset? text
+
+**one_time_code** · id* bigint, purpose text, ref text, user_id bigint, code_hash text, created_at timestamptz, expires_at timestamptz, attempts int, status text, used_at? timestamptz
 
 **org_setting** · key* text, value? text, description? text
 

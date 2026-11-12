@@ -272,6 +272,7 @@ const RequisitionsView = {
                 <span style="color:var(--text-primary);">${this.esc(s.name)}</span>
                 <span class="cell-muted"> · ${this.esc(s.designation || s.role)}${s.stand_in ? ` · ${this.esc(s.stand_in)} standing in` : ""}</span>
                 ${s.comment ? `<div class="cell-muted" style="font-size:11.5px;margin-top:2px;">“${this.esc(s.comment)}”</div>` : ""}
+                ${s.why ? `<div class="cell-muted" style="font-size:11px;margin-top:2px;">Why: ${this.esc(s.why)}</div>` : ""}
               </div>
               <div style="text-align:right;white-space:nowrap;">
                 <span class="badge badge-${this.esc(s.status === "pending" ? "waiting" : s.status)}">${this.esc(this.STEP_LABEL[s.status] || s.status)}</span>

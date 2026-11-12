@@ -22,7 +22,7 @@ from sqlalchemy.orm import Session
 
 from p2p.agents import assistant, intake
 from p2p.ai_steps.gateway import Gateway
-from p2p.approvals import budget
+from p2p.approvals import budget, deputies
 from p2p.approvals import rules as approval_rules
 from p2p.approvals import workflow as approvals
 from p2p.formulas.calendar import business_today
@@ -739,6 +739,8 @@ def get_requisition(no: str, db: Db, ctx: Ctx) -> dict[str, Any]:
                     "status": s["status"],
                     "acted_at": _iso(s["acted_at"]),
                     "comment": s["comment"],
+                    "why": s["route_reason"],
+                    "reminded_at": _iso(s["reminded_at"]),
                 }
                 for s in approvals.steps_of(db, no)
             ],
@@ -892,6 +894,43 @@ def remind_approver(no: str, db: Db, ctx: Ctx) -> dict[str, str]:
         raise HTTPException(409, str(exc)) from None
     except PermissionDenied as exc:
         raise HTTPException(403, str(exc)) from None
+
+
+Approver = Annotated[routing.TenantContext, Depends(require("request.approve"))]
+
+
+@router.get("/me/deputies")
+def my_deputies(db: Db, ctx: Approver) -> dict[str, Any]:
+    """The deputies this approver has named for when they are away."""
+    try:
+        return {"deputies": deputies.mine(db, ctx.user_id), "people": deputies.candidates(db, ctx.user_id)}
+    except deputies.DeputyError as exc:
+        raise HTTPException(409, str(exc)) from None
+
+
+@router.post("/me/deputies", status_code=201)
+def name_deputy(payload: dict[str, Any], db: Db, ctx: Approver) -> dict[str, int]:
+    """Name a deputy for a date range: approvals that open meanwhile go to them."""
+    try:
+        start, end = date.fromisoformat(str(payload.get("start"))), date.fromisoformat(str(payload.get("end")))
+    except ValueError:
+        raise HTTPException(422, "start and end must be dates (YYYY-MM-DD)") from None
+    try:
+        new_id = deputies.name_deputy(
+            db, ctx.slug, ctx.user_id, str(payload.get("deputy") or ""), start, end, payload.get("reason")
+        )
+    except deputies.DeputyError as exc:
+        raise HTTPException(409, str(exc)) from None
+    return {"id": new_id}
+
+
+@router.delete("/me/deputies/{delegation_id}")
+def remove_deputy(delegation_id: int, db: Db, ctx: Approver) -> dict[str, str]:
+    try:
+        deputies.remove(db, ctx.user_id, delegation_id)
+    except deputies.DeputyError as exc:
+        raise HTTPException(404, str(exc)) from None
+    return {"status": "removed"}
 
 
 @router.post("/requisitions/{no}/reject")

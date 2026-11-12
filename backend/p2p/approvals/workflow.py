@@ -18,8 +18,6 @@ from p2p.formulas.calendar import business_today
 from p2p.platform import audit, notifications, permissions, tasks, users, worker
 from p2p.platform.sod import Actor
 
-DEFAULT_SLA_HOURS = 24
-
 
 class ApprovalError(Exception):
     """The action is not allowed now (wrong status, not this person's turn, missing reason...)."""
@@ -80,11 +78,6 @@ def _locked(db: Session, no: str) -> dict[str, Any]:
     return dict(row)
 
 
-def _sla_hours(db: Session) -> Decimal:
-    value = db.execute(text("select value from org_setting where key = 'approval_reminder_hours'")).scalar()
-    return Decimal(str(value)) if value else Decimal(DEFAULT_SLA_HOURS)
-
-
 def _requires_budget(db: Session) -> bool:
     """Whether the company wants auto-approval only when the budget allows it (the default)."""
     value = db.execute(text("select value from org_setting where key = 'auto_approve_requires_budget'")).scalar()
@@ -110,9 +103,13 @@ def submit(db: Session, tenant: str, no: str, actor: Actor, *, today: date | Non
     spend = "capex" if req["type"] == "capex" else "opex"
     value = Decimal(req["total_value"])
 
-    rule = rules.find_rule(
-        db, "request", value, today, spend_type=spend, category=category, department=req["department_code"]
-    )
+    where: dict[str, Any] = {
+        "spend_type": spend,
+        "category": category,
+        "department": req["department_code"],
+        "location": req["ship_to_location"],
+    }
+    rule = rules.find_rule(db, "request", value, today, **where)
     checks = budget.check_request(db, no, today)
     over = [c for c in checks if c.check.status == "over"]
     if budget.blocked(checks):
@@ -122,22 +119,20 @@ def submit(db: Session, tenant: str, no: str, actor: Actor, *, today: date | Non
     if over and rule.is_automatic and _requires_budget(db):
         # a request that is over budget never approves itself: it goes to the first rule above the automatic band
         while rule.is_automatic:
-            rule = rules.find_rule(
-                db,
-                "request",
-                rule.max_value + Decimal("0.01"),
-                today,
-                spend_type=spend,
-                category=category,
-                department=req["department_code"],
-            )
+            rule = rules.find_rule(db, "request", rule.max_value + Decimal("0.01"), today, **where)
         budget_note += " It cannot approve itself, so it goes to a person."
     db.execute(
         text("update request set budget_check = cast(:b as jsonb) where no = :n"),
         {"b": json.dumps([c.as_json() for c in checks]), "n": no},
     )
     steps = rules.resolve_chain(
-        db, rule.roles, requester=req["requester"], department=req["department_code"], on_date=today
+        db,
+        rule.roles,
+        requester=req["requester"],
+        department=req["department_code"],
+        on_date=today,
+        location=req["ship_to_location"],
+        sources=rule.sources,
     )
     round_no = int(req["approval_round"]) + 1
     audit.record(
@@ -151,6 +146,7 @@ def submit(db: Session, tenant: str, no: str, actor: Actor, *, today: date | Non
             "rule": rule.code,
             "version": rule.version,
             "approvers": [s.approver for s in steps],
+            "rows": sorted({s.source.rule_id for s in steps if s.source}),
             "budget": budget_note,
         },
         rule_version=f"{rule.code}:v{rule.version}",
@@ -194,8 +190,8 @@ def submit(db: Session, tenant: str, no: str, actor: Actor, *, today: date | Non
     for n, step in enumerate(steps, start=1):
         db.execute(
             text(
-                "insert into approval_step (request_no, round, step, role, approver, delegate, status) "
-                "values (:no, :round, :step, :role, :who, :dele, :status)"
+                "insert into approval_step (request_no, round, step, role, approver, delegate, status, rule_id, rule_code, "
+                "rule_version, route_reason) values (:no, :round, :step, :role, :who, :dele, :status, :rid, :rc, :rv, :why)"
             ),
             {
                 "no": no,
@@ -205,6 +201,10 @@ def submit(db: Session, tenant: str, no: str, actor: Actor, *, today: date | Non
                 "who": step.approver,
                 "dele": step.delegate,
                 "status": "pending" if n == 1 else "waiting",
+                "rid": step.source.rule_id if step.source else None,
+                "rc": step.source.code if step.source else rule.code,
+                "rv": step.source.version if step.source else rule.version,
+                "why": step.source.why if step.source else None,
             },
         )
     names = " then ".join(name_of(db, s.approver) for s in steps)
@@ -227,51 +227,62 @@ def submit(db: Session, tenant: str, no: str, actor: Actor, *, today: date | Non
 
 
 def _open_step(db: Session, tenant: str, no: str, value: Decimal, step: int, round_no: int) -> None:
-    """Tell the person whose turn it is: a notification and a task that escalates if it waits too long."""
+    """Hand the step to the person whose turn it is: the approval email with its links, a task that escalates after
+    `approval_escalation_days` working days, and one reminder after `approval_reminder_days` (approvals/chasing.py)."""
+    from p2p.approvals import approval_email, chasing  # noqa: PLC0415 - both use this module
+
     row = (
         db.execute(
-            text("select approver, delegate from approval_step where request_no = :n and round = :r and step = :s"),
+            text(
+                "select s.approver, s.delegate, r.requester from approval_step s join request r on r.no = s.request_no "
+                "where s.request_no = :n and s.round = :r and s.step = :s"
+            ),
             {"n": no, "r": round_no, "s": step},
         )
         .mappings()
         .one()
     )
-    who = row["delegate"] or row["approver"]
-    email = db.execute(text("select email from org_user where code = :c"), {"c": who}).scalar()
-    user_id = users.user_id_by_email(tenant, str(email)) if email else None
+    delegate = row["delegate"]
+    if delegate is None:  # a deputy named after the request was submitted takes the step too
+        deputy = rules.deputy_on(db, row["approver"], business_today())
+        delegate = deputy if deputy != row["requester"] else None
+    now = datetime.now(UTC)
+    db.execute(
+        text(
+            "update approval_step set delegate = :d, opened_at = :t where request_no = :n and round = :r and step = :s"
+        ),
+        {"d": delegate, "t": now, "n": no, "r": round_no, "s": step},
+    )
+    if delegate and row["delegate"] is None:
+        audit.record(
+            db, audit.SYSTEM, "request.deputy", "request", no,
+            after={"step": step, "approver": row["approver"], "deputy": delegate}, reason="the approver named a deputy",
+        )  # fmt: skip
+    db.commit()
+    who = delegate or row["approver"]
+    user_id = notifications.login_of(db, tenant, who)
     if user_id is None:
         return  # no login yet: the step waits, and shows on the request page
-    from p2p.approvals import email_links  # noqa: PLC0415 - email_links uses this module
-
-    try:
-        link = email_links.url(tenant, no, round_no, step, user_id)
-        note = f" To decide without signing in, open {link} (works once, expires in {email_links.EXPIRES_DAYS} days)."
-    except email_links.LinkError:
-        note = ""  # no signing secret: the approver decides in the app
-    boss = db.execute(
-        text(
-            "select m.code from org_user a join org_user m on m.code = a.manager_code and m.active "
-            "join request r on r.no = :n where a.code = :c and m.code <> coalesce(r.requester, '')"
-        ),
-        {"n": no, "c": who},
-    ).scalar()  # a request that waits too long goes to the approver's own manager (never the person who asked)
-    boss_login = notifications.login_of(db, tenant, str(boss)) if boss else None
+    boss = chasing.escalation_target(db, tenant, no, round_no, step, who)
     task_id = tasks.create_task(
         db,
         tenant,
         kind="approval",
         title=f"Approve request {no} ({value})",
         assignee=user_id,
-        sla_hours=_sla_hours(db),
-        escalation_chain=[boss_login] if boss_login else None,
+        sla_hours=chasing.escalation_days(db) * chasing.calendar(db).hours_per_day,
+        escalation_chain=[boss] if boss else None,
         payload={"request_no": no, "step": step},
-        email_note=note,
+        email=False,  # the approval email below carries the request and the links
+        now=now,
     )
     db.execute(
         text("update approval_step set task_id = :t where request_no = :n and round = :r and step = :s"),
         {"t": task_id, "n": no, "r": round_no, "s": step},
     )
     db.commit()
+    approval_email.send(db, tenant, no, round_no, step, user_id)
+    chasing.queue_reminder(db, tenant, no, round_no, step, now)
 
 
 # ---- acting on a step -------------------------------------------------------------------------
@@ -455,13 +466,14 @@ def approve(
     return "submitted" if following is not None else "approved"
 
 
-def on_escalated(db: Session, task_id: int, new_assignee: int) -> None:
-    """An approval task moved to the approver's manager: the manager may decide the step too (on the approver's behalf, and
-    the audit says so). The approver can still decide it. Nothing happens if the step is no longer waiting."""
+def on_escalated(db: Session, tenant: str, task_id: int, new_assignee: int) -> None:
+    """An approval task moved on (to the approver's manager, else the next approver): that person may decide the step too
+    (on the approver's behalf, and the audit says so) and is sent the approval email. The approver can still decide it.
+    Nothing happens if the step is no longer waiting."""
     step = (
         db.execute(
             text(
-                "select s.id, s.request_no, s.approver, r.requester from approval_step s join request r on r.no = s.request_no "
+                "select s.id, s.request_no, s.round, s.step, s.approver, r.requester from approval_step s join request r on r.no = s.request_no "
                 "where s.task_id = :t and s.status = 'pending' and s.delegate is null for update of s"
             ),
             {"t": task_id},
@@ -477,6 +489,11 @@ def on_escalated(db: Session, task_id: int, new_assignee: int) -> None:
         db, Actor("service", "escalation"), "request.escalate", "request", step["request_no"],
         after={"step_approver": step["approver"], "may_also_decide": me}, reason="the approval waited past its time",
     )  # fmt: skip
+    from p2p.approvals import approval_email  # noqa: PLC0415 - the email module reads this one
+
+    approval_email.send(
+        db, tenant, step["request_no"], int(step["round"]), int(step["step"]), new_assignee, "escalated"
+    )
 
 
 def bulk_approve(
@@ -595,9 +612,11 @@ def reject(
     return _stop(db, no, user_id, reason, status="rejected", action="request.reject", tenant=tenant, via=via)
 
 
-def return_for_changes(db: Session, no: str, user_id: int, reason: str | None, *, tenant: str | None = None) -> str:
+def return_for_changes(
+    db: Session, no: str, user_id: int, reason: str | None, *, tenant: str | None = None, via: str | None = None
+) -> str:
     """Send the request back to be changed and submitted again (a new round). With the company's slug, the requester is told."""
-    return _stop(db, no, user_id, reason, status="returned", action="request.return", tenant=tenant)
+    return _stop(db, no, user_id, reason, status="returned", action="request.return", tenant=tenant, via=via)
 
 
 def steps_of(db: Session, no: str) -> list[dict[str, Any]]:
@@ -607,7 +626,8 @@ def steps_of(db: Session, no: str) -> list[dict[str, Any]]:
         for r in db.execute(
             text(
                 "select s.step, s.role, s.approver, a.name as approver_name, a.designation, s.delegate, d.name as delegate_name, "
-                "s.status, s.acted_by, s.acted_at, s.comment from approval_step s "
+                "s.status, s.acted_by, s.acted_at, s.comment, s.route_reason, s.rule_code, s.rule_version, s.reminded_at "
+                "from approval_step s "
                 "join request r on r.no = s.request_no and r.approval_round = s.round "
                 "left join org_user a on a.code = s.approver left join org_user d on d.code = s.delegate "
                 "where s.request_no = :n order by s.step"

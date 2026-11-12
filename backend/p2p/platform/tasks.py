@@ -36,6 +36,7 @@ def create_task(
     actor: Actor = audit.SYSTEM,
     now: datetime | None = None,
     email_note: str = "",
+    email: bool = True,
 ) -> int:
     now = now or datetime.now(UTC)
     due = sla_due(now, sla_hours, _calendar(db))
@@ -62,7 +63,14 @@ def create_task(
         cases.log_event(db, case_id, "task_created", actor, {"task_id": task_id, "assignee": assignee})
     db.commit()
     notifications.notify(
-        db, tenant, assignee, "task", f"New task: {title}", f"Due {due:%d %b %Y %H:%M}.", email_extra=email_note
+        db,
+        tenant,
+        assignee,
+        "task",
+        f"New task: {title}",
+        f"Due {due:%d %b %Y %H:%M}.",
+        email_extra=email_note,
+        email=email,
     )
     worker.enqueue(tenant, "task_escalate", {"task_id": task_id}, run_at=due)
     return task_id
@@ -143,11 +151,12 @@ def _escalate(ctx: worker.JobContext) -> None:
         if kind == "approval":  # the person it moves to must be able to decide it too
             from p2p.approvals import workflow  # noqa: PLC0415 - the approvals use this module
 
-            workflow.on_escalated(db, task_id, new_assignee)
+            workflow.on_escalated(db, ctx.tenant, task_id, new_assignee)
         db.commit()
         notifications.notify(
-            db, ctx.tenant, new_assignee, "task_escalated", f"Escalated to you: {title}", f"Due {due:%d %b %Y %H:%M}."
-        )
+            db, ctx.tenant, new_assignee, "task_escalated", f"Escalated to you: {title}", f"Due {due:%d %b %Y %H:%M}.",
+            email=kind != "approval",  # an approval sends its own email, with the request and the links
+        )  # fmt: skip
         notifications.notify(
             db, ctx.tenant, int(assignee), "task_escalated", f"Task moved on to the next person: {title}"
         )

@@ -21,6 +21,7 @@ SOURCES = [
     *(REPO_ROOT / "frontend" / "src").rglob("*.tsx"),
     REPO_ROOT / "backend" / "p2p" / "platform" / "workspace_api.py",
     REPO_ROOT / "backend" / "p2p" / "platform" / "setup_api.py",
+    REPO_ROOT / "backend" / "p2p" / "platform" / "approval_link_api.py",  # the page behind an approval email
 ]
 
 

@@ -9,7 +9,9 @@ const SettingsView = {
   async render(container) {
     if (!Auth.can("admin.settings")) {
       container.innerHTML = `<div class="page-header"><h1>Settings</h1></div>
-        <div class="empty-next"><strong>Settings are changed by the administrator.</strong><br>Ask them if a limit or a policy needs to change.</div>`;
+        <div class="empty-next"><strong>Settings are changed by the administrator.</strong><br>Ask them if a limit or a policy needs to change.</div>
+        <div class="panel" id="deputyPanel" style="margin-top:16px;display:none;"></div>`;
+      await this.loadDeputies();
       return;
     }
     container.innerHTML = `
@@ -18,8 +20,62 @@ const SettingsView = {
         <p>Limits that raise alerts and score suppliers, and what runs by itself. Approval chains and people are under Admin.</p>
       </div>
       <div class="panel" id="settingsForm"><div class="empty-state">Loading\u2026</div></div>
+      <div class="panel" id="deputyPanel" style="margin-top:16px;display:none;"></div>
     `;
     await this.load();
+    await this.loadDeputies();
+  },
+
+  esc(value) {
+    return String(value ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
+  },
+
+  // An approver who will be away names a deputy for some days; approvals that open meanwhile go to the deputy.
+  async loadDeputies() {
+    const el = document.getElementById("deputyPanel");
+    if (!el || !Auth.can("request.approve")) return;
+    let data;
+    try {
+      data = await API.getJSON("/api/me/deputies");
+    } catch {
+      return; // not linked to a person in the organisation: nothing to offer
+    }
+    const today = new Date().toISOString().slice(0, 10);
+    const field = "background:var(--surface-sunken);border:1px solid var(--border);border-radius:6px;padding:6px 8px;color:var(--text-primary);font-size:12.5px;";
+    el.style.display = "";
+    el.innerHTML = `
+      <div class="panel-title" style="margin-bottom:6px;">Away? Name a deputy</div>
+      <p class="cell-muted" style="font-size:12px;margin:0 0 10px;">Approvals that come up while you are away go to your deputy, who must be an approver.</p>
+      ${(data.deputies || []).map((d) => `
+        <div style="display:flex;flex-wrap:wrap;justify-content:space-between;gap:8px;padding:6px 0;border-bottom:1px solid var(--border);font-size:12.5px;">
+          <span>${this.esc(d.to_name || d.to_user)} · ${this.esc(d.start_date)} to ${this.esc(d.end_date)}</span>
+          <span class="btn btn-sm" data-remove="${this.esc(d.id)}">Remove</span>
+        </div>`).join("")}
+      <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-top:10px;">
+        <select id="deputyWho" style="${field}" aria-label="Deputy">
+          ${(data.people || []).map((p) => `<option value="${this.esc(p.code)}">${this.esc(p.name)}</option>`).join("")}
+        </select>
+        <input id="deputyFrom" type="date" value="${today}" style="${field}" aria-label="From" />
+        <input id="deputyTo" type="date" value="${today}" style="${field}" aria-label="To" />
+        <div class="btn btn-primary btn-sm" id="deputySave">Name deputy</div>
+      </div>
+      <div id="deputyMsg" class="cell-muted" style="font-size:11.5px;margin-top:6px;"></div>`;
+    el.querySelectorAll("[data-remove]").forEach((b) => b.addEventListener("click", async () => {
+      await Auth.fetch(`/api/me/deputies/${encodeURIComponent(b.dataset.remove)}`, { method: "DELETE" });
+      await this.loadDeputies();
+    }));
+    document.getElementById("deputySave").addEventListener("click", async () => {
+      const res = await API.postJSON("/api/me/deputies", {
+        deputy: document.getElementById("deputyWho").value,
+        start: document.getElementById("deputyFrom").value,
+        end: document.getElementById("deputyTo").value,
+      });
+      if (!res.ok) {
+        document.getElementById("deputyMsg").textContent = res.data.detail || "Couldn't name the deputy.";
+        return;
+      }
+      await this.loadDeputies();
+    });
   },
 
   FIELDS: [

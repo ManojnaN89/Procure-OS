@@ -99,8 +99,11 @@ def route(db: Session, req: DraftRequest, as_of: date) -> None:
             spend_type="opex",
             category=req.category_code,
             department=req.department,
+            location=req.location_code,
         )
-        steps = approval_rules.resolve_chain(db, rule.roles, requester=None, department=req.department, on_date=as_of)
+        steps = approval_rules.resolve_chain(
+            db, rule.roles, requester=None, department=req.department, on_date=as_of, location=req.location_code
+        )
     except approval_rules.ApprovalRuleError as exc:
         req.route_kind, req.route = "blocked", str(exc)
         return

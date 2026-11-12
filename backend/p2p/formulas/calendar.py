@@ -68,6 +68,16 @@ class BusinessCalendar:
             t = self._into_working_time(end_of_day)
         return t
 
+    @property
+    def hours_per_day(self) -> Decimal:
+        span = datetime.combine(date.min, self.day_end) - datetime.combine(date.min, self.day_start)
+        return Decimal(int(span.total_seconds())) / Decimal(3600)
+
+    def working_days_later(self, start: datetime, days: Decimal | int | str) -> datetime:
+        """The same point a number of working days on: Friday 11:00 plus one working day is Monday 11:00 (Tuesday when
+        Monday is a holiday). Counted in working hours, so time outside working hours or on a holiday does not count."""
+        return self.add_business_hours(start, to_decimal(days) * self.hours_per_day)
+
     def _into_working_time(self, t: datetime) -> datetime:
         day_start = datetime.combine(t.date(), self.day_start, tzinfo=IST)
         day_end = datetime.combine(t.date(), self.day_end, tzinfo=IST)

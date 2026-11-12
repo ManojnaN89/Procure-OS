@@ -60,6 +60,8 @@ def source_reads(key: str) -> set[str]:
                 found.add("app")
             if "DEFAULT_SETTINGS" in window:
                 found.add("app")
+            if re.search(r"settings\.(value|number)\(", window):  # platform/settings.py: the org's value, else the app's
+                found |= {"org", "app"}
     return found
 
 
@@ -365,6 +367,8 @@ def run(ctx) -> Outcome:
         r
         for r in client.get(f"{SETUP}/approval-rules", headers=admin).json()["rules"]
         if r["in_force"] and r["document"] in ("request", "po")
+        and not r.get("adds")  # a row that adds an approver is not a band of its own (no gap or overlap to test)
+        and r.get("location", "ANY") == "ANY"
     ]
     if client.get(f"{SETUP}/approval-rules", headers=admin).json()["problems"]:
         findings.append("the dataset's own rule table has a gap or an overlap")
