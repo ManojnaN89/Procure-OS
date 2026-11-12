@@ -12,6 +12,7 @@ from decimal import ROUND_HALF_UP, Decimal
 from itertools import combinations
 
 from p2p.formulas.money import format_inr, format_qty, round_money
+from p2p.formulas.words import count
 
 D = Decimal
 ONE = D(1)
@@ -53,14 +54,14 @@ def check_rule(method: str, weights: Weights, tie_break: Sequence[str]) -> list[
     """What is wrong with a rule, in words (empty when it is fine)."""
     found: list[str] = []
     if method not in METHODS:
-        found.append(f"the method must be one of {', '.join(METHODS)}")
+        found.append("the method must be lowest total cost or weighted score")
     if any(w < 0 for w in (weights.price, weights.delivery, weights.quality, weights.payment_terms)):
         found.append("a weight must not be negative")
     if method == "weighted" and weights.total <= 0:
         found.append("a weighted comparison needs at least one weight above zero")
     unknown = [t for t in tie_break if t not in TIE_BREAKS]
     if unknown or len(set(tie_break)) != len(tie_break):
-        found.append(f"the tie-break is a list of {', '.join(TIE_BREAKS)}, each at most once")
+        found.append("a tie is broken by earlier delivery and higher vendor score, each at most once")
     return found
 
 
@@ -103,7 +104,7 @@ def must_haves(f: OfferFacts) -> list[str]:
         out.append(f"below the supplier's minimum order of {format_qty(f.moq)}")
     late = days_late(f.as_of, f.delivery_days, f.need_by)
     if late:
-        out.append(f"delivers {late} day(s) after it is needed")
+        out.append(f"delivers {count(late, 'day')} after it is needed")
     if f.expected_gst_rate is not None and f.gst_rate != f.expected_gst_rate:
         out.append(f"GST rate {format_qty(f.gst_rate)}% differs from the expected {format_qty(f.expected_gst_rate)}%")
     if f.supplier_status != "active":

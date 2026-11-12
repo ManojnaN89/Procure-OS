@@ -135,7 +135,7 @@ def test_given_both_a_category_and_a_location_row_when_the_precedence_setting_ch
     try:
         assert _find(d36, "50000", category="ITH", location="PLT-2").code == "REQ-P2"
         d36.execute(text("update org_setting set value = 'location>category' where key = 'approval_precedence'"))
-        with pytest.raises(rules.ApprovalRuleError, match="approval_precedence"):
+        with pytest.raises(rules.ApprovalRuleError, match="approval precedence setting"):
             _find(d36, "50000", location="PLT-2")
     finally:
         d36.rollback()

@@ -127,7 +127,7 @@ const ReconciliationView = {
             ${d.invoices.map((i) => `<tr data-id="${this.esc(i.invoice)}"><td>${this.esc(i.invoice)}<div class="cell-muted" style="font-size:11px;">${this.esc(i.number)} · ${this.esc(String(i.status).replace(/_/g, " "))}</div></td>
               <td>${this.esc(i.supplier)} <span class="badge badge-pending">${this.esc(i.msme_category)}</span></td><td>${formatCurrency(i.total)}</td><td>${formatDate(i.accepted_on)}</td>
               <td>${this.esc(i.limit_days)} days${i.agreement ? "" : " (no agreement)"}</td><td>${formatDate(i.deadline)}</td>
-              <td>${i.days_late > 0 ? `<span class="badge badge-rejected">${this.esc(i.days_late)} day(s) late</span>` : `<span class="badge badge-pending">${i.days_left ? `${this.esc(i.days_left)} day(s) left` : "due today"}</span>`}</td></tr>`).join("")}</tbody></table></div>`
+              <td>${i.days_late > 0 ? `<span class="badge badge-rejected">${this.esc(plural(i.days_late, "day"))} late</span>` : `<span class="badge badge-pending">${i.days_left ? `${this.esc(plural(i.days_left, "day"))} left` : "due today"}</span>`}</td></tr>`).join("")}</tbody></table></div>`
           : `<div class="empty-state">No invoice of a small supplier is late or due within ${this.esc(d.within)} days.</div>`;
         box.querySelectorAll("tr[data-id]").forEach((tr) => tr.addEventListener("click", () => { window.location.hash = `#/invoices/${tr.dataset.id}`; }));
       } catch (err) { this.denied(box, err); }

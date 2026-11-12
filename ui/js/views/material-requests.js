@@ -109,7 +109,7 @@ const MaterialRequestsView = {
       const fate = p.outcome === "submitted" ? `sent for approval (${this.esc(p.route)})`
         : p.outcome === "approved" ? "approved at once"
         : `left as a draft: ${this.esc(p.submit_error || "")}`;
-      return `${this.esc(c.order_no)}: <a href="#/requisitions/${encodeURIComponent(p.no)}">${this.esc(p.no)}</a> for ${p.lines} item(s), ${this.esc(p.total_shown)}, ${fate}`;
+      return `${this.esc(c.order_no)}: <a href="#/requisitions/${encodeURIComponent(p.no)}">${this.esc(p.no)}</a> for ${plural(p.lines, "item")}, ${this.esc(p.total_shown)}, ${fate}`;
     });
     const unpriced = res.data.checked.flatMap((c) => c.unpriced);
     this.note(

@@ -442,7 +442,7 @@ def _422(message: str) -> HTTPException:
     return HTTPException(422, message)
 
 
-def _need_reason(reason: str | None) -> str:
+def need_reason(reason: str | None) -> str:
     if not (reason or "").strip():
         raise _422("a reason is needed")
     return str(reason).strip()
@@ -450,6 +450,12 @@ def _need_reason(reason: str | None) -> str:
 
 def _log(db: Session, actor: Actor, area: str, key: str, old: Any, new: Any, reason: str) -> None:
     """The setup history and the audit log say the same thing: who changed what, from what, to what, and why."""
+    record_history(db, actor, area, key, old, new, reason)
+    audit.record(db, actor, f"setup.{area}", area, key, before=old, after=new, reason=reason)
+
+
+def record_history(db: Session, actor: Actor, area: str, key: str, old: Any, new: Any, reason: str) -> None:
+    """The setup history row alone, for a change whose service writes its own audit row."""
     db.execute(
         text(
             "insert into setup_change (by_user, area, key, old_value, new_value, reason) "
@@ -464,7 +470,6 @@ def _log(db: Session, actor: Actor, area: str, key: str, old: Any, new: Any, rea
             "r": reason,
         },
     )
-    audit.record(db, actor, f"setup.{area}", area, key, before=old, after=new, reason=reason)
 
 
 def _iso(value: Any) -> str | None:
@@ -556,7 +561,7 @@ class NewPerson(BaseModel):
 
 @router.post("/people", status_code=201)
 def add_person(body: NewPerson, db: Db, ctx: PeopleAdmin) -> dict[str, int]:
-    reason = _need_reason(body.reason)
+    reason = need_reason(body.reason)
     try:
         uid = users.create_user(
             ctx.slug, body.email, body.password, body.display_name, body.role, actor=user_actor(ctx.user_id)
@@ -583,7 +588,7 @@ class ActiveBody(BaseModel):
 
 @router.post("/people/{user_id}/active")
 def set_active(user_id: int, body: ActiveBody, db: Db, ctx: PeopleAdmin) -> dict[str, Any]:
-    reason = _need_reason(body.reason)
+    reason = need_reason(body.reason)
     if user_id == ctx.user_id and not body.active:
         raise HTTPException(409, "you cannot deactivate yourself")
     with Session(tenants.control_engine()) as s:
@@ -609,7 +614,7 @@ class RoleGrant(BaseModel):
 
 @router.post("/people/{user_id}/roles", status_code=201)
 def give_role(user_id: int, body: RoleGrant, db: Db, ctx: PeopleAdmin) -> dict[str, str]:
-    reason = _need_reason(body.reason)
+    reason = need_reason(body.reason)
     if body.role not in users.ROLES:
         raise _422(f"role must be one of {', '.join(users.ROLES)}")
     if db.execute(text("select 1 from user_profile where user_id = :i"), {"i": user_id}).first() is None:
@@ -642,7 +647,7 @@ def give_role(user_id: int, body: RoleGrant, db: Db, ctx: PeopleAdmin) -> dict[s
 
 @router.delete("/people/{user_id}/roles/{row_id}")
 def take_role(user_id: int, row_id: int, db: Db, ctx: PeopleAdmin, reason: str = "") -> dict[str, str]:
-    reason = _need_reason(reason)
+    reason = need_reason(reason)
     row = db.execute(
         text("select role from user_role where id = :r and user_id = :u"), {"r": row_id, "u": user_id}
     ).first()
@@ -670,9 +675,9 @@ class LimitBody(BaseModel):
 
 @router.put("/people/{user_id}/limits")
 def put_limit(user_id: int, body: LimitBody, db: Db, ctx: PeopleAdmin) -> dict[str, str]:
-    reason = _need_reason(body.reason)
+    reason = need_reason(body.reason)
     if body.document not in ("request", "po", "invoice", "payment_run"):
-        raise _422("document must be request, po, invoice or payment_run")
+        raise _422("the document must be a request, a purchase order, an invoice or a payment run")
     if body.max_value < 0:
         raise _422("a limit cannot be negative")
     if db.execute(text("select 1 from user_profile where user_id = :i"), {"i": user_id}).first() is None:
@@ -702,7 +707,7 @@ def put_limit(user_id: int, body: LimitBody, db: Db, ctx: PeopleAdmin) -> dict[s
 
 @router.delete("/people/{user_id}/limits/{limit_id}")
 def drop_limit(user_id: int, limit_id: int, db: Db, ctx: PeopleAdmin, reason: str = "") -> dict[str, str]:
-    reason = _need_reason(reason)
+    reason = need_reason(reason)
     row = db.execute(
         text("select document, max_value from user_limit where id = :i and user_id = :u"), {"i": limit_id, "u": user_id}
     ).first()
@@ -721,7 +726,7 @@ class ManagerBody(BaseModel):
 
 @router.put("/people/{user_id}/manager")
 def put_manager(user_id: int, body: ManagerBody, db: Db, ctx: PeopleAdmin) -> dict[str, Any]:
-    reason = _need_reason(body.reason)
+    reason = need_reason(body.reason)
     email = (_accounts([user_id]).get(user_id) or {}).get("email")
     me = db.execute(
         text("select code, manager_code from org_user where lower(email) = :e"), {"e": (email or "").lower()}
@@ -777,13 +782,13 @@ class RolePermissions(BaseModel):
 
 @router.put("/roles/{role}")
 def put_role(role: str, body: RolePermissions, db: Db, ctx: PeopleAdmin) -> dict[str, Any]:
-    reason = _need_reason(body.reason)
+    reason = need_reason(body.reason)
     if role not in users.ROLES:
         raise HTTPException(404, "no such role")
     wanted = set(body.permissions)
     unknown = sorted(wanted - set(PERMISSIONS))
     if unknown:
-        raise _422(f"unknown permission(s): {', '.join(unknown)}")
+        raise _422(f"unknown {'permission' if len(unknown) == 1 else 'permissions'}: {', '.join(unknown)}")
     if role == "Admin":
         if not ADMIN_REQUIRED <= wanted:
             raise _422(f"Admin must keep {', '.join(sorted(ADMIN_REQUIRED))}, or nobody could run the setup")
@@ -853,11 +858,11 @@ class ApproverBody(BaseModel):
 
 @router.put("/approvers/{role}")
 def put_approver(role: str, body: ApproverBody, db: Db, ctx: RulesAdmin) -> dict[str, Any]:
-    reason = _need_reason(body.reason)
+    reason = need_reason(body.reason)
     if not role.replace("_", "").isalnum() or role != role.lower() or role == "auto":
         raise _422("a role name is lower case letters, digits and underscores, and cannot be 'auto'")
     if body.source not in APPROVER_SOURCES:
-        raise _422(f"source must be one of {', '.join(APPROVER_SOURCES)}")
+        raise _422("choose who stands behind the role from the list")
     value = (body.value or "").strip() or None
     if body.source in ("requester_manager", "department_head", "location_head"):
         value = None
@@ -898,7 +903,7 @@ def put_approver(role: str, body: ApproverBody, db: Db, ctx: RulesAdmin) -> dict
 
 @router.delete("/approvers/{role}")
 def drop_approver(role: str, db: Db, ctx: RulesAdmin, reason: str = "") -> dict[str, str]:
-    reason = _need_reason(reason)
+    reason = need_reason(reason)
     old = db.execute(text("select source, value from approver_role where role = :r"), {"r": role}).first()
     if old is None:
         raise HTTPException(404, "no such role")
@@ -920,7 +925,7 @@ class HeadBody(BaseModel):
 
 @router.put("/departments/{code}/head")
 def put_head(code: str, body: HeadBody, db: Db, ctx: RulesAdmin) -> dict[str, str]:
-    reason = _need_reason(reason=body.reason)
+    reason = need_reason(reason=body.reason)
     old = db.execute(text("select head_user from department where code = :c"), {"c": code}).first()
     if old is None:
         raise HTTPException(404, "no such department")
@@ -1046,7 +1051,7 @@ class RuleVersion(BaseModel):
 @router.post("/approval-rules", status_code=201)
 def new_rule_version(body: RuleVersion, db: Db, ctx: RulesAdmin) -> dict[str, Any]:
     """A change to who approves is a new version from a date. Past decisions keep the version they used."""
-    reason = _need_reason(body.reason)
+    reason = need_reason(body.reason)
     today = business_today()
     if body.effective_from < today:
         raise _422("a new version starts today or later: decisions already made keep the version they were made under")
@@ -1208,7 +1213,7 @@ class PolicyBody(BaseModel):
 
 @router.put("/policies/{key}")
 def put_policy(key: str, body: PolicyBody, db: Db, ctx: SettingsAdmin) -> dict[str, Any]:
-    reason = _need_reason(body.reason)
+    reason = need_reason(body.reason)
     spec = POLICIES.get(key)
     if spec is None:
         raise HTTPException(404, f"there is no policy '{key}'")
@@ -1252,7 +1257,7 @@ class ToleranceBody(BaseModel):
 
 @router.put("/tolerances/{key}")
 def put_tolerance(key: str, body: ToleranceBody, db: Db, ctx: SettingsAdmin) -> dict[str, Any]:
-    reason = _need_reason(body.reason)
+    reason = need_reason(body.reason)
     spec = TOLERANCES.get(key)
     if spec is None:
         raise HTTPException(404, f"there is no tolerance '{key}'")
@@ -1364,14 +1369,16 @@ class AutomationBody(BaseModel):
 
 @router.put("/automation/{decision_type}")
 def put_automation(decision_type: str, body: AutomationBody, db: Db, ctx: SettingsAdmin) -> dict[str, Any]:
-    reason = _need_reason(body.reason)
+    reason = need_reason(body.reason)
     actor = user_actor(ctx.user_id)
     if decision_type in autonomy.LOCKED:
-        raise _422(f"'{decision_type}' is always decided by a person and can never be set to act alone")
+        raise _422(
+            f"{autonomy.LABELS.get(decision_type, decision_type)} is always decided by a person and can never be set to act alone"
+        )
     if decision_type not in DECISIONS:
         raise HTTPException(404, f"there is no decision type '{decision_type}'")
     if body.level not in LEVELS:
-        raise _422(f"the level must be one of {', '.join(LEVELS)}")
+        raise _422("the level must be Off, Recommend or Act within the limits")
     if body.value_cap is not None and body.value_cap < 0:
         raise _422("a cap cannot be negative")
     if not D(0) <= body.min_confidence <= D(1):
@@ -1380,7 +1387,9 @@ def put_automation(decision_type: str, body: AutomationBody, db: Db, ctx: Settin
         raise _422("the wrong-decision rate is between 0 and 1")
     if decision_type == "po.send":
         if body.level == "off":
-            raise _422("orders have to be sent by someone: choose 'propose' (a person sends) or 'auto'")
+            raise _422(
+                "orders have to be sent by someone: choose Recommend (a person sends each one) or Act within the limits"
+            )
         return _write_policy(
             db,
             actor,
@@ -1420,7 +1429,7 @@ class KillSwitch(BaseModel):
 
 @router.put("/automation-kill-switch")
 def put_kill_switch(body: KillSwitch, db: Db, ctx: SettingsAdmin) -> dict[str, bool]:
-    reason = _need_reason(body.reason)
+    reason = need_reason(body.reason)
     actor = user_actor(ctx.user_id)
     old = bool(db.execute(text("select kill_switch from autonomy_global where id = 1")).scalar_one())
     autonomy.set_kill_switch(db, actor, body.on, reason)

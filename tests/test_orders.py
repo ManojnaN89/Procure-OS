@@ -365,8 +365,8 @@ def test_the_cheapest_compliant_offer_is_recommended_and_a_cheaper_late_one_is_n
     by_supplier = {o.supplier_code: o for o in line.offers}
     assert [o.supplier_code for o in line.offers] == ["S1", "S2", "S3"]  # the qualifying by cost, then the dropped
     assert by_supplier["S1"].net_price == D("180.0000") and by_supplier["S1"].value == D("900.00")
-    assert by_supplier["S3"].flags == ["delivers 6 day(s) after it is needed"]
-    assert line.recommended == "S1" and line.why.startswith("Lowest total cost among 2 qualifying offer(s): ₹ 900.00")
+    assert by_supplier["S3"].flags == ["delivers 6 days after it is needed"]
+    assert line.recommended == "S1" and line.why.startswith("Lowest total cost among 2 qualifying offers: ₹ 900.00")
 
 
 def test_equal_prices_are_decided_by_the_faster_delivery_then_the_supplier_code(shop: Session, outbox: Outbox) -> None:
@@ -386,7 +386,7 @@ def test_equal_prices_are_decided_by_the_faster_delivery_then_the_supplier_code(
         ({"valid": "2026-11-05"}, "expired on 05 Nov 2026"),
         ({"moq": "6"}, "below the supplier's minimum order of 6"),
         ({"gst": "12"}, "GST rate 12% differs from the expected 18%"),
-        ({"days": 15}, "delivers 1 day(s) after it is needed"),
+        ({"days": 15}, "delivers 1 day after it is needed"),
     ],
 )
 def test_each_reason_an_offer_does_not_comply_is_named(
@@ -426,7 +426,7 @@ def test_the_comparison_says_who_has_not_answered_and_counts_the_quotes(shop: Se
 
     assert (comp.quotes_received, comp.invited, comp.min_quotes) == (1, 3, 2)
     assert comp.waiting_for == ["S2", "S3"]
-    assert _comp(shop, rfq).lines[0].why.startswith("Lowest total cost among 1 qualifying offer(s)")
+    assert _comp(shop, rfq).lines[0].why.startswith("Lowest total cost among 1 qualifying offer")
     shop.execute(text("update rfq_supplier set declined = true where supplier_code = 'S2'"))
     shop.commit()
     assert _comp(shop, rfq).waiting_for == ["S3"]  # a supplier that said no is no longer waited for
@@ -451,7 +451,7 @@ def test_awarding_the_recommendation_needs_no_reason_and_stores_the_net_price(sh
     assert (done.awarded, done.overridden, done.complete) == ({1: "S1"}, [], True)
     row = shop.execute(text("select supplier_code, quote_no, qty, price, reason, overridden, by_user from award")).one()
     assert tuple(row[:4]) == ("S1", f"{rfq}-S1-R1", D("5"), D("180")) and row[5:] == (False, "7")
-    assert row[4].startswith("Lowest total cost among 2 qualifying offer(s)")  # the comparison's own reason
+    assert row[4].startswith("Lowest total cost among 2 qualifying offers")  # the comparison's own reason
     assert shop.execute(text("select status from rfq")).scalar_one() == "awarded"
     assert shop.execute(text("select count(*) from audit_event where action = 'rfq.award'")).scalar_one() == 1
 
@@ -482,7 +482,7 @@ def test_too_few_quotes_need_a_reason_even_for_the_recommendation(shop: Session,
     _, rfq = _sent_rfq(shop, outbox)
     _quote(shop, rfq, "S1", "100")  # one quote; the category wants two
 
-    with pytest.raises(quotes.QuoteError, match="only 1 quote\\(s\\) came in and 2 are wanted"):
+    with pytest.raises(quotes.QuoteError, match="only 1 quote came in and 2 are wanted"):
         quotes.award(shop, rfq, {1: "S1"}, sod.user(7), as_of=TODAY)
     quotes.award(shop, rfq, {1: "S1"}, sod.user(7), reason="The only supplier that stocks it", as_of=TODAY)
     assert shop.execute(text("select reason from award")).scalar_one() == "The only supplier that stocks it"
@@ -539,7 +539,7 @@ def test_the_recommendation_is_awarded_by_itself_only_when_the_gate_allows_and_e
 
     assert done is not None and done.awarded == {1: "S1"}
     row = shop.execute(text("select by_user, reason from award")).one()
-    assert row[0] == "service:award" and row[1].startswith("Lowest total cost among 2 qualifying offer(s)")
+    assert row[0] == "service:award" and row[1].startswith("Lowest total cost among 2 qualifying offers")
     assert (
         shop.execute(
             text("select count(*) from autonomy_outcome where decision_type = 'rfq.award' and auto")
@@ -991,7 +991,7 @@ def test_the_rfq_page_data_includes_the_comparison_and_who_may_quote_or_award(sh
     assert (data["min_quotes"], data["quotes_received"], data["invited"], data["waiting_for"]) == (2, 3, 3, [])
     assert data["can_quote"] is True and data["can_award"] is True
     (line,) = data["lines"]
-    assert line["recommended"] == "S1" and line["why"].startswith("Lowest total cost among 2 qualifying offer(s)")
+    assert line["recommended"] == "S1" and line["why"].startswith("Lowest total cost among 2 qualifying offers")
     last = line["offers"][-1]  # the dropped offers come after the ranked ones
     assert (last["supplier_code"], last["net_price"], last["value"], last["compliant"], last["rank"]) == (
         "S3",
@@ -1000,7 +1000,7 @@ def test_the_rfq_page_data_includes_the_comparison_and_who_may_quote_or_award(sh
         False,
         None,
     )
-    assert last["flags"] == ["delivers 6 day(s) after it is needed"]
+    assert last["flags"] == ["delivers 6 days after it is needed"]
     s1 = line["offers"][0]
     assert (s1["supplier_code"], s1["rank"], s1["value"], s1["charges"], s1["tax"], s1["landed"], s1["cost"]) == (
         "S1",

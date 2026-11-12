@@ -24,6 +24,7 @@ from p2p.formulas import material as rules
 from p2p.formulas.calendar import business_today
 from p2p.formulas.money import format_qty, round_money
 from p2p.formulas.replenishment import purchase_quantity
+from p2p.formulas.words import count
 from p2p.platform import audit, numbering
 from p2p.platform.sod import Actor, user
 from p2p.receiving import stock
@@ -300,7 +301,7 @@ def store_check(
                 checked.request,
                 as_of=as_of,
                 source_ref=mr_no,
-                justification=f"Short for {checked.order_no} ({mr_no}): {len(checked.request.lines)} item(s) not in stock",
+                justification=f"Short for {checked.order_no} ({mr_no}): {count(len(checked.request.lines), 'item')} not in stock",
                 audit_extra={"material_request": mr_no},
             )
             for n, (line_id, qty) in enumerate(links, start=1):

@@ -1752,7 +1752,7 @@ def run_part_delivery(d: Demo, c: Checks, co: Company, pick: Pick, by_documents:
     with d.step("buyer", "sees that the balance is late: the alert and the chaser to send") as page:
         d.go("buyer", "dashboard")
         page.locator("#notificationBellBtn").click()
-        expect(page.locator(".notif-row", has_text=f"Goods on {po} are 1 day(s) late")).to_be_visible()
+        expect(page.locator(".notif-row", has_text=f"Goods on {po} are 1 day late")).to_be_visible()
         expect(page.locator(".notif-row", has_text="New task: Chase")).to_be_visible()
     task = db.execute(text("select kind, title, status, payload from task where kind = 'supplier_chase'")).one()
     sup_name = csv_suppliers()[winner]

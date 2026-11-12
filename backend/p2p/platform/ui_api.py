@@ -30,6 +30,7 @@ from p2p.formulas.contracts import ContractUse
 from p2p.formulas.money import format_qty, round_money
 from p2p.formulas.scoring import risk_level
 from p2p.formulas.suppliers import LABELS
+from p2p.formulas.words import count
 from p2p.masters import supplier_status
 from p2p.orders import contracts as contract_usage
 from p2p.orders import dispatch, dispatch_notes, quotes
@@ -100,28 +101,28 @@ def update_settings(
 ) -> dict[str, Any]:
     unknown = [k for k in payload if k not in DEFAULT_SETTINGS]
     if unknown:
-        return {"error": f"Unknown setting(s): {', '.join(unknown)}"}
+        return {"error": f"Unknown {'setting' if len(unknown) == 1 else 'settings'}: {', '.join(unknown)}"}
     current = all_settings(db)
     for key, value in payload.items():
         value = str(value)
         if key == "currency_preset" and value not in CURRENCIES:
-            return {"error": f"currency_preset must be one of {', '.join(sorted(CURRENCIES))}"}
+            return {"error": "currency_preset: choose one of the currencies in the list"}
         if key in BOOLEAN_SETTINGS and value not in ("true", "false"):
-            return {"error": f"{key} must be true or false"}
+            return {"error": f"{key}: choose on or off"}
         if key == "sourcing_mode" and value not in ("compare", "best_vendor"):
-            return {"error": "sourcing_mode must be compare or best_vendor"}
+            return {"error": "sourcing_mode: choose Compare quotations or Order from the best-scored vendor"}
         if (
             key == "replenishment_department"
             and value
             and not db.execute(text("select 1 from department where code = :c"), {"c": value}).first()
         ):
-            return {"error": f"replenishment_department: there is no department with code {value}"}
+            return {"error": f"replenishment_department: there is no department with the code {value}"}
         if (
             key != "currency_preset"
             and key not in BOOLEAN_SETTINGS | TEXT_SETTINGS
             and not value.replace(".", "", 1).isdigit()
         ):
-            return {"error": f"{key} must be a number"}
+            return {"error": f"{key}: must be a number"}
         db.execute(
             text(
                 "insert into app_setting (key, value) values (:k, :v) "
@@ -423,8 +424,8 @@ def get_vendor(vendor_id: str, db: Db, ctx: Ctx) -> dict[str, Any]:
             if score.history.receipt_lines
             else 0,
             "basis": (
-                f"Score {score.total} of 100 from {score.history.receipts} delivery line(s), "
-                f"{score.history.receipt_lines} receipt line(s) and {score.price_items} item price(s) compared."
+                f"Score {score.total} of 100 from {count(score.history.receipts, 'delivery line')}, "
+                f"{count(score.history.receipt_lines, 'receipt line')} and {count(score.price_items, 'item price')} compared."
             ),
         },
         "purchase_orders": [],
@@ -1011,7 +1012,7 @@ def list_rfqs(db: Db, ctx: Ctx) -> list[dict[str, Any]]:
     return [
         {
             "id": r["no"],
-            "title": f"{r['category'] or 'Quotation request'}: {r['items']} item(s) for {r['request_no']}",
+            "title": f"{r['category'] or 'Quotation request'}: {count(r['items'], 'item')} for {r['request_no']}",
             "status": r["status"],
             "vendor_count": r["vendors"],
             "quote_count": r["quoted"],
@@ -1054,7 +1055,7 @@ def get_rfq(no: str, db: Db, ctx: Ctx) -> dict[str, Any]:
 
     return {
         "id": r["no"],
-        "title": f"{r['category'] or 'Quotation request'}: {len(lines)} item(s) for {r['request_no']}",
+        "title": f"{r['category'] or 'Quotation request'}: {count(len(lines), 'item')} for {r['request_no']}",
         "status": r["status"],
         "request_no": r["request_no"],
         "due_date": r["due_date"].isoformat(),

@@ -433,7 +433,7 @@ def test_switching_automatic_replenishment_on_queues_the_daily_job(company: tupl
     admin = _headers(slug, "Admin")
 
     bad = client.post("/api/settings", json={"auto_replenishment": "maybe"}, headers=admin).json()
-    assert "true or false" in bad["error"]
+    assert "choose on or off" in bad["error"]
     assert _queued(slug) == []
 
     assert client.post("/api/settings", json={"auto_replenishment": "true"}, headers=admin).json() == {

@@ -104,7 +104,9 @@ def record(db: Session, data: UnorderedIn, user_id: int, *, as_of: date) -> str:
             )
         ]
         if taken:
-            raise UnorderedError(f"serial number(s) already received for {data.item_code}: {', '.join(taken)}")
+            raise UnorderedError(
+                f"{'serial number' if len(taken) == 1 else 'serial numbers'} already received for {data.item_code}: {', '.join(taken)}"
+            )
     no = numbering.next_number(db, "unordered_receipt", as_of, location_code=data.location_code)
     me = org_code_of(db, user_id) or f"user:{user_id}"
     db.execute(

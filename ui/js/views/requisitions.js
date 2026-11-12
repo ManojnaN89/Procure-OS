@@ -246,7 +246,7 @@ const RequisitionsView = {
     if (!s.route) return "";
     const checks = (s.checks || []).map((c) => `<div>${c.passed ? "\u2713" : "\u2717"} ${this.esc(c.detail)}</div>`).join("");
     const waiting = s.agreement === "pending" ? ` <span class="badge badge-pending" style="font-size:10px;">purchase manager to agree</span>` : "";
-    return `${waiting}<details class="cell-muted" style="font-size:11px;margin-top:2px;"><summary>${this.esc(this.ROUTE_LABEL[s.route] || s.route)} \u00b7 ${this.esc(s.rule || "")}${s.min_quotes ? ` \u00b7 ${this.esc(s.min_quotes)} quotes` : ""}</summary><div>${this.esc(s.reason)}</div>${checks}</details>`;
+    return `${waiting}<details class="cell-muted" style="font-size:11px;margin-top:2px;"><summary>${this.esc(this.ROUTE_LABEL[s.route] || s.route)} \u00b7 ${this.esc(ruleName(s.rule))}${s.min_quotes ? ` \u00b7 ${this.esc(s.min_quotes)} quotes` : ""}</summary><div>${this.esc(s.reason)}</div>${checks}</details>`;
   },
 
   sourceCell(s) {
@@ -321,7 +321,7 @@ const RequisitionsView = {
     const dup = (c.duplicates || []).map((d) => `
       <div style="font-size:12.5px;margin-bottom:6px;color:${d.overridden ? "var(--text-secondary)" : "var(--warning-text)"};">
         ${d.likely ? "Likely a repeat" : "Possibly a repeat"} of <a href="#/requisitions/${this.esc(d.other_request)}" style="color:var(--accent-tint)">${this.esc(d.other_request)}</a>
-        (${this.esc(d.other_status)}; ${d.lines.length} line(s) alike)${d.overridden ? ` — gone ahead: “${this.esc(d.override_reason)}”` : ""}
+        (${this.esc(d.other_status)}; ${plural(d.lines.length, "line")} alike)${d.overridden ? ` — gone ahead: “${this.esc(d.override_reason)}”` : ""}
       </div>`).join("");
     const rows = (c.lines || []).filter((l) => l.item_code);
     if (!dup && !rows.length) return "";

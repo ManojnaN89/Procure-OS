@@ -26,6 +26,7 @@ from p2p.formulas.buying_route import Check, is_tighter, quotes_needed
 from p2p.formulas.contracts import ceiling_breach
 from p2p.formulas.money import format_inr, format_qty
 from p2p.formulas.sourcing import PriceOption, pick_contract_price
+from p2p.formulas.words import count
 from p2p.orders import contracts as contract_usage
 from p2p.platform import audit, emails, numbering, proposals, reference, worker
 from p2p.platform.sod import Actor
@@ -446,7 +447,7 @@ def _quotation(
     due = reference.calendar_for(db).add_working_days(as_of, int(_org_setting(db, "default_rfq_response_days", "5")))
     note = None
     if len(invited) < min_quotes:
-        note = f"Only {len(invited)} supplier(s) are approved for {category}; at least {min_quotes} quotes are wanted"
+        note = f"Only {count(len(invited), 'supplier')} {'is' if len(invited) == 1 else 'are'} approved for {category}; at least {min_quotes} quotes are wanted"
         result.notes.append(note)
     db.execute(
         text(
@@ -779,12 +780,12 @@ def _dispatch(db: Session, rfq_no: str, value: Decimal, actor: Actor, result: So
         result.sent += send_rfq(db, rfq_no, actor)
         autonomy.record_outcome(db, DECISION_TYPE, auto=True, ref=rfq_no)
         return
-    count = db.execute(text("select count(*) from rfq_supplier where rfq_no = :r"), {"r": rfq_no}).scalar_one()
+    asked = db.execute(text("select count(*) from rfq_supplier where rfq_no = :r"), {"r": rfq_no}).scalar_one()
     pid = proposals.propose(
         db,
         SERVICE,
         action="rfq.send",
-        summary=f"Send {rfq_no} to {count} supplier{'' if count == 1 else 's'}: {gate.reason}",
+        summary=f"Send {rfq_no} to {count(asked, 'supplier')}: {gate.reason}",
         payload={"rfq_no": rfq_no},
         required_permission="rfq.send",
         risk="low",

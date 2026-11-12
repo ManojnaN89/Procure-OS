@@ -125,5 +125,5 @@ def test_an_excel_file_without_a_column_is_refused_by_name(fresh: Session, tmp_p
 
     report = import_masters(fresh, tmp_path / "cols", dry_run=True)
 
-    assert any(p.table == "item" and "column(s) missing in item.xlsx" in p.reason for p in report.rejected)
+    assert any(p.table == "item" and "missing in item.xlsx" in p.reason for p in report.rejected)
     assert report.loaded["item"] == 0

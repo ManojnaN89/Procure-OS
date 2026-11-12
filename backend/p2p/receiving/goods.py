@@ -187,7 +187,7 @@ def _serials(db: Session, item_code: str, ln: LineIn) -> list[str]:
     )
     if taken:
         raise ReceiptError(
-            f"line {ln.po_line_no}: serial number(s) already received for {item_code}: {', '.join(taken)}"
+            f"line {ln.po_line_no}: {'serial number' if len(taken) == 1 else 'serial numbers'} already received for {item_code}: {', '.join(taken)}"
         )
     return numbers
 

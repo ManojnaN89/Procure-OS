@@ -13,6 +13,7 @@ from p2p.platform.admin_api import router as admin_router
 from p2p.platform.agent_api import router as agent_router
 from p2p.platform.approval_link_api import router as approval_link_router
 from p2p.platform.auth import router as auth_router
+from p2p.platform.buying_rules_api import router as buying_rules_router
 from p2p.platform.demand_api import router as demand_router
 from p2p.platform.export_api import router as export_router
 from p2p.platform.files import router as files_router
@@ -43,6 +44,7 @@ app.include_router(export_router)
 app.include_router(demand_router)
 app.include_router(material_router)
 app.include_router(setup_router)
+app.include_router(buying_rules_router)
 app.include_router(ui_router)
 app.include_router(workspace_router)
 app.include_router(guides_router)

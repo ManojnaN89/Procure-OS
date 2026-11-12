@@ -20,6 +20,7 @@ from sqlalchemy.orm import Session
 from p2p.approvals.email_links import EXPIRES_DAYS, LinkError
 from p2p.config import get_settings
 from p2p.formulas.money import format_inr, format_qty
+from p2p.formulas.words import count
 from p2p.platform import audit, notifications, worker
 from p2p.platform.signing import SignatureError, Signer
 from p2p.receiving import services
@@ -149,7 +150,7 @@ def ask_requesters(db: Session, tenant: str, *, dry_run: bool = False) -> list[t
             continue
         counts = {(ln["po_no"], ln["line_no"]): _count(db, ln["po_no"], ln["line_no"]) for ln in lines}
         body, html = compose(tenant, lines, uid, counts)
-        subject = f"Please confirm {len(lines)} service(s)"
+        subject = f"Please confirm {count(len(lines), 'service')}"
         worker.enqueue(tenant, "send_email", {"to": address, "subject": subject, "body": body, "html": html})
         audit.record(
             db, audit.SYSTEM, "service.confirm_email", "org_user", code,

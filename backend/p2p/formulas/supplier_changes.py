@@ -10,6 +10,8 @@ from dataclasses import dataclass
 from datetime import date, timedelta
 from decimal import Decimal
 
+from p2p.formulas.words import count
+
 IN_TOLERANCE = "in_tolerance"
 OUT = "out_of_tolerance"
 
@@ -44,11 +46,11 @@ def judge_date(current: date | None, requested: date | None, tolerance_days: int
     if slip <= tolerance_days:
         return Verdict(
             IN_TOLERANCE,
-            f"{requested:%d %b %Y} is {slip} day(s) after the promised {current:%d %b %Y}, within {tolerance_days}",
+            f"{requested:%d %b %Y} is {count(slip, 'day')} after the promised {current:%d %b %Y}, within {tolerance_days}",
         )
     return Verdict(
         OUT,
-        f"{requested:%d %b %Y} is {slip} day(s) after the promised {current:%d %b %Y}, more than the {tolerance_days} accepted",
+        f"{requested:%d %b %Y} is {count(slip, 'day')} after the promised {current:%d %b %Y}, more than the {tolerance_days} accepted",
     )
 
 

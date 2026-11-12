@@ -656,7 +656,7 @@ def test_the_replenishment_department_setting_must_name_a_real_department(db: Se
     h = _headers(slug, admin, "Admin")
 
     bad = client.post("/api/settings", json={"replenishment_department": "NOPE"}, headers=h).json()
-    assert "no department with code NOPE" in bad["error"]
+    assert "no department with the code NOPE" in bad["error"]
     assert client.post("/api/settings", json={"replenishment_department": "LOG"}, headers=h).json() == {
         "updated": ["replenishment_department"]
     }

@@ -7,6 +7,7 @@ from datetime import date
 from decimal import Decimal
 
 from p2p.formulas.matching import normalize_invoice_no
+from p2p.formulas.money import format_inr
 
 ZERO = Decimal(0)
 DOCUMENTS = ("invoice", "credit_note", "debit_note")
@@ -115,7 +116,7 @@ def _pair(line: Theirs, ours: Ours, how: str) -> Result:
         return Result(line.row, line.on, line.doc_type, line.doc_no, line.amount, ours.ref, ours.amount, "matched", how)
     return Result(
         line.row, line.on, line.doc_type, line.doc_no, line.amount, ours.ref, ours.amount, "amount_differs",
-        f"{how}, but theirs is {line.amount:,.2f} and ours {ours.amount:,.2f} (difference {line.amount - ours.amount:,.2f})",
+        f"{how}, but theirs is {format_inr(line.amount)} and ours {format_inr(ours.amount)} (difference {format_inr(line.amount - ours.amount)})",
     )  # fmt: skip
 
 

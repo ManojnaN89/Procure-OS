@@ -21,6 +21,7 @@ from sqlalchemy.orm import Session
 from p2p.formulas.money import format_qty, round_money
 from p2p.formulas.replenishment import purchase_quantity, shortfall
 from p2p.formulas.stock import BELOW_SAFETY, COVERED, NEGATIVE, REORDER, STOCKOUT
+from p2p.formulas.words import count
 from p2p.platform import audit, reference
 from p2p.platform.sod import Actor
 from p2p.receiving.stock import StockLine, stock_levels
@@ -228,7 +229,7 @@ def run(
             req,
             as_of=as_of,
             source_ref=f"replenishment:{as_of}:{result.run_id}",
-            justification=f"Automatic replenishment: {len(req.lines)} item(s) at or below their reorder point",
+            justification=f"Automatic replenishment: {count(len(req.lines), 'item')} at or below their reorder point",
             audit_extra={"run": result.run_id},
         )
     audit.record(

@@ -19,6 +19,7 @@ from p2p.formulas.calendar import IST, BusinessCalendar, business_today
 from p2p.formulas.fy import fy_bounds
 from p2p.formulas.kpis import working_days_between
 from p2p.formulas.money import format_inr
+from p2p.formulas.words import count
 from p2p.orders import contracts as contract_usage
 from p2p.orders import dispatch
 from p2p.platform import notifications, reference, routing, worker
@@ -141,8 +142,8 @@ def late_deliveries(c: Context) -> list[Finding]:
         late = (c.today - oldest).days
         out.append(
             Finding(
-                "late_delivery", "po", no, "high" if late > 7 else "medium", f"Goods on {no} are {late} day(s) late",
-                f"{lines} line(s) were promised by {oldest:%d %b %Y} and are not all received.", f"#/purchase-orders/{no}", ("Buyer",),
+                "late_delivery", "po", no, "high" if late > 7 else "medium", f"Goods on {no} are {count(late, 'day')} late",
+                f"{count(lines, 'line')} {'was' if lines == 1 else 'were'} promised by {oldest:%d %b %Y} and are not all received.", f"#/purchase-orders/{no}", ("Buyer",),
                 oldest,
             )
         )  # fmt: skip
@@ -189,7 +190,7 @@ def invoices_falling_due(c: Context) -> list[Finding]:
             Finding(
                 "invoice_due", "invoice", no, "high" if overdue or msme else "medium",
                 f"Invoice {number} of {supplier} {'is overdue' if overdue else 'is due soon'}",
-                f"{total:,.2f} due {due:%d %b %Y}.{small}", "#/payments", ("Finance",),
+                f"{format_inr(total)} due {due:%d %b %Y}.{small}", "#/payments", ("Finance",),
             )
         )  # fmt: skip
     return out
@@ -204,7 +205,7 @@ def contracts_expiring(c: Context) -> list[Finding]:
     return [
         Finding(
             "contract_expiring", "contract", code, "medium" if (valid_to - c.today).days <= 7 else "low",
-            f"Contract {code} ends on {valid_to:%d %b %Y}", f"{(valid_to - c.today).days} day(s) left.", f"#/contracts/{code}", ("Buyer",),
+            f"Contract {code} ends on {valid_to:%d %b %Y}", f"{count((valid_to - c.today).days, 'day')} left.", f"#/contracts/{code}", ("Buyer",),
         )
         for code, valid_to in rows
     ]  # fmt: skip
@@ -220,7 +221,7 @@ def contracts_nearly_used(c: Context) -> list[Finding]:
             out.append(
                 Finding(
                     "contract_ceiling", "contract", code, "high" if pct >= 100 else "medium",
-                    f"Contract {code} is {pct}% used", f"{use.used:,.2f} of {use.max_value:,.2f} ordered before tax.", f"#/contracts/{code}", ("Buyer",),
+                    f"Contract {code} is {pct}% used", f"{format_inr(use.used)} of {format_inr(use.max_value)} ordered before tax.", f"#/contracts/{code}", ("Buyer",),
                 )
             )  # fmt: skip
     return out
@@ -275,7 +276,7 @@ def budgets_nearly_used(c: Context) -> list[Finding]:
                 Finding(
                     "budget_used", "gl", gl, "high" if pct >= 100 else "medium",
                     f"GL {gl}: {pct:.0f}% of the budget so far this year is committed",
-                    f"{committed:,.2f} committed against {planned:,.2f} planned up to this month.", "#/requisitions", ("Approver", "Finance"),
+                    f"{format_inr(committed)} committed against {format_inr(planned)} planned up to this month.", "#/requisitions", ("Approver", "Finance"),
                 )
             )  # fmt: skip
     return out

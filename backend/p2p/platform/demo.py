@@ -22,6 +22,7 @@ from sqlalchemy.orm import Session
 
 from p2p.agents import autonomy
 from p2p.config import REPO_ROOT
+from p2p.formulas.words import count
 from p2p.masters.importer import ImportReport, import_masters
 from p2p.platform import audit, routing, tenants, users
 from p2p.receiving import stock
@@ -215,21 +216,21 @@ def reset_company(
         if result.report.rejected:
             first = result.report.rejected[0]
             raise DemoError(
-                f"{len(result.report.rejected)} row(s) left out; first: {first.table} line {first.line}: {first.reason}"
+                f"{count(len(result.report.rejected), 'row')} left out; first: {first.table} line {first.line}: {first.reason}"
             )
         if (folder / "history" / "stock_movement.csv").is_file():
             result.stock = stock.import_movements(db, folder)
             if result.stock.rejected:
                 first = result.stock.rejected[0]
                 raise DemoError(
-                    f"{len(result.stock.rejected)} stock movement(s) left out; first: line {first.line}: {first.reason}"
+                    f"{count(len(result.stock.rejected), 'stock movement')} left out; first: line {first.line}: {first.reason}"
                 )
         if (folder / "inputs" / "production_order.csv").is_file():
             result.demand = import_demand(db, folder)
             if result.demand.rejected:
                 first = result.demand.rejected[0]
                 raise DemoError(
-                    f"{len(result.demand.rejected)} demand row(s) left out; first: {first.table} line {first.line}: "
+                    f"{count(len(result.demand.rejected), 'demand row')} left out; first: {first.table} line {first.line}: "
                     f"{first.reason}"
                 )
         configure(db, demo, slug)

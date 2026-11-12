@@ -167,7 +167,9 @@ const SettingsView = {
     try {
       const result = await API.updateSettings(payload);
       if (result.error) {
-        alert(result.error);
+        // the server names the setting by its key; show the label people see on this page instead
+        const field = this.FIELDS.filter((f) => result.error.startsWith(f.key)).sort((a, b) => b.key.length - a.key.length)[0];
+        alert(field ? `${field.label}${result.error.slice(field.key.length)}` : result.error);
         return;
       }
       if (payload.currency_preset && CURRENCY_PRESETS[payload.currency_preset]) {

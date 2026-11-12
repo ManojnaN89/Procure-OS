@@ -163,7 +163,7 @@ def test_bad_rows_are_listed_with_their_reasons(db: Session, tmp_path: Path) -> 
     assert "MO-8 has no header" in reasons[("production_order_line", 6)]
     assert reasons[("production_order_line", 7)] == "qty: 'ten' is not a number"
     assert reasons[("production_order_line", 8)] == "qty 1.23456 has more than four decimals"
-    assert reasons[("demand_plan", 1)] == "column(s) missing in demand_plan.csv: period"
+    assert reasons[("demand_plan", 1)] == "column missing in demand_plan.csv: period"
     assert len(report.rejected) == 11
 
 

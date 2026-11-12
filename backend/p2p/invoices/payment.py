@@ -22,6 +22,7 @@ from sqlalchemy.orm import Session
 
 from p2p.formulas import payment as rules
 from p2p.formulas.money import format_inr
+from p2p.formulas.words import count
 from p2p.invoices.service import InvoiceError
 from p2p.platform import audit, emails, notifications, numbering, proposals
 from p2p.platform.sod import Actor, user
@@ -31,10 +32,6 @@ D = Decimal
 RTGS_FROM = D("200000")  # a payment above this goes by RTGS, below it by NEFT
 OPEN_RUN = ("proposed", "approved", "file_generated")
 ADVANCE_STATUSES = ("acknowledged", "part_received")  # an order is advanced once the supplier has confirmed it
-
-
-def _count(n: int, noun: str) -> str:
-    return f"{n} {noun}{'' if n == 1 else 's'}"
 
 
 def _setting(db: Session, key: str, default: str) -> str:
@@ -460,9 +457,9 @@ def propose_run(
                     {"p": pay_no, "i": credit_no, "a": -credit},
                 )
         total += net + interest
-    what = f"{_count(len(due), 'invoice')} to {_count(len(by_supplier), 'supplier')}" if due else ""
+    what = f"{count(len(due), 'invoice')} to {count(len(by_supplier), 'supplier')}" if due else ""
     if advances:
-        what = (what + " and " if what else "") + _count(len(advances), "advance")
+        what = (what + " and " if what else "") + count(len(advances), "advance")
     pid = proposals.propose(
         db,
         user(user_id),
