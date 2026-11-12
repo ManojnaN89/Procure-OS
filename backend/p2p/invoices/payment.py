@@ -56,12 +56,14 @@ def _terms(db: Session, code: str | None) -> dict[str, Any] | None:
 
 
 def accepted_on(db: Session, invoice: dict[str, Any]) -> date:
-    """The day the goods were accepted: the latest acceptance on the order lines before the invoice arrived."""
+    """The day the goods were accepted (or the service confirmed): the latest acceptance on the order lines before the
+    invoice arrived."""
     day = db.execute(
         text(
-            "select max(g.accepted_on) from goods_receipt g join gr_line l on l.gr_no = g.no "
-            "join invoice_line i on i.po_no = l.po_no and i.po_line_no = l.po_line_no "
-            "where i.invoice_no = :n and g.accepted_on is not null and g.accepted_on <= :d"
+            "select max(d) from (select g.accepted_on as d, l.po_no, l.po_line_no from goods_receipt g "
+            "join gr_line l on l.gr_no = g.no union all select accepted_on, po_no, po_line_no from service_entry) a "
+            "join invoice_line i on i.po_no = a.po_no and i.po_line_no = a.po_line_no "
+            "where i.invoice_no = :n and a.d is not null and a.d <= :d"
         ),
         {"n": invoice["no"], "d": invoice["received_on"]},
     ).scalar()

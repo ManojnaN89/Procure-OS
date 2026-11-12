@@ -20,6 +20,7 @@ from p2p.formulas.gst import Registration
 from p2p.formulas.orders import line_amounts
 from p2p.platform import audit, numbering, proposals
 from p2p.platform.sod import Actor, user
+from p2p.receiving.kinds import service_lines
 
 BOOKED = ("approved", "part_paid", "paid")  # the invoice counts against what was received
 D = Decimal
@@ -309,6 +310,7 @@ def match_invoice(db: Session, no: str, actor: Actor) -> Entered:
     problem = rules.header_problem(header)
     verdicts: list[rules.LineVerdict] = []
     running: dict[tuple[str, int], Decimal] = {}
+    services = {po_no: service_lines(db, po_no) for po_no in {ln["po_no"] for ln in lines}}
     for ln in lines:
         key = (ln["po_no"], ln["po_line_no"])
         available = _available(db, ln["po_no"], ln["po_line_no"], Decimal(ln["received_qty"]), no) - running.get(
@@ -322,6 +324,7 @@ def match_invoice(db: Session, no: str, actor: Actor) -> Entered:
                 Decimal(ln["qty"]),
                 available,
                 tol,
+                service=ln["po_line_no"] in services[ln["po_no"]],
             )
         )
         running[key] = running.get(key, D(0)) + Decimal(ln["qty"])
@@ -390,6 +393,11 @@ def _explain(
         over = [(ln["line_no"], v.qty_var) for ln, v in zip(lines, verdicts, strict=True) if v.reason == rules.QTY]
         return "Quantity invoiced is more than was received and accepted: " + ", ".join(
             f"line {n} by {q}" for n, q in over
+        )
+    if reason == rules.SERVICE:
+        over = [(ln["line_no"], v.qty_var) for ln, v in zip(lines, verdicts, strict=True) if v.reason == rules.SERVICE]
+        return "Service not confirmed: the requester has not confirmed the service invoiced on " + ", ".join(
+            f"line {n} ({q} more than confirmed)" for n, q in over
         )
     if reason == rules.IRN:
         return "The supplier must issue an e-invoice and this one carries no IRN"
@@ -473,6 +481,26 @@ def request_release(db: Session, no: str, reason: str, user_id: int) -> int:
     )
 
 
+def _asked_or_confirmed(db: Session, no: str, user_id: int) -> bool:
+    """Whether this login is the requester of a line on the invoice, or confirmed a service on it."""
+    from p2p.approvals.workflow import org_code_of  # noqa: PLC0415 - approvals pulls in more than invoices needs
+
+    me = org_code_of(db, user_id)
+    if me is None:
+        return False
+    return bool(
+        db.execute(
+            text(
+                "select 1 from invoice_line il join po_line pl on pl.po_no = il.po_no and pl.line_no = il.po_line_no "
+                "left join request r on r.no = pl.request_no where il.invoice_no = :n and (:me in (r.requester, r.on_behalf_of) "
+                "or exists (select 1 from service_entry e where e.po_no = il.po_no and e.po_line_no = il.po_line_no "
+                "and e.accepted_by = :me)) limit 1"
+            ),
+            {"n": no, "me": me},
+        ).first()
+    )
+
+
 @proposals.executor("invoice.release_block")
 def _release(db: Session, payload: dict[str, Any], actor: Actor) -> dict[str, Any]:
     no, reason = str(payload["invoice"]), str(payload.get("reason") or "")
@@ -481,6 +509,10 @@ def _release(db: Session, payload: dict[str, Any], actor: Actor) -> dict[str, An
         raise InvoiceError(f"{no} is no longer blocked")
     if inv[1] == actor.id:
         raise InvoiceError("segregation of duties: the person who entered the invoice cannot release its block")
+    if actor.kind == "user" and _asked_or_confirmed(db, no, int(actor.id)):
+        raise InvoiceError(
+            "segregation of duties: the person who asked for or confirmed what is invoiced cannot also approve the invoice"
+        )
     db.execute(text("update invoice set status = 'approved', payment_block = 'none' where no = :n"), {"n": no})
     from p2p.invoices import payment  # noqa: PLC0415 - payment builds on this module
 

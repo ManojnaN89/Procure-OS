@@ -14,6 +14,8 @@ const Router = {
     "material-requests": MaterialRequestsView,
     "purchase-orders": PurchaseOrdersView,
     receiving: ReceivingView,
+    services: ServicesView,
+    "receive-without-order": UnorderedView,
     invoices: InvoicesView,
     payments: PaymentsView,
     contracts: ContractsView,

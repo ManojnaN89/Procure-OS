@@ -25,6 +25,8 @@ python -m p2p.cli remind <tenant> [--dry-run] [--schedule]
         reminds suppliers who have not answered a quotation request; --schedule queues the daily morning run
 python -m p2p.cli order <tenant> [--request NO]
         makes purchase orders from the lines that are ready (contract prices and awarded quotations) and sends them for approval
+python -m p2p.cli confirm-services <tenant> [--dry-run]
+        at the end of a period: emails each person who asked for a service still to confirm, one signed link per service
 python -m p2p.cli demo reset apex|brightwave [--dataset DIR]
         drops and makes again a demo company from its profile in datagen/catalog (master data, stock history and the
         ERP's production orders, each with its material request);
@@ -90,6 +92,9 @@ def main(argv: list[str] | None = None) -> int:
     ordr = sub.add_parser("order")
     ordr.add_argument("tenant")
     ordr.add_argument("--request")
+    ask = sub.add_parser("confirm-services")
+    ask.add_argument("tenant")
+    ask.add_argument("--dry-run", action="store_true")
     demo = sub.add_parser("demo").add_subparsers(dest="cmd", required=True)
     reset = demo.add_parser("reset")
     reset.add_argument("name", help="a company with a profile in datagen/catalog (apex, brightwave)")
@@ -209,6 +214,17 @@ def main(argv: list[str] | None = None) -> int:
         for rfq_no, supplier in reminded.failed:
             print(f"  could not reach {supplier} about {rfq_no}")
         print(f"{len(reminded.sent)} reminder(s)")
+        return 0
+    if args.group == "confirm-services":
+        from sqlalchemy.orm import Session
+
+        from p2p.receiving import service_links
+
+        with Session(routing.engine_for(args.tenant)) as db:
+            told = service_links.ask_requesters(db, args.tenant, dry_run=args.dry_run)
+        for code, count in told:
+            print(f"  {'would ask' if args.dry_run else 'asked'} {code} to confirm {count} service(s)")
+        print(f"{len(told)} person(s)")
         return 0
     if args.group == "order":
         from sqlalchemy.orm import Session

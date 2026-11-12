@@ -175,6 +175,22 @@ def order_request(db: Session, tenant: str, request_no: str, actor: Actor = SERV
         return result
     lines, notes = ready_lines(db, request_no, as_of)
     result.skipped.extend(notes)
+    place(db, tenant, dict(req), lines, result, actor, as_of=as_of)
+    return result
+
+
+def place(
+    db: Session,
+    tenant: str,
+    req: dict[str, Any],
+    lines: list[ReadyLine],
+    result: OrderResult,
+    actor: Actor,
+    *,
+    as_of: date,
+) -> None:
+    """Make the orders for lines that are ready and send each for approval (or approve it, when the rule says so). Also
+    used for the order a buyer raises after goods came without one (receiving/unordered.py)."""
     # One order per supplier, set of terms and delivery location. A contract's payment and delivery terms are not dropped
     # because another line of the same supplier has none. A location has its own GST registration and place of supply,
     # and its own goods receipt, so lines for two locations are two orders rather than one order with a place per line.
@@ -193,7 +209,7 @@ def order_request(db: Session, tenant: str, request_no: str, actor: Actor = SERV
     for (supplier, _payment, _delivery, _location), group in sorted(
         by_group.items(), key=lambda kv: tuple(str(x or "") for x in kv[0])
     ):
-        outcome = _create_po(db, tenant, dict(req), supplier, group, as_of, actor, result)
+        outcome = _create_po(db, tenant, req, supplier, group, as_of, actor, result)
         if outcome:
             created.append(outcome)
     db.commit()
@@ -202,7 +218,6 @@ def order_request(db: Session, tenant: str, request_no: str, actor: Actor = SERV
             continue
         status = workflow.submit(db, tenant, po_no, actor, today=as_of)
         (result.approved if status == "approved" else result.held if status == "held" else result.waiting).append(po_no)
-    return result
 
 
 def _create_po(

@@ -3,7 +3,9 @@
 Plain rules on numbers and flags. Money is Decimal throughout. Per line, the invoice price may not be above the order
 price by more than the tolerance (a percentage of the price, or a rupee amount on the line, whichever lets it through),
 and the quantity may not be more than has been accepted at goods receipt and not yet invoiced (plus the quantity
-tolerance). Within tolerance an invoice is paid; outside it, it is blocked until a person decides.
+tolerance). Within tolerance an invoice is paid; outside it, it is blocked until a person decides. A service line has no
+goods receipt: what the requester confirmed in a service entry stands for it (a two-way match), and a service line invoiced
+beyond what was confirmed is blocked as not confirmed.
 """
 
 import re
@@ -22,7 +24,8 @@ IRN = "irn_missing"
 GSTIN = "gstin_mismatch"
 TAX = "tax_not_allowed"
 ARITH = "arithmetic_mismatch"
-BLOCK_KIND = {PRICE: "match", QTY: "match", ARITH: "match", IRN: "tax", GSTIN: "tax", TAX: "tax"}
+SERVICE = "service_not_confirmed"
+BLOCK_KIND = {PRICE: "match", QTY: "match", SERVICE: "match", ARITH: "match", IRN: "tax", GSTIN: "tax", TAX: "tax"}
 
 TWO_PLACES = Decimal("0.01")
 
@@ -66,9 +69,16 @@ class LineVerdict:
 
 
 def judge_line(
-    order_price: Decimal, invoice_price: Decimal, qty: Decimal, available: Decimal, tol: Tolerance
+    order_price: Decimal,
+    invoice_price: Decimal,
+    qty: Decimal,
+    available: Decimal,
+    tol: Tolerance,
+    *,
+    service: bool = False,
 ) -> LineVerdict:
-    """One invoice line. The price is judged first; a price above the order price that is within neither tolerance blocks."""
+    """One invoice line. The price is judged first; a price above the order price that is within neither tolerance blocks.
+    For a service line `available` is what was confirmed and not yet invoiced, and too much is 'not confirmed'."""
     diff = invoice_price - order_price
     result = MATCHED
     if diff > 0:
@@ -79,7 +89,7 @@ def judge_line(
         result = WITHIN
     allowed = available + available * tol.qty_pct / 100
     if qty > allowed:
-        return LineVerdict(BLOCKED, QTY, diff, qty - available)
+        return LineVerdict(BLOCKED, SERVICE if service else QTY, diff, qty - available)
     return LineVerdict(result, None, diff, max(qty - available, Decimal(0)))
 
 

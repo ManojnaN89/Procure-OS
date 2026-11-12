@@ -25,7 +25,7 @@ Orders are approved by tier, shown in the list of **Purchase orders**: the buyer
 
 ## Decide the rest
 
-Payment runs, releasing a blocked invoice, supplier changes and held orders are under **Admin** → **Approvals**. Click **Approve** or **Reject**. Nothing runs until you do.
+Payment runs, releasing a blocked invoice, supplier changes, held orders and goods received without an order (also on **Receive without order**) are under **Admin** → **Approvals**. Click **Approve** or **Reject**. Nothing runs until you do.
 
 ## Check suppliers and contracts
 

@@ -72,6 +72,8 @@
       <a class="nav-item" data-route="rfqs" data-needs="rfq.create rfq.send po.approve" href="#/rfqs"><i class="ti ti-file-text"></i>Quotations</a>
       <a class="nav-item" data-route="purchase-orders" data-needs="po.create po.approve po.send grn.create invoice.view" href="#/purchase-orders"><i class="ti ti-receipt"></i>Purchase orders</a>
       <a class="nav-item" data-route="receiving" data-needs="grn.create po.create" href="#/receiving"><i class="ti ti-truck-delivery"></i>Goods receipt</a>
+      <a class="nav-item" data-route="receive-without-order" data-needs="grn.create grn.unordered_approve po.create" href="#/receive-without-order"><i class="ti ti-alert-triangle"></i>Receive without order</a>
+      <a class="nav-item" data-route="services" data-needs="request.create request.view_own grn.create" href="#/services"><i class="ti ti-checklist"></i>Confirm services</a>
       <a class="nav-item" data-route="invoices" data-needs="invoice.view invoice.book invoice.approve" href="#/invoices"><i class="ti ti-file-invoice"></i>Invoices</a>
       <a class="nav-item" data-route="payments" data-needs="payment.view payment.propose payment.approve" href="#/payments"><i class="ti ti-credit-card"></i>Payments</a>
 
@@ -227,6 +229,8 @@
 <script src="js/views/inventory.js"></script>
 <script src="js/views/material-requests.js"></script>
 <script src="js/views/receiving.js"></script>
+<script src="js/views/services.js"></script>
+<script src="js/views/unordered.js"></script>
 <script src="js/views/invoices.js"></script>
 <script src="js/views/purchase-orders.js"></script>
 <script src="js/views/payments.js"></script>

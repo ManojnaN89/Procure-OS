@@ -153,8 +153,8 @@ categories:
 # gst: [rate before 22 Sep 2025, rate from then]; on_hand: opening stock at the office (a stocked item);
 # reorder: [reorder point, order up to] (min-max planning); gl overrides the category's account.
 items:
-  - {code: LP-01, name: Standard laptop 14 inch, description: Business laptop 14 inch, 16 GB RAM, 512 GB SSD, category: ITH, unit: NOS, hsn: "847130", gst: [18, 18], price: "62000.00", lead: 5, capex: true, on_hand: 3}
-  - {code: LP-02, name: Developer laptop 16 inch, description: Developer laptop 16 inch, 32 GB RAM, 1 TB SSD, category: ITH, unit: NOS, hsn: "847130", gst: [18, 18], price: "105000.00", lead: 5, capex: true, on_hand: 1}
+  - {code: LP-01, name: Standard laptop 14 inch, description: Business laptop 14 inch, 16 GB RAM, 512 GB SSD, category: ITH, unit: NOS, hsn: "847130", gst: [18, 18], price: "62000.00", lead: 5, capex: true, serialised: true, on_hand: 3}
+  - {code: LP-02, name: Developer laptop 16 inch, description: Developer laptop 16 inch, 32 GB RAM, 1 TB SSD, category: ITH, unit: NOS, hsn: "847130", gst: [18, 18], price: "105000.00", lead: 5, capex: true, serialised: true, on_hand: 1}
   - {code: MN-01, name: Monitor 24 inch, description: 24 inch full HD IPS monitor, category: ITH, gl: 5320, unit: NOS, hsn: "852852", gst: [18, 18], price: "12500.00", lead: 5, on_hand: 2}
   - {code: DK-01, name: Docking station, description: USB-C docking station with power delivery, category: ITH, gl: 5320, unit: NOS, hsn: "847180", gst: [18, 18], price: "9800.00", lead: 5, on_hand: 2}
   - {code: HS-01, name: Headset, description: USB headset with noise-cancelling microphone, category: ITH, gl: 5320, unit: NOS, hsn: "851830", gst: [18, 18], price: "2400.00", lead: 4, on_hand: 5}

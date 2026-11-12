@@ -4,6 +4,7 @@ rfq,RFQ,company,{prefix}-{fy4}-{seq:05d},fy
 po,PO,location,{prefix}-{loc}-{fy4}-{seq:05d},fy
 goods_receipt,GRN,location,{prefix}-{loc}-{fy4}-{seq:05d},fy
 service_receipt,SRN,location,{prefix}-{loc}-{fy4}-{seq:05d},fy
+unordered_receipt,URN,location,{prefix}-{loc}-{fy4}-{seq:05d},fy
 invoice_booking,PI,company,{prefix}-{fy4}-{seq:06d},fy
 payment_run,PR,company,{prefix}-{fy4}-{seq:04d},fy
 payment,PAY,company,{prefix}-{fy4}-{seq:06d},fy

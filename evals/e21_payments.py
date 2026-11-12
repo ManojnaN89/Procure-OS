@@ -27,7 +27,7 @@ def run(ctx) -> Outcome:
     out = Outcome(True)
     world = lib.build_world("e21", with_stock=False)
     db = world.db
-    r = replay(world, release_blocked=True, load_bank_rates=True, goods_only=True)  # no service entry yet: goods only
+    r = replay(world, release_blocked=True, load_bank_rates=True, goods_only=True)  # goods only: tax at source on services (194C, 194J) is not built yet
     db.commit()
     inverse = {v: k for k, v in r.platform_no.items()}
     suppliers = {s["code"]: s for s in rows("master", "supplier")}

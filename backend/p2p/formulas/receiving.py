@@ -52,6 +52,55 @@ def order_status(line_statuses: list[str]) -> str | None:
     return None
 
 
+BASES = ("qty", "pct", "amount")
+
+
+@dataclass(frozen=True)
+class ServiceConfirmed:
+    qty: Decimal  # what counts as received on the order line, in the line's unit
+    amount: Decimal  # its value at the order price, in rupees
+
+
+def confirm_service(
+    basis: str, value: Decimal, ordered: Decimal, unit_price: Decimal, room: Decimal
+) -> ServiceConfirmed:
+    """A service confirmed by quantity, by a percentage of the ordered quantity, or by amount (a lump-sum line).
+
+    `room` is the quantity that may still be confirmed (formulas `room_left`). More than that is refused; for an amount
+    the limit is the room at the order price, to the paisa.
+    """
+    if basis not in BASES:
+        raise ValueError("the basis must be qty, pct or amount")
+    if value <= 0:
+        raise ValueError("the quantity, percentage or amount confirmed must be more than zero")
+    if basis == "amount":
+        if unit_price <= 0:
+            raise ValueError("a line without a price cannot be confirmed by amount")
+        amount = value.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+        most = (room * unit_price).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+        if amount > most:
+            raise ValueError(f"{amount} is more than the {most} that may still be confirmed")
+        return ServiceConfirmed((amount / unit_price).quantize(QTY, rounding=ROUND_HALF_UP), amount)
+    qty = value if basis == "qty" else ordered * value / 100
+    qty = qty.quantize(QTY, rounding=ROUND_HALF_UP)
+    if qty > room:
+        raise ValueError(f"{qty} is more than the {room} that may still be confirmed")
+    return ServiceConfirmed(qty, (qty * unit_price).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP))
+
+
+def check_serials(serials: list[str], units: Decimal) -> list[str]:
+    """One serial number per unit of a serialised item, none given twice. Returns them trimmed and in capitals."""
+    clean = [s.strip().upper() for s in serials if s and s.strip()]
+    if units != units.to_integral_value():
+        raise ValueError("a serialised item is received in whole units")
+    if len(clean) != int(units):
+        raise ValueError(f"{int(units)} serial number(s) are needed, one per unit; {len(clean)} given")
+    twice = sorted({s for s in clean if clean.count(s) > 1})
+    if twice:
+        raise ValueError("serial number(s) given twice: " + ", ".join(twice))
+    return clean
+
+
 def stock_unit_cost(price: Decimal, qty: Decimal, base_qty: Decimal | None) -> Decimal:
     """The cost of one stock unit: the price of one purchase unit divided by the stock units in it."""
     if not base_qty or base_qty <= 0 or qty <= 0:

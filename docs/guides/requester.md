@@ -28,6 +28,10 @@ The system picks the approvers from the company's rules. You do not choose them.
 
 You are told, in the app and by email, when your request is approved, rejected or returned.
 
+## Confirm a service
+
+For a service you asked for (cleaning, maintenance, consulting), you say when it was done. Open **Confirm services**, give the percent done, a quantity or an amount, and click **Confirm**. You can confirm part now and the rest later. At the end of a period you may get an email with a link that does the same; it works once. The supplier is paid only for what you confirm, and someone else approves the invoice.
+
 ## If it comes back
 
 An approver can **Return for changes**. It then shows under **Returned to me for changes**, with their reason. Fix it and click **Submit for approval** again.
