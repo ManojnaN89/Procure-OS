@@ -167,7 +167,11 @@ def _setup(db: Session) -> None:
             "update supplier set state_code = '29', gstin = '29CCCCC0000C1Z5', gst_reg_type = 'regular' where code = 'S2'"
         )
     )
-    x(text("update supplier set state_code = '29', gstin = null, gst_reg_type = 'composition' where code = 'S3'"))
+    x(
+        text(
+            "update supplier set state_code = '29', gstin = '29DDDDD0000D1Z5', gst_reg_type = 'composition' where code = 'S3'"
+        )
+    )
     for code in ("S1", "S2"):  # registered for GST, so the certificate is a required document
         x(
             text(
@@ -359,10 +363,10 @@ def test_the_cheapest_compliant_offer_is_recommended_and_a_cheaper_late_one_is_n
     (line,) = _comp(shop, rfq).lines
 
     by_supplier = {o.supplier_code: o for o in line.offers}
-    assert [o.supplier_code for o in line.offers] == ["S3", "S1", "S2"]  # sorted by price: 150, 180, 190
+    assert [o.supplier_code for o in line.offers] == ["S1", "S2", "S3"]  # the qualifying by cost, then the dropped
     assert by_supplier["S1"].net_price == D("180.0000") and by_supplier["S1"].value == D("900.00")
     assert by_supplier["S3"].flags == ["delivers 6 day(s) after it is needed"]
-    assert (line.recommended, line.why) == ("S1", "Lowest price among 2 compliant offer(s)")
+    assert line.recommended == "S1" and line.why.startswith("Lowest total cost among 2 qualifying offer(s): ₹ 900.00")
 
 
 def test_equal_prices_are_decided_by_the_faster_delivery_then_the_supplier_code(shop: Session, outbox: Outbox) -> None:
@@ -394,7 +398,7 @@ def test_each_reason_an_offer_does_not_comply_is_named(
     (line,) = _comp(shop, rfq).lines
 
     assert line.offers[0].flags == [flag]
-    assert line.recommended is None and line.why == "No offer complies; a buyer has to decide"
+    assert line.recommended is None and line.why == "No offer qualifies; a buyer has to decide"
 
 
 @pytest.mark.parametrize(
@@ -422,7 +426,7 @@ def test_the_comparison_says_who_has_not_answered_and_counts_the_quotes(shop: Se
 
     assert (comp.quotes_received, comp.invited, comp.min_quotes) == (1, 3, 2)
     assert comp.waiting_for == ["S2", "S3"]
-    assert _comp(shop, rfq).lines[0].why == "Lowest price among 1 compliant offer(s)"
+    assert _comp(shop, rfq).lines[0].why.startswith("Lowest total cost among 1 qualifying offer(s)")
     shop.execute(text("update rfq_supplier set declined = true where supplier_code = 'S2'"))
     shop.commit()
     assert _comp(shop, rfq).waiting_for == ["S3"]  # a supplier that said no is no longer waited for
@@ -446,7 +450,8 @@ def test_awarding_the_recommendation_needs_no_reason_and_stores_the_net_price(sh
 
     assert (done.awarded, done.overridden, done.complete) == ({1: "S1"}, [], True)
     row = shop.execute(text("select supplier_code, quote_no, qty, price, reason, overridden, by_user from award")).one()
-    assert tuple(row) == ("S1", f"{rfq}-S1-R1", D("5"), D("180"), "Lowest price among compliant offers", False, "7")
+    assert tuple(row[:4]) == ("S1", f"{rfq}-S1-R1", D("5"), D("180")) and row[5:] == (False, "7")
+    assert row[4].startswith("Lowest total cost among 2 qualifying offer(s)")  # the comparison's own reason
     assert shop.execute(text("select status from rfq")).scalar_one() == "awarded"
     assert shop.execute(text("select count(*) from audit_event where action = 'rfq.award'")).scalar_one() == 1
 
@@ -534,7 +539,7 @@ def test_the_recommendation_is_awarded_by_itself_only_when_the_gate_allows_and_e
 
     assert done is not None and done.awarded == {1: "S1"}
     row = shop.execute(text("select by_user, reason from award")).one()
-    assert row == ("service:award", "Lowest price among compliant offers")
+    assert row[0] == "service:award" and row[1].startswith("Lowest total cost among 2 qualifying offer(s)")
     assert (
         shop.execute(
             text("select count(*) from autonomy_outcome where decision_type = 'rfq.award' and auto")
@@ -555,7 +560,8 @@ def test_nothing_is_awarded_by_itself_when_any_line_has_no_compliant_offer_or_th
     shop.commit()
     assert quotes.auto_award(shop, slug, rfq, as_of=TODAY) is None  # no compliant offer
 
-    _quote(shop, rfq, "S2", "100", days=3)  # a compliant revision
+    _quote(shop, rfq, "S1", "105", days=3)  # compliant revisions: two quotes qualify, as the route wants
+    _quote(shop, rfq, "S2", "100", days=3)
     autonomy.set_kill_switch(shop, sod.user(1), True, "incident")
     assert quotes.auto_award(shop, slug, rfq, as_of=TODAY) is None
     autonomy.set_kill_switch(shop, sod.user(1), False, "over")
@@ -694,11 +700,11 @@ def test_a_composition_supplier_charges_no_gst_at_all(shop: Session, outbox: Out
 
 def test_lines_with_an_unknown_state_or_gst_rate_are_not_ordered_and_say_why(shop: Session, outbox: Outbox) -> None:
     request, rfq = _sent_rfq(shop, outbox)
-    shop.execute(text("update supplier set state_code = null, gstin = null where code = 'S1'"))
+    shop.execute(text("update supplier set state_code = null, gstin = null where code = 'S1'"))  # no GST details
     shop.execute(text("update item set gst_rate_before = null, gst_rate_after = null where code = 'A'"))
     shop.commit()
     _three_quotes(shop, rfq)
-    quotes.award(shop, rfq, {1: "S1"}, sod.user(7), as_of=TODAY)
+    quotes.award(shop, rfq, {1: "S1"}, sod.user(7), reason="GSTIN to follow", as_of=TODAY)  # S1 fails a must-have
 
     made = service.order_request(shop, shop.info["slug"], request, as_of=TODAY)
 
@@ -985,17 +991,27 @@ def test_the_rfq_page_data_includes_the_comparison_and_who_may_quote_or_award(sh
     assert (data["min_quotes"], data["quotes_received"], data["invited"], data["waiting_for"]) == (2, 3, 3, [])
     assert data["can_quote"] is True and data["can_award"] is True
     (line,) = data["lines"]
-    assert line["recommended"] == "S1" and line["why"] == "Lowest price among 2 compliant offer(s)"
-    first = line["offers"][0]
-    assert (first["supplier_code"], first["net_price"], first["value"], first["compliant"]) == (
+    assert line["recommended"] == "S1" and line["why"].startswith("Lowest total cost among 2 qualifying offer(s)")
+    last = line["offers"][-1]  # the dropped offers come after the ranked ones
+    assert (last["supplier_code"], last["net_price"], last["value"], last["compliant"], last["rank"]) == (
         "S3",
         "150.0000",
         "750.00",
         False,
+        None,
     )
-    assert first["flags"] == ["delivers 6 day(s) after it is needed"]
-    s1 = next(o for o in line["offers"] if o["supplier_code"] == "S1")
-    assert (s1["value"], s1["charges"], s1["tax"], s1["landed"]) == ("900.00", "75.50", "175.59", "1151.09")
+    assert last["flags"] == ["delivers 6 day(s) after it is needed"]
+    s1 = line["offers"][0]
+    assert (s1["supplier_code"], s1["rank"], s1["value"], s1["charges"], s1["tax"], s1["landed"], s1["cost"]) == (
+        "S1",
+        1,
+        "900.00",
+        "75.50",
+        "175.59",
+        "1151.09",
+        "975.50",
+    )
+    assert line["split"] is None and line["cheapest"] == "S1" and line["qualifying"] == 2
     assert s1["questions"] == [] and s1["score"] is None and data["lines"][0]["needs_question"] is False
     assert client.get(f"/api/rfqs/{rfq}", headers=requester).json()["comparison"]["can_award"] is False
     assert client.get("/api/rfqs", headers=buyer).json()[0]["quote_count"] == 3

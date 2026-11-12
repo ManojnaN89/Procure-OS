@@ -14,7 +14,7 @@ from decimal import Decimal, InvalidOperation
 from typing import Annotated, Any
 
 import jwt
-from fastapi import APIRouter, Depends, HTTPException, Query, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, Depends, HTTPException, Query, Response, WebSocket, WebSocketDisconnect
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import StreamingResponse
 from sqlalchemy import text
@@ -43,7 +43,7 @@ from p2p.receiving import goods
 from p2p.receiving.stock import StockError, post_count, post_issue, stock_levels
 from p2p.requests import duplicates, jobs, lifecycle, replenishment
 from p2p.sourcing import documents as supplier_documents
-from p2p.sourcing import replies
+from p2p.sourcing import replies, rfq_document
 from p2p.sourcing import service as sourcing
 from p2p.suppliers import scoring
 
@@ -1079,6 +1079,8 @@ def _comparison_json(db: Session, rfq_no: str, user_id: int) -> dict[str, Any]:
         "quotes_received": comp.quotes_received,
         "invited": comp.invited,
         "waiting_for": comp.waiting_for,
+        "rule": comp.rule,
+        "basis": comp.basis,
         "can_quote": status == "sent" and can_anywhere(db, user_id, "rfq.create"),
         "can_award": status == "sent" and comp.quotes_received > 0 and can_anywhere(db, user_id, "rfq.create"),
         "suppliers": [
@@ -1104,7 +1106,19 @@ def _comparison_json(db: Session, rfq_no: str, user_id: int) -> dict[str, Any]:
                 "recommended": line.recommended,
                 "why": line.why,
                 "awarded": line.awarded,
+                "awarded_parts": [{"supplier_code": s, "qty": _qty(q)} for s, q in line.awarded_parts],
                 "needs_question": line.needs_question,
+                "cheapest": line.cheapest,
+                "qualifying": line.qualifying,
+                "split": {
+                    "worthwhile": line.split.worthwhile,
+                    "reason": line.split.reason(),
+                    "saving": _money(line.split.saving),
+                    "extra_freight": _money(line.split.extra_freight),
+                    "parts": [{"supplier_code": p.supplier_code, "qty": _qty(p.qty)} for p in line.split.parts],
+                }
+                if line.split
+                else None,
                 "offers": [
                     {
                         "supplier_code": o.supplier_code,
@@ -1121,6 +1135,10 @@ def _comparison_json(db: Session, rfq_no: str, user_id: int) -> dict[str, Any]:
                         "charges": _money(o.charges),
                         "tax": _money(o.tax),
                         "landed": _money(o.landed),
+                        "cost": _money(o.cost),
+                        "rank": o.rank,
+                        "qty_offered": _qty(o.qty_offered) if o.qty_offered is not None else None,
+                        "payment_days": o.payment_days,
                         "last_price": _money(o.last_price),
                         "questions": o.questions,
                         "score": _money(o.score),
@@ -1241,6 +1259,7 @@ def enter_rfq_quote(
                     offered_brand=line.get("offered_brand") or None,
                     moq=_decimal(line["moq"], "moq") if line.get("moq") not in (None, "") else None,
                     deviation=line.get("deviation") or None,
+                    qty=_decimal(line["qty"], "qty") if line.get("qty") not in (None, "") else None,
                 )
                 for line in payload.get("lines", [])
             ],
@@ -1260,8 +1279,14 @@ def enter_rfq_quote(
 def award_rfq(
     no: str, payload: dict[str, Any], db: Db, ctx: Annotated[routing.TenantContext, Depends(require("rfq.create"))]
 ) -> dict[str, Any]:
+    """A buyer selects the supplier of each line (choices: line to supplier), or shares a line between suppliers
+    (splits: line to a list of [supplier, quantity])."""
     try:
         choices = {int(k): str(v) for k, v in dict(payload.get("choices", {})).items()}
+        splits = {
+            int(k): [(str(s), _decimal(q, "qty")) for s, q in parts]
+            for k, parts in dict(payload.get("splits", {})).items()
+        }
         done = quotes.award(
             db,
             no,
@@ -1270,9 +1295,10 @@ def award_rfq(
             reason=payload.get("reason"),
             as_of=business_today(),
             tenant=ctx.slug,
+            splits=splits,
         )
     except (ValueError, TypeError) as exc:
-        raise HTTPException(422, f"the award could not be read: {exc}") from None
+        raise HTTPException(422, f"the selection could not be read: {exc}") from None
     except quotes.QuoteError as exc:
         raise HTTPException(409, str(exc)) from None
     return {
@@ -1280,6 +1306,20 @@ def award_rfq(
         "overridden": done.overridden,
         "complete": done.complete,
     }
+
+
+@router.get("/rfqs/{no}/suppliers/{supplier_code}/pdf")
+def rfq_pdf(no: str, supplier_code: str, db: Db, ctx: Ctx) -> Response:
+    """The quotation request as a printable PDF for one supplier that was asked."""
+    try:
+        pdf = rfq_document.rfq_document(db, no, supplier_code)
+    except rfq_document.RfqDocumentError:
+        raise HTTPException(404, "Not found") from None
+    return Response(
+        pdf,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'inline; filename="{no}-{supplier_code}.pdf"'},
+    )
 
 
 def _po(r: dict[str, Any]) -> dict[str, Any]:

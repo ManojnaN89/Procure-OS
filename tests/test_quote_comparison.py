@@ -9,7 +9,8 @@ from test_orders import TODAY, _comp, _quote, _sent_rfq, shop  # noqa: F401 - fi
 from test_sourcing import Outbox, _auto_send, _request, _source, db, outbox  # noqa: F401 - fixtures
 
 from p2p.agents import autonomy
-from p2p.orders import quotes, service
+from p2p.formulas.selection import Weights
+from p2p.orders import quotes, selection_rule, service
 from p2p.platform import sod
 
 D = Decimal
@@ -34,11 +35,12 @@ def test_a_dearer_unit_price_can_still_be_the_cheapest_once_freight_and_tax_are_
     line = _comp(shop, rfq).lines[0]
 
     s2, s1 = line.offers
-    assert [o.supplier_code for o in line.offers] == ["S2", "S1"]  # sorted by landed cost
+    assert [o.supplier_code for o in line.offers] == ["S2", "S1"]  # sorted by total cost
     assert (s2.value, s2.charges, s2.tax, s2.landed) == (D("950.00"), D("0.00"), D("171.00"), D("1121.00"))
     assert (s1.value, s1.charges, s1.tax, s1.landed) == (D("900.00"), D("100.00"), D("180.00"), D("1180.00"))
     assert line.recommended == "S2"
-    assert line.why == "Lowest landed cost (price, freight and tax) among 2 compliant offer(s)"
+    assert (s2.cost, s1.cost) == (D("950.00"), D("1000.00"))  # GST is claimed back: shown, not counted
+    assert line.why.startswith("Lowest total cost among 2 qualifying offer(s): ₹ 950.00 (price and freight")
 
 
 def test_when_the_cheapest_unit_price_is_also_cheapest_landed_the_reason_says_price(
@@ -51,7 +53,7 @@ def test_when_the_cheapest_unit_price_is_also_cheapest_landed_the_reason_says_pr
 
     line = _comp(shop, rfq).lines[0]
 
-    assert (line.recommended, line.why) == ("S1", "Lowest price among 2 compliant offer(s)")
+    assert line.recommended == "S1" and line.why.startswith("Lowest total cost among 2 qualifying offer(s): ₹ 910.00")
 
 
 def test_a_quotes_freight_is_shared_over_the_lines_it_prices_by_value_and_adds_up_exactly(
@@ -159,10 +161,9 @@ def test_the_weighted_comparison_recommends_the_best_score_and_says_how_it_was_s
     shop: Session,
     outbox: Outbox,  # noqa: F811
 ) -> None:
-    _set(shop, "comparison_mode", "weighted")
-    _set(shop, "score_weight_price", "100")
-    _set(shop, "score_weight_delivery", "0")
-    _set(shop, "score_weight_quality", "0")
+    selection_rule.save_rule(
+        shop, sod.user(1), effective_from=TODAY, method="weighted", weights=Weights(D(100), D(0), D(0), D(0))
+    )
     _, rfq = _sent_rfq(shop, outbox)
     _quote(shop, rfq, "S1", "180")
     _quote(shop, rfq, "S2", "200")
@@ -175,7 +176,8 @@ def test_the_weighted_comparison_recommends_the_best_score_and_says_how_it_was_s
     assert line.recommended == "S1"
     assert (
         line.why
-        == "Best score (100.0 of 100) among 2 compliant offer(s): price 100, delivery 70, quality 70; weights 100/0/0"
+        == "Best score (100.0 of 100) among 2 qualifying offer(s): price 100, delivery 70, quality 70, payment terms 100; "
+        "weights 100/0/0/0"
     )
 
 
@@ -183,7 +185,7 @@ def test_in_the_weighted_comparison_a_knocked_out_offer_is_never_recommended_how
     shop: Session,
     outbox: Outbox,  # noqa: F811
 ) -> None:
-    _set(shop, "comparison_mode", "weighted")
+    selection_rule.save_rule(shop, sod.user(1), effective_from=TODAY, method="weighted")
     _, rfq = _sent_rfq(shop, outbox)
     _quote(shop, rfq, "S1", "180")
     _quote(shop, rfq, "S3", "50", days=20)  # far too late: knocked out

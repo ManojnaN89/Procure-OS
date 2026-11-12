@@ -12,11 +12,15 @@ You turn approved requests into orders.
 2. Open an approved request and click **Find suppliers**. A contract price is used when there is one. Otherwise a request for quotation is made.
 3. Sending the quotation request needs a person (unless the company made it automatic): **Admin** → **Approvals** → **Approve**.
 
-## Quotes and award
+## Quotes and supplier selection
 
-Suppliers answer by email. Under **Quotations**, open the RFQ: each reply is read into a draft. Check it and click **Confirm this quote**, or **Dismiss**. To type one yourself click **Enter a quote**, then **Save the quote**. When you have enough, click **Award the selected suppliers**. The order is made with GST.
+Suppliers answer by email. Under **Quotations**, open the RFQ: each reply is read into a draft. Check it and click **Confirm this quote**, or **Dismiss**. To type one yourself click **Enter a quote**, then **Save the quote**. To print or post the request, click **RFQ (PDF)** next to a supplier: it has the RFQ number, the lines with their need-by dates, where to deliver, the terms and the date to quote by.
 
-Each offer is compared on what it costs to our door: its price, its share of the supplier's freight and packing, and the GST. The recommended offer is the cheapest of those that comply. A price far below the other quotes or the last price paid shows "Ask the supplier": check it with the supplier before awarding. When a supplier asks a question, the task carries a drafted reply you can start from; nothing is sent until you send it.
+A quote that fails a must-have is dropped, and the table says why: it delivers after the need-by date, it has expired (a quote valid until today still counts), the supplier is not active or not approved for the category, or its GST details are missing. The rest are ranked on total cost: price times quantity plus freight and other charges. GST is shown but not counted when the company claims it back. Equal totals go to the earlier delivery, then the better vendor score. The company may instead compare on a weighted score of price, delivery, quality and payment terms; its weights are a versioned company rule.
+
+When the cheapest supplier can supply only part, the app shows a **Split** row: it splits only when the saving beats the extra freight. Pick a row for each line and click **Select these suppliers**. A written reason is needed when you select anything but the recommended, cheapest qualifying quote (or the recommended split), or when fewer qualifying quotes came in than the buying route asked for. One order is made per supplier, with GST.
+
+A price far below the other quotes or the last price paid shows "Ask the supplier": check it with the supplier before selecting. When a supplier asks a question, the task carries a drafted reply you can start from; nothing is sent until you send it.
 
 ## Orders
 

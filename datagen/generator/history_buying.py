@@ -112,6 +112,7 @@ class Buying:
                               "item_code": item, "description": it["name"], "attributes": "{}", "qty": qty_s(qty),
                               "uom": it["base_uom"], "need_by": iso(min(n.need_by for n in needs))}, created)  # fmt: skip
         quotes = []
+        offered: dict[str, dict] = {}  # each quote's line, by quote number
         for k, supplier in enumerate(pool, 1):
             b = self.behaviour[supplier]
             days = self.R.randint(*b["reply"])
@@ -126,18 +127,21 @@ class Buying:
                                "delivery_terms": "for_destination", "packing_forwarding": "0.00", "freight": "0.00", "taxes_extra": "true",
                                "warranty_months": "", "deviations": "", "document_ref": ""}, replied)  # fmt: skip
             lead = self.lead.get((supplier, item), int(it["default_lead_days"])) + b["lead_extra"]
-            self.add("quote_line", {"quote_no": qno, "rfq_line_no": 1, "item_code": item, "offered_brand": "", "qty": qty_s(qty),
+            offered[qno] = self.add("quote_line", {"quote_no": qno, "rfq_line_no": 1, "item_code": item, "offered_brand": "", "qty": qty_s(qty),
                                     "moq": "1", "unit_price": money(price), "discount_pct": "0.00", "gst_rate": str(self.rate_on(it, day)),
                                     "delivery_days": lead, "deviation": ""}, replied)  # fmt: skip
             quotes.append((price, lead, supplier, qno, replied))
         quotes.sort()
         awarded = self.later(max(q[4] for q in quotes), self.R.uniform(1, 4))
         whole = it["base_uom"] in ("NOS", "PAC", "OTH")
-        split = len(quotes) >= 2 and qty >= 4 and self.R.bern(self.route["split_award"])
+        # a split as the platform makes one: the lowest quote offers only part and the rest comes from the next lowest,
+        # which saves money as long as the lowest is really lower (there is no freight to beat)
+        split = len(quotes) >= 2 and qty >= 4 and self.R.bern(self.route["split_award"]) and quotes[0][0] < quotes[1][0]
         if split:
             first = (qty * D("0.6")).quantize(D(1)) if whole else q3(qty * D("0.6"))
             shares = [(quotes[0], first), (quotes[1], qty - first)]
-            reason = "Split between the two lowest quotes for supply security"
+            offered[quotes[0][3]]["qty"] = qty_s(first)
+            reason = "Split: the lowest quote covers only part; the saving beats the extra freight"
         else:
             shares = [(quotes[0], qty)]
             reason = "Lowest price"

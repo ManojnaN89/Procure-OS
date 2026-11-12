@@ -7,7 +7,7 @@ From a stock shortage to a paid invoice. Each step has one person's name on it, 
 | 1 | Stock is at its reorder point, or someone asks for something | Buyer, Requester | **Requests** → **Check stock levels**, or the **Assistant** |
 | 2 | The request is approved by your approval rules. Small ones approve themselves | Approver | **Requests** → **Approve** |
 | 3 | Find a price: a contract price, or a request for quotation to suppliers | Buyer | **Requests** → **Find suppliers** |
-| 4 | Quotes come back by email, the buyer checks them and awards | Buyer | **Quotations** → **Award the selected suppliers** |
+| 4 | Quotes come back by email, the buyer checks them and selects the supplier | Buyer | **Quotations** → **Select these suppliers** |
 | 5 | The order is approved, then sent to the supplier | Approver, Buyer | **Purchase orders** → **Send to supplier** |
 | 6 | Goods arrive and are checked | Store | **Goods receipt** → **Receive goods** |
 | 7 | The supplier's invoice is entered and matched to the order and the receipt | AP | **Invoices** → **Enter an invoice** |

@@ -587,9 +587,16 @@ def test_the_buyer_compares_quotes_and_awards_and_the_approver_signs_the_purchas
     for code, name, state in (("S1", "Alpha Traders", "27"), ("S2", "Bravo Supplies", "29")):
         db.execute(
             text(
-                "insert into supplier (code, legal_name, status, state_code, gst_reg_type) values (:c, :n, 'active', :s, 'regular')"
+                "insert into supplier (code, legal_name, status, state_code, gst_reg_type, gstin) "
+                "values (:c, :n, 'active', :s, 'regular', :g)"
             ),
-            {"c": code, "n": name, "s": state},
+            {"c": code, "n": name, "s": state, "g": f"{state}AAAA{code[-1]}0000A1Z5"},
+        )
+        db.execute(
+            text(
+                "insert into supplier_category (supplier_code, category_code) values (:c, 'C1') on conflict do nothing"
+            ),
+            {"c": code},
         )
         give_documents(db, code, gst=True)
     # an approved request whose only line is out for quotation to both suppliers
@@ -659,7 +666,7 @@ def test_the_buyer_compares_quotes_and_awards_and_the_approver_signs_the_purchas
         assert buyer.locator("#appContent i:not(.ti)").count() == 0  # the item name is shown as typed
 
         buyer.locator("#awardBtn").click()
-        expect(buyer.locator("#appContent")).to_contain_text("Awarded to Alpha Traders")
+        expect(buyer.locator("#appContent")).to_contain_text("Supplier selected: Alpha Traders")
         assert company.db.execute(text("select status from rfq where no = 'RFQ-UI-1'")).scalar_one() == "awarded"
 
         made = orders.order_request(db, company.slug, "REQ-UI-1", as_of=today)  # what the worker does after an award
@@ -768,6 +775,9 @@ def test_the_buyer_checks_a_reply_read_from_email_corrects_one_value_and_confirm
     db = company.db
     later = datetime.now(IST).date().replace(year=datetime.now(IST).date().year + 1)
     db.execute(text("insert into supplier (code, legal_name, status) values ('S1', 'Alpha <b>Traders</b>', 'active')"))
+    db.execute(
+        text("insert into supplier_category (supplier_code, category_code) values ('S1', 'C1') on conflict do nothing")
+    )
     give_documents(db, "S1")
     db.execute(
         text(

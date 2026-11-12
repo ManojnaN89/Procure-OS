@@ -621,7 +621,7 @@ def _run(ctx: Any) -> Outcome:
             )
             with d.step(
                 "buyer",
-                "sees one quote where two are wanted: writes the reason and clicks Award the selected suppliers",
+                "sees one quote where two are wanted: writes the reason and clicks Select these suppliers",
             ) as page:
                 page.locator("#awardReason").fill("The only approved supplier of spares; the line needs the belts")
                 page.locator("#awardBtn").click()
@@ -654,7 +654,7 @@ def _run(ctx: Any) -> Outcome:
                 cheapest = min(offers, key=lambda s: Decimal(offers[s]))
                 with d.step(
                     "buyer",
-                    f"sees {suppliers[cheapest]['trade_name']} recommended (the lowest landed cost) and clicks Award the selected suppliers",
+                    f"sees {suppliers[cheapest]['trade_name']} recommended (the lowest total cost) and clicks Select these suppliers",
                 ) as page:
                     d.go("buyer", f"rfqs/{rfq_no}")
                     expect(page.locator("#appContent tr", has_text="recommended")).to_contain_text(
