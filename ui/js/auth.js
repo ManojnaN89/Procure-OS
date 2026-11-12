@@ -78,8 +78,10 @@ const Auth = {
     const role = document.querySelector(".user-badge .role");
     const avatar = document.querySelector(".user-badge .avatar-circle");
     if (who) who.textContent = this.me.display_name;
-    if (role) role.textContent = `${this.me.role} · ${this.me.tenant_name}`;
+    if (role) role.textContent = this.me.role;
     if (avatar) avatar.textContent = this.initials(this.me.display_name);
+    const company = document.getElementById("companyName");
+    if (company) company.innerHTML = `<i class="ti ti-building" aria-hidden="true"></i>${escapeHtml(this.me.tenant_name || "")}`;
     const admin = document.getElementById("adminLink");
     if (admin) admin.style.display = this.can("admin.users", "admin.rules", "audit.view", "request.approve", "po.approve", "invoice.approve", "payment.approve", "rfq.send", "supplier.activate") ? "" : "none";
     // the menu shows what this person's role can use, so each person sees their own flow

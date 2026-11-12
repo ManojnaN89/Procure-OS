@@ -74,9 +74,14 @@ function ProposalCard({ p, onDone }: { p: Proposal; onDone: () => void }) {
 						) : null}
 					</div>
 				</div>
-				<pre className="max-w-full overflow-x-auto rounded-md bg-muted p-2 text-xs">
-					{JSON.stringify(p.payload, null, 2)}
-				</pre>
+				<details className="text-sm">
+					<summary className="cursor-pointer font-medium text-primary">
+						What exactly will run
+					</summary>
+					<pre className="mt-2 max-w-full overflow-x-auto rounded-md bg-muted p-3 text-xs">
+						{JSON.stringify(p.payload, null, 2)}
+					</pre>
+				</details>
 				{mode === "edit" ? (
 					<Field label="Edit the details before approving (JSON)">
 						<Textarea
@@ -152,9 +157,14 @@ export function ApprovalsPage() {
 				<p className="text-sm text-muted-foreground">Loading…</p>
 			) : null}
 			{data?.length === 0 ? (
-				<p className="text-sm text-muted-foreground">
-					Nothing is waiting for you.
-				</p>
+				<Card className="max-w-3xl">
+					<CardBody className="text-center">
+						<div className="font-semibold">Nothing is waiting for you.</div>
+						<p className="text-sm text-muted-foreground">
+							New proposals appear here as agents and services make them.
+						</p>
+					</CardBody>
+				</Card>
 			) : null}
 			<div className="grid max-w-3xl gap-3">
 				{data?.map((p) => (

@@ -3,7 +3,7 @@
 from sqlalchemy import select, text
 from sqlalchemy.orm import Session
 
-from p2p.platform import mail, tenants, users, worker
+from p2p.platform import email_layout, mail, tenants, users, worker
 from p2p.platform.control_models import AppUser
 
 
@@ -45,8 +45,16 @@ def notify(
     )
     db.commit()
     if email and (address := email_of(user_id)):
+        text_body = ((body or title) + email_extra).strip()
         worker.enqueue(
-            tenant, "send_email", {"to": address, "subject": title, "body": ((body or title) + email_extra).strip()}
+            tenant,
+            "send_email",
+            {
+                "to": address,
+                "subject": title,
+                "body": text_body,
+                "html": email_layout.text_email(title, text_body, footer="Sent by the purchasing system."),
+            },
         )
     return nid
 

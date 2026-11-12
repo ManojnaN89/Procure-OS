@@ -80,28 +80,15 @@ const PurchaseOrdersView = {
 
   approvalPanel(po) {
     const a = po.approval || {};
-    const steps = a.steps || [];
-    const trail = steps.map((s) => `
-      <div style="display:flex;justify-content:space-between;gap:12px;padding:7px 0;border-bottom:1px solid var(--border);font-size:12.5px;">
-        <div>
-          <span style="color:var(--text-primary);">${this.esc(s.name)}</span>
-          <span class="cell-muted"> · ${this.esc(s.designation || s.role)}${s.stand_in ? ` · ${this.esc(s.stand_in)} standing in` : ""}</span>
-          ${s.comment ? `<div class="cell-muted" style="font-size:11.5px;margin-top:2px;">“${this.esc(s.comment)}”</div>` : ""}
-        </div>
-        <div style="text-align:right;white-space:nowrap;">
-          <span class="badge badge-${this.esc(s.status === "pending" ? "waiting" : s.status)}">${this.esc(this.STEP_LABEL[s.status] || s.status)}</span>
-          ${s.acted_at ? `<div class="cell-muted" style="font-size:11px;margin-top:2px;">${formatDate(s.acted_at)}</div>` : ""}
-        </div>
-      </div>`).join("");
     return `
       <div class="panel" style="margin-bottom:12px;">
         <div class="panel-title">Approval${po.tier ? ` · ${this.esc(this.tierLabel(po.tier))} tier` : ""}</div>
         ${po.approver ? `<p style="margin:0 0 10px;font-size:12.5px;color:var(--text-secondary);">Approver: ${this.esc(po.approver)}</p>` : ""}
-        ${po.hold_reason ? `<p style="margin:0 0 10px;font-size:12.5px;color:var(--warning-text);">On hold until a person accepts the price: ${this.esc(po.hold_reason)}</p>` : ""}
+        ${po.hold_reason ? UI.callout("warning", "On hold until a person accepts the price", `<p>${this.esc(po.hold_reason)}</p>`) : ""}
         ${a.decision ? `<p style="margin:0 0 10px;font-size:12.5px;color:var(--text-secondary);">${this.esc(a.decision)}</p>` : ""}
-        ${trail}
+        ${UI.approvalSteps(a.steps, this.STEP_LABEL)}
         ${a.rule_code ? `<div class="cell-muted" style="font-size:11.5px;margin:10px 0;">Rule ${this.esc(a.rule_code)} version ${this.esc(a.rule_version)}</div>` : ""}
-        ${a.can_act ? `<div style="display:flex;gap:10px;"><div class="btn btn-primary btn-sm" id="poApprove"><i class="ti ti-check"></i>Approve</div><div class="btn btn-sm" id="poReject"><i class="ti ti-x"></i>Reject</div></div>` : ""}
+        ${a.can_act ? `<div class="btn-row"><div class="btn btn-primary" id="poApprove"><i class="ti ti-check"></i>Approve</div><div class="btn btn-danger" id="poReject"><i class="ti ti-x"></i>Reject</div></div>` : ""}
         <div id="poNote" style="font-size:12px;color:var(--warning-text);margin-top:8px;"></div>
         <div id="poReasonBox" style="display:none;margin-top:10px;">
           <textarea id="poReason" rows="2" placeholder="Reason (required)" style="width:100%;background:var(--surface-sunken);border:1px solid var(--border);color:var(--text-primary);border-radius:8px;padding:8px;font-size:12.5px;"></textarea>
@@ -120,8 +107,11 @@ const PurchaseOrdersView = {
       <div class="panel" style="margin-bottom:12px;">
         <div class="panel-title">Supplier</div>
         <p style="margin:0 0 10px;font-size:12.5px;color:var(--text-secondary);">${sent}${ack}</p>
-        ${po.can_send ? `<div class="btn btn-primary btn-sm" id="poSend" style="display:inline-block;"><i class="ti ti-send"></i>Send to supplier</div>` : ""}
-        ${po.can_acknowledge ? `<div id="poAckBox"><input id="poAckDate" type="date" style="padding:6px 8px;font-size:12.5px;"> <input id="poAckNote" placeholder="Note (optional)" style="padding:6px 8px;font-size:12.5px;width:40%;"> <div class="btn btn-primary btn-sm" id="poAck" style="display:inline-block;">Record acknowledgement</div></div>` : ""}
+        ${po.can_send ? `<div class="btn btn-primary" id="poSend"><i class="ti ti-send"></i>Send to supplier</div>` : ""}
+        ${po.can_acknowledge ? `<div id="poAckBox" class="form-grid" style="grid-template-columns:minmax(160px,200px) minmax(180px,1fr) auto;">
+            <label>Delivery date the supplier promised<input id="poAckDate" type="date"></label>
+            <label>Note (optional)<input id="poAckNote" placeholder="For example: confirmed by phone"></label>
+            <div class="btn btn-primary" id="poAck">Record acknowledgement</div></div>` : ""}
         <div id="poDispatchNote" style="font-size:12px;color:var(--warning-text);margin-top:8px;"></div>
       </div>`;
   },
@@ -279,26 +269,24 @@ const PurchaseOrdersView = {
       if (po.error) { container.innerHTML = `<div class="empty-state">${this.esc(po.error)}</div>`; return; }
       const taxCols = Number(po.igst) > 0 ? ["IGST"] : (Number(po.cgst) > 0 ? ["CGST", "SGST"] : []);
       const taxCell = (l) => (Number(po.igst) > 0 ? `<td>${formatCurrency(l.igst)}</td>` : (Number(po.cgst) > 0 ? `<td>${formatCurrency(l.cgst)}</td><td>${formatCurrency(l.sgst)}</td>` : ""));
+      // what someone has to do on this order comes first; the record of what happened sits at the side
+      const approvalActs = (po.approval || {}).can_act || !!po.hold_reason;
+      const dispatchActs = po.can_send || po.can_acknowledge;
       container.innerHTML = `
         <div class="page-header">
-          <a href="#/purchase-orders" style="color:var(--text-muted);font-size:12px;text-decoration:none;">← Purchase orders</a>
-          <h1 style="margin-top:6px;">${this.esc(po.id)} · ${this.esc(po.supplier)}</h1>
-          <p>${statusBadge(po.status)}${po.touchless ? ' <span class="badge badge-approved">Touchless</span>' : ""} · ${formatCurrency(po.total)} · for <a href="#/requisitions/${this.esc(po.request_no)}" style="color:var(--accent-tint)">${this.esc(po.request_no)}</a>
-             ${po.rfq_no ? ` · <a href="#/rfqs/${this.esc(po.rfq_no)}" style="color:var(--accent-tint)">${this.esc(po.rfq_no)}</a>` : ""}
+          ${UI.backLink("#/purchase-orders", "Purchase orders")}
+          <h1>${this.esc(po.id)} · ${this.esc(po.supplier)}</h1>
+          <p>${statusBadge(po.status)}${po.touchless ? ' <span class="badge badge-approved">Touchless</span>' : ""} · ${formatCurrency(po.total)} · for <a href="#/requisitions/${this.esc(po.request_no)}">${this.esc(po.request_no)}</a>
+             ${po.rfq_no ? ` · <a href="#/rfqs/${this.esc(po.rfq_no)}">${this.esc(po.rfq_no)}</a>` : ""}
              ${po.contract_code ? ` · contract ${this.esc(po.contract_code)}` : ""}</p>
         </div>
         ${FlowStrip.forOrder(po)}
-        ${this.approvalPanel(po)}
-        ${this.touchlessPanel(po)}
-        ${this.dispatchPanel(po)}
+        ${po.cancel_reason ? UI.callout("danger", "", `<p><strong>Cancelled:</strong> ${this.esc(po.cancel_reason)}</p>`) : ""}
+        <div class="doc-layout">
+        <div class="doc-main">
+        ${approvalActs ? this.approvalPanel(po) : ""}
+        ${dispatchActs ? this.dispatchPanel(po) : ""}
         <div id="poAnswerBox"></div>
-        <div id="poChangesBox"></div>
-        <div id="supplierMessagesBox"></div>
-        <div class="panel" style="margin-bottom:12px;font-size:12.5px;color:var(--text-secondary);">
-          Supplier GSTIN ${this.esc(po.supplier_gstin || "none")} · buyer GSTIN ${this.esc(po.buyer_gstin || "none")} · deliver to ${this.esc(po.ship_to_name || po.ship_to)} (${this.esc(po.ship_to)})
-          ${po.payment_terms ? ` · payment ${this.esc(po.payment_terms)}` : ""}${po.delivery_terms ? ` · ${this.esc(po.delivery_terms)}` : ""}
-          ${po.cancel_reason ? `<div style="margin-top:6px;color:var(--warning-text);">Cancelled: ${this.esc(po.cancel_reason)}</div>` : ""}
-        </div>
         <div class="table-wrap" style="margin-bottom:12px;">
           <table class="data-table">
             <thead><tr><th>ITEM</th><th>QTY</th><th>PRICE</th><th>GST</th><th>TAXABLE</th>${taxCols.map((c) => `<th>${c}</th>`).join("")}</tr></thead>
@@ -320,12 +308,25 @@ const PurchaseOrdersView = {
                 </tr>`).join("")}
             </tbody>
           </table>
+          <div class="table-foot">${UI.totals([["Taxable", po.taxable], ["IGST", po.igst], ["CGST", po.cgst], ["SGST", po.sgst], ["Total", po.total]])}</div>
         </div>
-        <div class="stat-grid" style="grid-template-columns:repeat(auto-fit,minmax(150px,1fr));">
-          <div class="stat-card"><div class="stat-label">TAXABLE</div><div class="stat-value" style="font-size:18px;">${formatCurrency(po.taxable)}</div></div>
-          ${Number(po.igst) > 0 ? `<div class="stat-card"><div class="stat-label">IGST</div><div class="stat-value" style="font-size:18px;">${formatCurrency(po.igst)}</div></div>` : ""}
-          ${Number(po.cgst) > 0 ? `<div class="stat-card"><div class="stat-label">CGST</div><div class="stat-value" style="font-size:18px;">${formatCurrency(po.cgst)}</div></div><div class="stat-card"><div class="stat-label">SGST</div><div class="stat-value" style="font-size:18px;">${formatCurrency(po.sgst)}</div></div>` : ""}
-          <div class="stat-card"><div class="stat-label">TOTAL</div><div class="stat-value" style="font-size:18px;">${formatCurrency(po.total)}</div></div>
+        <div id="supplierMessagesBox"></div>
+        </div>
+        <div class="doc-side">
+        <div class="panel">
+          <div class="panel-title">Order details</div>
+          ${UI.facts([
+            ["Supplier", `${this.esc(po.supplier)}<div class="cell-muted">GSTIN ${this.esc(po.supplier_gstin || "none")}</div>`],
+            ["Deliver to", `${this.esc(po.ship_to_name || po.ship_to)} (${this.esc(po.ship_to)})<div class="cell-muted">our GSTIN ${this.esc(po.buyer_gstin || "none")}</div>`],
+            ["Payment terms", this.esc(po.payment_terms || "")],
+            ["Delivery terms", this.esc(String(po.delivery_terms || "").replace(/_/g, " "))],
+          ])}
+        </div>
+        ${approvalActs ? "" : this.approvalPanel(po)}
+        ${dispatchActs ? "" : this.dispatchPanel(po)}
+        ${this.touchlessPanel(po)}
+        <div id="poChangesBox"></div>
+        </div>
         </div>
       `;
       this.wire(po);

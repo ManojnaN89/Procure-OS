@@ -43,7 +43,8 @@ Development only (`requirements-dev.in`): pytest (MIT), ruff (MIT), mypy (MIT), 
 |---|---|
 | Chart.js 4.4.4 | MIT |
 | Tabler Icons 2.47.0 | MIT |
-| Inter, JetBrains Mono, Sora (fontsource builds) | SIL Open Font Licence 1.1 (`ui/vendor/fonts/LICENSE-fontsource`) |
+
+Text uses the system font of each device (Segoe UI, San Francisco, Roboto), so no web font is shipped.
 
 ## Services (`docker-compose.yml`)
 

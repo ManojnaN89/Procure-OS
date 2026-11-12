@@ -1,18 +1,24 @@
 @import "tailwindcss";
 
+/* The same tokens as the main app (ui/css/tokens.css): light, calm, one brand blue. See docs/ui-guide.md. */
 :root {
-	color-scheme: dark;
-	--canvas: #0b0d12;
-	--background: #12141c;
-	--foreground: #f3f4f8;
-	--muted: #1b1f2a;
-	--muted-foreground: #9aa2b5;
-	--border: #262b38;
-	--primary: #6c5ce7;
+	color-scheme: light;
+	--canvas: #f4f6f9;
+	--background: #ffffff;
+	--foreground: #141c2b;
+	--muted: #edf0f4;
+	--muted-foreground: #5f6b7a;
+	--border: #e1e5eb;
+	--primary: #2453c7;
+	--primary-hover: #1c45ab;
 	--primary-foreground: #ffffff;
-	--danger: #f0605d;
-	--success: #3ddc84;
-	--warning: #f5a623;
+	--danger: #b42318;
+	--success: #13683a;
+	--warning: #844600;
+	--ring: rgba(47, 107, 255, 0.35);
+	--font-sans:
+		-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue",
+		Arial, "Noto Sans", sans-serif;
 }
 
 @theme inline {
@@ -22,10 +28,12 @@
 	--color-muted-foreground: var(--muted-foreground);
 	--color-border: var(--border);
 	--color-primary: var(--primary);
+	--color-primary-hover: var(--primary-hover);
 	--color-primary-foreground: var(--primary-foreground);
 	--color-danger: var(--danger);
 	--color-success: var(--success);
 	--color-warning: var(--warning);
+	--font-sans: var(--font-sans);
 }
 
 html,
@@ -38,18 +46,24 @@ body {
 	margin: 0;
 	background: var(--canvas);
 	color: var(--foreground);
-	font-family: Inter, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
-	font-size: 15px;
+	font-family: var(--font-sans);
+	font-size: 14px;
+	line-height: 1.5;
 	overflow-x: hidden;
+	-webkit-font-smoothing: antialiased;
 }
 
-/* links and focus read clearly on the dark surface */
 a.text-primary,
 .text-primary {
-	color: #a99cff;
+	color: var(--primary);
 }
-select,
-input,
-textarea {
-	color-scheme: dark;
+
+/* one visible focus ring for every control, for keyboard use */
+:focus-visible {
+	outline: 2px solid #2f6bff;
+	outline-offset: 2px;
+}
+
+table {
+	font-variant-numeric: tabular-nums;
 }

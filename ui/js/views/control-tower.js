@@ -21,7 +21,7 @@ const ControlTowerView = {
         <div><h1>Control tower</h1><p>Where every case stands, how long it has been there (in working days), and the numbers behind it</p></div>
         <select id="ctLocation" style="padding:6px;"><option value="">All locations</option></select>
       </div>
-      <div id="ctTower"><div class="empty-state">Loading…</div></div>
+      <div id="ctTower" class="table-wrap"><div class="empty-state">Loading…</div></div>
       <div id="ctDrill" style="margin-top:14px;"></div>
       <h2 style="font-size:14px;margin:22px 0 8px;">Key figures</h2>
       <div id="ctKpis"><div class="empty-state">Loading…</div></div>

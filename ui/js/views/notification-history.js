@@ -37,11 +37,11 @@ const NotificationHistoryView = {
   },
 
   TYPE_ICONS: {
-    exception_flagged: { icon: "ti-alert-triangle", bg: "#412402", fg: "#FAC775" },
-    vendor_risk: { icon: "ti-building-store", bg: "#501313", fg: "#F09595" },
-    stale_requisition: { icon: "ti-clock", bg: "#412402", fg: "#FAC775" },
-    budget_overrun: { icon: "ti-chart-bar", bg: "#412402", fg: "#FAC775" },
-    contract_expiring: { icon: "ti-file-certificate", bg: "#3C3489", fg: "#CECBF6" },
+    exception_flagged: { icon: "ti-alert-triangle", bg: "var(--warning-bg)", fg: "var(--warning-text)" },
+    vendor_risk: { icon: "ti-building-store", bg: "var(--danger-bg)", fg: "var(--danger-text)" },
+    stale_requisition: { icon: "ti-clock", bg: "var(--warning-bg)", fg: "var(--warning-text)" },
+    budget_overrun: { icon: "ti-chart-bar", bg: "var(--warning-bg)", fg: "var(--warning-text)" },
+    contract_expiring: { icon: "ti-file-certificate", bg: "var(--accent-dim)", fg: "var(--accent-tint)" },
   },
 
   async load() {

@@ -14,7 +14,7 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from p2p.config import get_settings
-from p2p.platform import audit, cases, files, mail, worker
+from p2p.platform import audit, cases, email_layout, files, mail, worker
 from p2p.platform.mailbox import ImapMailbox, IncomingMail, Mailbox, MailpitMailbox
 from p2p.platform.sod import Actor
 
@@ -54,7 +54,15 @@ def send_linked_email(
     """Send an email whose replies will be linked back to the RFQ, PO or invoice. Returns the Message-ID."""
     message_id = mail.new_message_id()
     reply_to = plus_address(linked_type, linked_ref)
-    mail.send_email(to, subject, body, message_id=message_id, reply_to=reply_to, attachments=attachments)
+    mail.send_email(
+        to,
+        subject,
+        body,
+        message_id=message_id,
+        reply_to=reply_to,
+        attachments=attachments,
+        html=email_layout.text_email(subject, body),
+    )
     db.execute(
         text(
             "insert into email_message (message_id, direction, from_addr, to_addr, subject, body_text, sent_at, plus_tag, "

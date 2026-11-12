@@ -1,41 +1,124 @@
-/* ProcureOS design tokens — single source of truth for color/type/spacing */
+/* Design tokens: the one place for colour, type, spacing, radius and shadow. See docs/ui-guide.md. */
 :root {
-  /* Surfaces */
-  --canvas: #0B0D12;
-  --surface: #12141C;
-  --surface-raised: #181B25;
-  --surface-sunken: #0F1117;
-  --border: #232733;
-  --border-strong: #2E3444;
+  color-scheme: light;
 
-  /* Accent + status */
-  --accent: #6C5CE7;
-  --accent-dim: #3C3489;
-  --accent-tint: #EEEDFE;
-  --success: #2ECC71;
-  --success-bg: #173404;
-  --success-text: #97C459;
-  --warning: #F5A623;
-  --warning-bg: #412402;
-  --warning-text: #FAC775;
-  --danger: #EF4444;
-  --danger-bg: #501313;
-  --danger-text: #F09595;
+  /* ---------- Neutrals (cool slate) ---------- */
+  --c-white: #FFFFFF;
+  --c-gray-25: #FAFBFC;
+  --c-gray-50: #F4F6F9;
+  --c-gray-100: #EDF0F4;
+  --c-gray-200: #E1E5EB;
+  --c-gray-300: #CBD2DB;
+  --c-gray-500: #5F6B7A;
+  --c-gray-700: #3B4554;
+  --c-gray-900: #141C2B;
 
-  /* Text */
-  --text-primary: #F3F4F8;
-  --text-secondary: #B8BECC;
-  --text-muted: #8B93A7;
+  /* ---------- Brand ---------- */
+  --c-brand: #2453C7;
+  --c-brand-hover: #1C45AB;
+  --c-brand-press: #17398D;
+  --c-brand-soft: #EAF0FC;
+  --c-brand-text: #1C45AB;
 
-  /* Type */
-  --font-display: 'Sora', 'Calibri', sans-serif;
-  --font-body: 'Inter', 'Calibri', sans-serif;
-  --font-mono: 'JetBrains Mono', 'Consolas', monospace;
+  /* ---------- Roles of colour ---------- */
+  --color-bg: var(--c-gray-50);           /* the page behind everything */
+  --color-surface: var(--c-white);        /* cards, tables, the shell */
+  --color-surface-muted: var(--c-gray-25);/* table headers, quiet blocks */
+  --color-surface-sunken: var(--c-gray-100);
+  --color-hover: #F2F5F9;
+  --color-border: var(--c-gray-200);
+  --color-border-strong: var(--c-gray-300);
+  --color-text: var(--c-gray-900);
+  --color-text-secondary: var(--c-gray-700);
+  --color-text-muted: var(--c-gray-500);
+  --color-link: var(--c-brand-text);
+  --color-primary: var(--c-brand);
+  --color-primary-hover: var(--c-brand-hover);
+  --color-primary-press: var(--c-brand-press);
+  --color-primary-soft: var(--c-brand-soft);
+  --color-on-primary: #FFFFFF;
+  --color-focus: #2F6BFF;
 
-  /* Layout */
-  --sidebar-w: 220px;
-  --topbar-h: 60px;
-  --radius: 10px;
-  --radius-lg: 14px;
-  --gap: 12px;
+  --color-success: #1E8A4C;  --color-success-soft: #E6F4EC;  --color-success-text: #13683A;
+  --color-warning: #C27803;  --color-warning-soft: #FFF5E0;  --color-warning-text: #8A4B00;
+  --color-danger: #C8322B;   --color-danger-soft: #FDECEC;   --color-danger-text: #B42318;
+  --color-info: var(--c-brand); --color-info-soft: var(--c-brand-soft); --color-info-text: var(--c-brand-text);
+
+  /* ---------- Document status (one tone per state, used by every badge) ---------- */
+  --status-draft-bg: #EEF1F5;    --status-draft-fg: #3B4554;    --status-draft-dot: #8792A2;
+  --status-waiting-bg: #FFF4DE;  --status-waiting-fg: #844600;  --status-waiting-dot: #D98A00;
+  --status-approved-bg: #E5F4EB; --status-approved-fg: #13683A; --status-approved-dot: #1E8A4C;
+  --status-sent-bg: #E8EFFD;     --status-sent-fg: #1C45AB;     --status-sent-dot: #2453C7;
+  --status-received-bg: #E1F3F3; --status-received-fg: #0A5F62; --status-received-dot: #0E8A8E;
+  --status-held-bg: #FDEBDD;     --status-held-fg: #943508;     --status-held-dot: #E0620E;
+  --status-paid-bg: #13683A;     --status-paid-fg: #FFFFFF;     --status-paid-dot: #FFFFFF;
+  --status-rejected-bg: #FDECEC; --status-rejected-fg: #B42318; --status-rejected-dot: #D92D20;
+
+  /* ---------- Type (system fonts: nothing to download) ---------- */
+  --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, "Noto Sans", sans-serif;
+  --font-code: ui-monospace, SFMono-Regular, "Cascadia Mono", Consolas, "Liberation Mono", monospace;
+  --text-xs: 11.5px;
+  --text-sm: 12.5px;
+  --text-base: 14px;
+  --text-md: 15px;
+  --text-lg: 17px;
+  --text-xl: 20px;
+  --text-2xl: 24px;
+  --leading: 1.5;
+  --weight-medium: 500;
+  --weight-semibold: 600;
+
+  /* ---------- Spacing (4 px steps) ---------- */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-8: 32px;
+  --space-10: 40px;
+
+  /* ---------- Radius and shadow ---------- */
+  --radius-sm: 4px;
+  --radius-md: 6px;
+  --radius-lg: 8px;
+  --radius-xl: 12px;
+  --radius-pill: 999px;
+  --shadow-sm: 0 1px 2px rgba(16, 24, 40, 0.06);
+  --shadow-md: 0 4px 12px rgba(16, 24, 40, 0.08), 0 1px 3px rgba(16, 24, 40, 0.06);
+  --shadow-lg: 0 16px 40px rgba(16, 24, 40, 0.16), 0 2px 6px rgba(16, 24, 40, 0.08);
+  --ring: 0 0 0 3px rgba(47, 107, 255, 0.35);
+
+  /* ---------- Shell ---------- */
+  --sidebar-w: 236px;
+  --topbar-h: 56px;
+  --content-max: 1280px;
+
+  /* ---------- Older names, kept so every screen (and screens still being written) picks up the new look ---------- */
+  --canvas: var(--color-bg);
+  --surface: var(--color-surface);
+  --surface-raised: var(--color-hover);
+  --surface-sunken: var(--color-surface-sunken);
+  --border: var(--color-border);
+  --border-strong: var(--color-border-strong);
+  --accent: var(--color-primary);
+  --accent-dim: var(--color-primary-soft);   /* a soft brand background */
+  --accent-tint: var(--color-link);          /* brand-coloured text and links */
+  --success: var(--color-success);
+  --success-bg: var(--color-success-soft);
+  --success-text: var(--color-success-text);
+  --warning: var(--color-warning);
+  --warning-bg: var(--color-warning-soft);
+  --warning-text: var(--color-warning-text);
+  --danger: var(--color-danger);
+  --danger-bg: var(--color-danger-soft);
+  --danger-text: var(--color-danger-text);
+  --text-primary: var(--color-text);
+  --text-secondary: var(--color-text-secondary);
+  --text-muted: var(--color-text-muted);
+  --font-display: var(--font-sans);
+  --font-body: var(--font-sans);
+  --font-mono: var(--font-code);
+  --radius: var(--radius-lg);
+  --gap: var(--space-3);
 }

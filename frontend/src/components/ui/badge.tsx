@@ -1,11 +1,11 @@
 import { cn } from "../../lib/utils";
 
 const tones: Record<string, string> = {
-	neutral: "bg-muted text-muted-foreground",
-	success: "bg-success/10 text-success",
-	danger: "bg-danger/10 text-danger",
-	warning: "bg-warning/10 text-warning",
-	info: "bg-primary/10 text-primary",
+	neutral: "bg-[#eef1f5] text-[#3b4554]",
+	success: "bg-[#e5f4eb] text-success",
+	danger: "bg-[#fdecec] text-danger",
+	warning: "bg-[#fff4de] text-warning",
+	info: "bg-[#e8effd] text-[#1c45ab]",
 };
 
 const byStatus: Record<string, string> = {
@@ -39,7 +39,7 @@ export function Badge({
 	return (
 		<span
 			className={cn(
-				"inline-block rounded-full px-2 py-0.5 text-xs font-medium",
+				"inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 text-xs font-semibold whitespace-nowrap before:h-1.5 before:w-1.5 before:rounded-full before:bg-current before:opacity-70",
 				tones[key],
 			)}
 		>

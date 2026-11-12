@@ -1126,7 +1126,8 @@ def _run(ctx: Any) -> Outcome:
             with d.step("finance", "chooses the bank's statement and clicks Import the bank statement") as page:
                 page.set_input_files("#stmtFile", str(statement))
                 page.locator("#importStmt").click()
-                expect(page.locator("#appContent")).to_contain_text("The bank has paid")
+                # the "Done:" line of the run, not the button of the same words, so the import has finished
+                expect(page.locator("#appContent .fs-note")).to_contain_text("The bank has paid")
                 expect(page.locator("#appContent")).to_contain_text("bank reference")
             d.sync()
             c.same("every invoice is paid", sorted({r[0] for r in q("select status from invoice")}), ["paid"])

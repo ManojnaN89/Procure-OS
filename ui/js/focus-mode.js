@@ -8,7 +8,7 @@
  * its own close button/backdrop-click — Escape closes the modal first if
  * one is open, and only exits Focus Mode on a second Escape.)
  */
-const CHART_SLICE_COLORS = ["#9B8CFF", "#F5A623", "#2ECC71", "#4f8dfd", "#ff6b9d"];
+const CHART_SLICE_COLORS = ["#2453C7", "#C27803", "#0E8A8E", "#7A5AF8", "#D92D20"];
 const FocusMode = {
   active: false,
   _unsubConversation: null,
@@ -561,13 +561,13 @@ const FocusMode = {
         labels: chartSpec.labels || [],
         datasets: [{
           data: ds.data,
-          borderColor: "#9B8CFF",
-          backgroundColor: isLine ? "rgba(108,92,231,0.18)" : "rgba(108,92,231,0.6)",
+          borderColor: "#2453C7",
+          backgroundColor: isLine ? "rgba(36,83,199,0.14)" : "rgba(36,83,199,0.7)",
           borderWidth: 2,
           tension: 0.35,
           fill: isLine,
           pointRadius: isLine ? 2.5 : 0,
-          pointBackgroundColor: "#9B8CFF",
+          pointBackgroundColor: "#2453C7",
           pointBorderWidth: 0,
           borderRadius: isLine ? 0 : 4,
           maxBarThickness: 28,
@@ -613,7 +613,7 @@ const FocusMode = {
           maintainAspectRatio: false,
           cutout: "62%",
           plugins: {
-            legend: { display: true, position: "bottom", labels: { color: "#B8BECC", font: { size: 11.5 } } },
+            legend: { display: true, position: "bottom", labels: { color: "#3B4554", font: { size: 11.5 } } },
             tooltip: {
               enabled: true, backgroundColor: "#181B25", titleColor: "#F3F4F8",
               bodyColor: "#B8BECC", borderColor: "#232733", borderWidth: 1, padding: 10,
@@ -631,13 +631,13 @@ const FocusMode = {
         datasets: [{
           label: ds.label || "",
           data: ds.data,
-          borderColor: "#9B8CFF",
-          backgroundColor: "rgba(108,92,231,0.35)",
+          borderColor: "#2453C7",
+          backgroundColor: "rgba(36,83,199,0.3)",
           borderWidth: 2,
           tension: 0.3,
           pointRadius: 4,
           pointHoverRadius: 6,
-          pointBackgroundColor: "#9B8CFF",
+          pointBackgroundColor: "#2453C7",
         }],
       },
       options: {
@@ -645,15 +645,15 @@ const FocusMode = {
         maintainAspectRatio: false,
         interaction: { mode: "index", intersect: false },
         plugins: {
-          legend: { display: !!ds.label, labels: { color: "#B8BECC", font: { size: 11.5 } } },
+          legend: { display: !!ds.label, labels: { color: "#3B4554", font: { size: 11.5 } } },
           tooltip: {
             enabled: true, backgroundColor: "#181B25", titleColor: "#F3F4F8",
             bodyColor: "#B8BECC", borderColor: "#232733", borderWidth: 1, padding: 10,
           },
         },
         scales: {
-          x: { ticks: { color: "#8B93A7", font: { size: 11 } }, grid: { color: "#232733" } },
-          y: { ticks: { color: "#8B93A7", font: { size: 11 } }, grid: { color: "#232733" } },
+          x: { ticks: { color: "#5F6B7A", font: { size: 11 } }, grid: { color: "#E1E5EB" } },
+          y: { ticks: { color: "#5F6B7A", font: { size: 11 } }, grid: { color: "#E1E5EB" } },
         },
       },
     });
@@ -673,7 +673,7 @@ const FocusMode = {
     const dot = document.createElement("div");
     dot.className = "fm-pulse-dot";
     dot.style.top = `${Math.min(4 + this._pulseCount * 7, 94)}%`;
-    dot.style.background = Trail.colorFor ? Trail.colorFor(evt.agent) : "#6C5CE7";
+    dot.style.background = Trail.colorFor ? Trail.colorFor(evt.agent) : "#2453C7";
     dot.title = `${escapeHtml(evt.agent)} \u2192 ${escapeHtml(evt.skill)}`;
     if (!silent) dot.style.animation = "trailSlideIn 0.4s ease";
     this.rail.appendChild(dot);

@@ -1,11 +1,11 @@
 /* ==========================================================================
-   FOCUS MODE — the "Living Report" view.
+   FOCUS MODE â€” the "Living Report" view.
    No cards, no chrome. Typography and an ambient signal do the work that
    stat cards and boxed widgets do everywhere else in the app.
    ========================================================================== */
 
 /* Standard app shell fades/scales away while Focus Mode is active,
-   rather than being removed from layout — keeps the transition smooth
+   rather than being removed from layout â€” keeps the transition smooth
    since nothing has to reflow underneath. */
 body.focus-mode-active #app {
   opacity: 0;
@@ -17,7 +17,7 @@ body.focus-mode-active #app {
   transition: opacity 0.32s cubic-bezier(0.4, 0, 0.2, 1), transform 0.32s cubic-bezier(0.4, 0, 0.2, 1);
 }
 /* The dashboard underneath is only invisible (opacity: 0), not removed
-   from layout — its full height still exists, which was creating a
+   from layout â€” its full height still exists, which was creating a
    page-level scrollbar even though nothing about it was visible. Locking
    the page itself while Focus Mode is active is the actual fix; the
    overlay's own internal scroll (.fm-story) handles scrolling instead. */
@@ -34,7 +34,7 @@ body.focus-mode-active {
   pointer-events: none;
   transform: scale(1.02);
   transition: opacity 0.4s cubic-bezier(0.4, 0, 0.2, 1), transform 0.4s cubic-bezier(0.4, 0, 0.2, 1);
-  background: #08090D;
+  background: var(--color-bg);
   overflow: hidden;
 }
 .focus-mode-overlay.visible { pointer-events: auto; }
@@ -45,15 +45,15 @@ body.focus-mode-active {
   position: absolute;
   inset: -20%;
   background:
-    radial-gradient(circle at 30% 20%, rgba(108, 92, 231, 0.10), transparent 45%),
-    radial-gradient(circle at 75% 75%, rgba(45, 212, 191, 0.06), transparent 50%);
+    radial-gradient(circle at 30% 20%, rgba(36, 83, 199, 0.08), transparent 45%),
+    radial-gradient(circle at 75% 75%, rgba(14, 138, 142, 0.05), transparent 50%);
   animation: fmDrift 26s ease-in-out infinite alternate;
   transition: background 1.2s ease;
 }
 .focus-mode-overlay.fm-alert .fm-ambient {
   background:
-    radial-gradient(circle at 30% 20%, rgba(245, 166, 35, 0.14), transparent 45%),
-    radial-gradient(circle at 75% 75%, rgba(239, 68, 68, 0.08), transparent 50%);
+    radial-gradient(circle at 30% 20%, rgba(194, 120, 3, 0.10), transparent 45%),
+    radial-gradient(circle at 75% 75%, rgba(200, 50, 43, 0.06), transparent 50%);
 }
 @keyframes fmDrift {
   0%   { transform: translate(0, 0) scale(1); }
@@ -74,12 +74,12 @@ body.focus-mode-active {
   padding: 90px 70px 40px;
   scroll-behavior: smooth;
   scrollbar-width: thin; /* Firefox: thin, not the OS-default wide bar */
-  scrollbar-color: #2E3444 transparent; /* Firefox: dark thumb, matches --border-strong */
+  scrollbar-color: var(--color-border-strong) transparent;
 }
 .fm-story::-webkit-scrollbar { width: 6px; }
 .fm-story::-webkit-scrollbar-track { background: transparent; }
-.fm-story::-webkit-scrollbar-thumb { background: #2E3444; border-radius: 3px; }
-.fm-story::-webkit-scrollbar-thumb:hover { background: #3A4152; }
+.fm-story::-webkit-scrollbar-thumb { background: var(--color-border-strong); border-radius: 3px; }
+.fm-story::-webkit-scrollbar-thumb:hover { background: var(--color-text-muted); }
 
 .fm-turn { margin-bottom: 46px; }
 
@@ -106,18 +106,18 @@ body.focus-mode-active {
 .fm-answer ul, .fm-answer ol { margin: 4px 0 20px; padding-left: 22px; }
 .fm-answer li { margin-bottom: 8px; }
 
-/* the signature move: numbers that matter are set large, serif, inline —
+/* the signature move: numbers that matter are set large, serif, inline â€”
    just bigger/bolder/colored, no background chip/box around them */
 .fm-number {
   font-family: var(--font-display);
   font-size: 1.3em;
   font-weight: 700;
   color: var(--accent-tint);
-  border-bottom: 2px solid rgba(108, 92, 231, 0.35);
+  border-bottom: 2px solid rgba(36, 83, 199, 0.3);
   padding-bottom: 1px;
 }
 
-/* tables — same editorial restraint as the rest of the report: no grid lines,
+/* tables â€” same editorial restraint as the rest of the report: no grid lines,
    just a header rule and hairline row dividers */
 .fm-answer table {
   width: 100%;
@@ -142,7 +142,7 @@ body.focus-mode-active {
 }
 .fm-answer tr:last-child td { border-bottom: none; }
 
-/* inline sparkline chart — a real, readable block-level card (not tiny and
+/* inline sparkline chart â€” a real, readable block-level card (not tiny and
    floating), with a title and start-to-end values since the axes stay
    hidden by design; still clickable to open the full interactive chart */
 .fm-sparkline-wrap {
@@ -160,7 +160,7 @@ body.focus-mode-active {
 .fm-sparkline-wrap:hover { background: var(--surface-raised); border-color: var(--border-strong); }
 
 /* multiple charts from one reply sit side by side when they fit, rather
-   than always stacking full-width — each chart shrinks to share the row */
+   than always stacking full-width â€” each chart shrinks to share the row */
 .fm-chart-row {
   display: flex;
   flex-wrap: wrap;
@@ -209,7 +209,7 @@ body.focus-mode-active {
   animation: dotPulse 1.2s ease-in-out infinite;
 }
 
-/* ---------- Briefing section labels — quiet, matching the sparkline
+/* ---------- Briefing section labels â€” quiet, matching the sparkline
    title treatment, not bold headers, per the report's calm typography ---------- */
 .fm-section-label {
   font-size: 10.5px;
@@ -219,7 +219,7 @@ body.focus-mode-active {
   margin-bottom: 8px;
 }
 
-/* the briefing's clickable signal list — plain, no boxes, matching the
+/* the briefing's clickable signal list â€” plain, no boxes, matching the
    report's own typographic language rather than the boxed dashboard style */
 .fm-signal-list {
   margin: 4px 0 20px;
@@ -237,7 +237,7 @@ body.focus-mode-active {
   transition: color 0.15s ease;
 }
 .fm-signal-item:hover { color: var(--text-primary); }
-.fm-signal-item:hover .fm-signal-action { color: #fff; }
+.fm-signal-item:hover .fm-signal-action { color: var(--color-primary-press); }
 .fm-signal-dot {
   width: 8px; height: 8px;
   border-radius: 50%;
@@ -269,7 +269,7 @@ body.focus-mode-active {
   cursor: pointer;
   transition: color 0.15s ease, text-decoration-color 0.15s ease;
 }
-.fm-suggestion:hover { color: #fff; text-decoration-color: var(--accent); }
+.fm-suggestion:hover { color: var(--color-primary-press); text-decoration-color: var(--accent); }
 .fm-suggestion-sep { margin: 0 6px; color: var(--border-strong); }
 
 /* ---------- Composer: minimal, command-palette style ---------- */
@@ -280,12 +280,12 @@ body.focus-mode-active {
   z-index: 3;
   width: min(600px, 80vw);
   display: flex; align-items: center; gap: 10px;
-  background: rgba(18, 20, 28, 0.75);
+  background: rgba(255, 255, 255, 0.92);
   backdrop-filter: blur(14px);
   border: 1px solid var(--border-strong);
   border-radius: 999px;
   padding: 14px 10px 14px 22px;
-  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.35);
+  box-shadow: var(--shadow-lg);
 }
 .fm-composer input {
   flex: 1; background: transparent; border: none; outline: none;
@@ -293,7 +293,7 @@ body.focus-mode-active {
 }
 .fm-composer input::placeholder { color: var(--text-muted); }
 
-/* attach + mic icons — deliberately not the boxy button style used in the
+/* attach + mic icons â€” deliberately not the boxy button style used in the
    floating panel, kept quiet and unobtrusive to match Focus Mode's own
    look, closer to how .fm-hint reads than a normal UI control */
 .fm-composer-icon {
@@ -321,7 +321,7 @@ body.focus-mode-active {
   display: flex; align-items: center; justify-content: center;
 }
 
-/* ---------- Exit hint — text only, deliberately no button ---------- */
+/* ---------- Exit hint â€” text only, deliberately no button ---------- */
 .fm-hint {
   position: absolute; top: 20px; left: 50%; transform: translateX(-50%);
   z-index: 3;
@@ -361,7 +361,7 @@ body.focus-mode-active {
   position: fixed;
   inset: 0;
   z-index: 250;
-  background: rgba(4, 5, 8, 0.72);
+  background: rgba(20, 28, 43, 0.45);
   backdrop-filter: blur(6px);
   display: flex;
   align-items: center;
@@ -377,7 +377,7 @@ body.focus-mode-active {
   border: 1px solid var(--border-strong);
   border-radius: 16px;
   padding: 20px 24px 24px;
-  box-shadow: 0 30px 80px rgba(0, 0, 0, 0.5);
+  box-shadow: var(--shadow-lg);
   transform: scale(0.96);
   transition: transform 0.2s ease;
 }
@@ -406,7 +406,6 @@ body.focus-mode-active {
   cursor: pointer;
   transition: background 0.15s ease, color 0.15s ease;
 }
-.entity-chip:hover { background: var(--accent); color: #fff; }
 
 /* ---------- Inline progress bar (percentage metrics) ---------- */
 .fm-progress-card {
@@ -454,7 +453,7 @@ body.focus-mode-active {
   text-decoration: underline;
   text-decoration-color: var(--accent-dim);
 }
-.fm-expandable-toggle:hover { color: #fff; }
+.fm-expandable-toggle:hover { color: var(--color-primary-press); }
 .fm-expandable-toggle i { font-size: 11px; transition: transform 0.15s ease; }
 .fm-expandable.open .fm-expandable-toggle i { transform: rotate(90deg); }
 .fm-expandable-body { display: none; margin-top: 10px; padding-left: 2px; }

@@ -72,11 +72,13 @@ def _form(token: str, data: dict[str, Any], do: str | None, note: str = "") -> H
         f"<p>{escape(data['summary'])}</p>"
         + (f"<p>{escape(data['justification'])}</p>" if data["justification"] else "")
         + f"<table><tr><th>Item</th><th>Quantity</th><th>Amount</th></tr>{rows}</table>"
-        f"<p>Estimated total <b>{escape(data['total_inr'])}</b>. {escape(data['budget'])}</p>"
-        f"<p class=muted>{escape(data['why'])}</p>"
+        f"<table class=facts><tr><td>Estimated total</td><td><b>{escape(data['total_inr'])}</b></td></tr>"
+        f"<tr><td>Budget</td><td>{escape(data['budget'])}</td></tr>"
+        f"<tr><td>Why you</td><td>{escape(data['why'])}</td></tr></table>"
         + (f"<p class=note>{escape(note)}</p>" if note else "")
-        + f"<form method=post action='/approve/{escape(token)}'>{code}<p class=muted>{escape(prompt)}</p>"
-        f"<textarea name=reason rows=3 maxlength=500{' required' if needs_reason else ''}></textarea><p>"
+        + f"<form method=post action='/approve/{escape(token)}'>{code}"
+        f"<label for=reason>Reason</label><p class=muted>{escape(prompt)}</p>"
+        f"<textarea id=reason name=reason rows=3 maxlength=500{' required' if needs_reason else ''}></textarea><p>"
         + "".join(_BUTTONS[a] for a in actions)
         + "</p></form><p class=muted>This link works once. To change a quantity, open the request in the app.</p>"
     )
@@ -131,4 +133,6 @@ def decide(
         "rejected": "Rejected. The requester has been told.",
         "returned": "Sent back for changes. The requester has been told.",
     }.get(status, f"Recorded: {status}.")
-    return _page(f"Request {link.request_no}", f"<p>{escape(done)}</p><p class=muted>You can close this page.</p>")
+    return _page(
+        f"Request {link.request_no}", f"<p class=done>{escape(done)}</p><p class=muted>You can close this page.</p>"
+    )

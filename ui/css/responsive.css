@@ -1,32 +1,113 @@
-/* Phone and tablet layout. The desktop look is untouched; below 900 px the menu becomes a slide-in drawer. */
-.menu-btn { display: none; }
+/* Tablet and phone. Below 900 px the menu becomes a drawer; below 600 px tables scroll inside their card and the
+   goods receipt form stacks into one column with large fields, for one-handed use in the store. */
+.menu-btn { display: none !important; }
 .nav-backdrop { display: none; }
+
+@media (max-width: 1100px) {
+  .topbar-company { display: none; }
+  .search-box { width: 260px; }
+}
 
 @media (max-width: 900px) {
   #app { flex-direction: column; }
-  .main { min-width: 0; width: 100%; }
+  .main { width: 100%; }
 
-  .menu-btn { display: flex; margin-right: 8px; }
+  .menu-btn { display: inline-flex !important; }
   .sidebar {
     position: fixed; left: 0; top: 0; bottom: 0; height: 100%; z-index: 60;
-    transform: translateX(-100%); transition: transform 0.18s ease; box-shadow: 8px 0 24px rgba(0, 0, 0, 0.4);
+    transform: translateX(-100%); transition: transform 0.18s ease, visibility 0.18s; visibility: hidden;
   }
-  body.nav-open .sidebar { transform: none; }
-  body.nav-open .nav-backdrop { display: block; position: fixed; inset: 0; z-index: 55; background: rgba(0, 0, 0, 0.55); }
+  body.nav-open .sidebar { transform: none; visibility: visible; box-shadow: var(--shadow-lg); }
+  body.nav-open .nav-backdrop { display: block; position: fixed; inset: 0; z-index: 55; background: rgba(20, 28, 43, 0.45); }
+  .nav-item { min-height: 44px; font-size: var(--text-base); }
 
-  .topbar { padding: 0 12px; gap: 6px; }
+  .topbar { padding: 0 var(--space-2); gap: var(--space-1); }
   .topbar .search-box { width: auto; flex: 1; min-width: 0; }
-  .search-results { width: min(320px, 92vw); }
-  .topbar-actions { gap: 6px; }
+  .search-results { width: min(360px, 94vw); }
+  .topbar-actions { gap: 2px; }
+  .user-badge { padding-left: var(--space-2); margin-left: 0; gap: 4px; }
   .user-badge .meta { display: none; }
-  .notif-dropdown { width: min(360px, 94vw); right: 0; }
+  .notif-dropdown { position: fixed; top: calc(var(--topbar-h) + 4px); left: 8px; right: 8px; width: auto; }
 
-  .page { padding: 14px 12px; }
+  .page { padding: var(--space-4) var(--space-3) 110px; }
+  .page-header { margin-bottom: var(--space-4); }
+  .page-header h1 { font-size: var(--text-xl); }
+  .page-header p { font-size: var(--text-sm); }
+  .page-header-row { gap: var(--space-3); }
+  .page-header:not(.page-header-row):has(> .page-actions) { grid-template-columns: minmax(0, 1fr); }
+  .page-header:not(.page-header-row):has(> .page-actions) > .page-actions { grid-column: 1; grid-row: auto; margin-top: var(--space-3); }
   .stat-grid, .two-col { grid-template-columns: 1fr !important; }
+  .stage-row { grid-template-columns: repeat(2, 1fr); }
   #operationalStrip { flex-wrap: wrap; gap: 8px 14px !important; }
-  .page-header-row { flex-wrap: wrap; gap: 8px; }
 
-  .panel { overflow-x: auto; max-width: 100%; }
-  table { min-width: 560px; }
-  .panel table { font-size: 12px; }
+  /* wide tables scroll inside their own card, never the page */
+  .table-wrap, .panel { overflow-x: auto; max-width: 100%; }
+  .data-table { min-width: 560px; }
+  .data-table thead th { position: static; }
+  .panel table { font-size: var(--text-xs); }
+  #ctTower, #ctDrill, #ctKpis { overflow-x: auto; max-width: 100%; }
+  #ctTower table, #ctDrill table { min-width: 640px; }
+
+  .fs-steps { padding: var(--space-3); }
+  .fs-name { display: none; }
+  .fs-current .fs-name { display: inline; }
+  .fs-step:not(:last-child)::after { min-width: 6px; margin: 0 6px; }
+  .fs-note { padding: 10px var(--space-3); font-size: var(--text-sm); }
+
+  .todo-row { flex-wrap: wrap; }
+  .todo-row .go { margin-left: auto; }
+  .btn { min-height: 40px; }
+  .btn-sm { min-height: 36px; }
+  .toast-host { left: var(--space-3); right: var(--space-3); bottom: 84px; }
+  .toast { max-width: none; }
+  .floating-panel { left: 8px; right: 8px; width: auto; bottom: 84px; }
+}
+
+/* ---------- Lists on a phone: each row becomes a card, the first cell its title, the rest "LABEL  value" ---------- */
+@media (max-width: 600px) {
+  #tableWrap .data-table, #receiptsWrap .data-table { min-width: 0; }
+  #tableWrap .data-table thead, #receiptsWrap .data-table thead { display: none; }
+  #tableWrap .data-table tbody tr, #receiptsWrap .data-table tbody tr { display: block; padding: var(--space-3) var(--space-4); border-bottom: 1px solid var(--color-border); }
+  #tableWrap .data-table tbody tr:last-child, #receiptsWrap .data-table tbody tr:last-child { border-bottom: 0; }
+  #tableWrap .data-table tbody td, #receiptsWrap .data-table tbody td { display: block; overflow: hidden; padding: 3px 0 !important; border: 0; text-align: right; font-size: var(--text-sm); }
+  #tableWrap .data-table tbody td[data-label]::before, #receiptsWrap .data-table tbody td[data-label]::before {
+    content: attr(data-label); float: left; max-width: 45%; margin-right: var(--space-3); text-align: left;
+    color: var(--color-text-muted); font-size: 11px; font-weight: var(--weight-semibold); letter-spacing: 0.04em; text-transform: uppercase; line-height: 1.9;
+  }
+  #tableWrap .data-table tbody td:first-child, #receiptsWrap .data-table tbody td:first-child { text-align: left; font-size: var(--text-base); font-weight: var(--weight-semibold); padding-bottom: 6px !important; }
+  #tableWrap .data-table tbody td:first-child::before, #receiptsWrap .data-table tbody td:first-child::before { display: none; }
+  #tableWrap .data-table tbody td:empty, #receiptsWrap .data-table tbody td:empty { display: none; }
+}
+
+/* ---------- New request on a phone: the item on its own line, quantity, unit and remove under it ---------- */
+@media (max-width: 600px) {
+  .req-line { grid-template-columns: minmax(0, 1fr) 70px 44px !important; }
+  .req-line > label:first-child { grid-column: 1 / -1; }
+}
+
+/* ---------- The store's receive screen on a phone: one column, big fields, the action at thumb height ---------- */
+@media (max-width: 600px) {
+  #waitingWrap .panel { padding: var(--space-4); overflow: visible; }
+  #waitingWrap .panel > div:first-child { flex-direction: column; align-items: stretch !important; }
+  #waitingWrap .recv-open { width: 100%; min-height: 48px; font-size: var(--text-base); }
+  #waitingWrap .data-table { min-width: 0; }
+  #waitingWrap .data-table thead { display: none; }
+  #waitingWrap .data-table, #waitingWrap .data-table tbody, #waitingWrap .data-table tr, #waitingWrap .data-table td { display: block; width: 100%; }
+  #waitingWrap .data-table tr {
+    border: 1px solid var(--color-border); border-radius: var(--radius-lg);
+    padding: var(--space-3); margin-bottom: var(--space-3); background: var(--color-surface-muted);
+  }
+  #waitingWrap .data-table tbody td { border: 0; padding: 4px 0 !important; font-size: var(--text-base); }
+  #waitingWrap .data-table td[data-label]::before {
+    content: attr(data-label); display: block;
+    font-size: var(--text-xs); font-weight: var(--weight-semibold); color: var(--color-text-muted);
+    text-transform: uppercase; letter-spacing: 0.04em; margin-bottom: 2px;
+  }
+  #waitingWrap .data-table td { text-align: left !important; }
+  #waitingWrap .data-table td:first-child { font-weight: var(--weight-semibold); font-size: var(--text-md); }
+  #waitingWrap .data-table td:first-child::before { display: none; }  #waitingWrap input:not([type="checkbox"]) { width: 100% !important; min-height: 48px; font-size: 16px !important; padding: 10px 12px !important; }
+  #waitingWrap .recv-send {
+    position: sticky; bottom: 12px; z-index: 5;
+    width: 100%; min-height: 52px; font-size: var(--text-md); box-shadow: var(--shadow-lg);
+  }
 }
