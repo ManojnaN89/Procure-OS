@@ -7,6 +7,7 @@ box and the throw-away databases all apply to what the browser sees.
 
 import os
 import re
+import shutil
 import threading
 import time
 from collections.abc import Iterator
@@ -21,6 +22,21 @@ PORT = int(os.environ.get("P2P_DEMO_PORT", "18290"))
 URL = f"http://127.0.0.1:{PORT}"
 RESULTS = lib.ROOT / "evals" / "results" / "demo_runs"
 LAPTOP = {"width": 1280, "height": 760}
+FLOW = {  # the plan's 13 steps (planning/P2P-13-Step-Plan.md)
+    1: "Demand intake",
+    2: "Stock check",
+    3: "Requisition",
+    4: "Approval",
+    5: "Buying route",
+    6: "Quotes and supplier selection",
+    7: "Purchase order",
+    8: "Confirmation",
+    9: "Goods receipt",
+    10: "Invoice",
+    11: "Three-way match",
+    12: "Payment",
+    13: "Reconcile and close",
+}
 
 
 class Site:
@@ -72,6 +88,7 @@ class Demo:
         self.pages: dict[str, Any] = {}
         self.names: dict[str, str] = {}  # key -> "Prakash Gowda (Head - Stores & Logistics)"
         self.steps: list[dict[str, str]] = []
+        self.flow: dict[int, int] = {}  # plan step -> transcript step that shows it
         self.problems: list[str] = []
         self.allowed: list[str] = []  # responses the script expects to be refused, while it checks a refusal
         self.folder = RESULTS / name
@@ -171,6 +188,21 @@ class Demo:
                 }
             )
 
+    # ---- the plan's 13 steps ----------------------------------------------------------------------
+
+    def mark(self, flow_step: int) -> None:
+        """The step just taken shows this step of the plan's flow (the last one marked for a step is its picture)."""
+        self.flow[flow_step] = len(self.steps)
+
+    def visitor(self, key: str, who: str) -> Any:
+        """Someone with no login (a supplier, an approver by email) in their own browser window."""
+        ctx = self.browser.new_context(viewport=LAPTOP)
+        page = ctx.new_page()
+        page.set_default_timeout(30_000)
+        page.on("pageerror", lambda e, k=key: self.problems.append(f"{k}: page error: {e}"))
+        self.contexts[key], self.pages[key], self.names[key] = ctx, page, who
+        return page
+
     def event(self, who: str, what: str, saw: str = "") -> None:
         """Something that happens outside the screens (a supplier's email arrives, the daily job runs): a line in the
         transcript with no picture."""
@@ -197,6 +229,8 @@ class Demo:
             did = s["did"] + (f" **FAILED: {s['failed']}**" if s["failed"] else "")
             pic = f"[{s['shot']}]({self.name}/{s['shot']})" if s["shot"] else ""
             lines.append(f"| {s['n']} | {s['who']} | {did} | {saw} | {pic} |")
+        if self.flow:
+            lines[4:4] = self._flow_table() + [""]
         if facts:
             lines += ["", "## What the data showed at the end", ""] + [f"- {f}" for f in facts]
         if self.problems:
@@ -204,6 +238,26 @@ class Demo:
         path = RESULTS / f"{self.name}.md"
         path.write_text("\n".join(lines) + "\n", encoding="utf-8")
         return path
+
+    def _flow_table(self) -> list[str]:
+        """Which transcript step shows each of the plan's 13 steps; its picture is kept in `steps/` (committed)."""
+        steps_dir = RESULTS / "steps"
+        steps_dir.mkdir(parents=True, exist_ok=True)
+        for old in steps_dir.glob(f"{self.name}-*.jpg"):
+            old.unlink()
+        out = ["## The 13 steps of the flow", "", "| Step | Shown at | Picture |", "|---|---|---|"]
+        for n in sorted(self.flow):
+            s = self.steps[self.flow[n] - 1]
+            pic = ""
+            if s["shot"] and (self.folder / s["shot"]).is_file():
+                kept = f"{self.name}-{n:02d}-{slug(FLOW[n])}.jpg"
+                shutil.copyfile(self.folder / s["shot"], steps_dir / kept)
+                pic = f"[{kept}](steps/{kept})"
+            out.append(f"| {n}. {FLOW[n]} | #{s['n']}: {s['did']} | {pic} |")
+        missing = [f"{n}. {FLOW[n]}" for n in FLOW if n not in self.flow]
+        if missing:
+            out += ["", f"Not shown: {', '.join(missing)}"]
+        return out
 
     # ---- the background worker and the database -------------------------------------------------
 

@@ -701,6 +701,7 @@ def _run(ctx: Any) -> Outcome:
                     )
                     page.locator("#awardBtn").click()
                     expect(page.locator("#appContent")).to_contain_text("Awarded")
+                d.mark(6)
                 d.sync()
                 c.same(f"{rfq_no} awarded", q("select status from rfq where no = :n", n=rfq_no)[0][0], "awarded")
             work()
@@ -756,6 +757,7 @@ def _run(ctx: Any) -> Outcome:
                     expect(page.locator("#poPdf")).to_be_visible()
                     page.locator("#poApprove").click()
                     expect(page.locator("#appContent")).to_contain_text("Approved by")
+                d.mark(7)
                 d.sync()
             c.same(
                 "every order is approved (the touchless one already sent)",
@@ -764,6 +766,73 @@ def _run(ctx: Any) -> Outcome:
             )
             pdf = demo_ui.api("GET", f"/api/purchase-orders/{next(iter(pos))}/pdf", token("buyer"))
             c.true("the order document is a real PDF", pdf.status_code == 200 and pdf.content[:4] == b"%PDF")
+            seal_po = by_supplier[seal_winner][0]
+            new_date = TODAY + timedelta(days=9)
+
+            def order_link(no: str) -> str:
+                mail = next(m for m in reversed(supplier_mails(subject=no)) if "/supplier/" in m["body"])
+                return re.search(r"https?://\S+/supplier/[\w.\-]+", mail["body"]).group(0)  # type: ignore[union-attr]
+
+            def supplier_answers(no: str, promised: date) -> None:
+                """Step 8: Deccan accepts its touchless order by the link; Gujarat asks to deliver the seals later and
+                the buyer accepts the change on the order (version 2, the requester told)."""
+                code = q("select supplier_code from po where no = :n", n=no)[0][0]
+                key = f"supplier-{code}"
+                if key not in d.pages:
+                    d.visitor(key, f"{suppliers[code]['trade_name']} (supplier, no login)")
+                if no != seal_po:
+                    with d.step(
+                        key, f"opens the link in the email for {no}, enters {promised} and clicks Accept the order"
+                    ) as page:
+                        page.goto(order_link(no))
+                        expect(page.locator("body")).to_contain_text(no)
+                        page.locator("#promised").fill(promised.isoformat())
+                        page.get_by_role("button", name="Accept the order").click()
+                        expect(page.locator("body")).to_contain_text("accepted")
+                    d.sync()
+                    c.same(
+                        f"{no} is acknowledged by the supplier's link",
+                        q("select status from po where no = :n", n=no)[0][0],
+                        "acknowledged",
+                    )
+                    return
+                with d.step(
+                    key, f"opens the link for {no} and asks to deliver on {new_date}: Send the change to the buyer"
+                ) as page:
+                    page.goto(order_link(no))
+                    page.locator("input[name=date_1]").fill(new_date.isoformat())
+                    page.locator("#creason").fill("The seals are in our next lot")
+                    page.get_by_role("button", name="Send the change to the buyer").click()
+                    expect(page.locator("body")).to_contain_text("Thank you")
+                d.sync()
+                c.same(
+                    "the change waits for the buyer: the order is unchanged",
+                    q("select version, status from po where no = :n", n=no)[0],
+                    (1, "sent"),
+                )
+                with d.step("buyer", f"opens {no}: Supplier's answer shows the new date; clicks Accept") as page:
+                    d.go("buyer", f"purchase-orders/{no}")
+                    box = page.locator("#poAnswerBox")
+                    expect(box).to_contain_text("Supplier's answer")
+                    expect(box).to_contain_text(f"{new_date:%d %b %Y}")
+                    box.locator(".chg-yes").first.click()
+                    expect(page.locator("#poAnswerBox")).to_contain_text("Made version 2")
+                d.mark(8)
+                d.sync()
+                c.same(
+                    f"{no} is version 2 with the new date, and acknowledged by accepting the change",
+                    q(
+                        "select p.version, p.status, l.need_by from po p join po_line l on l.po_no = p.no where p.no = :n",
+                        n=no,
+                    )[0],
+                    (2, "acknowledged", new_date),
+                )
+                c.true(
+                    "the requester and the buyer were told of the change",
+                    one("select count(distinct user_id) from notification where title like :t", t=f"%{no} changed%")
+                    == 2,
+                )
+
             for no in pos:
                 if contract_alone and no == imp_po:  # sent with no buyer; the buyer only records the acknowledgement
                     with d.step("buyer", f"opens the touchless order {no}, already sent to the supplier") as page:
@@ -782,6 +851,9 @@ def _run(ctx: Any) -> Outcome:
                         expect(page.locator("#appContent")).to_contain_text("Sent to")
                 d.sync()
                 promised = TODAY + timedelta(days=6)
+                if no in (imp_po, seal_po):  # step 8: these two suppliers answer through the link in their order email
+                    supplier_answers(no, promised)
+                    continue
                 with d.step("buyer", f"clicks Record acknowledgement with the promised date {promised}") as page:
                     page.locator("#poAckDate").fill(promised.isoformat())
                     page.locator("#poAck").click()
@@ -812,7 +884,7 @@ def _run(ctx: Any) -> Outcome:
                         card.locator(".recv-qty").nth(i).fill(str(qty))
                     card.locator(".recv-challan").fill(challan)
                     card.locator(".recv-send").click()
-                    expect(page.locator("#appContent")).to_contain_text("GRN-")
+                    expect(page.locator("#appContent .page-header")).to_contain_text(f"for {po}")
                 d.sync()
 
             for supplier, nos in sorted(by_supplier.items()):
@@ -857,6 +929,7 @@ def _run(ctx: Any) -> Outcome:
                             expect(page.locator("#appContent")).to_contain_text("waiting for inspection")
                             page.locator("#inspectBtn").click()
                             expect(page.locator("#appContent")).to_contain_text("inspection passed")
+                        d.mark(9)
                         d.sync()
                     c.same(f"{po} is fully received", q("select status from po where no = :n", n=po)[0][0], "received")
             with d.step("production", "is told in the app that the goods for their request arrived") as page:
@@ -923,6 +996,7 @@ def _run(ctx: Any) -> Outcome:
                 with d.step("ap", "clicks Check and enter") as page:
                     page.locator("#invDrafts .draft-row [data-act=confirm]").first.click()
                     expect(page.locator("#appContent")).to_contain_text("Taxable")
+                d.mark(10)
                 d.sync()
 
             def type_invoice(supplier: str, po: str, number: str, qty: Decimal, price: Decimal) -> None:
@@ -994,6 +1068,7 @@ def _run(ctx: Any) -> Outcome:
                 expect(page.locator("#appContent")).to_contain_text("Price above the order price")
                 page.locator("#invExplain").click()
                 expect(page.locator("#invAdvice")).to_contain_text("What to do")
+            d.mark(11)
             ui_api.use_gateway(model_gateway())
             reason = "The supplier raised its price from 1 November; the line needs these seals this month."
             with d.step("ap", "clicks Ask to pay it anyway, writes the reason and clicks Send") as page:
@@ -1111,6 +1186,7 @@ def _run(ctx: Any) -> Outcome:
                 page.locator("#makeFile").click()
                 page.locator("#showFile").click()
                 expect(page.locator("#fileText")).to_contain_text("payment_no")
+            d.mark(12)
             d.sync()
             lines = one("select file_text from payment_run where no = :n", n=run_no).strip().splitlines()
             c.same("the bank file has a header and one line per supplier", len(lines), 1 + len(by_supplier))
@@ -1143,6 +1219,7 @@ def _run(ctx: Any) -> Outcome:
                 d.go("buyer", "dashboard")
                 page.locator("#notificationBellBtn").click()
                 expect(page.locator(".notif-row", has_text="paid and closed").first).to_be_visible()
+            d.mark(13)
 
             # ---------------------------------------------------------------- 11. the control tower and the dashboard agree with what happened
             end_tower = tower()
@@ -1254,6 +1331,7 @@ def _run(ctx: Any) -> Outcome:
                 str({t: v for t, v in unaudited.items() if v}),
             )
 
+            production_orders(d, c, q, work, mails_to, folder, dataset, on_hand, expected, expect)
             sweep(d, c, out, EMAILS, expect)
             guide_walk(d, c, out)
         except Exception as exc:  # noqa: BLE001 - a failed step is a finding with the step it stopped at
@@ -1283,6 +1361,200 @@ def _run(ctx: Any) -> Outcome:
     out.passed = out.passed and not any(f.severity in ("high", "medium") for f in out.findings)
     db.close()
     return out
+
+
+# ---- steps 1 to 5 from the ERP's production orders -------------------------------------------------------------
+
+MO3 = (
+    "MO-3",
+    "FG-01",
+    20,
+    date(2027, 1, 20),
+)  # loaded by the store on screen; far from MO-2, so never combined with it
+
+
+def production_orders(
+    d: Journey, c: Any, q: Any, work: Any, mails_to: Any, folder: Path, dataset: Path,
+    on_hand: dict[str, Decimal], bought: dict[str, tuple[str, Decimal, Decimal]], expect: Any,
+) -> None:  # fmt: skip
+    """The store loads one more production order from the ERP, runs the store check (MO-1 and MO-2 came with the company),
+    issues what MO-1 holds; the plant head or director approves MO-1's shortfall request by the emailed link; the buyer
+    sees each line's buying route. The oracle: the stock the journey left (the books plus what it received), each
+    order's bill of materials, earliest need-by first; prices from the contract, else the journey's own last price
+    paid, else the standard price; the approver from the rule table."""
+    items = {r["code"]: r for r in lib.rows("master", "item", dataset)}
+    bom: dict[str, list[dict[str, str]]] = {}
+    for r in lib.rows("inputs", "bom", dataset):
+        bom.setdefault(r["product_code"], []).append(r)
+    orders = [
+        (r["order_no"], r["product_code"], D_(r["qty"]), date.fromisoformat(r["need_by"]))
+        for r in lib.rows("inputs", "production_order", dataset)
+    ]
+    orders.append((MO3[0], MO3[1], Decimal(MO3[2]), MO3[3]))
+    contract = {
+        p["item_code"]: Decimal(p["price"])
+        for p in lib.rows("master", "price_record", dataset)
+        if p["contract_code"] and p["valid_from"] <= TODAY.isoformat() <= (p["valid_to"] or "9999")
+    }
+    last_paid = {item: price for item, _, price in bought.values()}
+    stock = dict(on_hand)
+    for item, qty, _ in bought.values():
+        stock[item] = stock.get(item, Decimal(0)) + qty
+    held: dict[str, dict[str, Decimal]] = {}
+    buy: dict[str, dict[str, tuple[Decimal, Decimal]]] = {}
+    for no, product, qty, _ in sorted(orders, key=lambda o: o[3]):
+        held[no], buy[no] = {}, {}
+        for part in bom[product]:
+            item, need = part["item_code"], Decimal(part["qty"]) * qty
+            take = min(need, max(stock.get(item, Decimal(0)), Decimal(0)))
+            stock[item] = stock.get(item, Decimal(0)) - take
+            held[no][item] = take
+            if need > take:
+                price = contract.get(item) or last_paid.get(item) or Decimal(items[item]["standard_price"])
+                buy[no][item] = (max(need - take, Decimal(items[item]["moq"] or 0)), price)
+
+    # step 1: the ERP's production order and its component lines, loaded on the Material requests screen
+    files = {
+        "production_order": f"order_no,product_code,qty,need_by,reason\n{MO3[0]},{MO3[1]},{MO3[2]},{MO3[3]},SO-1107\n",
+        "production_order_line": "order_no,item_code,qty,unit,need_by\n"
+        + "".join(
+            f"{MO3[0]},{p['item_code']},{Decimal(p['qty']) * MO3[2]},{p['unit']},{MO3[3]}\n" for p in bom[MO3[1]]
+        ),
+    }
+    with d.step("store", "opens Material requests: MO-1 and MO-2 from the ERP, nothing set aside yet") as page:
+        d.go("store", "material-requests")
+        for no in ("MO-1", "MO-2"):
+            expect(page.locator("#mrList")).to_contain_text(no)
+    for kind, body in files.items():
+        path = folder / f"{kind}.csv"
+        path.write_text(body, encoding="utf-8")
+        with d.step("store", f"clicks Load from the ERP, chooses {path.name} and clicks Load the file") as page:
+            page.locator("#mrLoad").click()
+            page.locator("#mrKind").select_option(kind)
+            page.set_input_files("#mrFile", str(path))
+            page.locator("#mrLoadGo").click()
+            expect(page.locator("#mrNote")).to_contain_text("Loaded")
+    expect(d.pages["store"].locator("#mrList")).to_contain_text(MO3[0])
+    d.mark(1)
+    d.sync()
+    by_order = {r[0]: r[1] for r in q("select order_no, no from material_request")}
+    c.same(
+        "one material request per production order, MO-3 loaded on screen",
+        sorted(by_order),
+        sorted(o[0] for o in orders),
+    )
+
+    # step 2: the store check
+    with d.step("store", "clicks Run store check: what is short goes for approval") as page:
+        page.locator("#mrCheck").click()
+        expect(page.locator("#mrNote")).to_contain_text("Store check done")
+    d.mark(2)
+    work()  # the approval emails go out from the job worker
+    got = {}
+    for order, item, reserved in q(
+        "select m.order_no, l.item_code, l.reserved_qty from material_request_line l join material_request m on m.no = l.mr_no"
+    ):
+        got.setdefault(order, {})[item] = Decimal(reserved)
+    c.same(
+        "each line sets aside what the oracle says (earliest need-by first, after the journey's receipts)", got, held
+    )
+    requests: dict[str, str] = {}
+    for order, want in buy.items():
+        rows = q(
+            "select distinct r.no from request r join request_line l on l.request_no = r.no "
+            "where l.reason like :o and r.status <> 'cancelled'",
+            o=f"Short for {order} (%",
+        )
+        if not want:
+            c.same(f"{order} lacks nothing and buys nothing", rows, [])
+            continue
+        requests[order] = rows[0][0] if rows else ""
+        lines = {
+            r[0]: (Decimal(r[1]), Decimal(r[2]))
+            for r in q("select item_code, qty, est_price from request_line where request_no = :n", n=requests[order])
+        }
+        c.same(
+            f"{order}: its request buys the shortfall at contract, else last price paid, else standard price",
+            lines,
+            want,
+        )
+
+    # step 3: the requisition as its approver sees it
+    first = min((o for o in orders if buy[o[0]]), key=lambda o: o[3])[0]
+    r_no = requests[first]
+    value = money(sum((qty * price for qty, price in buy[first].values()), Decimal(0)))
+    approver = "director" if value > 100000 else "planthead"
+    with d.step(approver, f"opens {r_no} for {first}: the shortfall lines, the estimate and the budget check") as page:
+        d.go(approver, f"requisitions/{r_no}")
+        expect(page.locator("#appContent")).to_contain_text(f"Short for {first}")
+        expect(page.locator("#appContent")).to_contain_text("Budget account")
+        expect(page.locator("#appContent")).to_contain_text(rupees(value)[:-3])
+    d.mark(3)
+    c.same(
+        f"{r_no} waits for the {NAMES[approver]} (Rs {value})",
+        q("select status, total_value from request where no = :n", n=r_no)[0],
+        ("submitted", value),
+    )
+
+    # the store issues what MO-1 holds at production start
+    before = {r[0]: Decimal(r[1]) for r in q("select item_code, on_hand from stock_level")}
+    with d.step("store", "clicks Issue for production on MO-1, then Issue what is set aside") as page:
+        d.go("store", "material-requests")
+        page.locator("#mrList .panel", has_text=by_order["MO-1"]).first.locator("[data-mr=issue]").click()
+        page.locator("#mrSave").click()
+        expect(page.locator("#mrNote")).to_contain_text("Issued")
+    d.sync()
+    after = {r[0]: Decimal(r[1]) for r in q("select item_code, on_hand from stock_level")}
+    c.same(
+        "the issue moved exactly what MO-1 held",
+        {i: before[i] - after[i] for i in before if before[i] != after[i]},
+        {i: x for i, x in held["MO-1"].items() if x},
+    )
+
+    # step 4: approval by the emailed link
+    mail = next(
+        (m for m in reversed(mails_to(approver)) if "/approve/" in m["body"] and r_no in m["body"] + m["subject"]), None
+    )
+    c.true(f"the {NAMES[approver]} was emailed a link for {r_no}", mail is not None)
+    if mail:
+        url = re.search(r"https?://\S+/approve/[\w.\-]+", mail["body"]).group(0)  # type: ignore[union-attr]
+        with d.step(approver, f"opens the link in the email for {r_no} and clicks Approve") as page:
+            page.goto(url)
+            page.get_by_role("button", name="Approve").click()
+            expect(page.locator("body")).to_contain_text("Approved")
+        d.mark(4)
+        d.sync()
+        c.same(f"{r_no} approved by the link", q("select status from request where no = :n", n=r_no)[0][0], "approved")
+
+    # step 5: the buying route of each line
+    work()
+    routes = {r[0]: (r[1], r[2]) for r in q(
+        "select l.item_code, s.route, s.route_rule from sourcing_decision s join request_line l "
+        "on l.request_no = s.request_no and l.line_no = s.line_no where s.request_no = :n", n=r_no)}  # fmt: skip
+    c.true(
+        f"every line of {r_no} has a buying route and its rule",
+        set(routes) == set(buy[first]) and all(r and v for r, v in routes.values()),
+        str(routes),
+    )
+    on_contract = sorted(i for i in buy[first] if i in contract)
+    c.same(
+        "the lines with a contract take the contract route",
+        sorted(i for i, (r, _) in routes.items() if r == "contract"),
+        on_contract,
+    )
+    with d.step("buyer", f"opens {r_no}: each line shows its buying route and why") as page:
+        d.go("buyer", f"requisitions/{r_no}")
+        for summary in page.locator("#appContent details summary").all():
+            if any(w in summary.inner_text() for w in ("contract", "quotes", "safe reorder", "single source")):
+                summary.click()
+        expect(page.locator("#appContent")).to_contain_text("contract")
+    d.mark(5)
+    contract_po = q("select status, touchless from po where request_no = :n and contract_code is not null", n=r_no)
+    c.true(f"the contract lines of {r_no} became an order at once", bool(contract_po), str(contract_po))
+
+
+def D_(value: str) -> Decimal:
+    return Decimal(value)
 
 
 def demo_ui_checks(out: Outcome) -> Any:
