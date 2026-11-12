@@ -220,6 +220,19 @@ def test_given_an_unconfirmed_service_when_it_is_invoiced_then_it_is_held_and_re
     assert svc.execute(text("select status from invoice where no = :n"), {"n": held.no}).scalar_one() == "approved"
 
 
+def test_given_a_sent_service_nobody_confirmed_yet_then_its_invoice_can_be_entered_on_the_screen(
+    svc: Session, outbox: Outbox
+) -> None:  # noqa: F811
+    po_no, logins = _service_po(svc)  # found by the Brightwave walk-through (E46): the line was missing from the form
+
+    ready = client.get("/api/invoicing/ready", headers=_headers(svc.info["slug"], logins["buyer"], "Buyer"))
+
+    assert ready.status_code == 200, ready.text
+    assert [(r["po_no"], r["line_no"], r["available"]) for r in ready.json()] == [(po_no, 1, "10")]
+    held = _invoice(svc, po_no, user=logins["buyer"])  # entered from that line, it is held until confirmed
+    assert held.reasons == [matching.SERVICE]
+
+
 def test_given_the_requester_confirmed_a_service_when_they_approve_its_blocked_invoice_then_segregation_refuses_it(
     svc: Session, outbox: Outbox
 ) -> None:  # noqa: F811

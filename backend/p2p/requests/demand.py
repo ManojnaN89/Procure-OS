@@ -281,6 +281,7 @@ def summary(report: DemandReport) -> str:
     if report.rows_loaded == 0 and report.already_loaded and not report.rejected:
         return f"nothing new: all {report.already_loaded} rows were loaded before"
     return (
-        f"{verb} {report.rows_loaded} rows; {report.already_loaded} loaded before and unchanged; "
+        f"{verb} {report.rows_loaded} row{'' if report.rows_loaded == 1 else 's'}; {report.already_loaded} loaded "
+        "before and unchanged; "
         f"{len(report.rejected)} left out"
     )

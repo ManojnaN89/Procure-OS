@@ -296,6 +296,27 @@ def test_selecting_other_than_the_cheapest_qualifying_quote_needs_a_written_reas
     )
 
 
+def test_a_dropped_quote_with_longer_credit_does_not_set_the_scale_of_the_payment_terms(
+    shop: Session, outbox: Outbox
+) -> None:
+    # given payment terms only: S1 gives 30 days; S3 offers 45 days but delivers late, so it is dropped (found by E49)
+    selection_rule.save_rule(
+        shop, sod.user(1), effective_from=TODAY, method="weighted", weights=sel.Weights(D(0), D(0), D(0), D(100))
+    )
+    _, rfq = _one_line(shop, outbox)
+    _quote(shop, rfq, "S1", "110")
+    _quote(shop, rfq, "S2", "100")
+    _quote(shop, rfq, "S3", "90", days=20)
+    shop.execute(text("update quote set payment_terms_code = 'NET45' where supplier_code = 'S3'"))
+    shop.commit()
+
+    (line,) = _comp(shop, rfq).lines
+
+    # then the longest credit among the qualifying quotes (30 days) is the full mark, as the lowest cost is for price
+    scores = {o.supplier_code: o.score for o in line.offers if o.rank is not None}
+    assert scores == {"S1": D("100.0"), "S2": D("0.0")} and line.recommended == "S1"
+
+
 def test_fewer_qualifying_quotes_than_the_route_asked_for_need_a_reason(shop: Session, outbox: Outbox) -> None:
     # given two quotes came in, as the route wants, but one is late: only one qualifies
     _, rfq = _one_line(shop, outbox)

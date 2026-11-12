@@ -43,6 +43,7 @@ def _shown(head: dict[str, Any]) -> dict[str, Any]:
 def list_requests(db: Db, ctx: Viewer, status: str | None = None) -> dict[str, Any]:
     return {
         "can_manage": can_anywhere(db, ctx.user_id, "material.manage"),
+        "can_import": can_anywhere(db, ctx.user_id, "demand.import"),  # the ERP's files are loaded on this screen
         "requests": [_shown(h) for h in material.listing(db, status=status)],
     }
 

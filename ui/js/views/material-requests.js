@@ -5,6 +5,7 @@
  */
 const MaterialRequestsView = {
   BADGE: { open: "badge-waiting", issued: "badge-approved", cancelled: "badge-draft" },
+  STATUS: { open: "Open", issued: "Issued", cancelled: "Cancelled" },
 
   esc(value) {
     return String(value ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
@@ -36,16 +37,19 @@ const MaterialRequestsView = {
     if (!list) return; // the person has already gone to another page
     const action = document.getElementById("mrAction");
     const open = data.requests.filter((r) => r.status === "open");
-    action.innerHTML = data.can_manage && open.length
+    action.innerHTML = (data.can_manage && open.length) || data.can_import
       ? `<div style="display:flex;gap:8px;margin-bottom:12px;align-items:center;flex-wrap:wrap;">
-           <span class="btn btn-primary btn-sm" id="mrCheck">Run store check</span>
-           <span class="cell-muted" style="font-size:12.5px;">Sets free stock aside, earliest need-by first, and sends what is short for approval.</span>
+           ${data.can_manage && open.length ? `<span class="btn btn-primary btn-sm" id="mrCheck">Run store check</span>
+           <span class="cell-muted" style="font-size:12.5px;">Sets free stock aside, earliest need-by first, and sends what is short for approval.</span>` : ""}
+           ${data.can_import ? `<span class="btn btn-sm" id="mrLoad">Load from the ERP</span>` : ""}
          </div>`
       : "";
     const check = document.getElementById("mrCheck");
     if (check) check.addEventListener("click", () => this.runCheck());
+    const load = document.getElementById("mrLoad");
+    if (load) load.addEventListener("click", () => this.loadForm());
     if (!data.requests.length) {
-      list.innerHTML = `<div class="empty-state">No material requests yet. They are made when production orders are imported from the ERP.</div>`;
+      list.innerHTML = `<div class="empty-state">No material requests yet. They are made when production orders are loaded from the ERP${data.can_import ? ": click Load from the ERP" : ""}.</div>`;
       return;
     }
     this.requests = data.requests;
@@ -65,7 +69,7 @@ const MaterialRequestsView = {
       <div class="panel" style="margin-bottom:12px;">
         <div style="display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap;align-items:center;">
           <div class="panel-title" style="margin:0;">${this.esc(r.no)} · ${this.esc(r.order_no)} (${this.esc(r.product_code)}) · need by ${formatDate(r.need_by)}
-            <span class="badge ${this.BADGE[r.status] || ""}">${this.esc(r.status)}</span></div>
+            <span class="badge ${this.BADGE[r.status] || ""}">${this.esc(this.STATUS[r.status] || r.status)}</span></div>
           <div style="white-space:nowrap;">${buttons}</div>
         </div>
         ${r.cancel_reason ? `<p class="cell-muted" style="font-size:12.5px;">Cancelled: ${this.esc(r.cancel_reason)}</p>` : ""}
@@ -113,6 +117,44 @@ const MaterialRequestsView = {
       + (unpriced.length ? `<br>No price to estimate ${this.esc(unpriced.join(", "))}: ask the buyer.` : ""),
     );
     await this.load();
+  },
+
+  // Step 1: the ERP's production orders (and their component lines, sales orders, demand plan) as a CSV or Excel file.
+  async loadForm() {
+    const box = document.getElementById("mrAction");
+    if (!box) return;
+    let kinds = [];
+    try {
+      kinds = await API.getJSON("/api/demand/kinds");
+    } catch {
+      this.note("Couldn't load the kinds of ERP file.");
+      return;
+    }
+    box.innerHTML = `
+      <div class="panel" style="margin-bottom:12px;">
+        <div class="panel-title">Load from the ERP</div>
+        <p class="cell-muted" style="margin:0 0 10px;font-size:12.5px;">A CSV or Excel file in our template or with your ERP's column names. Rows loaded before are skipped; every row left out is listed with its reason. A production order gets its material request.</p>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
+          <select id="mrKind" aria-label="Kind of file" style="padding:6px;">${kinds.map((k) => `<option value="${this.esc(k.kind)}">${this.esc(k.title)}</option>`).join("")}</select>
+          <input type="file" id="mrFile" accept=".csv,.xlsx" aria-label="The ERP's file">
+          <span class="btn btn-primary btn-sm" id="mrLoadGo">Load the file</span>
+          <span class="btn btn-sm" id="mrBack">Back</span>
+        </div>
+        <div id="mrErr" style="font-size:12.5px;color:var(--warning-text);margin-top:8px;"></div>
+      </div>`;
+    document.getElementById("mrBack").addEventListener("click", () => this.load());
+    document.getElementById("mrLoadGo").addEventListener("click", async () => {
+      const file = document.getElementById("mrFile").files[0];
+      if (!file) { document.getElementById("mrErr").textContent = "Choose the file first."; return; }
+      const form = new FormData();
+      form.append("file", file);
+      const res = await Auth.fetch(`${API.base}/api/demand/import/${encodeURIComponent(document.getElementById("mrKind").value)}`, { method: "POST", body: form });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) { document.getElementById("mrErr").textContent = body.detail || "The file was not loaded."; return; }
+      const left = (body.rejected || []).map((p) => `line ${this.esc(p.line)}: ${this.esc(p.reason)}`);
+      this.note(`${this.esc(body.summary.charAt(0).toUpperCase() + body.summary.slice(1))}.${body.material_requests.length ? `<br>New material requests: ${body.material_requests.map((n) => this.esc(n)).join(", ")}.` : ""}${left.length ? `<br>Left out: ${left.join("; ")}` : ""}`);
+      await this.load();
+    });
   },
 
   act(kind, r) {
