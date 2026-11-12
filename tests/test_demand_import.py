@@ -346,9 +346,10 @@ def test_an_upload_loads_for_its_own_company_only(company: tuple[str, Session], 
         assert _count(other_db, "production_order") == 0
 
 
-def test_only_the_store_and_the_administrator_may_import(company: tuple[str, Session], db: Session) -> None:
+def test_only_the_store_may_import(company: tuple[str, Session], db: Session) -> None:
+    # the administrator does setup only (E22), so the import is the store's alone
     slug, _ = company
-    for role, allowed in (("Store", True), ("Admin", True), ("Requester", False), ("Buyer", False)):
+    for role, allowed in (("Store", True), ("Admin", False), ("Requester", False), ("Buyer", False)):
         resp = client.get("/api/demand/templates/production_order", headers=_headers(slug, role))
         assert (resp.status_code == 200) == allowed, role
     resp = client.get("/api/demand/templates/production_order", headers=_headers(slug, "Store"))

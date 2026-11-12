@@ -22,6 +22,7 @@ from typing import Any
 import demo_ui
 import env
 import lib
+import yaml
 from lib import Outcome
 from sqlalchemy import text
 
@@ -80,6 +81,7 @@ BELT_REPLY = ("SUP-006", "205")  # the only spares supplier answers the V-belt q
 SEAL_QUOTES = {"SUP-002": "94", "SUP-001": "99", "SUP-003": "97"}  # typed in by the buyer
 COPPER_QUOTES = {"SUP-003": "905", "SUP-005": "915", "SUP-001": "930"}
 ASKED = 3  # suppliers asked for a quotation (the platform's default `rfq_supplier_count`)
+PROFILE = yaml.safe_load((lib.ROOT / "datagen" / "catalog" / "apex" / "company.yaml").read_text(encoding="utf-8"))
 
 
 def money(value: Decimal | int | str) -> Decimal:
@@ -509,15 +511,52 @@ def _run(ctx: Any) -> Outcome:
                 sorted(rfq_of),
                 sorted([r_belts, r_seal, r_copper]),
             )
-            c.same("nothing was mailed to a supplier yet", len(supplier_mails()), 0)
             belts_rfq, seal_rfq, copper_rfq = rfq_of.get(r_belts, ""), rfq_of.get(r_seal, ""), rfq_of.get(r_copper, "")
             contract = next(p for p in prices if p["item_code"] == "RM-03" and p["contract_code"])
-            contract_pos = q("select no, supplier_code, taxable, status from po where contract_code is not null")
-            c.same(
-                "the impellers went straight to an order on the castings contract, approved by the rule (under Rs 1,00,000)",
-                [(r[1], money(r[2]), r[3]) for r in contract_pos],
-                [(contract["supplier_code"], money(200 * Decimal(contract["price"])), "approved")],
+            contract_taxable = money(200 * Decimal(contract["price"]))
+            # touchless (D35): the profile turns po.issue on, so a contract order the rule approves goes out with no buyer
+            touchless_on = (PROFILE.get("autonomy") or {}).get("po.issue") == "auto"
+            contract_alone = touchless_on and chain("po", contract_taxable) == "auto"
+            contract_pos = q(
+                "select no, supplier_code, taxable, status, touchless from po where contract_code is not null"
             )
+            c.same(
+                "the impellers went straight to an order on the castings contract, approved by the rule (under "
+                f"Rs 1,00,000){' and sent to the supplier touchless' if contract_alone else ''}",
+                [(r[1], money(r[2]), r[3], r[4]) for r in contract_pos],
+                [
+                    (
+                        contract["supplier_code"],
+                        contract_taxable,
+                        "sent" if contract_alone else "approved",
+                        contract_alone,
+                    )
+                ],
+            )
+            imp_po = contract_pos[0][0] if contract_pos else ""
+            c.same(
+                "no quotation request was mailed yet; the only supplier mail is the touchless order, to its supplier",
+                sorted((m["to"].lower(), imp_po in m["subject"]) for m in supplier_mails()),
+                [(contacts[contract["supplier_code"]].lower(), True)] if contract_alone else [],
+            )
+            if contract_alone:
+                with d.step(
+                    "buyer",
+                    f"opens Dashboard: Sent orders waiting for the supplier's acknowledgement includes {imp_po}; opens it",
+                ) as page:
+                    d.go("buyer", "dashboard")
+                    expect(page.locator("#myWork")).to_contain_text(
+                        "Sent orders waiting for the supplier's acknowledgement"
+                    )
+                    page.locator("#myWork a", has_text=imp_po).first.click()
+                    page.wait_for_load_state("networkidle")
+                with d.step("buyer", f"sees {imp_po} marked Touchless, with why, and sent with no buyer") as page:
+                    content = page.locator("#appContent")
+                    expect(content.locator(".page-header .badge", has_text="Touchless")).to_be_visible()
+                    expect(content).to_contain_text("Issued without a buyer")
+                    expect(content).to_contain_text("Touchless: issued and sent without a buyer")
+                    expect(content).to_contain_text("Sent to")
+                    expect(page.locator("#poSend")).to_have_count(0)
             for rfq_no in (belts_rfq, seal_rfq, copper_rfq):
                 with d.step("buyer", f"opens Dashboard: RFQs waiting to be sent includes {rfq_no}") as page:
                     d.go("buyer", "dashboard")
@@ -692,10 +731,11 @@ def _run(ctx: Any) -> Outcome:
                 )
                 band = chain("po", taxable)
                 for n in by_supplier.get(supplier, []):
+                    alone = contract_alone and n == imp_po
                     c.same(
-                        f"{n} of {taxable}: {'approved by the rule' if band == 'auto' else 'waits for the purchase manager'}",
+                        f"{n} of {taxable}: {'sent touchless' if alone else 'approved by the rule' if band == 'auto' else 'waits for the purchase manager'}",
                         pos[n][2],
-                        "approved" if band == "auto" else "submitted",
+                        "sent" if alone else "approved" if band == "auto" else "submitted",
                     )
             for no, row in pos.items():
                 inter = suppliers[row[1]]["state_code"] != plant_gstin[:2]
@@ -717,19 +757,29 @@ def _run(ctx: Any) -> Outcome:
                     page.locator("#poApprove").click()
                     expect(page.locator("#appContent")).to_contain_text("Approved by")
                 d.sync()
-            c.same("every order is approved", sorted({r[0] for r in q("select status from po")}), ["approved"])
+            c.same(
+                "every order is approved (the touchless one already sent)",
+                sorted((r[0], r[1]) for r in q("select no, status from po")),
+                sorted((n, "sent" if contract_alone and n == imp_po else "approved") for n in pos),
+            )
             pdf = demo_ui.api("GET", f"/api/purchase-orders/{next(iter(pos))}/pdf", token("buyer"))
             c.true("the order document is a real PDF", pdf.status_code == 200 and pdf.content[:4] == b"%PDF")
             for no in pos:
-                with d.step(
-                    "buyer", f"opens Dashboard: Approved orders to send includes {no}; clicks Send to supplier"
-                ) as page:
-                    d.go("buyer", "dashboard")
-                    expect(page.locator("#myWork")).to_contain_text("Approved orders to send to the supplier")
-                    page.locator("#myWork a", has_text=no).first.click()
-                    page.wait_for_load_state("networkidle")
-                    page.locator("#poSend").click()
-                    expect(page.locator("#appContent")).to_contain_text("Sent to")
+                if contract_alone and no == imp_po:  # sent with no buyer; the buyer only records the acknowledgement
+                    with d.step("buyer", f"opens the touchless order {no}, already sent to the supplier") as page:
+                        d.go("buyer", f"purchase-orders/{no}")
+                        expect(page.locator("#appContent")).to_contain_text("Sent to")
+                        expect(page.locator("#poSend")).to_have_count(0)
+                else:
+                    with d.step(
+                        "buyer", f"opens Dashboard: Approved orders to send includes {no}; clicks Send to supplier"
+                    ) as page:
+                        d.go("buyer", "dashboard")
+                        expect(page.locator("#myWork")).to_contain_text("Approved orders to send to the supplier")
+                        page.locator("#myWork a", has_text=no).first.click()
+                        page.wait_for_load_state("networkidle")
+                        page.locator("#poSend").click()
+                        expect(page.locator("#appContent")).to_contain_text("Sent to")
                 d.sync()
                 promised = TODAY + timedelta(days=6)
                 with d.step("buyer", f"clicks Record acknowledgement with the promised date {promised}") as page:
