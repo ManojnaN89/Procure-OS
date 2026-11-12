@@ -48,4 +48,4 @@ You cannot approve an order, verify a document you added, or activate a contract
 
 ## If you are stuck
 
-An order held for a price waits for an Approver. Goods that came with no order show in **Receive without order**; once the purchase manager approves, click **Raise the order** and give the price agreed with the supplier, then send it as usual. A supplier with a missing or unverified document cannot be used: open the vendor to see which one.
+An order held for a price waits for an Approver. Goods that came with no order show in **Receive without order**; once the purchase manager approves, click **Raise the order** and give the price agreed with the supplier, then send it as usual. A supplier with a missing or unverified document cannot be used: open the vendor to see which one. **Exceptions** lists everything stuck that needs a person, oldest first, with the reason, who must act, the next step and the age in working days; tick **Only mine** for what waits on you.

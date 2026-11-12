@@ -39,7 +39,7 @@ Each production order imported from the ERP gets a material request: one line pe
 
 ## Goods with no order
 
-Open **Receive without order**: enter the supplier, item, quantity, place and why, then **Record and ask the purchase manager**. Nothing goes into stock yet. Once the buyer has raised the order and it is sent, click **Post the receipt**. If it is rejected, send the goods back and click **Mark returned**. Services are not received here: the person who asked confirms them.
+Open **Receive without order**: enter the supplier, item, quantity, place and why, then **Record and ask the purchase manager**. Nothing goes into stock yet. Once the buyer has raised the order and it is sent, click **Post the receipt**. If it is rejected, send the goods back and click **Mark returned**. Services are not received here: the person who asked confirms them. **Exceptions** lists everything stuck that needs a person, oldest first, with the reason, who must act, the next step and the age in working days; tick **Only mine** for what waits on you.
 
 ## What you cannot do
 

@@ -481,7 +481,7 @@ def request_release(db: Session, no: str, reason: str, user_id: int) -> int:
     )
 
 
-def _asked_or_confirmed(db: Session, no: str, user_id: int) -> bool:
+def asked_or_confirmed(db: Session, no: str, user_id: int) -> bool:
     """Whether this login is the requester of a line on the invoice, or confirmed a service on it."""
     from p2p.approvals.workflow import org_code_of  # noqa: PLC0415 - approvals pulls in more than invoices needs
 
@@ -509,7 +509,7 @@ def _release(db: Session, payload: dict[str, Any], actor: Actor) -> dict[str, An
         raise InvoiceError(f"{no} is no longer blocked")
     if inv[1] == actor.id:
         raise InvoiceError("segregation of duties: the person who entered the invoice cannot release its block")
-    if actor.kind == "user" and _asked_or_confirmed(db, no, int(actor.id)):
+    if actor.kind == "user" and asked_or_confirmed(db, no, int(actor.id)):
         raise InvoiceError(
             "segregation of duties: the person who asked for or confirmed what is invoiced cannot also approve the invoice"
         )
