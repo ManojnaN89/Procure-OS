@@ -15,23 +15,12 @@ from fastapi.responses import HTMLResponse
 from sqlalchemy.orm import Session
 
 from p2p.approvals import email_links
-from p2p.platform import ratelimit, routing
+from p2p.platform import public_page, ratelimit, routing
 
 router = APIRouter(tags=["approval links"])
 WINDOW = 600.0
 MAX_BAD = 30
 
-_STYLE = (
-    "body{font-family:system-ui,sans-serif;background:#10151c;color:#e8edf3;margin:0;padding:24px}"
-    "main{max-width:560px;margin:0 auto}h1{font-size:20px}table{width:100%;border-collapse:collapse;margin:12px 0}"
-    "td,th{padding:6px 8px;border-bottom:1px solid #2a3340;text-align:left;font-size:14px}"
-    "textarea,input{width:100%;box-sizing:border-box;background:#18202b;color:inherit;border:1px solid #2a3340;"
-    "border-radius:6px;padding:8px;font-size:14px}"
-    "button{padding:9px 16px;border-radius:6px;border:0;font-size:14px;cursor:pointer;margin:0 8px 8px 0}"
-    ".ok{background:#2f9e6e;color:#fff}.no{background:#b4443c;color:#fff}.back{background:#5b6b7f;color:#fff}"
-    ".plain{background:#2a3340;color:#e8edf3}.muted{color:#93a0b1;font-size:13px}.note{color:#f0c36a}"
-)
-_HEADERS = {"Cache-Control": "no-store", "Referrer-Policy": "no-referrer", "X-Robots-Tag": "noindex"}
 _BUTTONS = {
     "approve": "<button class=ok name=action value=approve>Approve</button>",
     "reject": "<button class=no name=action value=reject>Reject</button>",
@@ -39,12 +28,7 @@ _BUTTONS = {
 }
 
 
-def _page(title: str, body: str, status: int = 200) -> HTMLResponse:
-    html = (
-        f"<!doctype html><html lang=en><meta charset=utf-8><meta name=viewport content='width=device-width,initial-scale=1'>"
-        f"<title>{escape(title)}</title><style>{_STYLE}</style><main><h1>{escape(title)}</h1>{body}</main></html>"
-    )
-    return HTMLResponse(html, status_code=status, headers=_HEADERS)
+_page = public_page.page
 
 
 def _address(request: Request) -> str:
@@ -108,11 +92,13 @@ def _form(token: str, data: dict[str, Any], do: str | None, note: str = "") -> H
         f"<p>{escape(data['summary'])}</p>"
         + (f"<p>{escape(data['justification'])}</p>" if data["justification"] else "")
         + f"<table><tr><th>Item</th><th>Quantity</th><th>Amount</th></tr>{rows}</table>"
-        f"<p>Estimated total <b>{escape(data['total_inr'])}</b>. {escape(data['budget'])}</p>"
-        f"<p class=muted>{escape(data['why'])}</p>"
+        f"<table class=facts><tr><td>Estimated total</td><td><b>{escape(data['total_inr'])}</b></td></tr>"
+        f"<tr><td>Budget</td><td>{escape(data['budget'])}</td></tr>"
+        f"<tr><td>Why you</td><td>{escape(data['why'])}</td></tr></table>"
         + (f"<p class=note>{escape(note)}</p>" if note else "")
-        + f"<form method=post action='/approve/{escape(token)}'>{code}<p class=muted>{escape(prompt)}</p>"
-        f"<textarea name=reason rows=3 maxlength=500{' required' if needs_reason else ''}></textarea><p>"
+        + f"<form method=post action='/approve/{escape(token)}'>{code}"
+        f"<label for=reason>Reason</label><p class=muted>{escape(prompt)}</p>"
+        f"<textarea id=reason name=reason rows=3 maxlength=500{' required' if needs_reason else ''}></textarea><p>"
         + "".join(_BUTTONS[a] for a in actions)
         + "</p></form><p class=muted>This link works once. To change a quantity, open the request in the app.</p>"
     )
@@ -167,4 +153,6 @@ def decide(
         "rejected": "Rejected. The requester has been told.",
         "returned": "Sent back for changes. The requester has been told.",
     }.get(status, f"Recorded: {status}.")
-    return _page(f"Request {link.request_no}", f"<p>{escape(done)}</p><p class=muted>You can close this page.</p>")
+    return _page(
+        f"Request {link.request_no}", f"<p class=done>{escape(done)}</p><p class=muted>You can close this page.</p>"
+    )

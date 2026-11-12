@@ -12,7 +12,7 @@ from html import escape
 from sqlalchemy.orm import Session
 
 from p2p.approvals import email_links
-from p2p.platform import audit, notifications, worker
+from p2p.platform import audit, email_layout, notifications, worker
 
 OPENING = {
     "new": "A request is waiting for your approval.",
@@ -31,13 +31,6 @@ class Mail:
     subject: str
     text: str
     html: str
-
-
-def _button(href: str, label: str, colour: str) -> str:
-    return (
-        f'<a href="{escape(href)}" style="display:inline-block;padding:10px 18px;margin:0 8px 8px 0;border-radius:6px;'
-        f'background:{colour};color:#ffffff;text-decoration:none;font-weight:600">{escape(label)}</a>'
-    )
 
 
 def compose(db: Session, tenant: str, no: str, round_no: int, step: int, user_id: int, kind: str = "new") -> Mail:
@@ -84,30 +77,49 @@ def compose(db: Session, tenant: str, no: str, round_no: int, step: int, user_id
         ]
     else:
         text_parts.append("Open the request in the app to decide.")
+    cell = f"padding:8px 10px;border-bottom:1px solid {email_layout.BORDER}"
+    head = f"{cell};background:#FAFBFC;color:{email_layout.MUTED};font-size:12px;font-weight:600"
     rows = "".join(
-        f"<tr><td>{escape(ln['item'])}</td><td>{escape(ln['qty'])} {escape(ln['uom'])}</td>"
-        f"<td style='text-align:right'>{escape(ln['price'])}</td><td style='text-align:right'>{escape(ln['amount'])}</td></tr>"
+        f"<tr><td style='{cell}'>{escape(ln['item'])}</td><td style='{cell}'>{escape(ln['qty'])} {escape(ln['uom'])}</td>"
+        f"<td style='{cell};text-align:right'>{escape(ln['price'])}</td>"
+        f"<td style='{cell};text-align:right'>{escape(ln['amount'])}</td></tr>"
         for ln in f["lines"]
     )
     buttons = (
-        _button(links["approve"], "Approve", "#2f9e6e")
-        + _button(links["reject"], "Reject", "#b4443c")
-        + _button(links["return"], "Send back for changes", "#5b6b7f")
+        email_layout.button(links["approve"], "Approve", "success")
+        + email_layout.button(links["reject"], "Reject", "danger")
+        + email_layout.button(links["return"], "Send back for changes", "neutral")
         if links
         else "<p>Open the request in the app to decide.</p>"
     )
-    html = (
-        "<div style='font-family:system-ui,sans-serif;font-size:14px;color:#1d2733;max-width:620px'>"
-        f"<p>{escape(OPENING[kind])}</p><h2 style='font-size:18px'>Request {escape(no)}</h2>"
-        f"<p>{escape(f['summary'])}</p>"
-        + (f"<p><b>Reason given:</b> {escape(f['justification'])}</p>" if f["justification"] else "")
-        + "<table style='border-collapse:collapse;width:100%' cellpadding='6' border='1' bordercolor='#d5dbe3'>"
-        "<tr><th align='left'>Item</th><th align='left'>Quantity</th><th align='right'>Price</th><th align='right'>Amount</th></tr>"
-        f"{rows}</table><p><b>Estimated total:</b> {escape(f['total_inr'])}</p>"
-        f"<p><b>Budget:</b> {escape(f['budget'])}</p><p><b>Why you:</b> {escape(f['why'])}</p>"
-        + (f"<p><b>{escape(code_note)}</b></p>" if code_note else "")
-        + f"<p>{buttons}</p><p style='color:#6b7785;font-size:12px'>Each button works once and expires in "
-        f"{email_links.EXPIRES_DAYS} days. Opening a link decides nothing.</p></div>"
+    fact = "<tr><td style='padding:3px 16px 3px 0;color:{m};vertical-align:top;white-space:nowrap'>{k}</td><td style='padding:3px 0'>{v}</td></tr>"
+    facts = "".join(
+        fact.format(m=email_layout.MUTED, k=escape(k), v=v)
+        for k, v in (
+            ("Estimated total", f"<strong>{escape(f['total_inr'])}</strong>"),
+            ("Budget", escape(f["budget"])),
+            ("Why you", escape(f["why"])),
+        )
+    )
+    inner = (
+        f"<p style='margin:0 0 12px'>{escape(OPENING[kind])}</p>"
+        f"<p style='margin:0 0 12px'>{escape(f['summary'])}</p>"
+        + (
+            f"<p style='margin:0 0 12px'><b>Reason given:</b> {escape(f['justification'])}</p>"
+            if f["justification"]
+            else ""
+        )
+        + "<table role='presentation' style='border-collapse:collapse;width:100%;margin:0 0 16px;font-size:13px'>"
+        f"<tr><th align='left' style='{head}'>Item</th><th align='left' style='{head}'>Quantity</th>"
+        f"<th align='right' style='{head}'>Price</th><th align='right' style='{head}'>Amount</th></tr>{rows}</table>"
+        f"<table role='presentation' style='border-collapse:collapse;margin:0 0 16px'>{facts}</table>"
+        + (f"<p style='margin:0 0 12px'><b>{escape(code_note)}</b></p>" if code_note else "")
+        + f"<p style='margin:8px 0 8px'>{buttons}</p>"
+    )
+    html = email_layout.wrap(
+        f"Request {no}",
+        inner,
+        footer=f"Each button works once and expires in {email_links.EXPIRES_DAYS} days. Opening a link decides nothing.",
     )
     subject = SUBJECT[kind].format(no=no, total=f["total_inr"])
     return Mail(subject, "\n".join(text_parts).strip(), html)
