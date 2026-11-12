@@ -327,8 +327,10 @@ const PurchaseOrdersView = {
           ${Number(po.cgst) > 0 ? `<div class="stat-card"><div class="stat-label">CGST</div><div class="stat-value" style="font-size:18px;">${formatCurrency(po.cgst)}</div></div><div class="stat-card"><div class="stat-label">SGST</div><div class="stat-value" style="font-size:18px;">${formatCurrency(po.sgst)}</div></div>` : ""}
           <div class="stat-card"><div class="stat-label">TOTAL</div><div class="stat-value" style="font-size:18px;">${formatCurrency(po.total)}</div></div>
         </div>
+        <div id="poTraceBox" style="margin-top:12px;"></div>
       `;
       this.wire(po);
+      TracePanel.mount(document.getElementById("poTraceBox"), po.id);
       this.mountChanges(po);
       if (po.sent_at) this.mountSupplierAnswer(po);
       if (po.sent_at) SupplierMessages.mount(document.getElementById("supplierMessagesBox"), "orders", po.id);

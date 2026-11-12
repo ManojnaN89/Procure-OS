@@ -16,7 +16,7 @@ from fastapi.responses import Response
 from sqlalchemy.orm import Session
 
 from p2p.formulas.calendar import business_today
-from p2p.platform import audit, invoice_api, payment_api, routing, ui_api
+from p2p.platform import audit, invoice_api, payment_api, reconciliation_api, routing, ui_api
 from p2p.platform.sod import user
 
 router = APIRouter(prefix="/api", tags=["export"])
@@ -34,6 +34,8 @@ LISTS: dict[str, Reader] = {
     "vendors": lambda db, ctx: ui_api.list_vendors(db, ctx),
     "contracts": lambda db, ctx: ui_api.list_contracts(db, ctx),
     "stock": lambda db, ctx: ui_api.inventory(db, ctx)["lines"],
+    "received-not-invoiced": lambda db, ctx: reconciliation_api.received_not_invoiced(db, ctx)["lines"],
+    "msme-due": lambda db, ctx: reconciliation_api.msme(db, ctx)["invoices"],
 }
 _NUMBER = re.compile(r"-?\d+(\.\d+)?")
 

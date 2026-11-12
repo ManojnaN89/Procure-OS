@@ -87,6 +87,7 @@ Match the surrounding code. Short plain-language comments only where the reason 
 | The order document (PDF), revising an order (versions), cancelling it, closing what is still to come | `orders/document.py`, `orders/changes.py`, `platform/order_api.py` |
 | Invoices: intake, duplicates, three-way match, blocks and releases | `invoices/service.py`, `formulas/matching.py`, `platform/invoice_api.py` |
 | Payment: due dates, tax at source (rate and threshold from `ref_tds_section`), runs, bank file, bank statement import, closing | `invoices/payment.py`, `invoices/bank_statement.py`, `formulas/payment.py`, `platform/payment_api.py` |
+| Reconciliation (step 13): order trace from production order to payment, received not invoiced (and the reverse) as of a date, supplier statement import and matching, bank lines a person confirms, small suppliers against the MSMED Act deadline (settings `msme_max_days`, `msme_no_agreement_days`, `msme_warn_days`) | `invoices/trace.py`, `invoices/reconciliation.py`, `invoices/vendor_statement.py`, `invoices/bank_statement.py` (`open_lines`, `confirm`), `formulas/reconciliation.py`, `platform/reconciliation_api.py` |
 | Goods receipt (tolerance, rejection, inspection, stock, serial numbers) | `receiving/goods.py`, `formulas/receiving.py` |
 | Service entry (the requester confirms a service; its emailed link), which lines are services, receipt without an order (proposal, after-the-fact order; `unordered.listing` for the exceptions screen) | `receiving/services.py`, `receiving/service_links.py`, `receiving/kinds.py`, `receiving/unordered.py`, `platform/service_entry_api.py` |
 | Sending orders to suppliers, acknowledgement | `orders/dispatch.py` |
@@ -101,7 +102,7 @@ Match the surrounding code. Short plain-language comments only where the reason 
 | Store issues and counts, list export, Excel import of masters | `receiving/stock.py` (`post_issue`, `post_count`), `formulas/stock.py`; `platform/export_api.py`; `masters/importer.py` |
 | Files, parsing, email | `platform/files.py`, `parsing.py`, `emails.py`, `mailbox.py` |
 | Admin API and run viewer | `platform/admin_api.py`, `logs.py` |
-| API routers (one file per area, all registered in `main.py`) | `platform/ui_api.py` (main app), `admin_api.py`, `setup_api.py`, `master_api.py`, `invoice_api.py`, `invoice_intake_api.py`, `payment_api.py`, `order_api.py`, `agent_api.py`, `supplier_agent_api.py`, `workspace_api.py`, `export_api.py`, `approval_link_api.py`, `guides_api.py`, `demand_api.py`, `service_entry_api.py` |
+| API routers (one file per area, all registered in `main.py`) | `platform/ui_api.py` (main app), `admin_api.py`, `reconciliation_api.py`, `setup_api.py`, `master_api.py`, `invoice_api.py`, `invoice_intake_api.py`, `payment_api.py`, `order_api.py`, `agent_api.py`, `supplier_agent_api.py`, `workspace_api.py`, `export_api.py`, `approval_link_api.py`, `guides_api.py`, `demand_api.py`, `service_entry_api.py` |
 | Control tower, role homes (My work), alerts, key figures | `platform/control_tower.py`, `workspace_api.py`, `alerts.py`, `formulas/kpis.py` |
 | Agents: plain-words intake, invoice exceptions, supplier mail, the assistant, tool registry and runtime (`agents/demo.py` is a development-only toolset, never loaded by the product) | `agents/intake.py`, `invoice_exceptions.py`, `supplier_comms.py`, `assistant.py`, `tools.py`, `runtime.py`, `decider.py` |
 | AI steps (one model call each, schema and evidence checked): quotes, invoices, supplier mail, item matching | `ai_steps/quote_reading.py`, `invoice_reading.py`, `supplier_message.py`, `item_matching.py`, `evidence.py`, `limits.py`, `adapters.py` |
@@ -114,5 +115,5 @@ Match the surrounding code. Short plain-language comments only where the reason 
 
 <<<<<<< HEAD
 =======
-A new tenant-database table is a new file in `platform/migrations/tenant/versions/` (next number; the latest is 0053, the control database has 0001-0003). A new agent tool is registered with `ToolRegistry`; modules that register tools or executors are listed in `EXTRA_MODULES` so the API process loads them.
+A new tenant-database table is a new file in `platform/migrations/tenant/versions/` (next number; the latest is 0054, the control database has 0001-0003). A new agent tool is registered with `ToolRegistry`; modules that register tools or executors are listed in `EXTRA_MODULES` so the API process loads them.
 >>>>>>> phase1-service-entry

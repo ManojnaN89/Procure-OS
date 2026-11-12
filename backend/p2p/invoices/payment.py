@@ -40,6 +40,15 @@ def _setting(db: Session, key: str, default: str) -> str:
     return default
 
 
+def msme_limits(db: Session) -> rules.MsmeLimits:
+    """The MSMED Act day limits as the company has them (settings), else the statute's figures."""
+    default = rules.MsmeLimits()
+    return rules.MsmeLimits(
+        int(_setting(db, "msme_max_days", str(default.max_days))),
+        int(_setting(db, "msme_no_agreement_days", str(default.no_agreement_days))),
+    )
+
+
 def _terms(db: Session, code: str | None) -> dict[str, Any] | None:
     row = (
         db.execute(
@@ -185,6 +194,7 @@ def book_invoice(db: Session, no: str) -> None:
         msme_category=sup["msme_category"],
         msme_agreement=bool(sup["msme_agreement"]),
         agreed_days=sup["agreed_payment_days"],
+        limits=msme_limits(db),
     )
     used_g, used_t = _use_advances(db, dict(inv))
     tds_amount = D(0)

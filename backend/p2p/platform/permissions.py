@@ -102,6 +102,12 @@ def authorize_approval(
         raise PermissionDenied(str(exc)) from None
 
 
+def need_any(db: Session, user_id: int, *actions: str) -> None:
+    """Refuse (403) unless one of the user's roles grants one of the actions."""
+    if not any(can_anywhere(db, user_id, a) for a in actions):
+        raise HTTPException(403, f"Not allowed: needs one of {', '.join(actions)}")
+
+
 def require(action: str) -> Callable[..., TenantContext]:
     """FastAPI dependency: the caller needs a role that grants this action (anywhere in the tenant)."""
 

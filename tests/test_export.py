@@ -65,7 +65,10 @@ def test_every_export_has_the_same_number_of_rows_as_the_list_on_the_screen(db: 
     assert stock.status_code == 200 and len(_read(stock.content)) == len(
         client.get("/api/inventory", headers=head).json()["lines"]
     )
-    assert set(LISTS) == set(SCREEN) | {"stock"}  # a list added to the screens is added here too
+    books = {"received-not-invoiced", "msme-due"}  # reconciliation: rows checked in tests/test_reconciliation.py
+    assert set(LISTS) == set(SCREEN) | {"stock"} | books  # a list added to the screens is added here too
+    for name in books:  # an export follows its screen's permission: an approver does not see the books
+        assert client.get(f"/api/export/{name}", headers=head).status_code == 403
 
 
 def test_an_export_leaves_an_audit_row_and_needs_a_login_and_a_known_list(db: Session, logins: Logins) -> None:  # noqa: F811
