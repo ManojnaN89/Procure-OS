@@ -84,6 +84,10 @@ class Company:
             self.ids[role] = uid
             if role == "Finance":
                 users.set_limit(self.slug, uid, "payment_run", Decimal("50000000"))
+        # the second administrator who approves the first one's changes to the controls (D-22)
+        self.ids["Admin2"] = users.create_user(
+            self.slug, f"admin2{uuid.uuid4().hex[:5]}@example.com", PASSWORD, "Second Admin", "Admin"
+        )
         from test_rules_engine import approval_table  # noqa: PLC0415
 
         admin = Actor("user", "1")
@@ -275,6 +279,23 @@ def _row(page: Page, text_in_row: str) -> Any:
     return page.get_by_role("row").filter(has_text=text_in_row)
 
 
+def _second_admin_approves(page: Page, company: Company) -> None:
+    """A change to the controls waits for a second administrator (D-22): the page lists it, and the second
+    administrator approves it (through the API: the page is the first administrator's)."""
+    expect(page.get_by_text("Changes waiting for a second administrator")).to_be_visible()
+    h = {"Authorization": f"Bearer {create_access_token(company.ids['Admin2'], company.slug, 'Admin')}"}
+    for change in httpx.get(f"{URL}/api/setup/pending", headers=h).json():
+        done = httpx.post(f"{URL}/api/admin/proposals/{change['proposal_id']}/approve", json={}, headers=h)
+        assert done.status_code == 200 and done.json()["execution"] == "ok", done.text
+    expect(page.get_by_text("Changes waiting for a second administrator")).to_be_hidden()  # the list follows
+
+
+def _reopen(page: Page, tab: str) -> None:
+    """Show a tab again so it reads what is stored now (the reason box keeps its text)."""
+    page.get_by_role("tab", name="History").click()
+    page.get_by_role("tab", name=tab).click()
+
+
 def test_company_setup_opens_every_tab_for_the_admin(company: Company, browser: Any) -> None:
     page = open_page(browser, LAPTOP)
     sign_in(page, company.emails["Admin"])
@@ -330,6 +351,8 @@ def test_a_policy_change_needs_a_reason_is_checked_and_shows_in_the_history_and_
 
     page.get_by_label(REASON).fill("suppliers asked for a day more")
     days.get_by_role("button", name="Save").click()
+    _second_admin_approves(page, company)
+    _reopen(page, "Policies")
     expect(days).to_contain_text("suppliers asked for a day more")  # the row says who changed it last and why
 
     box = _row(page, "Requests mailbox")  # the two mailboxes live here too
@@ -338,6 +361,8 @@ def test_a_policy_change_needs_a_reason_is_checked_and_shows_in_the_history_and_
     expect(page.get_by_role("alert")).to_contain_text("must be an email address")
     box.get_by_role("textbox").fill("Requests@Plant.example")
     box.get_by_role("button", name="Save").click()
+    _second_admin_approves(page, company)
+    _reopen(page, "Policies")
     expect(box).to_contain_text("suppliers asked for a day more")
     expect(box.get_by_role("textbox")).to_have_value("requests@plant.example")  # stored in lower case
 
@@ -372,6 +397,8 @@ def test_a_new_touchless_version_takes_effect_and_the_old_one_stays_in_the_histo
     expect(now).to_contain_text("up to the buyer's tier")
     page.get_by_label("Limit (₹", exact=False).fill("50000")
     page.get_by_role("button", name="Save new touchless version").click()
+    _second_admin_approves(page, company)
+    _reopen(page, "Touchless orders")
 
     expect(now).to_contain_text("Version 2")
     expect(now).to_contain_text("up to ₹50,000.00 and every price is within 2%")
@@ -427,7 +454,7 @@ def test_automation_controls_set_a_level_with_a_reason_and_the_locked_ones_stay_
 
     page.get_by_label(REASON).fill("a person checks every quote for now")
     quote.get_by_role("button", name="Save").click()
-    page.wait_for_load_state("networkidle")
+    _second_admin_approves(page, company)
     page.reload()
     expect(_row(page, "Accept a quote read from an email").get_by_role("combobox")).to_have_value("propose")
 
@@ -457,6 +484,9 @@ def test_the_kill_switch_stops_everything_and_switches_back(company: Company, br
 
     page.get_by_label(REASON).fill("check finished")
     page.get_by_role("button", name="Switch off").click()
+    expect(page.get_by_text("The kill switch is ON: nothing runs automatically.")).to_be_visible()  # waits
+    _second_admin_approves(page, company)
+    page.reload()
     expect(page.get_by_text("The kill switch is off.")).to_be_visible()
 
 

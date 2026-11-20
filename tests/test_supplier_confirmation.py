@@ -20,7 +20,7 @@ from p2p.formulas.calendar import BusinessCalendar
 from p2p.formulas.deliveries import before_reminder_due, overdue_reminder_due, overdue_reminder_on, working_days_before
 from p2p.main import app
 from p2p.orders import confirmation, delivery_reminders, dispatch, service, supplier_links
-from p2p.platform import routing, sod, tenants, users
+from p2p.platform import notifications, routing, sod, tenants, users
 
 D = Decimal
 client = TestClient(app)
@@ -190,17 +190,18 @@ def test_a_date_change_from_the_link_makes_version_2_and_tells_the_requester(sho
     # when the buyer accepts it
     done = client.post(f"/api/supplier-changes/{change['id']}/decide", json={"accept": True}, headers=buyer)
 
-    # then the order is version 2 with the new date, the supplier has the revised order, the requester is told
+    # then the order is version 2 with the new date; 16 days is beyond the 3-day tolerance, so it is material (Q19):
+    # it goes for approval again before the supplier gets it, and the requester is told
     assert done.status_code == 200 and done.json()["version"] == 2
     shop.rollback()
-    assert shop.execute(text("select version, status from po")).one() == (2, "acknowledged")
+    assert shop.execute(text("select version, status from po")).one() == (2, "submitted")
     assert shop.execute(text("select need_by, promised_date from po_line")).one() == (date(2026, 12, 6),) * 2
-    assert shop.execute(text("select version, reapproval from po_revision")).one() == (2, False)
+    assert shop.execute(text("select version, reapproval from po_revision")).one() == (2, True)
     keeper = shop.execute(
         text("select title from notification where user_id = :u and title like '%version 2%'"), {"u": logins["keeper"]}
     ).scalar()
     assert keeper == f"Order {po_no} changed (version 2)"
-    assert any(f"{po_no} (version 2)" in m["subject"] for m in outbox.sent)
+    assert not any(f"{po_no} (version 2)" in m["subject"] for m in outbox.sent)  # not before it is approved again
     assert [_audit(shop, a) for a in ("po.change_proposed", "po.change_accepted", "po.revise")] == [1, 1, 1]
     again = client.post(f"/api/supplier-changes/{change['id']}/decide", json={"accept": True}, headers=buyer)
     assert again.status_code == 409
@@ -272,8 +273,38 @@ def test_a_price_rise_within_the_tolerance_is_accepted_by_the_buyer(shop: Sessio
     shop.rollback()
     line = shop.execute(text("select unit_price, taxable, igst from po_line")).one()
     assert line == (D("102.0000"), D("1020.00"), D("183.60"))
-    assert shop.execute(text("select total, status from po")).one() == (D("1203.60"), "acknowledged")
+    assert shop.execute(text("select total, status from po")).one() == (D("1203.60"), "submitted")  # price up: Q19
     assert shop.execute(text("select count(*) from proposal where action = 'po.supplier_price'")).scalar_one() == 0
+
+
+def test_a_price_rise_within_the_tolerance_on_the_buyers_own_order_goes_to_the_purchase_manager(
+    shop: Session,
+    outbox: Outbox,  # noqa: F811
+) -> None:
+    _price_rule(shop)
+    po_no, logins, token = _sent(shop, outbox)
+    email = shop.execute(text("select email from org_user where code = 'U9'")).scalar()
+    assert email is None  # a code free for the buyer
+    shop.execute(
+        text("insert into org_user (code, name, email, active) values ('U9', 'A Buyer', :e, true)"),
+        {"e": notifications.email_of(logins["buyer"])},
+    )
+    shop.execute(text("update po set buyer = 'U9'"))
+    shop.commit()
+    client.post(f"/supplier/{token}", data={"action": "change", "price_1": "101.00"})  # 1%: inside the tolerance
+    shop.rollback()
+    change_id, within = shop.execute(text("select id, within_tolerance from po_change")).one()
+
+    referred = client.post(
+        f"/api/supplier-changes/{change_id}/decide",
+        json={"accept": True},
+        headers=_headers(shop.info["slug"], logins["buyer"], "Buyer"),
+    )
+
+    assert within is True and referred.status_code == 200
+    assert referred.json()["status"] == "waiting_approval" and referred.json()["approver"] == "Procure Vikram"
+    shop.rollback()
+    assert shop.execute(text("select unit_price from po_line")).scalar_one() == D("100.0000")
 
 
 def test_a_price_rise_just_above_the_tolerance_needs_the_purchase_manager(shop: Session, outbox: Outbox) -> None:  # noqa: F811
@@ -539,3 +570,31 @@ def test_the_confirmation_service_refuses_an_order_no_longer_with_the_supplier(s
             shop, shop.info["slug"], po_no, [confirmation.Proposed("decline")], source="link", reason="x",
             actor=confirmation.supplier_actor("S1"),
         )  # fmt: skip
+
+
+@pytest.mark.parametrize(
+    ("changes", "reasons"),
+    [
+        ([{"line": 1, "unit_price": {"from": "100", "to": "100"}}], []),
+        ([{"line": 1, "unit_price": {"from": "100", "to": "100.01"}}], ["line 1: price up"]),
+        ([{"line": 1, "unit_price": {"from": "100", "to": "99.99"}}], []),
+        ([{"line": 1, "qty": {"from": "10", "to": "10.0001"}}], ["line 1: quantity up"]),
+        ([{"line": 1, "qty": {"from": "10", "to": "8"}}], []),
+        ([{"line": 1, "need_by": {"from": "2026-11-20", "to": "2026-11-23"}}], []),
+        (
+            [{"line": 1, "need_by": {"from": "2026-11-20", "to": "2026-11-24"}}],
+            ["line 1: date moved 4 days, more than the 3 accepted"],
+        ),
+        (
+            [{"line": 1, "need_by": {"from": "2026-11-20", "to": "2026-11-16"}}],
+            ["line 1: date moved 4 days, more than the 3 accepted"],
+        ),
+    ],
+)
+def test_what_makes_a_revision_material_q19(changes: list, reasons: list) -> None:
+    assert judge.material_reasons(D("100"), D("100"), changes, 3) == reasons
+
+
+def test_a_higher_total_alone_is_material_and_an_equal_one_is_not() -> None:
+    assert judge.material_reasons(D("1180.00"), D("1180.01"), [], 3) == ["the total went up"]
+    assert judge.material_reasons(D("1180.00"), D("1180.00"), [], 3) == []

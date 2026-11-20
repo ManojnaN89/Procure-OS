@@ -261,7 +261,7 @@ def test_the_best_vendor_gets_an_ordinary_order_that_goes_through_the_usual_appr
     ).one()
     assert po[:3] == ("S2", "standard", None) and po[3] == D("1050.00") and po[4] in ("submitted", "approved")
     line = shop.execute(text("select source, source_ref, unit_price from po_line where po_no like 'PO-%'")).one()
-    assert line == ("contract", None, D("105"))
+    assert line == ("contract", "price_list", D("105"))  # a listed price, not a contract (DF-09)
 
 
 @pytest.mark.parametrize(
@@ -396,3 +396,24 @@ def test_the_mode_and_weights_are_settings_with_checks(shop: Session) -> None:
         .json()["error"]
         .endswith("must be a number")
     )
+
+
+def test_a_best_vendor_line_bought_on_a_price_list_is_labelled_so_is_never_touchless_and_is_never_ordered_twice(
+    shop: Session,
+    outbox: Outbox,  # noqa: F811
+) -> None:
+    _best_vendor_world(shop)
+    _set(shop, "best_vendor")
+    no = _request(shop, "R-1", [("B", "10", None, "C1")])
+    _source(shop, no, dispatch=False)
+
+    made = orders.order_request(shop, shop.info["slug"], no, as_of=TODAY)
+
+    (po_no,) = made.pos
+    line = shop.execute(text("select source, source_ref from po_line where po_no = :n"), {"n": po_no}).one()
+    assert tuple(line) == ("contract", "price_list")  # bought like a contract line, but there is no contract
+    po = shop.execute(text("select touchless, touchless_note from po where no = :n"), {"n": po_no}).one()
+    assert po[0] is False and "price list: never touchless" in po[1]
+    again = orders.order_request(shop, shop.info["slug"], no, as_of=TODAY)
+    assert again.pos == []
+    assert shop.execute(text("select count(*) from po_line where po_no like 'PO-%'")).scalar_one() == 1

@@ -26,7 +26,7 @@ from p2p.formulas.orders import (
 from p2p.main import app
 from p2p.orders import contracts as contract_usage
 from p2p.orders import quotes, service, workflow
-from p2p.platform import proposals, routing, sod, users
+from p2p.platform import permissions, proposals, routing, sod, users
 from p2p.platform.tokens import create_access_token
 from p2p.receiving.stock import stock_levels
 
@@ -832,6 +832,34 @@ def test_a_price_far_above_the_estimate_holds_the_order_until_a_person_accepts_i
     assert (
         shop.execute(text("select count(*) from audit_event where action = 'po.variance_accepted'")).scalar_one() == 1
     )
+
+
+def test_a_price_variance_is_accepted_only_by_someone_its_approval_bands_name_and_a_refusal_leaves_it_waiting(
+    shop: Session, outbox: Outbox
+) -> None:
+    logins = _logins(shop)
+    slug = shop.info["slug"]
+    _price(shop, "S1", "A", "100")
+    request = _request(shop, "R-5B", [("A", "10", None, "C1")])
+    shop.execute(text("update request_line set est_price = 80 where request_no = 'R-5B'"))
+    shop.commit()
+    _source(shop, request, dispatch=False)
+    service.order_request(shop, slug, request, as_of=TODAY)
+    pid = shop.execute(text("select hold_proposal_id from po")).scalar_one()
+    outsider = users.create_user(slug, f"other{shop.info['sfx']}@x.example", PASSWORD, "Other Approver", "Approver")
+
+    with pytest.raises(permissions.PermissionDenied, match="above what you may approve"):
+        proposals.approve(shop, pid, outsider)
+
+    assert shop.execute(text("select status from proposal where id = :i"), {"i": pid}).scalar_one() == "pending"
+    proposals.approve(shop, pid, logins["procurement"])
+    assert shop.execute(text("select status, execution from proposal where id = :i"), {"i": pid}).one() == (
+        "approved",
+        "ok",
+    )
+    # accepting the price does not make that person one of the order's makers: they still approve the order itself
+    po_no = shop.execute(text("select no from po")).scalar_one()
+    assert workflow.approve(shop, slug, po_no, logins["procurement"]) == "approved"
 
 
 def test_a_price_exactly_at_the_band_is_not_held(shop: Session, outbox: Outbox) -> None:

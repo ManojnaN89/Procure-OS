@@ -154,7 +154,7 @@ def _price_table(db: Session, as_of: date) -> dict[tuple[str, str | None], dict[
             "select distinct on (p.item_code, p.uom, p.supplier_code) p.item_code, p.uom, p.supplier_code, p.price "
             "from price_record p join supplier s on s.code = p.supplier_code "
             "left join contract c on c.code = p.contract_code "
-            "where s.status = 'active' and p.valid_from <= :d and (p.valid_to is null or p.valid_to >= :d) "
+            "where s.status = 'active' and p.status = 'active' and p.valid_from <= :d and (p.valid_to is null or p.valid_to >= :d) "
             "and (p.contract_code is null or (c.status = 'active' and c.valid_from <= :d and (c.valid_to is null or c.valid_to >= :d))) "
             "order by p.item_code, p.uom, p.supplier_code, coalesce(p.min_qty, 0), p.price"
         ),

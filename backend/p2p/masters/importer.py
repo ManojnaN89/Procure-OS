@@ -104,6 +104,12 @@ def _check_dates(r: dict[str, Any], start: str, end: str) -> str | None:
 def _check_price_record(r: dict[str, Any]) -> str | None:
     if r.get("price") is not None and r["price"] <= 0:
         return f"price {r['price']} must be above zero"
+    r["version"] = r.get("version") or 1  # a file without versions: every price is version 1, in force
+    r["status"] = r.get("status") or "active"
+    if r["status"] not in ("active", "draft"):
+        return f"status '{r['status']}' must be active or draft (a draft waits for a second person to activate it)"
+    if r["version"] < 1:
+        return "version must be 1 or more"
     return _check_dates(r, "valid_from", "valid_to")
 
 
@@ -121,6 +127,9 @@ def _check_pincode(r: dict[str, Any]) -> str | None:
         return f"pincode '{r['pincode']}' is not 6 digits"
     return None
 
+
+# columns a file may leave out: a price list without versions loads as version 1, in force
+OPTIONAL: dict[str, frozenset[str]] = {"price_record": frozenset({"version", "status"})}
 
 CHECKS: dict[str, Callable[[dict[str, Any]], str | None]] = {
     "supplier": _check_supplier,
@@ -240,7 +249,9 @@ def import_masters(db: Session, dataset: Path, *, actor: Actor = audit.SYSTEM, d
     # the tables that others point at must be known before their children are checked, including self-references
     parsed: dict[str, list[tuple[int, dict[str, Any]]]] = {}
     for spec in TABLES:
-        parsed[spec.name] = read_table(master_dir / f"{spec.csv}.csv", spec, report)
+        parsed[spec.name] = read_table(
+            master_dir / f"{spec.csv}.csv", spec, report, optional=OPTIONAL.get(spec.name, frozenset())
+        )
     for spec in TABLES:
         for col in {c for _, t, c in (fk for s in TABLES for fk in s.foreign_keys) if t == spec.name}:
             keys.setdefault(spec.name, {})[col] = {r[col] for _, r in parsed[spec.name] if r.get(col) is not None}
@@ -294,6 +305,7 @@ def import_masters(db: Session, dataset: Path, *, actor: Actor = audit.SYSTEM, d
 
     _warn_unknown_hsn(db, accepted.get("item", []), report)
     _warn_gst_rate_differs(db, accepted.get("item", []), report)
+    kept = _supplier_controls(db, accepted, report)
 
     if not dry_run:
         for spec in reversed(TABLES):
@@ -306,6 +318,7 @@ def import_masters(db: Session, dataset: Path, *, actor: Actor = audit.SYSTEM, d
                     text(f"insert into {spec.name} ({', '.join(cols)}) values ({', '.join(':' + c for c in cols)})"),  # noqa: S608
                     rows,
                 )
+        _restore_supplier_controls(db, kept)
         audit.record(
             db,
             actor,
@@ -321,6 +334,54 @@ def import_masters(db: Session, dataset: Path, *, actor: Actor = audit.SYSTEM, d
         db.commit()
     report.seconds = round(time.monotonic() - started, 2)
     return report
+
+
+@dataclass
+class _Controls:
+    status: dict[str, str]  # the supplier's status before the import, for suppliers the import keeps
+    banks: list[dict[str, Any]]  # their bank accounts as they were, every column
+
+
+def _supplier_controls(db: Session, accepted: dict[str, list[dict[str, Any]]], report: ImportReport) -> _Controls:
+    """An import never changes the status or the bank details of a supplier the company already has (DF-16): those
+    change only through their proposals, with a second person. Whatever the file says for them is set aside, and the
+    report says so."""
+    incoming = {str(r["code"]) for r in accepted.get("supplier", [])}
+    status = {
+        str(r[0]): str(r[1]) for r in db.execute(text("select code, status from supplier")) if str(r[0]) in incoming
+    }
+    for n, row in enumerate(accepted.get("supplier", []), start=2):
+        old = status.get(str(row["code"]))
+        if old is not None and row.get("status") not in (None, old):
+            report.warnings.append(
+                Problem("supplier", n, f"{row['code']}: status stays {old}; an import does not change it")
+            )
+    banks = [dict(r) for r in db.execute(text("select * from supplier_bank_account")).mappings()]
+    banks = [b for b in banks if str(b["supplier_code"]) in status]
+    before = {(str(b["supplier_code"]), str(b["account_no"]), str(b["ifsc"])) for b in banks}
+    for n, row in enumerate(accepted.get("supplier_bank_account", []), start=2):
+        code = str(row["supplier_code"])
+        if code in status and (code, str(row["account_no"]), str(row["ifsc"])) not in before:
+            report.warnings.append(
+                Problem("supplier_bank_account", n, f"{code}: bank details kept; change them through a bank change")
+            )
+    accepted["supplier_bank_account"] = [
+        r for r in accepted.get("supplier_bank_account", []) if str(r["supplier_code"]) not in status
+    ]
+    return _Controls(status, banks)
+
+
+def _restore_supplier_controls(db: Session, kept: _Controls) -> None:
+    for code, status in kept.status.items():
+        db.execute(text("update supplier set status = :s where code = :c"), {"s": status, "c": code})
+    for row in kept.banks:
+        cols = list(row)
+        db.execute(
+            text(
+                f"insert into supplier_bank_account ({', '.join(cols)}) values ({', '.join(':' + c for c in cols)})"  # noqa: S608 - column names from the table itself
+            ),
+            row,
+        )
 
 
 def _warn_unknown_hsn(db: Session, items: list[dict[str, Any]], report: ImportReport) -> None:

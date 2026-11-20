@@ -360,11 +360,10 @@ def _run(ctx: Any) -> Outcome:  # noqa: C901 - one story, step by step
                 not any(r[5] for r in pos.values()),
             )
             for no, row in pos.items():
-                chain = band("po", Decimal(row[4]))
                 c.same(
-                    f"{no} of {money(row[4])}: {'approved by the rule' if chain == 'auto' else 'waits for the ' + chain}",
+                    f"{no} of {money(row[4])}: waits for the cfo (not touchless; never the buyer)",
                     row[2],
-                    "approved" if chain == "auto" else "submitted",
+                    "submitted",
                 )
                 if row[2] != "submitted":
                     continue

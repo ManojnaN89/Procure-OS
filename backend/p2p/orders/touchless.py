@@ -20,6 +20,7 @@ from sqlalchemy.orm import Session
 from p2p.agents import autonomy
 from p2p.approvals import budget, rules
 from p2p.formulas import touchless as tl
+from p2p.formulas.touchless import PRICE_LIST
 from p2p.orders import contracts as contract_usage
 from p2p.orders import dispatch
 from p2p.platform import audit
@@ -63,14 +64,18 @@ def save_rule(
     value_limit: Decimal | None,
     price_pct: Decimal,
     note: str | None = None,
+    apply: bool = True,
 ) -> int:
-    """Make the next version from a date (an empty limit means the buyer's tier). Returns the version."""
+    """Make the next version from a date (an empty limit means the buyer's tier). Returns the version. With apply False
+    it only checks the change."""
     current = _row(db, effective_from)
     if price_pct < 0 or (value_limit is not None and value_limit < 0):
         raise TouchlessRuleError("the limit and the price tolerance cannot be negative")
     if price_pct > 100:
         raise TouchlessRuleError("the price tolerance cannot be above 100%")
     version = int(db.execute(text("select coalesce(max(version), 0) + 1 from touchless_rule")).scalar_one())
+    if not apply:
+        return version
     if current is not None:
         db.execute(
             text("update touchless_rule set effective_to = :t where id = :i"),
@@ -107,8 +112,8 @@ def save_rule(
 
 
 def tier_of(rule: rules.ApprovalRule) -> str:
-    """The order's tier: 'buyer' when the rule needs no approver (the buyer's own issue is the approval), else the last
-    role of the chain (the most senior person who approves it)."""
+    """The order's tier: 'buyer' for the band with no approver (where only a touchless order is approved, by the rule; an
+    order there that is not touchless goes up a tier), else the last role of the chain (the most senior approver)."""
     return "buyer" if rule.is_automatic else rule.roles[-1]
 
 
@@ -117,7 +122,7 @@ def _buyer_tier_max(db: Session, rule: rules.ApprovalRule, today: date) -> Decim
 
 
 def buyer_tier_top(db: Session, today: date) -> Decimal | None:
-    """The top of the buyer's tier (the order rule that needs no approver), or None when every order needs one."""
+    """The top of the touchless band (the order rule that needs no approver), or None when every order needs one."""
     try:
         lowest = rules.find_rule(db, "po", Decimal(0), today)
     except rules.ApprovalRuleError:
@@ -127,12 +132,22 @@ def buyer_tier_top(db: Session, today: date) -> Decimal | None:
 
 def facts(db: Session, po_no: str, rule: rules.ApprovalRule, today: date) -> tl.Facts:
     """What our own records say about the order, for the tests."""
-    po = db.execute(text("select supplier_code, total from po where no = :n"), {"n": po_no}).mappings().one()
+    po = (
+        db.execute(
+            text(
+                "select p.supplier_code, p.total, coalesce(t.advance_pct, 0) as advance_pct from po p "
+                "left join payment_terms t on t.code = p.payment_terms_code where p.no = :n"
+            ),
+            {"n": po_no},
+        )
+        .mappings()
+        .one()
+    )
     status = db.execute(text("select status from supplier where code = :c"), {"c": po["supplier_code"]}).scalar()
     lines = tuple(
         tl.OrderLine(
             r["description"] or r["item_code"] or f"line {r['line_no']}",
-            "contract"
+            ("price_list" if r["source_ref"] in (None, PRICE_LIST) else "contract")
             if r["source"] == "contract"
             else str(r["source_ref"])
             if r["source"] == "direct"
@@ -155,7 +170,8 @@ def facts(db: Session, po_no: str, rule: rules.ApprovalRule, today: date) -> tl.
             str(r[0])
             for r in db.execute(
                 text(
-                    "select source_ref from po_line where po_no = :n and source = 'contract' and status <> 'cancelled'"
+                    "select source_ref from po_line where po_no = :n and source = 'contract' and status <> 'cancelled' "
+                    "and source_ref is not null and source_ref <> 'price_list'"
                 ),
                 {"n": po_no},
             )
@@ -179,6 +195,7 @@ def facts(db: Session, po_no: str, rule: rules.ApprovalRule, today: date) -> tl.
         budget_over=over,
         gate_allowed=gate.allowed,
         gate_reason=gate.reason,
+        advance_pct=int(po["advance_pct"]),
     )
 
 

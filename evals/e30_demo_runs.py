@@ -601,8 +601,8 @@ def check_order(
     )
     c.same("order: total", D(h[5]), total)
     c.same("order: our GSTIN is the delivery place's", h[7], csv_locations()[loc]["gstin"])
-    if status is None:  # the rule table decides: an order within the band for no approval is approved at once
-        status = "approved" if po_route(taxable) == "auto" else "submitted"
+    if status is None:  # not touchless, so a person approves it, even within the band with no approver (v1.1)
+        status = "submitted"
     c.same("order status", h[6], status)
     return taxable, total, igst
 
@@ -610,17 +610,8 @@ def check_order(
 def approve_order(d: Demo, c: Checks, po: str, taxable: Decimal, total: Decimal, igst: Decimal) -> None:
     from playwright.sync_api import expect
 
-    if po_route(taxable) == "auto":
-        c.same(
-            f"the order of {money(taxable)} is within the band that needs no approver: approved by the rule",
-            one(d.db, "select status from po where no = :n", n=po),
-            "approved",
-        )
-        refused = api("POST", f"/api/purchase-orders/{po}/approve", d.w.headers("Buyer"), json={})
-        c.true(
-            "the buyer cannot approve an order (refused)", refused.status_code in (403, 409), str(refused.status_code)
-        )
-        return
+    refused = api("POST", f"/api/purchase-orders/{po}/approve", d.w.headers("Buyer"), json={})
+    c.true("the buyer cannot approve an order (refused)", refused.status_code in (403, 409), str(refused.status_code))
     my_work(
         d,
         "proc_head",
@@ -2179,9 +2170,9 @@ def run_held_order(d: Demo, c: Checks, co: Company, pick: Pick) -> None:
         what="reads the reason and accepts the price",
     )
     c.same(
-        "order status: accepted, so it follows the approval band for its value",
+        "order status: accepted, so a person other than the buyer approves it",
         first(db, "select status from po where no = :n", n=po),
-        "approved" if po_route(taxable) == "auto" else "submitted",
+        "submitted",
     )
     c.same(
         "the hold is lifted",

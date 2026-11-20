@@ -16,6 +16,7 @@ from typing import Any
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
+from p2p.approvals.workflow import org_code_of
 from p2p.formulas.calendar import business_today
 from p2p.formulas.contracts import ceiling_breach
 from p2p.formulas.gst import Registration
@@ -28,6 +29,7 @@ from p2p.formulas.orders import (
     order_totals,
     variance_pct,
 )
+from p2p.formulas.touchless import PRICE_LIST
 from p2p.orders import contracts as contract_usage
 from p2p.orders import workflow
 from p2p.platform import audit, numbering, proposals
@@ -54,8 +56,14 @@ class ReadyLine:
     unit_price: Decimal
     gst_rate: Decimal
     source: str  # contract, direct (a buying route without quotes) or award
-    source_ref: str  # the contract code, the route or the quote number
+    source_ref: str  # the contract code (price_list when there is none), the route or the quote number
     quote_no: str | None = None
+    price_record_id: int | None = None  # the contract price version a contract line was bought at
+
+
+def _contract_of(line: ReadyLine) -> str | None:
+    """The contract a line is bought on; a price-list line has none."""
+    return line.source_ref if line.source == "contract" and line.source_ref != PRICE_LIST else None
 
 
 @dataclass
@@ -80,7 +88,7 @@ def ready_lines(db: Session, request_no: str, as_of: date) -> tuple[list[ReadyLi
             "select rl.line_no, rl.item_code, coalesce(i.name, rl.free_text) as name, rl.qty, rl.uom, rl.base_qty, "
             "rl.est_price, rl.need_by, rl.gl_code, coalesce(nullif(rl.category_code, ''), i.category_code) as category, "
             "coalesce(rl.delivery_location, r.ship_to_location) as location, "
-            "d.method, d.supplier_code as d_supplier, d.contract_code, d.price as d_price, d.rfq_no, d.route, "
+            "d.method, d.supplier_code as d_supplier, d.contract_code, d.price as d_price, d.rfq_no, d.route, d.price_record_id, "
             "(not d.needs_agreement or exists (select 1 from proposal p where p.id = d.proposal_id "
             "and p.status in ('approved', 'edited'))) as agreed, "
             "i.gst_rate_before, i.gst_rate_after, i.gst_rate_change_date "
@@ -129,7 +137,8 @@ def ready_lines(db: Session, request_no: str, as_of: date) -> tuple[list[ReadyLi
                     unit_price=r["d_price"],
                     gst_rate=rate,
                     source=r["method"],
-                    source_ref=r["contract_code"] if r["method"] == "contract" else r["route"],
+                    source_ref=(r["contract_code"] or PRICE_LIST) if r["method"] == "contract" else r["route"],
+                    price_record_id=r["price_record_id"] if r["method"] == "contract" else None,
                 )
             )
             continue
@@ -201,9 +210,7 @@ def place(
             own_terms[line.supplier_code] = db.execute(
                 text("select payment_terms_code from supplier where code = :c"), {"c": line.supplier_code}
             ).scalar()
-        payment, delivery = _terms(
-            db, [line], line.source_ref if line.source == "contract" else None, own_terms[line.supplier_code]
-        )
+        payment, delivery = _terms(db, [line], _contract_of(line), own_terms[line.supplier_code])
         by_group.setdefault((line.supplier_code, payment, delivery, line.location), []).append(line)
     created: list[tuple[str, bool]] = []
     for (supplier, _payment, _delivery, _location), group in sorted(
@@ -271,10 +278,8 @@ def _create_po(
                 )
     totals = order_totals([*amounts, *[c[3] for c in charge_parts]])
 
-    contracts = {ln.source_ref for ln in lines if ln.source == "contract"}
-    contract_code = (
-        next(iter(contracts)) if len(contracts) == 1 and all(ln.source == "contract" for ln in lines) else None
-    )
+    contracts = {code for ln in lines if (code := _contract_of(ln))}
+    contract_code = next(iter(contracts)) if len(contracts) == 1 and all(_contract_of(ln) for ln in lines) else None
     terms = _terms(db, lines, contract_code, sup["payment_terms_code"])
     rfqs = {
         r[0]
@@ -334,8 +339,8 @@ def _create_po(
         db.execute(
             text(
                 "insert into po_line (po_no, line_no, request_no, request_line_no, item_code, description, qty, uom, base_qty, "
-                "unit_price, est_price, gst_rate, taxable, cgst, sgst, igst, need_by, gl_code, source, source_ref) values "
-                "(:po, :n, :req, :rl, :item, :d, :q, :u, :bq, :p, :est, :g, :tx, :cg, :sg, :ig, :need, :gl, :src, :ref)"
+                "unit_price, est_price, gst_rate, taxable, cgst, sgst, igst, need_by, gl_code, source, source_ref, price_record_id) "
+                "values (:po, :n, :req, :rl, :item, :d, :q, :u, :bq, :p, :est, :g, :tx, :cg, :sg, :ig, :need, :gl, :src, :ref, :prid)"
             ),
             {
                 "po": po_no,
@@ -358,6 +363,7 @@ def _create_po(
                 "gl": ln.gl_code,
                 "src": ln.source,
                 "ref": ln.source_ref,
+                "prid": ln.price_record_id,
             },
         )
         db.execute(
@@ -436,10 +442,19 @@ def _terms(
     return supplier_terms, None
 
 
+@proposals.guard("po.accept_variance")
+def _may_accept_variance(db: Session, payload: dict[str, Any], actor: Actor) -> None:
+    """Accepting the price is an approval: its band's people only, never the order's makers."""
+    if actor.kind == "user":
+        po = db.execute(text("select * from po where no = :n"), {"n": str(payload["po_no"])}).mappings().one()
+        workflow.refuse_outside_band(db, dict(po), org_code_of(db, int(actor.id)))
+
+
 @proposals.executor("po.accept_variance")
 def _accept_variance(db: Session, payload: dict[str, Any], actor: Actor) -> dict[str, Any]:
     """A person accepted the price above the estimate: the hold is lifted and the order goes for approval."""
     po_no, tenant = str(payload["po_no"]), str(payload["tenant"])
+    _may_accept_variance(db, payload, actor)
     held = db.execute(text("select hold_reason from po where no = :n and status = 'draft'"), {"n": po_no}).scalar()
     db.execute(
         text(
@@ -451,7 +466,8 @@ def _accept_variance(db: Session, payload: dict[str, Any], actor: Actor) -> dict
     audit.record(db, actor, "po.variance_accepted", "po", po_no)
     db.commit()
 
-    return {"status": workflow.submit(db, tenant, po_no, actor, today=business_today())}
+    # the system sends the order on for approval: accepting its price does not make this person one of its makers
+    return {"status": workflow.submit(db, tenant, po_no, SERVICE, today=business_today())}
 
 
 def sweep(db: Session, tenant: str, *, as_of: date, actor: Actor = SERVICE) -> list[OrderResult]:

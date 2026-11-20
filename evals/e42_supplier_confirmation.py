@@ -252,6 +252,10 @@ def run(ctx: lib.Ctx) -> Outcome:  # noqa: C901 - one scenario, step by step
         out.metrics[f"price {'one paisa above' if above else 'at'} the {pct}% edge"] = (
             f"{old} -> {new}: {'purchase manager' if above else 'buyer'}"
         )
+        # Q19: a price up is material, so the order goes for approval again before the supplier gets it back
+        status = db.execute(text("select status from po where no = :n"), {"n": po_no}).scalar_one()
+        if status != "submitted":
+            out.find("high", f"{po_no}: price up accepted, but the order is {status}, not back for approval (Q19)")
 
     # 3. a decline goes back to the buyer, and nothing orders it again by itself
     post(tokens[declined_po], action="decline", reason="our furnace is down")
@@ -401,8 +405,19 @@ def run(ctx: lib.Ctx) -> Outcome:  # noqa: C901 - one scenario, step by step
     if any(v == 0 for v in trail.values()):
         out.find("high", f"no audit rows for {[a for a, v in trail.items() if v == 0]}")
 
+    db.rollback()
+    with_supplier = db.execute(
+        text(
+            "select no from po where no = any(:n) and status = 'acknowledged' "
+            "and not exists (select 1 from dispatch_note d where d.po_no = po.no) order by no limit 1"
+        ),
+        {"n": list(pos)},
+    ).scalar()
+    if with_supplier is None:
+        out.find("high", "no order is left with its supplier for the mutation checks")
+        return out
     out.metrics["mutation checks (rule broken on purpose: caught?)"] = _mutations(
-        db, slug, within_po, confirmation, supplier_links, client, box, out
+        db, slug, with_supplier, confirmation, supplier_links, client, box, out
     )
     return out
 

@@ -146,6 +146,7 @@ MENUS = {
         "Invoices",
         "Payments",
         "Reconciliation",
+        "Vendors",  # Finance verifies supplier bank accounts
         "Exceptions",
         "Control tower",
         "Assistant",

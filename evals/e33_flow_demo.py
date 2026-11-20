@@ -90,7 +90,7 @@ def _run(ctx: Any) -> Outcome:
         found = re.match(r"^(\S+@\S+)\s+(\S+)\s+#\s*(.+) \((\w+)\)$", line)
         if found:
             people[found.group(3)] = (found.group(1), found.group(2))
-    check(len(people) == 9, f"expected 9 logins, found {len(people)}")
+    check(len(people) == 10, f"expected 10 logins (nine roles and a second administrator), found {len(people)}")
     tokens: dict[str, dict[str, str]] = {}
 
     def who(designation: str) -> dict[str, str]:
@@ -355,7 +355,7 @@ def _run(ctx: Any) -> Outcome:
         band = chain("po", lib.D(po[7]))
         # touchless (D35): the company's profile turns po.issue on; a contract line in the buyer's band goes out alone
         touchless = band == "auto" and supplier == contract["supplier_code"] and touchless_on
-        want = "sent" if touchless else "approved" if band == "auto" else "submitted"
+        want = "sent" if touchless else "submitted"  # never approved by the buyer who made it (v1.1)
         check(po[2] == want, f"{po[0]} of {po[7]} should be {want} (rule '{band}', touchless {touchless})")
     sent_alone = [r[0] for r in orders.values() if r[2] == "sent"]
     out.metrics["orders issued touchless"] = len(sent_alone)
@@ -365,7 +365,10 @@ def _run(ctx: Any) -> Outcome:
         refused(BUYER, "POST", f"/api/purchase-orders/{no}/send")  # already out
     waiting_pos = [r[0] for r in orders.values() if r[2] == "submitted"]
     out.metrics["orders waiting for the purchase manager"] = len(waiting_pos)
-    check(len(waiting_pos) == 1, f"only the copper wire order is above Rs 1,00,000: {waiting_pos}")
+    check(
+        len(waiting_pos) == len(orders) - len(sent_alone),
+        f"every order that is not touchless waits for the purchase manager: {waiting_pos}",
+    )
     for no in waiting_pos:
         refused(BUYER, "POST", f"/api/purchase-orders/{no}/approve", {})
         refused(REQUESTER, "POST", f"/api/purchase-orders/{no}/approve", {})

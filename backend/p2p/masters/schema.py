@@ -550,6 +550,8 @@ TABLES: tuple[Table, ...] = (
             ("valid_from", "date"),
             ("valid_to", "date"),
             ("lead_days", "integer"),
+            ("version", "integer"),
+            ("status", "text"),
         ),
         None,
         (("supplier_code", "supplier", "code"), ("item_code", "item", "code"), ("contract_code", "contract", "code")),

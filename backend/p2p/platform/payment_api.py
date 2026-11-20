@@ -5,6 +5,7 @@ from datetime import date
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, HTTPException
+from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from p2p.formulas import payment as rules
@@ -179,7 +180,8 @@ def get_run(no: str, db: Db, ctx: Ctx) -> dict[str, Any]:
         "has_file": bool(r["file_text"]),
         "payments": out,
         "can_file": can_work and r["status"] == "approved",
-        "can_mark_paid": can_work and r["status"] == "file_generated",
+        "can_mark_paid": can_work and r["status"] == "file_generated" and manual_mark_paid(db),
+        "can_import_statement": can_work and r["status"] == "file_generated",  # the way to settle, always open
     }
 
 
@@ -238,10 +240,28 @@ def import_bank_statement(
         raise HTTPException(422, str(exc)) from None
 
 
+MARK_PAID_OFF = (
+    "Recording a payment by hand is switched off until payments carry the bank's evidence (DF-01, DF-02): "
+    "import the bank statement to settle the run"
+)
+
+
+def manual_mark_paid(db: Session) -> bool:
+    """Containment: the hand-recorded payment invents bank references and settles without evidence, so it stays off
+    except where a company turned it on on purpose (the synthetic demo companies)."""
+    for table in ("org_setting", "app_setting"):  # the company's own choice first, then the loaded master settings
+        value = db.execute(text(f"select value from {table} where key = 'manual_mark_paid'")).scalar()  # noqa: S608
+        if value not in (None, ""):
+            return str(value).lower() == "true"
+    return False
+
+
 @router.post("/payment-runs/{no}/paid")
 def mark_paid(
     no: str, payload: dict[str, Any], db: Db, ctx: Annotated[routing.TenantContext, Depends(require("payment.propose"))]
 ) -> dict[str, Any]:
+    if not manual_mark_paid(db):
+        raise HTTPException(409, MARK_PAID_OFF)
     paid_on = _date(payload.get("paid_on") or business_today().isoformat(), "paid_on")
     if paid_on > business_today():
         raise HTTPException(422, "the bank cannot have paid on a date that has not come yet")

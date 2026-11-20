@@ -1,8 +1,9 @@
 """Purchase order tiers, the delivery location on the order, and touchless orders (plan step 7, P1-35, D35, D36).
 
-The tiers are the 'po' rows of the approval rule table: the buyer up to Rs 1,00,000 (the buyer's own issue is the
-approval), the purchase manager (here the procurement head) up to Rs 5,00,000, the director above. An order in the buyer's
-tier made of contract and safe-reorder lines is issued and sent with no buyer when every touchless test passes.
+The tiers are the 'po' rows of the approval rule table: a band with no approver up to Rs 1,00,000, the purchase manager
+(here the procurement head) up to Rs 5,00,000, the director above. In the band with no approver only a touchless order is
+approved, by the rule: made of contract and safe-reorder lines, it is issued and sent with no buyer when every touchless
+test passes. Any other order there goes up to the purchase manager: the buyer who made an order never approves it (v1.1).
 """
 
 from decimal import Decimal
@@ -20,7 +21,7 @@ from p2p.formulas import touchless as tl
 from p2p.main import app
 from p2p.orders import service as orders
 from p2p.orders import touchless, workflow
-from p2p.platform import demo, sod
+from p2p.platform import audit, demo, sod
 
 D = Decimal
 client = TestClient(app)
@@ -100,12 +101,29 @@ RULE = tl.TouchlessRule(1, None, D(2))
 
 @pytest.mark.parametrize(
     ("route", "touchless_"),
-    [("contract", True), ("reorder", True), ("single_source", False), ("emergency", False), ("quotation", False)],
+    [
+        ("contract", True),
+        ("reorder", True),
+        ("price_list", False),
+        ("single_source", False),
+        ("emergency", False),
+        ("quotation", False),
+    ],
 )
 def test_only_contract_and_safe_reorder_lines_can_be_touchless(route: str, touchless_: bool) -> None:
     found = tl.checks(_facts(lines=(tl.OrderLine("x", route, D(10), D(10)),)), RULE)
 
     assert all(c.passed for c in found) is touchless_
+
+
+@pytest.mark.parametrize(("advance", "passed"), [(0, True), (1, False), (30, False)])
+def test_an_advance_in_the_payment_terms_stops_touchless(advance: int, passed: bool) -> None:
+    found = tl.checks(_facts(advance_pct=advance), RULE)
+
+    (check,) = [c for c in found if c.test == "touchless.advance"]
+    assert check.passed is passed and all(c.passed for c in found) is passed
+    if not passed:
+        assert f"an advance of {advance}% is agreed" in tl.reason(found)
 
 
 @pytest.mark.parametrize(
@@ -143,7 +161,7 @@ def test_with_no_buyer_tier_and_no_limit_nothing_is_touchless() -> None:
 @pytest.mark.parametrize(
     ("value", "tier", "status"),
     [
-        ("100000.00", "buyer", "approved"),  # the buyer's issue is the approval
+        ("100000.00", "procurement_head", "submitted"),  # not touchless: a person approves, never the buyer
         ("100000.01", "procurement_head", "submitted"),
         ("500000.00", "procurement_head", "submitted"),
         ("500000.01", "director", "submitted"),
@@ -154,12 +172,12 @@ def test_each_tier_starts_one_paisa_above_the_one_below(tiers: Session, value: s
 
     row = _po(tiers, po)
     assert (row["total"], row["approval_tier"], row["status"]) == (D(value), tier, status)
-    if tier == "buyer":
-        assert "the buyer's issue is the approval" in row["decision_reason"]
-        assert tiers.execute(text("select count(*) from po_approval_step")).scalar_one() == 0
+    approver = tiers.execute(text("select role from po_approval_step order by step desc limit 1")).scalar_one()
+    assert approver == tier and row["touchless"] is False
+    if value == "100000.00":
+        assert "Not touchless, so a person approves it, never the buyer who made it" in row["decision_reason"]
     else:
-        approver = tiers.execute(text("select role from po_approval_step order by step desc limit 1")).scalar_one()
-        assert approver == tier and row["touchless"] is False and "needs an approver" in row["touchless_note"]
+        assert "needs an approver" in row["touchless_note"]
 
 
 # ---- touchless ---------------------------------------------------------------------------------------
@@ -188,6 +206,7 @@ def test_the_apex_casting_on_contract_is_issued_and_sent_with_no_buyer(tiers: Se
         "touchless.contract",
         "touchless.price",
         "touchless.budget",
+        "touchless.advance",
         "touchless.gate",
     ]
     (mail,) = [m for m in outbox.sent if po in m["subject"]]
@@ -222,7 +241,7 @@ def test_the_touchless_limit_exactly_and_one_paisa_over(
 
     row = _po(tiers, _order(tiers, "R-3", "Z", "1", value))
 
-    assert (row["touchless"], row["status"]) == ((True, "sent") if touchless_ else (False, "approved"))
+    assert (row["touchless"], row["status"]) == ((True, "sent") if touchless_ else (False, "submitted"))
     if limit:
         assert row["touchless_rule"] == "touchless_po v2"
     if not touchless_:
@@ -264,7 +283,7 @@ def test_a_contract_used_up_exactly_is_touchless_and_one_paisa_over_is_held(
 
 
 @pytest.mark.parametrize("how", ["propose", "kill switch"])
-def test_with_the_autonomy_gate_off_the_order_waits_for_the_buyer_and_says_why(
+def test_with_the_autonomy_gate_off_the_order_goes_to_a_person_and_says_why(
     tiers: Session, outbox: Outbox, how: str
 ) -> None:
     _gate(tiers, "auto" if how == "kill switch" else "propose")
@@ -273,7 +292,7 @@ def test_with_the_autonomy_gate_off_the_order_waits_for_the_buyer_and_says_why(
 
     row = _po(tiers, _order(tiers, "R-6", "RM-01", "50", "650"))
 
-    assert (row["status"], row["touchless"]) == ("approved", False)
+    assert (row["status"], row["touchless"]) == ("submitted", False)  # to the purchase manager, not the buyer
     why = "the kill switch is on" if how == "kill switch" else "a person confirms it first (automation setting"
     assert f"automatic issue: {why}" in row["touchless_note"]
     assert "po.issue" not in row["touchless_note"]
@@ -290,7 +309,7 @@ def test_a_single_source_line_is_never_touchless(tiers: Session, outbox: Outbox)
     assert tiers.execute(text("select source_ref from po_line where po_no = :n"), {"n": row["no"]}).scalar_one() == (
         "single_source"
     )
-    assert (row["status"], row["touchless"]) == ("approved", False)
+    assert (row["status"], row["touchless"]) == ("submitted", False)
     assert "Zero-rated part is single source: never touchless" in row["touchless_note"]
 
 
@@ -316,7 +335,7 @@ def test_a_touchless_order_is_audited_as_the_system_and_its_rule_with_the_facts_
         "touchless_po v1",
         "touchless_po v1; PO-01:v1",
     )
-    assert check["after"]["touchless"] is True and len(check["after"]["checks"]) == 8
+    assert check["after"]["touchless"] is True and len(check["after"]["checks"]) == 9
     assert (rows["po.send"]["actor_type"], rows["po.send"]["actor_id"]) == ("rule", "touchless_po v1")
     outcome = tiers.execute(text("select auto, ref from autonomy_outcome where decision_type = 'po.issue'")).one()
     assert tuple(outcome) == (True, po)
@@ -338,6 +357,64 @@ def test_no_person_holds_a_duty_on_a_touchless_order_and_the_buyer_still_cannot_
     tiers.commit()
     with pytest.raises(workflow.ApprovalError, match="segregation of duties"):
         workflow.approve(tiers, tiers.info["slug"], big, logins["procurement"])
+
+
+def _resubmit(db: Session, po: str, buyer: str) -> list[tuple[str, str, str | None]]:
+    """Put a submitted order back to draft with another buyer, submit it again, and return its new chain."""
+    db.execute(text("delete from po_approval_step where po_no = :n"), {"n": po})
+    db.execute(text("update po set status = 'draft', buyer = :b where no = :n"), {"b": buyer, "n": po})
+    db.commit()
+    assert workflow.submit(db, db.info["slug"], po, sod.user(1), today=TODAY) == "submitted"
+    return [
+        (r[0], r[1], r[2])
+        for r in db.execute(
+            text("select role, approver, delegate from po_approval_step where po_no = :n order by step"), {"n": po}
+        )
+    ]
+
+
+def test_a_buyer_who_holds_the_approving_role_is_skipped_and_the_order_goes_up_a_tier(
+    tiers: Session, outbox: Outbox
+) -> None:
+    _gate(tiers, "propose")  # not touchless: a person approves even a small order
+    po = _order(tiers, "R-12", "RM-01", "10", "650")
+    assert [r[0] for r in tiers.execute(text("select role from po_approval_step where po_no = :n"), {"n": po})] == [
+        "procurement_head"
+    ]
+
+    chain = _resubmit(tiers, po, "U5")  # the procurement head made this order himself
+
+    assert [(role, who) for role, who, _ in chain] == [("director", chain[0][1])] and chain[0][1] != "U5"
+    assert "U5" in workflow.makers(tiers, _po(tiers, po))
+
+
+def test_a_deputy_who_made_the_order_does_not_stand_in_for_the_approver(tiers: Session, outbox: Outbox) -> None:
+    _gate(tiers, "propose")
+    po = _order(tiers, "R-13", "RM-01", "10", "650")
+    head = tiers.execute(text("select approver from po_approval_step where po_no = :n"), {"n": po}).scalar_one()
+    buyer = tiers.execute(
+        text("select code from org_user where code <> :h order by code limit 1"), {"h": head}
+    ).scalar_one()
+    tiers.execute(
+        text("insert into delegation (from_user, to_user, start_date, reason) values (:f, :t, '2024-01-01', 'leave')"),
+        {"f": head, "t": buyer},
+    )
+    tiers.commit()
+
+    chain = _resubmit(tiers, po, buyer)
+
+    assert chain == [("procurement_head", head, None)]  # no deputy rather than the buyer as deputy
+
+
+def test_the_buyer_cannot_accept_a_price_variance_on_their_own_order(tiers: Session, outbox: Outbox) -> None:
+    logins = _logins(tiers)
+    _gate(tiers, "propose")
+    po = _order(tiers, "R-14", "RM-01", "10", "650")
+    tiers.execute(text("update po set buyer = 'U5', status = 'draft' where no = :n"), {"n": po})
+    tiers.commit()
+
+    with pytest.raises(workflow.ApprovalError, match="segregation of duties"):
+        orders._accept_variance(tiers, {"po_no": po, "tenant": tiers.info["slug"]}, sod.user(logins["procurement"]))
 
 
 # ---- the delivery location ----------------------------------------------------------------------------
@@ -400,10 +477,139 @@ def test_the_order_list_and_page_show_the_tier_approver_place_and_touchless_badg
         "Bengaluru store",
         True,
     )
-    assert page["touchless_note"].startswith("Touchless") and len(page["touchless_checks"]) == 8
+    assert page["touchless_note"].startswith("Touchless") and len(page["touchless_checks"]) == 9
     assert page["touchless_rule"] == "touchless_po v1" and page["ship_to"] == "WH-BLR"
 
 
 def test_touchless_orders_are_on_for_apex_and_off_for_brightwave() -> None:
     assert demo.company("apex").autonomy == {"po.issue": "auto"}
     assert demo.company("brightwave").autonomy == {"po.issue": "propose"}
+
+
+def _maker_trace(db: Session, po: str, how: str, user_id: int) -> None:
+    """Leave in the audit log (or the revisions) the mark of one way of shaping the order, done by this login."""
+    line = db.execute(text("select request_no, request_line_no from po_line where po_no = :n"), {"n": po}).one()
+    if how == "award":
+        db.execute(
+            text("insert into rfq (no, due_date, type, status) values ('RFQ-C1', :d, 'commercial', 'awarded')"),
+            {"d": TODAY},
+        )
+        db.execute(
+            text(
+                "insert into rfq_line (rfq_no, line_no, request_no, request_line_no, qty) values ('RFQ-C1', 1, :r, :l, 1)"
+            ),
+            {"r": line[0], "l": line[1]},
+        )
+        audit.record(db, sod.user(user_id), "rfq.award", "rfq", "RFQ-C1")
+    elif how == "route":
+        audit.record(
+            db, sod.user(user_id), "sourcing.route_change_proposed", "request", f"{line[0]}/{line[1]}",
+            after={"route": "direct"},
+        )  # fmt: skip
+    else:
+        db.execute(
+            text(
+                "insert into po_revision (po_no, version, changed_by, reason, changes, total_before, total_after, "
+                "reapproval) values (:n, 2, :u, 'more', '[]', 1, 2, true)"
+            ),
+            {"n": po, "u": str(user_id)},
+        )
+    db.commit()
+
+
+@pytest.mark.parametrize("how", ["award", "route", "revise"])
+def test_who_awarded_rerouted_or_revised_the_order_is_one_of_its_makers_and_never_approves_it(
+    tiers: Session, outbox: Outbox, how: str
+) -> None:
+    logins = _logins(tiers)
+    _gate(tiers, "propose")
+    po = _order(tiers, f"R-2{len(how)}", "RM-01", "10", "650")
+    head = tiers.execute(text("select approver from po_approval_step where po_no = :n"), {"n": po}).scalar_one()
+    assert workflow.org_code_of(tiers, logins["procurement"]) == head
+
+    _maker_trace(tiers, po, how, logins["procurement"])
+
+    assert head in workflow.makers(tiers, _po(tiers, po))
+    with pytest.raises(workflow.ApprovalError, match="segregation of duties"):
+        workflow.approve(tiers, tiers.info["slug"], po, logins["procurement"])
+    chain = _resubmit(tiers, po, _po(tiers, po)["buyer"])
+    assert chain and head not in [who for _, who, _ in chain]
+
+
+def test_a_revision_made_by_accepting_a_suppliers_price_does_not_make_the_approver_a_maker(
+    tiers: Session, outbox: Outbox
+) -> None:
+    logins = _logins(tiers)
+    _gate(tiers, "propose")
+    po = _order(tiers, "R-30", "RM-01", "10", "650")
+    head = workflow.org_code_of(tiers, logins["procurement"])
+    _maker_trace(tiers, po, "revise", logins["procurement"])
+    tiers.execute(
+        text(
+            "insert into po_change (po_no, po_line_no, kind, old_value, new_value, source, status, proposal_id, "
+            "version_made) values (:n, 1, 'price', '650', '660', 'link', 'accepted', 1, 2)"
+        ),
+        {"n": po},
+    )
+    tiers.commit()
+
+    assert head not in workflow.makers(tiers, _po(tiers, po))
+
+
+def test_when_every_approver_made_the_order_it_is_refused_with_a_clear_reason_not_approved(
+    tiers: Session, outbox: Outbox, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _gate(tiers, "propose")
+    po = _order(tiers, "R-31", "RM-01", "10", "650")
+    tiers.execute(text("delete from po_approval_step where po_no = :n"), {"n": po})
+    tiers.execute(text("update po set status = 'draft' where no = :n"), {"n": po})
+    tiers.commit()
+    everyone = frozenset(str(r[0]) for r in tiers.execute(text("select code from org_user")))
+    monkeypatch.setattr(workflow, "makers", lambda db, order: everyone)  # all of them shaped the order
+
+    held = workflow.submit(tiers, tiers.info["slug"], po, sod.user(1), today=TODAY)
+
+    row = _po(tiers, po)
+    assert held == "held" and row["status"] == "draft"  # never approved by a maker, and the reason is on the order
+    assert row["hold_reason"].startswith("Nobody may approve it:") and "add an approver" in row["hold_reason"]
+    from p2p.formulas.calendar import BusinessCalendar
+    from p2p.platform import exceptions
+
+    stuck = [s for s in exceptions.collect(tiers, TODAY, BusinessCalendar(frozenset())) if s.kind == "order"]
+    assert [s.ref for s in stuck] == [po]
+    monkeypatch.undo()  # the rules now name someone who did not make it: submitting again goes on
+    assert workflow.submit(tiers, tiers.info["slug"], po, sod.user(1), today=TODAY) == "submitted"
+    assert _po(tiers, po)["hold_reason"] is None
+
+
+def test_an_approver_who_revises_an_order_waiting_for_them_hands_its_approval_to_the_next_person(
+    tiers: Session, outbox: Outbox
+) -> None:
+    from p2p.orders import changes
+
+    logins = _logins(tiers)
+    _gate(tiers, "propose")
+    po = _order(tiers, "R-40", "RM-01", "200", "650")  # Rs 1.5 lakh: the procurement head's band
+    head = workflow.org_code_of(tiers, logins["procurement"])
+    assert tiers.execute(text("select approver from po_approval_step where po_no = :n"), {"n": po}).scalar_one() == head
+
+    done = changes.revise(
+        tiers,
+        tiers.info["slug"],
+        po,
+        logins["procurement"],
+        "Fewer castings",
+        [changes.LineChange(1, qty=Decimal("190"))],
+    )
+
+    assert done["status"] == "submitted" and done["reapproval"] is True  # approval restarts on the new version
+    steps = tiers.execute(
+        text(
+            "select approver, status from po_approval_step where po_no = :n and round = "
+            "(select approval_round from po where no = :n) order by step"
+        ),
+        {"n": po},
+    ).all()
+    assert steps and all(a != head for a, _ in steps)  # the reviser is now one of its makers
+    with pytest.raises(workflow.ApprovalError, match="segregation of duties|not your turn"):
+        workflow.approve(tiers, tiers.info["slug"], po, logins["procurement"])

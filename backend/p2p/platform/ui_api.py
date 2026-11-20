@@ -1382,11 +1382,7 @@ def _po(r: dict[str, Any]) -> dict[str, Any]:
         "held": bool(r["hold_reason"]),
         "po_type": r["po_type"],
         "tier": r["approval_tier"],
-        "approver": (
-            ("the system (touchless)" if r["touchless"] else r["buyer_name"] or "the buyer")
-            if r["approval_tier"] == "buyer"
-            else r["approvers"]
-        ),
+        "approver": "the system (touchless)" if r["touchless"] else r["approvers"],  # never the buyer who made it
         "ship_to": r["ship_to_location"],
         "ship_to_name": r["ship_to_name"],
         "touchless": bool(r["touchless"]),
@@ -1832,14 +1828,26 @@ def get_contract(code: str, db: Db, ctx: Ctx) -> dict[str, Any]:
     )
     prices = _rows(
         db,
-        "select p.id, p.item_code, i.name, p.uom, p.price, p.min_qty, p.valid_from, p.valid_to, p.lead_days from price_record p "
-        "left join item i on i.code = p.item_code where p.contract_code = :c order by p.item_code, p.min_qty",
+        "select p.id, p.item_code, i.name, p.uom, p.price, p.min_qty, p.valid_from, p.valid_to, p.lead_days, p.version, "
+        "p.status from price_record p left join item i on i.code = p.item_code "
+        "where p.contract_code = :c and p.status <> 'withdrawn' order by p.item_code, p.min_qty, p.version",
         c=code,
     )
+    draft = next((p["version"] for p in prices if p["status"] == "draft"), None)
+    waiting = db.execute(
+        text("select id from proposal where action = :a and status = 'pending' and payload->>'contract' = :c"),
+        {"a": "contract.price_version", "c": code},
+    ).scalar()
+    may_activate = can_anywhere(db, ctx.user_id, "contract.activate")
     return {
         **_contract_json(c, contract_usage.usage(db, code)),
-        "can_manage": can_anywhere(db, ctx.user_id, "contract.manage") and c["status"] == "draft",
-        "can_activate": can_anywhere(db, ctx.user_id, "contract.activate") and c["status"] == "draft",
+        # an active contract takes new prices as a draft version that someone else activates (D48)
+        "can_manage": can_anywhere(db, ctx.user_id, "contract.manage") and c["status"] in ("draft", "active"),
+        "can_activate": may_activate and c["status"] == "draft",
+        "draft_version": draft,
+        "version_waiting": waiting is not None,
+        "can_submit_version": c["status"] == "active" and draft is not None and waiting is None,
+        "can_activate_version": may_activate and waiting is not None,
         "prices": [
             {
                 "id": p["id"],
@@ -1851,6 +1859,8 @@ def get_contract(code: str, db: Db, ctx: Ctx) -> dict[str, Any]:
                 "valid_from": p["valid_from"].isoformat() if p["valid_from"] else None,
                 "valid_to": p["valid_to"].isoformat() if p["valid_to"] else None,
                 "lead_days": p["lead_days"],
+                "version": p["version"],
+                "status": p["status"],
             }
             for p in prices
         ],

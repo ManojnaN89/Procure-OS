@@ -106,8 +106,12 @@ const ContractsView = {
         </div>
         <div class="panel" style="margin-bottom:14px;">
           <div class="panel-title">Price list ${c.status !== "active" ? `<span class="badge badge-pending">${escapeHtml(c.status)}</span>` : ""}</div>
-          ${(c.prices || []).length ? `<table class="data-table"><thead><tr><th>ITEM</th><th>UNIT</th><th>FROM QTY</th><th>PRICE</th><th>VALID</th></tr></thead><tbody>${c.prices.map((p) => `<tr><td>${escapeHtml(p.name || p.item_code)}<div class="cell-muted" style="font-size:11px;">${escapeHtml(p.item_code)}</div></td><td>${escapeHtml(p.uom || "")}</td><td>${escapeHtml(p.min_qty)}</td><td>${formatCurrency(p.price)}</td><td class="cell-muted">${p.valid_from ? formatDate(p.valid_from) : "—"} → ${p.valid_to ? formatDate(p.valid_to) : "—"}</td></tr>`).join("")}</tbody></table>` : `<p class="cell-muted" style="font-size:12px;margin:0;">No prices yet.</p>`}
-          ${c.can_manage ? `<div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:10px;"><input id="pItem" placeholder="Item code" style="padding:5px;"><input id="pUom" placeholder="Unit" style="padding:5px;width:70px;"><input id="pPrice" type="number" min="0" step="any" placeholder="Price" style="padding:5px;width:110px;"><input id="pMin" type="number" min="0" step="any" placeholder="From qty" style="padding:5px;width:90px;"><div class="btn btn-secondary btn-sm" id="pAdd">Add a price</div></div>` : ""}
+          ${(c.prices || []).length ? `<table class="data-table"><thead><tr><th>ITEM</th><th>UNIT</th><th>FROM QTY</th><th>PRICE</th><th>VALID</th><th>VERSION</th></tr></thead><tbody>${c.prices.map((p) => `<tr><td>${escapeHtml(p.name || p.item_code)}<div class="cell-muted" style="font-size:11px;">${escapeHtml(p.item_code)}</div></td><td>${escapeHtml(p.uom || "")}</td><td>${escapeHtml(p.min_qty)}</td><td>${formatCurrency(p.price)}</td><td class="cell-muted">${p.valid_from ? formatDate(p.valid_from) : "—"} → ${p.valid_to ? formatDate(p.valid_to) : "—"}</td><td>${escapeHtml(p.version)}${p.status === "draft" ? ' <span class="badge badge-pending">draft</span>' : ""}</td></tr>`).join("")}</tbody></table>` : `<p class="cell-muted" style="font-size:12px;margin:0;">No prices yet.</p>`}
+          ${c.can_manage ? `<div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:10px;"><input id="pItem" placeholder="Item code" style="padding:5px;"><input id="pUom" placeholder="Unit" style="padding:5px;width:70px;"><input id="pPrice" type="number" min="0" step="any" placeholder="Price" style="padding:5px;width:110px;"><input id="pMin" type="number" min="0" step="any" placeholder="From qty" style="padding:5px;width:90px;"><input id="pFrom" type="date" title="Valid from (empty: the contract's start)" style="padding:5px;"><input id="pTo" type="date" title="Valid to (empty: the contract's end)" style="padding:5px;"><div class="btn btn-secondary btn-sm" id="pAdd">${c.status === "active" ? "Add a draft price" : "Add a price"}</div></div>${c.status === "active" ? `<p class="cell-muted" style="font-size:11.5px;margin:6px 0 0;">A new price is a draft of the next version. It is used only after someone else activates the version; from its first day it replaces the price in force.</p>` : ""}` : ""}
+          ${c.version_waiting ? `<p style="font-size:12.5px;margin:10px 0 0;">Version ${escapeHtml(c.draft_version)} is waiting to be activated by someone other than who entered it.</p>` : ""}
+          ${c.can_submit_version ? `<div class="btn btn-primary btn-sm" id="vSubmit" style="margin-top:10px;display:inline-block;">Send version ${escapeHtml(c.draft_version)} for activation</div>` : ""}
+          ${c.can_activate_version ? `<div class="btn btn-primary btn-sm" id="vActivate" style="margin-top:10px;display:inline-block;">Activate version ${escapeHtml(c.draft_version)}</div> <div class="btn btn-secondary btn-sm" id="vReject" style="margin-top:10px;display:inline-block;">Reject</div>` : ""}
+          ${c.can_manage && c.status === "active" && c.draft_version ? `<div class="btn btn-secondary btn-sm" id="vWithdraw" style="margin-top:10px;display:inline-block;">Withdraw the draft</div>` : ""}
           ${c.can_activate ? `<div class="btn btn-primary btn-sm" id="cActivate" style="margin-top:10px;display:inline-block;">Activate this contract</div>` : ""}
           <div id="cMsg" style="font-size:12.5px;color:var(--warning-text);margin-top:6px;"></div>
         </div>
@@ -120,7 +124,7 @@ const ContractsView = {
       const msg = (t) => { const el = document.getElementById("cMsg"); if (el) el.textContent = t; };
       const pAdd = document.getElementById("pAdd");
       if (pAdd) pAdd.addEventListener("click", async () => {
-        const res = await API.postJSON(`/api/contracts/${encodeURIComponent(id)}/prices`, { item_code: document.getElementById("pItem").value, uom: document.getElementById("pUom").value, price: document.getElementById("pPrice").value, min_qty: document.getElementById("pMin").value });
+        const res = await API.postJSON(`/api/contracts/${encodeURIComponent(id)}/prices`, { item_code: document.getElementById("pItem").value, uom: document.getElementById("pUom").value, price: document.getElementById("pPrice").value, min_qty: document.getElementById("pMin").value, valid_from: document.getElementById("pFrom").value, valid_to: document.getElementById("pTo").value });
         if (res.ok) return this.renderDetail(container, id);
         msg(res.data.detail || "The price was not added.");
       });
@@ -130,6 +134,25 @@ const ContractsView = {
         if (res.ok) return this.renderDetail(container, id);
         msg(res.data.detail || "The contract was not activated.");
       });
+      const versionAction = (elId, path, ask) => {
+        const el = document.getElementById(elId);
+        if (!el) return;
+        el.addEventListener("click", async () => {
+          const body = {};
+          if (ask) {
+            const reason = window.prompt(ask);
+            if (!reason) return;
+            body.reason = reason;
+          }
+          const res = await API.postJSON(`/api/contracts/${encodeURIComponent(id)}/versions/${path}`, body);
+          if (res.ok) return this.renderDetail(container, id);
+          msg(res.data.detail || "That did not work.");
+        });
+      };
+      versionAction("vSubmit", "submit");
+      versionAction("vActivate", "activate");
+      versionAction("vReject", "reject", "Why is this version rejected?");
+      versionAction("vWithdraw", "withdraw", "Why is the draft withdrawn?");
 
       // Prefill, not auto-send — renewal needs a new end date the user
       // has to actually supply, unlike a one-click action like Dismiss

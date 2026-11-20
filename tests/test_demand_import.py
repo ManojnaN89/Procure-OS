@@ -100,7 +100,15 @@ def test_apex_input_files_load_every_order_and_material(db: Session, dataset: Pa
         "production_order_line": len(_rows(inputs / "production_order_line.csv")),
         "sales_order": len(_rows(inputs / "sales_order.csv")),
         "demand_plan": len(_rows(inputs / "demand_plan.csv")),
+        "mrp_result": len(_rows(inputs / "mrp_result.csv")),
     }
+    # the ERP's January MRP run: 120 pumps of 1 HP need 1.8 kg of copper wire each, by 10 January
+    wire = db.execute(
+        text(
+            "select qty, need_by from material_requirement where source_doc_no = 'MRP-2027-01' and item_code = 'RM-08'"
+        )
+    ).one()
+    assert (wire.qty, wire.need_by.isoformat()) == (D(216), "2027-01-10")
     mo1 = db.execute(text("select id, qty, need_by, location_code from production_order where order_no = 'MO-1'")).one()
     assert (mo1.qty, mo1.need_by.isoformat(), mo1.location_code) == (D(50), "2026-12-05", "PLT-CKN")
     wire = db.execute(
@@ -310,6 +318,7 @@ def test_open_requirements_come_earliest_need_by_first(db: Session, dataset: Pat
         ("MRP-1", "2026-11-30"),
         ("MO-1", "2026-12-05"),
         ("MO-2", "2026-12-15"),
+        ("MRP-2027-01", "2027-01-10"),
     ]
     assert wanted[0].source_kind == "mrp" and wanted[0].base_qty == D(40)
 

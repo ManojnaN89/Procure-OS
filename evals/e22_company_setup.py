@@ -6,6 +6,7 @@ never gains a business permission; and every setting the screen offers is really
 import random
 import re
 from datetime import timedelta
+from types import SimpleNamespace
 from decimal import Decimal
 
 import lib
@@ -36,6 +37,37 @@ BUSINESS = (
     "grn.create",
 )
 ADMIN_ACTIONS = ("admin.users", "admin.rules", "admin.settings")
+
+
+class SecondAdmin:
+    """The client the probes use: a change the Admin makes that waits for a second administrator (D-22, maker-checker)
+    is approved by `checker` at once, so the probe sees the change applied (201 for a post, else 200) or why not."""
+
+    def __init__(self, client, maker: dict[str, str], checker: dict[str, str]) -> None:
+        self.client, self.maker, self.checker = client, maker, checker
+
+    def get(self, *args, **kw):
+        return self.client.get(*args, **kw)
+
+    def _write(self, verb: str, path: str, **kw):
+        r = getattr(self.client, verb)(path, **kw)
+        if r.status_code != 202 or kw.get("headers") != self.maker:
+            return r
+        approve = f"/api/admin/proposals/{r.json()['proposal_id']}/approve"
+        done = self.client.post(approve, json={}, headers=self.checker)
+        body = done.json()
+        ok = done.status_code == 200 and body.get("execution") == "ok"
+        status = (201 if verb == "post" else 200) if ok else 409
+        return SimpleNamespace(status_code=status, json=lambda: body.get("result"), text=str(body))
+
+    def put(self, path: str, **kw):
+        return self._write("put", path, **kw)
+
+    def post(self, path: str, **kw):
+        return self._write("post", path, **kw)
+
+    def delete(self, path: str, **kw):
+        return self._write("delete", path, **kw)
 
 
 def source_reads(key: str) -> set[str]:
@@ -70,15 +102,18 @@ def run(ctx) -> Outcome:
     from p2p.approvals import rules as approval_rules
     from p2p.formulas.calendar import business_today
     from p2p.main import app
-    from p2p.platform import sod
+    from p2p.platform import sod, users
+    from p2p.platform.tokens import create_access_token
 
     out = Outcome(True)
     rng = random.Random(22)
     world = lib.build_world("e22", with_stock=False)
     db = world.db
     db.commit()
-    client = TestClient(app)
     admin = world.headers("Admin")
+    checker_id = users.create_user(world.slug, f"checker-{world.slug}@eval.example", lib.PASSWORD, "Checker", "Admin")
+    checker = {"Authorization": f"Bearer {create_access_token(checker_id, world.slug, 'Admin')}"}
+    client = SecondAdmin(TestClient(app), admin, checker)
     findings: list[str] = []
 
     def snapshot(table: str) -> list:
@@ -153,6 +188,9 @@ def run(ctx) -> Outcome:
             # refused: no fields, an unknown field, a stray brace, and text over the length limit
             good = ["Please quote {items} (ref {reference}).\n", ""]
             bad = ["no fields at all", "{items} {reference} {nope}", "{items} {reference} {", "{items} {reference} " + "y" * 4100]
+        elif kind == "list":  # a comma-separated list of plain words (e.g. the accepted bank verification methods)
+            good = ["cancelled_cheque,bank_letter"]
+            bad = ["", ",,", "two words", "cheque;letter"]
         elif kind == "email":  # an address, or empty for none; the two mailboxes must differ, so each gets its own
             mine = f"{key.split('_')[0]}@eval-co.example"
             good = [mine if p["value"] != mine else f"other.{mine}"]
@@ -499,6 +537,8 @@ def run(ctx) -> Outcome:
         r[0]
         for r in db.execute(text("select id from setup_change where key = 'price_band_pct' order by id desc limit 2"))
     ][::-1]
+    # the history is insert only (migration 0059): back-dating it needs the database owner to switch the triggers off
+    db.execute(text("set local session_replication_role = replica"))
     for stamp, i in zip((datetime(2025, 1, 1, tzinfo=UTC), datetime(2025, 6, 1, tzinfo=UTC)), ids, strict=True):
         db.execute(text("update setup_change set at = :t where id = :i"), {"t": stamp, "i": i})
     db.commit()

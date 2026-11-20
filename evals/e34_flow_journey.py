@@ -738,13 +738,12 @@ def _run(ctx: Any) -> Outcome:
                     sum((Decimal(pos[n][3]) for n in by_supplier.get(supplier, [])), Decimal(0)),
                     taxable,
                 )
-                band = chain("po", taxable)
                 for n in by_supplier.get(supplier, []):
                     alone = contract_alone and n == imp_po
                     c.same(
-                        f"{n} of {taxable}: {'sent touchless' if alone else 'approved by the rule' if band == 'auto' else 'waits for the purchase manager'}",
+                        f"{n} of {taxable}: {'sent touchless' if alone else 'waits for the purchase manager'}",
                         pos[n][2],
-                        "sent" if alone else "approved" if band == "auto" else "submitted",
+                        "sent" if alone else "submitted",
                     )
             for no, row in pos.items():
                 inter = suppliers[row[1]]["state_code"] != plant_gstin[:2]
@@ -1269,6 +1268,21 @@ def _run(ctx: Any) -> Outcome:
                     reason_text
                 )
                 row.get_by_role("button", name="Save").click()
+                expect(page.get_by_text("Changes waiting for a second administrator")).to_be_visible()
+            with d.step("admin", "a second administrator approves the change (D-22); it applies") as page:
+                from p2p.platform import users
+                from p2p.platform.tokens import create_access_token
+
+                # Apex has one administrator: the checker is a login made for this walk-through
+                checker_id = users.create_user(slug, f"checker-{slug}@apexpumps.example", demo.DEV_PASSWORD, "C", "Admin")
+                checker = {"Authorization": f"Bearer {create_access_token(checker_id, slug, 'Admin')}"}
+                for waiting in demo_ui.api("GET", "/api/setup/pending", checker).json():
+                    approve = f"/api/admin/proposals/{waiting['proposal_id']}/approve"
+                    done = demo_ui.api("POST", approve, checker, json={}).json()
+                    c.true("the second administrator's approval applies the change", done.get("execution") == "ok")
+                page.get_by_role("tab", name="History").click()
+                page.get_by_role("tab", name="Policies").click()
+                row = page.get_by_role("row").filter(has_text="Days suppliers get to quote")
                 expect(row).to_contain_text(reason_text)
             with d.step("admin", "opens Audit: the change is there with its reason") as page:
                 page.get_by_role("link", name="Audit").click()

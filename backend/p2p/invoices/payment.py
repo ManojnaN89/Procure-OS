@@ -310,6 +310,8 @@ def due_invoices(db: Session, run_date: date, window_days: int | None = None) ->
                 "from invoice i join supplier s on s.code = i.supplier_code "
                 "left join payment_terms t on t.code = s.payment_terms_code "
                 "where i.type = 'invoice' and i.status = 'approved' and i.payment_block = 'none' and i.due_date is not null "
+                # paid only into a bank account a second person verified: a supplier without one is never in a run
+                "and exists (select 1 from supplier_bank_account b where b.supplier_code = i.supplier_code and b.verified) "
                 "and i.due_date <= :d + make_interval(days => :w + 120) and not exists ("
                 "  select 1 from payment_allocation a join payment p on p.no = a.payment_no join payment_run r on r.no = p.run_no "
                 "  where a.invoice_no = i.no and r.status = any(:open)) "
@@ -342,6 +344,7 @@ def due_advances(db: Session, po_nos: list[str] | None = None) -> list[dict[str,
             "select po.no, po.supplier_code, po.total, po.taxable, t.advance_pct from po "
             "join payment_terms t on t.code = po.payment_terms_code "
             "where t.advance_pct > 0 and not exists (select 1 from advance a where a.po_no = po.no) "
+            "and exists (select 1 from supplier_bank_account b where b.supplier_code = po.supplier_code and b.verified) "
             "and (case when cast(:p as text[]) is null then po.status = any(:st) "
             "else po.no = any(:p) and po.status not in ('draft', 'submitted', 'approved', 'cancelled') end) "
             "order by po.no"
@@ -502,6 +505,55 @@ def _approve_run(db: Session, payload: dict[str, Any], actor: Actor) -> dict[str
     )
     db.commit()
     return {"run": no, "status": "approved"}
+
+
+def take_out_supplier(db: Session, supplier: str, actor: Actor, why: str) -> list[str]:
+    """A supplier's bank account changed: its payments still waiting in a run leave the run, so nothing goes to an account
+    nobody has verified. A run that keeps other payments keeps its approval for what is left (less than was approved); a
+    bank file already made for it is voided and must be made again; a run left empty is cancelled. Returns the runs."""
+    runs = db.execute(
+        text(
+            "select no, status, proposal_id, total from payment_run where status = any(:open) and no in "
+            "(select run_no from payment where supplier_code = :s and paid_on is null) order by no for update"
+        ),
+        {"open": list(OPEN_RUN), "s": supplier},
+    ).all()
+    for no, status, proposal_id, before_total in runs:
+        pays = [
+            str(r[0])
+            for r in db.execute(
+                text("select no from payment where run_no = :r and supplier_code = :s"), {"r": no, "s": supplier}
+            )
+        ]
+        for table in ("payment_allocation", "tds_entry", "advance"):  # an unpaid advance has no adjustments yet
+            db.execute(text(f"delete from {table} where payment_no = any(:p)"), {"p": pays})  # noqa: S608 - fixed names
+        db.execute(text("delete from payment where no = any(:p)"), {"p": pays})
+        left = db.execute(
+            text("select count(*), coalesce(sum(amount), 0) from payment where run_no = :r"), {"r": no}
+        ).one()
+        new_status = "cancelled" if left[0] == 0 else ("approved" if status == "file_generated" else status)
+        db.execute(
+            text(
+                "update payment_run set status = :st, total = :t, "
+                "file_text = case when :void then null else file_text end where no = :n"
+            ),
+            {"st": new_status, "t": D(left[1]), "void": status == "file_generated", "n": no},
+        )
+        audit.record(
+            db, actor, "payment_run.supplier_removed", "payment_run", no,
+            before={"status": status, "total": before_total, "payments": pays},
+            after={"status": new_status, "total": D(left[1]), "file_voided": status == "file_generated"},
+            reason=why,
+        )  # fmt: skip
+        if status == "proposed" and proposal_id is not None:
+            if new_status == "cancelled":
+                proposals.withdraw(db, int(proposal_id), None, f"nothing left to pay: {why}")
+            else:  # the person deciding sees what changed since the run was proposed
+                db.execute(
+                    text("update proposal set summary = summary || :x where id = :p and status = 'pending'"),
+                    {"x": f". Changed: {supplier} taken out ({why}); now {format_inr(D(left[1]))}", "p": proposal_id},
+                )
+    return [str(r[0]) for r in runs]
 
 
 # ---- the bank file, the payment, the closing --------------------------------------------------

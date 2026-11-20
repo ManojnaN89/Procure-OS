@@ -1,4 +1,4 @@
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { Badge } from "../components/ui/badge";
 import { Button } from "../components/ui/button";
@@ -15,7 +15,7 @@ import {
 	Touchless,
 } from "./setup-buying";
 import { History, Policies } from "./setup-policies";
-import { type Shared, select, useChange } from "./setup-shared";
+import { PendingChanges, type Shared, select, useChange } from "./setup-shared";
 
 type Person = {
 	user_id: number;
@@ -105,6 +105,7 @@ export function SetupPage() {
 					{error}
 				</p>
 			) : null}
+			<PendingChanges />
 			{me.data && tabs.length === 0 ? (
 				<p className="text-sm text-muted-foreground">
 					You do not have access to the company setup. It is for the Admin.
@@ -125,6 +126,7 @@ export function SetupPage() {
 }
 
 function PeopleTab(shared: Shared) {
+	const queryClient = useQueryClient();
 	const data = useQuery({
 		queryKey: ["setup-people"],
 		queryFn: () => api<People>("/api/setup/people"),
@@ -182,6 +184,7 @@ function PeopleTab(shared: Shared) {
 			await api(path, init);
 			shared.fail("");
 			await data.refetch();
+			await queryClient.invalidateQueries({ queryKey: ["setup-pending"] });
 		} catch (e) {
 			shared.fail((e as Error).message);
 		}

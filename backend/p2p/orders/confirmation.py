@@ -28,6 +28,7 @@ from p2p.formulas import supplier_changes as judge
 from p2p.formulas.calendar import business_today
 from p2p.formulas.money import format_inr, format_qty
 from p2p.orders import changes, dispatch, supplier_links
+from p2p.orders import workflow as po_workflow
 from p2p.platform import audit, notifications, permissions, proposals, tasks
 from p2p.platform.sod import Actor, user
 
@@ -313,7 +314,7 @@ def decide(
             db.rollback()
             raise ConfirmationError("a reason is needed to reject a change")
         return _reject(db, tenant, ch, user_id, why)
-    if ch["kind"] == "price" and not ch["within_tolerance"]:
+    if ch["kind"] == "price" and (not ch["within_tolerance"] or _maker_raises_price(db, ch, user_id)):
         return _ask_for_price_approval(db, tenant, ch, user_id, note)
     if ch["kind"] == "decline":
         return _accept_decline(db, tenant, ch, user_id, note)
@@ -374,7 +375,7 @@ def _apply(db: Session, tenant: str, ch: dict[str, Any], user_id: int, note: str
     try:
         made = changes.revise(
             db, tenant, ch["po_no"], user_id, f"The supplier asked for it: {what}" + (f". {note}" if note else ""),
-            [change], approved_change=ch["kind"] == "price",
+            [change], approved_change=ch["kind"] == "price", supplier_asked=True, change_id=int(ch["id"]),
         )  # fmt: skip
     except changes.ChangeError as exc:
         db.rollback()
@@ -400,9 +401,26 @@ def _apply(db: Session, tenant: str, ch: dict[str, Any], user_id: int, note: str
 # ---- a price above the tolerance: the purchase manager ----------------------------------------------
 
 
-def _price_approver(db: Session, value: Decimal) -> approval_rules.Step:
+def _maker_raises_price(db: Session, ch: dict[str, Any], user_id: int) -> bool:
+    """A price rise accepted by one of the order's makers is never theirs to accept, even within tolerance (C1)."""
+    if Decimal(ch["new_value"]) <= Decimal(ch["old_value"]):
+        return False
+    return org_code_of(db, user_id) in po_workflow.makers(db, _order(db, ch["po_no"]))
+
+
+def _price_approver(db: Session, po_no: str, value: Decimal) -> approval_rules.Step:
+    """The first person the price variance rule names, never one of the order's makers."""
     rule = approval_rules.find_rule(db, "price_variance", value, business_today())
-    steps = approval_rules.resolve_chain(db, rule.roles, requester=None, department=None, on_date=business_today())
+    never = po_workflow.makers(db, _order(db, po_no))
+    try:
+        steps = approval_rules.resolve_chain(
+            db, rule.roles, requester=None, department=None, on_date=business_today(), exclude=never
+        )
+    except approval_rules.ApprovalRuleError:
+        raise ConfirmationError(
+            "everyone the price variance rule names made this order, so none of them may accept its price; "
+            "the rule has to name someone else"
+        ) from None
     if not steps:
         raise ConfirmationError("the price variance rule names nobody to accept a price rise")
     return steps[0]
@@ -416,7 +434,7 @@ def _ask_for_price_approval(
     ).scalar_one()
     rise = ((Decimal(ch["new_value"]) - Decimal(ch["old_value"])) * Decimal(qty)).quantize(Decimal("0.01"))
     try:
-        step = _price_approver(db, rise)
+        step = _price_approver(db, ch["po_no"], rise)
     except approval_rules.ApprovalRuleError as exc:
         db.rollback()
         raise ConfirmationError(str(exc)) from None
@@ -481,11 +499,20 @@ def _decide_price(
     return _reject(db, tenant, _change(db, int(ch["id"])), user_id, why)
 
 
+@proposals.guard(PRICE_ACTION)
+def _may_accept_price(db: Session, payload: dict[str, Any], actor: Actor) -> None:
+    """Only the person the price variance rule named (or their deputy), never one of the order's makers."""
+    user_id = int(actor.id)
+    _named(db, payload, user_id)
+    ch = _change(db, int(payload["change_id"]))
+    po_workflow.refuse_maker(db, _order(db, ch["po_no"]), org_code_of(db, user_id))
+
+
 @proposals.executor(PRICE_ACTION)
 def _price_accepted(db: Session, payload: dict[str, Any], actor: Actor) -> dict[str, Any]:
     """The purchase manager accepted the price rise: the new version is made as that person."""
     user_id = int(actor.id)
-    _named(db, payload, user_id)
+    _may_accept_price(db, payload, actor)
     ch = _change(db, int(payload["change_id"]))
     if ch["status"] != "waiting_approval":
         raise ConfirmationError(f"this change is already {ch['status']}")

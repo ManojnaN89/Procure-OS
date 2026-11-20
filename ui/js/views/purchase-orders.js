@@ -51,7 +51,7 @@ const PurchaseOrdersView = {
     }
   },
 
-  TIER_LABEL: { buyer: "Buyer", purchase_manager: "Purchase manager", director: "Director", cfo: "CFO" },
+  TIER_LABEL: { buyer: "Touchless", purchase_manager: "Purchase manager", director: "Director", cfo: "CFO" },
 
   tierLabel(tier) {
     return this.TIER_LABEL[tier] || String(tier || "").replace(/_/g, " ");

@@ -4,6 +4,11 @@ how much the platform may do without a person. All of it is data an administrato
 Every change needs a reason and writes two things: an audit row and a row in the setup history (who, when, old value,
 new value, why). A decision made earlier stays explainable, because the value in force at any time can be read back from
 the history. Admin is a setup role: it can change this but holds no business permission, and it cannot give itself one.
+
+A change to a control (roles, permissions, limits, who approves, approval rules, policies, tolerances, automation, the
+kill switch going off, whether a person may log in, a person's manager) is proposed by one administrator and applied
+when another approves it (D-22, `setting_changes`): the endpoint checks it and answers 202 with the proposal. Stopping
+automation and adding a person who is not an administrator apply at once.
 """
 
 import json
@@ -12,7 +17,7 @@ from datetime import date, datetime, timedelta
 from decimal import Decimal, InvalidOperation
 from typing import Annotated, Any
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Response
 from pydantic import BaseModel
 from sqlalchemy import text
 from sqlalchemy.orm import Session
@@ -20,9 +25,10 @@ from sqlalchemy.orm import Session
 from p2p.agents import autonomy
 from p2p.approvals.rules import chain_roles
 from p2p.formulas.calendar import business_today
-from p2p.platform import audit, routing, tenants, users
+from p2p.platform import audit, routing, setting_changes, tenants, users
 from p2p.platform.permissions import require
 from p2p.platform.rows import rows as _rows
+from p2p.platform.setting_changes import Change
 from p2p.platform.sod import Actor
 from p2p.platform.sod import user as user_actor
 from p2p.sourcing import templates
@@ -57,6 +63,7 @@ PERMISSIONS: dict[str, str] = {
     "sourcing.route_approve": "Agree to a direct buy or a looser buying route",
     "supplier.documents": "Add a supplier's documents",
     "supplier.verify_docs": "Verify a supplier's documents against the originals",
+    "supplier.verify_bank": "Verify a supplier's bank account against its proof",
     "contract.manage": "Store contracts and their price lists",
     "contract.activate": "Activate a contract",
     "grn.create": "Receive and inspect goods",
@@ -274,6 +281,16 @@ POLICIES: dict[str, tuple[str, str, str, str, str, float | None, float | None, t
         (),
     ),
     "delivery_overdue_max": ("org", "int", "Reminders about a missed delivery, at most", "", "3", 0, 10, ()),
+    "manual_mark_paid": (
+        "org",
+        "bool",
+        "Payments recorded by hand",
+        "Off until settlement evidence is built: a run is settled from the bank statement. Demo companies only",
+        "false",
+        None,
+        None,
+        (),
+    ),
     "po_send_requires_confirmation": (
         "org",
         "bool",
@@ -326,6 +343,16 @@ POLICIES: dict[str, tuple[str, str, str, str, str, float | None, float | None, t
         (),
     ),
     "supplier_document_warn_days": ("org", "int", "Warn before a document expires (days)", "", "30", 0, 365, ()),
+    "bank_verification_methods": (
+        "org",
+        "list",
+        "Ways a supplier bank account may be verified",
+        "Comma-separated, for example cancelled_cheque, bank_letter, penny_drop",
+        "cancelled_cheque,bank_letter,penny_drop",
+        None,
+        None,
+        (),
+    ),
     "payment_run_window_days": (
         "org",
         "int",
@@ -455,14 +482,16 @@ def _log(db: Session, actor: Actor, area: str, key: str, old: Any, new: Any, rea
 
 
 def record_history(db: Session, actor: Actor, area: str, key: str, old: Any, new: Any, reason: str) -> None:
-    """The setup history row alone, for a change whose service writes its own audit row."""
+    """The setup history row alone, for a change whose service writes its own audit row. A change applied on a second
+    administrator's approval names them too."""
     db.execute(
         text(
-            "insert into setup_change (by_user, area, key, old_value, new_value, reason) "
-            "values (:u, :a, :k, cast(:o as jsonb), cast(:n as jsonb), :r)"
+            "insert into setup_change (by_user, area, key, old_value, new_value, reason, approved_by) "
+            "values (:u, :a, :k, cast(:o as jsonb), cast(:n as jsonb), :r, :ap)"
         ),
         {
             "u": actor.id,
+            "ap": setting_changes.APPROVED_BY.get(),
             "a": area,
             "k": key,
             "o": json.dumps(old, default=str),
@@ -470,6 +499,15 @@ def record_history(db: Session, actor: Actor, area: str, key: str, old: Any, new
             "r": reason,
         },
     )
+
+
+def _submit(db: Session, ctx: routing.TenantContext, kind: str, args: dict[str, Any], reason: str) -> dict[str, Any]:
+    return setting_changes.submit(db, user_actor(ctx.user_id), kind, args, reason, tenant=ctx.slug)
+
+
+def _args(body: BaseModel) -> dict[str, Any]:
+    """A request body as the proposal keeps it: plain JSON, without the reason (kept beside it)."""
+    return body.model_dump(mode="json", exclude={"reason"})
 
 
 def _iso(value: Any) -> str | None:
@@ -562,6 +600,10 @@ class NewPerson(BaseModel):
 @router.post("/people", status_code=201)
 def add_person(body: NewPerson, db: Db, ctx: PeopleAdmin) -> dict[str, int]:
     reason = need_reason(body.reason)
+    if body.role == "Admin":
+        raise HTTPException(
+            403, "add the person with another role, then give the Admin role: another administrator approves it"
+        )
     try:
         uid = users.create_user(
             ctx.slug, body.email, body.password, body.display_name, body.role, actor=user_actor(ctx.user_id)
@@ -586,23 +628,32 @@ class ActiveBody(BaseModel):
     reason: str | None = None
 
 
-@router.post("/people/{user_id}/active")
+@router.post("/people/{user_id}/active", status_code=202)
 def set_active(user_id: int, body: ActiveBody, db: Db, ctx: PeopleAdmin) -> dict[str, Any]:
     reason = need_reason(body.reason)
     if user_id == ctx.user_id and not body.active:
         raise HTTPException(409, "you cannot deactivate yourself")
-    with Session(tenants.control_engine()) as s:
-        row = s.execute(text("select active from app_user where id = :i"), {"i": user_id}).first()
-        if (
-            row is None
-            or db.execute(text("select 1 from user_profile where user_id = :i"), {"i": user_id}).first() is None
-        ):
-            raise HTTPException(404, "no such person")
-        s.execute(text("update app_user set active = :a where id = :i"), {"a": body.active, "i": user_id})
-        s.commit()
-    _log(db, user_actor(ctx.user_id), "person", str(user_id), {"active": bool(row[0])}, {"active": body.active}, reason)
-    db.commit()
-    return {"user_id": user_id, "active": body.active}
+    return _submit(db, ctx, "person_active", {"user_id": user_id, **_args(body)}, reason)
+
+
+@setting_changes.handler("person_active", "admin.users")
+def _person_active(db: Session, actor: Actor, args: dict[str, Any], reason: str, apply: bool) -> Change:
+    """The login itself lives in the control database: it is written only when the change applies."""
+    body, user_id = ActiveBody.model_validate(args), int(args["user_id"])
+    was = _accounts([user_id]).get(user_id)
+    if was is None or db.execute(text("select 1 from user_profile where user_id = :i"), {"i": user_id}).first() is None:
+        raise HTTPException(404, "no such person")
+    if was["active"] == body.active:
+        raise HTTPException(409, f"they are already {'active' if body.active else 'inactive'}")
+    before, after = {"active": was["active"]}, {"active": body.active}
+    change = Change("person", str(user_id), before, after, {"user_id": user_id, "active": body.active}, person=user_id)
+    if apply:
+        with Session(tenants.control_engine()) as s:
+            s.execute(text("update app_user set active = :a where id = :i"), {"a": body.active, "i": user_id})
+            s.commit()
+        _log(db, actor, "person", str(user_id), before, after, reason)
+        db.commit()
+    return change
 
 
 class RoleGrant(BaseModel):
@@ -612,9 +663,22 @@ class RoleGrant(BaseModel):
     reason: str | None = None
 
 
-@router.post("/people/{user_id}/roles", status_code=201)
-def give_role(user_id: int, body: RoleGrant, db: Db, ctx: PeopleAdmin) -> dict[str, str]:
+def _not_yourself(user_id: int, ctx: routing.TenantContext, what: str) -> None:
+    """Nobody widens their own powers: another administrator does it (DF-15)."""
+    if user_id == ctx.user_id:
+        raise HTTPException(403, f"you cannot {what}; another administrator has to")
+
+
+@router.post("/people/{user_id}/roles", status_code=202)
+def give_role(user_id: int, body: RoleGrant, db: Db, ctx: PeopleAdmin) -> dict[str, Any]:
     reason = need_reason(body.reason)
+    _not_yourself(user_id, ctx, "give yourself a role")
+    return _submit(db, ctx, "role_grant", {"user_id": user_id, **_args(body)}, reason)
+
+
+@setting_changes.handler("role_grant", "admin.users")
+def _role_grant(db: Session, actor: Actor, args: dict[str, Any], reason: str, apply: bool) -> Change:
+    body, user_id = RoleGrant.model_validate(args), int(args["user_id"])
     if body.role not in users.ROLES:
         raise _422(f"role must be one of {', '.join(users.ROLES)}")
     if db.execute(text("select 1 from user_profile where user_id = :i"), {"i": user_id}).first() is None:
@@ -628,26 +692,27 @@ def give_role(user_id: int, body: RoleGrant, db: Db, ctx: PeopleAdmin) -> dict[s
     ).first()
     if same:
         raise HTTPException(409, "they already have this role")
-    db.execute(
-        text("insert into user_role (user_id, role, scope_location, scope_department) values (:i, :r, :l, :d)"),
-        {"i": user_id, "r": body.role, "l": body.location, "d": body.department},
-    )
-    _log(
-        db,
-        user_actor(ctx.user_id),
-        "role_grant",
-        str(user_id),
-        None,
-        {"role": body.role, "location": body.location, "department": body.department},
-        reason,
-    )
-    db.commit()
-    return {"status": "granted"}
+    new = {"role": body.role, "location": body.location, "department": body.department}
+    change = Change("role_grant", str(user_id), None, new, {"status": "granted"}, person=user_id)
+    if apply:
+        db.execute(
+            text("insert into user_role (user_id, role, scope_location, scope_department) values (:i, :r, :l, :d)"),
+            {"i": user_id, "r": body.role, "l": body.location, "d": body.department},
+        )
+        _log(db, actor, "role_grant", str(user_id), None, new, reason)
+        db.commit()
+    return change
 
 
-@router.delete("/people/{user_id}/roles/{row_id}")
-def take_role(user_id: int, row_id: int, db: Db, ctx: PeopleAdmin, reason: str = "") -> dict[str, str]:
+@router.delete("/people/{user_id}/roles/{row_id}", status_code=202)
+def take_role(user_id: int, row_id: int, db: Db, ctx: PeopleAdmin, reason: str = "") -> dict[str, Any]:
     reason = need_reason(reason)
+    return _submit(db, ctx, "role_revoke", {"user_id": user_id, "row_id": row_id}, reason)
+
+
+@setting_changes.handler("role_revoke", "admin.users")
+def _role_revoke(db: Session, actor: Actor, args: dict[str, Any], reason: str, apply: bool) -> Change:
+    user_id, row_id = int(args["user_id"]), int(args["row_id"])
     row = db.execute(
         text("select role from user_role where id = :r and user_id = :u"), {"r": row_id, "u": user_id}
     ).first()
@@ -657,12 +722,14 @@ def take_role(user_id: int, row_id: int, db: Db, ctx: PeopleAdmin, reason: str =
         others = db.execute(
             text("select count(distinct user_id) from user_role where role = 'Admin' and id <> :r"), {"r": row_id}
         ).scalar_one()
-        if user_id == ctx.user_id or others == 0:
+        if str(user_id) == actor.id or others == 0:
             raise HTTPException(409, "the last administrator, or you yourself, cannot lose the Admin role")
-    db.execute(text("delete from user_role where id = :r"), {"r": row_id})
-    _log(db, user_actor(ctx.user_id), "role_revoke", str(user_id), {"role": row[0]}, None, reason)
-    db.commit()
-    return {"status": "removed"}
+    change = Change("role_revoke", str(user_id), {"role": row[0]}, None, {"status": "removed"})
+    if apply:
+        db.execute(text("delete from user_role where id = :r"), {"r": row_id})
+        _log(db, actor, "role_revoke", str(user_id), {"role": row[0]}, None, reason)
+        db.commit()
+    return change
 
 
 class LimitBody(BaseModel):
@@ -673,9 +740,16 @@ class LimitBody(BaseModel):
     reason: str | None = None
 
 
-@router.put("/people/{user_id}/limits")
-def put_limit(user_id: int, body: LimitBody, db: Db, ctx: PeopleAdmin) -> dict[str, str]:
+@router.put("/people/{user_id}/limits", status_code=202)
+def put_limit(user_id: int, body: LimitBody, db: Db, ctx: PeopleAdmin) -> dict[str, Any]:
     reason = need_reason(body.reason)
+    _not_yourself(user_id, ctx, "set your own approval limit")
+    return _submit(db, ctx, "limit_set", {"user_id": user_id, **_args(body)}, reason)
+
+
+@setting_changes.handler("limit_set", "admin.users")
+def _limit_set(db: Session, actor: Actor, args: dict[str, Any], reason: str, apply: bool) -> Change:
+    body, user_id = LimitBody.model_validate(args), int(args["user_id"])
     if body.document not in ("request", "po", "invoice", "payment_run"):
         raise _422("the document must be a request, a purchase order, an invoice or a payment run")
     if body.max_value < 0:
@@ -685,38 +759,42 @@ def put_limit(user_id: int, body: LimitBody, db: Db, ctx: PeopleAdmin) -> dict[s
     where = "user_id = :u and document = :d and category_code is not distinct from :c and location_code is not distinct from :l"
     params = {"u": user_id, "d": body.document, "c": body.category, "l": body.location}
     old = db.execute(text(f"select max_value from user_limit where {where}"), params).scalar()  # noqa: S608 - fixed text
-    db.execute(text(f"delete from user_limit where {where}"), params)  # noqa: S608
-    db.execute(
-        text(
-            "insert into user_limit (user_id, document, category_code, location_code, max_value) values (:u, :d, :c, :l, :m)"
-        ),
-        {**params, "m": body.max_value},
-    )
-    _log(
-        db,
-        user_actor(ctx.user_id),
-        "limit",
-        f"{user_id}:{body.document}",
-        {"max_value": old},
-        {"max_value": body.max_value},
-        reason,
-    )
-    db.commit()
-    return {"status": "set"}
+    key, before, after = f"{user_id}:{body.document}", {"max_value": old}, {"max_value": body.max_value}
+    change = Change("limit", key, before, after, {"status": "set"}, person=user_id)
+    if apply:
+        db.execute(text(f"delete from user_limit where {where}"), params)  # noqa: S608
+        db.execute(
+            text(
+                "insert into user_limit (user_id, document, category_code, location_code, max_value) "
+                "values (:u, :d, :c, :l, :m)"
+            ),
+            {**params, "m": body.max_value},
+        )
+        _log(db, actor, "limit", key, before, after, reason)
+        db.commit()
+    return change
 
 
-@router.delete("/people/{user_id}/limits/{limit_id}")
-def drop_limit(user_id: int, limit_id: int, db: Db, ctx: PeopleAdmin, reason: str = "") -> dict[str, str]:
+@router.delete("/people/{user_id}/limits/{limit_id}", status_code=202)
+def drop_limit(user_id: int, limit_id: int, db: Db, ctx: PeopleAdmin, reason: str = "") -> dict[str, Any]:
     reason = need_reason(reason)
+    return _submit(db, ctx, "limit_drop", {"user_id": user_id, "limit_id": limit_id}, reason)
+
+
+@setting_changes.handler("limit_drop", "admin.users")
+def _limit_drop(db: Session, actor: Actor, args: dict[str, Any], reason: str, apply: bool) -> Change:
+    user_id, limit_id = int(args["user_id"]), int(args["limit_id"])
     row = db.execute(
         text("select document, max_value from user_limit where id = :i and user_id = :u"), {"i": limit_id, "u": user_id}
     ).first()
     if row is None:
         raise HTTPException(404, "no such limit")
-    db.execute(text("delete from user_limit where id = :i"), {"i": limit_id})
-    _log(db, user_actor(ctx.user_id), "limit", f"{user_id}:{row[0]}", {"max_value": row[1]}, None, reason)
-    db.commit()
-    return {"status": "removed"}
+    change = Change("limit", f"{user_id}:{row[0]}", {"max_value": row[1]}, None, {"status": "removed"})
+    if apply:
+        db.execute(text("delete from user_limit where id = :i"), {"i": limit_id})
+        _log(db, actor, "limit", change.key, change.old, None, reason)
+        db.commit()
+    return change
 
 
 class ManagerBody(BaseModel):
@@ -724,9 +802,15 @@ class ManagerBody(BaseModel):
     reason: str | None = None
 
 
-@router.put("/people/{user_id}/manager")
+@router.put("/people/{user_id}/manager", status_code=202)
 def put_manager(user_id: int, body: ManagerBody, db: Db, ctx: PeopleAdmin) -> dict[str, Any]:
     reason = need_reason(body.reason)
+    return _submit(db, ctx, "manager", {"user_id": user_id, **_args(body)}, reason)
+
+
+@setting_changes.handler("manager", "admin.users")
+def _manager(db: Session, actor: Actor, args: dict[str, Any], reason: str, apply: bool) -> Change:
+    body, user_id = ManagerBody.model_validate(args), int(args["user_id"])
     email = (_accounts([user_id]).get(user_id) or {}).get("email")
     me = db.execute(
         text("select code, manager_code from org_user where lower(email) = :e"), {"e": (email or "").lower()}
@@ -744,18 +828,15 @@ def put_manager(user_id: int, body: ManagerBody, db: Db, ctx: PeopleAdmin) -> di
             seen.add(nxt)
             up = db.execute(text("select manager_code from org_user where code = :c"), {"c": nxt}).scalar()
             nxt = str(up) if up else None
-    db.execute(text("update org_user set manager_code = :m where code = :c"), {"m": body.manager_code, "c": me[0]})
-    _log(
-        db,
-        user_actor(ctx.user_id),
-        "manager",
-        me[0],
-        {"manager_code": me[1]},
-        {"manager_code": body.manager_code},
-        reason,
-    )
-    db.commit()
-    return {"person": me[0], "manager_code": body.manager_code}
+    if me[1] == body.manager_code:
+        raise HTTPException(409, "that is already their manager")
+    before, after = {"manager_code": me[1]}, {"manager_code": body.manager_code}
+    change = Change("manager", me[0], before, after, {"person": me[0], **after}, person=user_id)
+    if apply:
+        db.execute(text("update org_user set manager_code = :m where code = :c"), {"m": body.manager_code, "c": me[0]})
+        _log(db, actor, "manager", me[0], before, after, reason)
+        db.commit()
+    return change
 
 
 # ---- what each role may do --------------------------------------------------------------------
@@ -780,9 +861,15 @@ class RolePermissions(BaseModel):
     reason: str | None = None
 
 
-@router.put("/roles/{role}")
+@router.put("/roles/{role}", status_code=202)
 def put_role(role: str, body: RolePermissions, db: Db, ctx: PeopleAdmin) -> dict[str, Any]:
     reason = need_reason(body.reason)
+    return _submit(db, ctx, "role_permission", {"role": role, **_args(body)}, reason)
+
+
+@setting_changes.handler("role_permission", "admin.users")
+def _role_permission(db: Session, actor: Actor, args: dict[str, Any], reason: str, apply: bool) -> Change:
+    body, role = RolePermissions.model_validate(args), str(args["role"])
     if role not in users.ROLES:
         raise HTTPException(404, "no such role")
     wanted = set(body.permissions)
@@ -800,12 +887,15 @@ def put_role(role: str, body: RolePermissions, db: Db, ctx: PeopleAdmin) -> dict
     elif wanted & ADMIN_ONLY:
         raise _422("the setup permissions belong to the Admin role only")
     old = {r[0] for r in db.execute(text("select action from role_permission where role = :r"), {"r": role})}
-    db.execute(text("delete from role_permission where role = :r"), {"r": role})
-    for action in sorted(wanted):
-        db.execute(text("insert into role_permission (role, action) values (:r, :a)"), {"r": role, "a": action})
-    _log(db, user_actor(ctx.user_id), "role_permission", role, sorted(old), sorted(wanted), reason)
-    db.commit()
-    return {"role": role, "added": sorted(wanted - old), "removed": sorted(old - wanted)}
+    result = {"role": role, "added": sorted(wanted - old), "removed": sorted(old - wanted)}
+    change = Change("role_permission", role, sorted(old), sorted(wanted), result)
+    if apply:
+        db.execute(text("delete from role_permission where role = :r"), {"r": role})
+        for action in sorted(wanted):
+            db.execute(text("insert into role_permission (role, action) values (:r, :a)"), {"r": role, "a": action})
+        _log(db, actor, "role_permission", role, sorted(old), sorted(wanted), reason)
+        db.commit()
+    return change
 
 
 # ---- who approves: the people behind the roles in an approval chain ------------------------------
@@ -856,9 +946,15 @@ class ApproverBody(BaseModel):
     reason: str | None = None
 
 
-@router.put("/approvers/{role}")
+@router.put("/approvers/{role}", status_code=202)
 def put_approver(role: str, body: ApproverBody, db: Db, ctx: RulesAdmin) -> dict[str, Any]:
     reason = need_reason(body.reason)
+    return _submit(db, ctx, "approver_role", {"role": role, **_args(body)}, reason)
+
+
+@setting_changes.handler("approver_role", "admin.rules")
+def _approver_role(db: Session, actor: Actor, args: dict[str, Any], reason: str, apply: bool) -> Change:
+    body, role = ApproverBody.model_validate(args), str(args["role"])
     if not role.replace("_", "").isalnum() or role != role.lower() or role == "auto":
         raise _422("a role name is lower case letters, digits and underscores, and cannot be 'auto'")
     if body.source not in APPROVER_SOURCES:
@@ -882,28 +978,31 @@ def put_approver(role: str, body: ApproverBody, db: Db, ctx: RulesAdmin) -> dict
     ):
         raise _422(f"nobody holds the designation '{value}'")
     old = db.execute(text("select source, value from approver_role where role = :r"), {"r": role}).first()
-    db.execute(
-        text(
-            "insert into approver_role (role, source, value) values (:r, :s, :v) on conflict (role) do update set source = :s, value = :v"
-        ),
-        {"r": role, "s": body.source, "v": value},
-    )
-    _log(
-        db,
-        user_actor(ctx.user_id),
-        "approver_role",
-        role,
-        {"source": old[0], "value": old[1]} if old else None,
-        {"source": body.source, "value": value},
-        reason,
-    )
-    db.commit()
-    return {"role": role, "source": body.source, "value": value}
+    before = {"source": old[0], "value": old[1]} if old else None
+    after = {"source": body.source, "value": value}
+    change = Change("approver_role", role, before, after, {"role": role, **after})
+    if apply:
+        db.execute(
+            text(
+                "insert into approver_role (role, source, value) values (:r, :s, :v) "
+                "on conflict (role) do update set source = :s, value = :v"
+            ),
+            {"r": role, "s": body.source, "v": value},
+        )
+        _log(db, actor, "approver_role", role, before, after, reason)
+        db.commit()
+    return change
 
 
-@router.delete("/approvers/{role}")
-def drop_approver(role: str, db: Db, ctx: RulesAdmin, reason: str = "") -> dict[str, str]:
+@router.delete("/approvers/{role}", status_code=202)
+def drop_approver(role: str, db: Db, ctx: RulesAdmin, reason: str = "") -> dict[str, Any]:
     reason = need_reason(reason)
+    return _submit(db, ctx, "approver_role_drop", {"role": role}, reason)
+
+
+@setting_changes.handler("approver_role_drop", "admin.rules")
+def _approver_role_drop(db: Session, actor: Actor, args: dict[str, Any], reason: str, apply: bool) -> Change:
+    role = str(args["role"])
     old = db.execute(text("select source, value from approver_role where role = :r"), {"r": role}).first()
     if old is None:
         raise HTTPException(404, "no such role")
@@ -912,10 +1011,12 @@ def drop_approver(role: str, db: Db, ctx: RulesAdmin, reason: str = "") -> dict[
     ):
         if role in chain_roles(str(chain))[1]:
             raise HTTPException(409, "an approval chain still uses this role")
-    db.execute(text("delete from approver_role where role = :r"), {"r": role})
-    _log(db, user_actor(ctx.user_id), "approver_role", role, {"source": old[0], "value": old[1]}, None, reason)
-    db.commit()
-    return {"status": "removed"}
+    change = Change("approver_role", role, {"source": old[0], "value": old[1]}, None, {"status": "removed"})
+    if apply:
+        db.execute(text("delete from approver_role where role = :r"), {"r": role})
+        _log(db, actor, "approver_role", role, change.old, None, reason)
+        db.commit()
+    return change
 
 
 class HeadBody(BaseModel):
@@ -923,9 +1024,15 @@ class HeadBody(BaseModel):
     reason: str | None = None
 
 
-@router.put("/departments/{code}/head")
-def put_head(code: str, body: HeadBody, db: Db, ctx: RulesAdmin) -> dict[str, str]:
+@router.put("/departments/{code}/head", status_code=202)
+def put_head(code: str, body: HeadBody, db: Db, ctx: RulesAdmin) -> dict[str, Any]:
     reason = need_reason(reason=body.reason)
+    return _submit(db, ctx, "department_head", {"code": code, **_args(body)}, reason)
+
+
+@setting_changes.handler("department_head", "admin.rules")
+def _department_head(db: Session, actor: Actor, args: dict[str, Any], reason: str, apply: bool) -> Change:
+    body, code = HeadBody.model_validate(args), str(args["code"])
     old = db.execute(text("select head_user from department where code = :c"), {"c": code}).first()
     if old is None:
         raise HTTPException(404, "no such department")
@@ -936,18 +1043,13 @@ def put_head(code: str, body: HeadBody, db: Db, ctx: RulesAdmin) -> dict[str, st
         is None
     ):
         raise _422(f"there is no active person {body.person_code}")
-    db.execute(text("update department set head_user = :p where code = :c"), {"p": body.person_code, "c": code})
-    _log(
-        db,
-        user_actor(ctx.user_id),
-        "department_head",
-        code,
-        {"head_user": old[0]},
-        {"head_user": body.person_code},
-        reason,
-    )
-    db.commit()
-    return {"department": code, "head": body.person_code}
+    before, after = {"head_user": old[0]}, {"head_user": body.person_code}
+    change = Change("department_head", code, before, after, {"department": code, "head": body.person_code})
+    if apply:
+        db.execute(text("update department set head_user = :p where code = :c"), {"p": body.person_code, "c": code})
+        _log(db, actor, "department_head", code, before, after, reason)
+        db.commit()
+    return change
 
 
 # ---- approval chains: the rule table that says who approves what, by value --------------------
@@ -1048,10 +1150,17 @@ class RuleVersion(BaseModel):
     reason: str | None = None
 
 
-@router.post("/approval-rules", status_code=201)
+@router.post("/approval-rules", status_code=202)
 def new_rule_version(body: RuleVersion, db: Db, ctx: RulesAdmin) -> dict[str, Any]:
     """A change to who approves is a new version from a date. Past decisions keep the version they used."""
     reason = need_reason(body.reason)
+    return _submit(db, ctx, "approval_rule", _args(body), reason)
+
+
+@setting_changes.handler("approval_rule", "admin.rules")
+def _approval_rule(db: Session, actor: Actor, args: dict[str, Any], reason: str, apply: bool) -> Change:
+    """Written to see that the table stays whole; a check alone runs in a savepoint that is undone (`setting_changes`)."""
+    body = RuleVersion.model_validate(args)
     today = business_today()
     if body.effective_from < today:
         raise _422("a new version starts today or later: decisions already made keep the version they were made under")
@@ -1112,12 +1221,14 @@ def new_rule_version(body: RuleVersion, db: Db, ctx: RulesAdmin) -> dict[str, An
     ).scalar_one()  # fmt: skip
     problems = coverage_problems(db, body.document, body.effective_from)
     if problems:
-        db.rollback()
         raise _422("that would leave the rule table with a gap or an overlap: " + "; ".join(problems))
     new = _rule_json(_rows(db, "select * from approval_rule where id = :i", i=new_id)[0], today)
-    _log(db, user_actor(ctx.user_id), "approval_rule", f"{code}:v{version}", old, new, reason)
+    change = Change("approval_rule", f"{code}:v{version}", old, new, {"rule_code": code, "version": version})
+    if not apply:
+        return change
+    _log(db, actor, "approval_rule", change.key, old, new, reason)
     db.commit()
-    return {"rule_code": code, "version": version}
+    return change
 
 
 # ---- policies and tolerances ------------------------------------------------------------------
@@ -1137,6 +1248,11 @@ def _validate(
         value = value.replace("\r\n", "\n").strip("\n") + "\n" if value.strip() else ""
         if value and (bad := templates.problems(value)):
             raise _422(f"{label}: " + "; ".join(bad))
+    elif kind == "list":
+        words = [w.strip().lower() for w in value.split(",") if w.strip()]
+        if not words or not all(LIST_WORD.fullmatch(w) for w in words):
+            raise _422(f"{label}: a comma-separated list of words like cancelled_cheque, bank_letter")
+        value = ",".join(dict.fromkeys(words))
     elif kind == "email":
         value = value.lower()
         if value and (len(value) > 254 or not EMAIL.fullmatch(value)):
@@ -1158,6 +1274,7 @@ def _validate(
     return value
 
 
+LIST_WORD = re.compile(r"[a-z][a-z0-9_]{0,39}")
 EMAIL = re.compile(r"[a-z0-9._%+-]+@[a-z0-9-]+(?:\.[a-z0-9-]+)+")
 MAILBOXES = (
     "request_mailbox",
@@ -1211,9 +1328,15 @@ class PolicyBody(BaseModel):
     reason: str | None = None
 
 
-@router.put("/policies/{key}")
+@router.put("/policies/{key}", status_code=202)
 def put_policy(key: str, body: PolicyBody, db: Db, ctx: SettingsAdmin) -> dict[str, Any]:
     reason = need_reason(body.reason)
+    return _submit(db, ctx, "policy", {"key": key, **_args(body)}, reason)
+
+
+@setting_changes.handler("policy", "admin.settings")
+def _policy(db: Session, actor: Actor, args: dict[str, Any], reason: str, apply: bool) -> Change:
+    body, key = PolicyBody.model_validate(args), str(args["key"])
     spec = POLICIES.get(key)
     if spec is None:
         raise HTTPException(404, f"there is no policy '{key}'")
@@ -1223,15 +1346,19 @@ def put_policy(key: str, body: PolicyBody, db: Db, ctx: SettingsAdmin) -> dict[s
         other = next(k for k in MAILBOXES if k != key)
         if _stored(db, "org", other) == value:
             raise _422(f"{label}: that address already receives {POLICIES[other][2].lower()}; use a different one")
-    return _write_policy(db, user_actor(ctx.user_id), key, store, value, default, reason)
+    return _write_policy(db, actor, key, store, value, default, reason, apply)
 
 
 def _write_policy(
-    db: Session, actor: Actor, key: str, store: str, value: str, default: str, reason: str
-) -> dict[str, Any]:
+    db: Session, actor: Actor, key: str, store: str, value: str, default: str, reason: str, apply: bool
+) -> Change:
     old = _stored(db, store, key)
     if (old if old is not None else default) == value and old is not None:
         raise HTTPException(409, "that is already the value")
+    before, after = {"value": old if old is not None else default}, {"value": value}
+    change = Change("policy", key, before, after, {"key": key, "value": value})
+    if not apply:
+        return change
     if store == "org":
         db.execute(
             text("insert into org_setting (key, value) values (:k, :v) on conflict (key) do update set value = :v"),
@@ -1244,9 +1371,9 @@ def _write_policy(
             ),
             {"k": key, "v": value},
         )
-    _log(db, actor, "policy", key, {"value": old if old is not None else default}, {"value": value}, reason)
+    _log(db, actor, "policy", key, before, after, reason)
     db.commit()
-    return {"key": key, "value": value}
+    return change
 
 
 class ToleranceBody(BaseModel):
@@ -1255,9 +1382,15 @@ class ToleranceBody(BaseModel):
     reason: str | None = None
 
 
-@router.put("/tolerances/{key}")
+@router.put("/tolerances/{key}", status_code=202)
 def put_tolerance(key: str, body: ToleranceBody, db: Db, ctx: SettingsAdmin) -> dict[str, Any]:
     reason = need_reason(body.reason)
+    return _submit(db, ctx, "tolerance", {"key": key, **_args(body)}, reason)
+
+
+@setting_changes.handler("tolerance", "admin.settings")
+def _tolerance(db: Session, actor: Actor, args: dict[str, Any], reason: str, apply: bool) -> Change:
+    body, key = ToleranceBody.model_validate(args), str(args["key"])
     spec = TOLERANCES.get(key)
     if spec is None:
         raise HTTPException(404, f"there is no tolerance '{key}'")
@@ -1271,6 +1404,10 @@ def put_tolerance(key: str, body: ToleranceBody, db: Db, ctx: SettingsAdmin) -> 
     old = db.execute(
         text("select value from tolerance where key = :k and category_code = :c"), {"k": key, "c": body.category}
     ).scalar()
+    result = {"key": key, "category": body.category, "value": value}
+    change = Change("tolerance", f"{key}:{body.category}", {"value": old}, {"value": value}, result)
+    if not apply:
+        return change
     if old is None:
         db.execute(
             text("insert into tolerance (key, value, category_code) values (:k, :v, :c)"),
@@ -1281,9 +1418,9 @@ def put_tolerance(key: str, body: ToleranceBody, db: Db, ctx: SettingsAdmin) -> 
             text("update tolerance set value = :v where key = :k and category_code = :c"),
             {"k": key, "v": value, "c": body.category},
         )
-    _log(db, user_actor(ctx.user_id), "tolerance", f"{key}:{body.category}", {"value": old}, {"value": value}, reason)
+    _log(db, actor, "tolerance", change.key, change.old, change.new, reason)
     db.commit()
-    return {"key": key, "category": body.category, "value": value}
+    return change
 
 
 def policy_value_on(db: Session, key: str, at: datetime) -> str | None:
@@ -1367,10 +1504,15 @@ class AutomationBody(BaseModel):
     reason: str | None = None
 
 
-@router.put("/automation/{decision_type}")
+@router.put("/automation/{decision_type}", status_code=202)
 def put_automation(decision_type: str, body: AutomationBody, db: Db, ctx: SettingsAdmin) -> dict[str, Any]:
     reason = need_reason(body.reason)
-    actor = user_actor(ctx.user_id)
+    return _submit(db, ctx, "automation", {"decision_type": decision_type, **_args(body)}, reason)
+
+
+@setting_changes.handler("automation", "admin.settings")
+def _automation(db: Session, actor: Actor, args: dict[str, Any], reason: str, apply: bool) -> Change:
+    body, decision_type = AutomationBody.model_validate(args), str(args["decision_type"])
     if decision_type in autonomy.LOCKED:
         raise _422(
             f"{autonomy.LABELS.get(decision_type, decision_type)} is always decided by a person and can never be set to act alone"
@@ -1398,11 +1540,22 @@ def put_automation(decision_type: str, body: AutomationBody, db: Db, ctx: Settin
             "true" if body.level == "propose" else "false",
             "true",
             reason,
+            apply,
         )
     old = db.execute(
         text("select level, value_cap, min_confidence, max_wrong_rate from autonomy_setting where decision_type = :d"),
         {"d": decision_type},
     ).first()
+    before = {"level": old[0], "value_cap": old[1], "min_confidence": old[2], "max_wrong_rate": old[3]} if old else None
+    after = {
+        "level": body.level,
+        "value_cap": body.value_cap,
+        "min_confidence": body.min_confidence,
+        "max_wrong_rate": body.max_wrong_rate,
+    }
+    change = Change("automation", decision_type, before, after, {"decision_type": decision_type, "level": body.level})
+    if not apply:
+        return change
     autonomy.configure(
         db,
         actor,
@@ -1412,14 +1565,9 @@ def put_automation(decision_type: str, body: AutomationBody, db: Db, ctx: Settin
         min_confidence=body.min_confidence,
         max_wrong_rate=body.max_wrong_rate,
     )
-    _log(
-        db, actor, "automation", decision_type,
-        {"level": old[0], "value_cap": old[1], "min_confidence": old[2], "max_wrong_rate": old[3]} if old else None,
-        {"level": body.level, "value_cap": body.value_cap, "min_confidence": body.min_confidence, "max_wrong_rate": body.max_wrong_rate},
-        reason,
-    )  # fmt: skip
+    _log(db, actor, "automation", decision_type, before, after, reason)
     db.commit()
-    return {"decision_type": decision_type, "level": body.level}
+    return change
 
 
 class KillSwitch(BaseModel):
@@ -1428,24 +1576,58 @@ class KillSwitch(BaseModel):
 
 
 @router.put("/automation-kill-switch")
-def put_kill_switch(body: KillSwitch, db: Db, ctx: SettingsAdmin) -> dict[str, bool]:
+def put_kill_switch(body: KillSwitch, db: Db, ctx: SettingsAdmin, response: Response) -> dict[str, Any]:
+    """Stopping automation is immediate, for safety. Starting it again waits for a second administrator."""
     reason = need_reason(body.reason)
-    actor = user_actor(ctx.user_id)
+    if not body.on:
+        response.status_code = 202
+        return _submit(db, ctx, "kill_switch_off", {}, reason)
+    _kill_switch(db, user_actor(ctx.user_id), True, reason, apply=True)
+    return {"kill_switch": True}
+
+
+@setting_changes.handler("kill_switch_off", "admin.settings")
+def _kill_switch_off(db: Session, actor: Actor, args: dict[str, Any], reason: str, apply: bool) -> Change:
+    return _kill_switch(db, actor, False, reason, apply)
+
+
+def _kill_switch(db: Session, actor: Actor, on: bool, reason: str, apply: bool) -> Change:
     old = bool(db.execute(text("select kill_switch from autonomy_global where id = 1")).scalar_one())
-    autonomy.set_kill_switch(db, actor, body.on, reason)
-    _log(db, actor, "automation", "kill_switch", {"on": old}, {"on": body.on}, reason)
-    db.commit()
-    return {"kill_switch": body.on}
+    if not on and not old:
+        raise HTTPException(409, "the kill switch is already off")
+    change = Change("automation", "kill_switch", {"on": old}, {"on": on}, {"kill_switch": on})
+    if apply:
+        autonomy.set_kill_switch(db, actor, on, reason)
+        _log(db, actor, "automation", "kill_switch", {"on": old}, {"on": on}, reason)
+        db.commit()
+    return change
+
+
+# ---- changes waiting for a second administrator ---------------------------------------------------
+
+
+@router.get("/pending")
+def list_pending(db: Db, ctx: AuditViewer) -> list[dict[str, Any]]:
+    """Every change waiting for approval, old value (as it is now), new value, reason, who proposed it. `mine` marks the
+    ones the caller proposed (they cannot approve those)."""
+    return [{**c, "mine": c["by"] == ctx.user_id} for c in setting_changes.pending(db)]
 
 
 # ---- the history ------------------------------------------------------------------------------
+
+
+def _name(names: dict[Any, Any], user: str | None) -> str | None:
+    """A person's name for a login id as the history stores it (the system and agents are kept as they are)."""
+    if user is None:
+        return None
+    return names.get(int(user)) if user.isdigit() else user
 
 
 @router.get("/changes")
 def list_changes(db: Db, ctx: AuditViewer, area: str | None = None, key: str | None = None, limit: int = 100) -> Rows:
     rows = _rows(
         db,
-        "select id, at, by_user, area, key, old_value, new_value, reason from setup_change "
+        "select id, at, by_user, approved_by, area, key, old_value, new_value, reason from setup_change "
         "where (cast(:a as text) is null or area = :a) and (cast(:k as text) is null or key = :k) order by id desc limit :n",
         a=area,
         k=key,
@@ -1454,5 +1636,6 @@ def list_changes(db: Db, ctx: AuditViewer, area: str | None = None, key: str | N
     names = {p["user_id"]: p["display_name"] for p in _rows(db, "select user_id, display_name from user_profile")}
     for r in rows:
         r["at"] = _iso(r["at"])
-        r["by_name"] = names.get(int(r["by_user"])) if str(r["by_user"]).isdigit() else r["by_user"]
+        r["by_name"] = _name(names, r["by_user"])
+        r["approved_by_name"] = _name(names, r["approved_by"])
     return rows

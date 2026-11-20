@@ -24,12 +24,13 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from p2p.approvals.workflow import name_of, notify_person
+from p2p.formulas import supplier_changes as judge
 from p2p.formulas.gst import Registration
 from p2p.formulas.money import format_qty
 from p2p.formulas.orders import LineAmounts, line_amounts, order_totals
-from p2p.orders import document, workflow
+from p2p.orders import document, supplier_links, workflow
 from p2p.platform import audit, emails, notifications, proposals, tasks
-from p2p.platform.sod import user
+from p2p.platform.sod import Actor, user
 
 log = logging.getLogger(__name__)
 CANCELLABLE = ("draft", "submitted", "approved", "sent", "acknowledged")
@@ -293,9 +294,13 @@ def revise(
     changes: list[LineChange],
     *,
     approved_change: bool = False,
+    supplier_asked: bool = False,
+    change_id: int | None = None,
 ) -> dict[str, Any]:
     """Make a new version of the order: change the quantity or the need-by date of open lines. `approved_change` is a
-    supplier's change a person has already accepted: it may change the price and is not approved again."""
+    supplier's change a person has already accepted: it may change the price. A material change (Q19: price or quantity
+    up, a date beyond the tolerance, a higher total) goes through approval again; any other change of an order the
+    supplier already has clears its acknowledgement and sends a link to answer the new version."""
     why = _reason(reason)
     if not changes:
         raise ChangeError("nothing to change")
@@ -406,7 +411,10 @@ def revise(
     totals = order_totals(parts)
     after_total = totals.total
     version = int(po["version"]) + 1
-    reapprove = after_total > before_total and po["status"] != "draft" and not approved_change
+    material = judge.material_reasons(before_total, after_total, done, _date_tolerance(db))
+    # a material change goes for approval again; so does any change while approval is under way, so that the approval
+    # is of this version and never waits for someone who has just become one of the order's makers (C1)
+    reapprove = (bool(material) and po["status"] != "draft") or po["status"] == "submitted"
     db.execute(
         text("update po set taxable = :t, cgst = :c, sgst = :s, igst = :i, total = :tot, version = :v where no = :n"),
         {
@@ -437,7 +445,8 @@ def revise(
     )
     audit.record(
         db, user(user_id), "po.revise", "po", po_no,
-        before={"version": version - 1, "total": before_total}, after={"version": version, "total": after_total, "changes": done},
+        before={"version": version - 1, "total": before_total},
+        after={"version": version, "total": after_total, "changes": done, "material": material},
         reason=why,
     )  # fmt: skip
     was = po["status"]
@@ -450,18 +459,38 @@ def revise(
             ),
             {"n": po_no},
         )
+        if approved_change and change_id is not None:  # the price approver's acceptance, not their making (C1)
+            db.execute(text("update po_change set version_made = :v where id = :i"), {"v": version, "i": change_id})
         db.commit()
-        new_status = workflow.submit(db, tenant or "", po_no, user(user_id))
+        # an accepted supplier price goes on for approval as the system: accepting it does not make that person a maker
+        by = Actor("service", "supplier-change") if approved_change else user(user_id)
+        new_status = workflow.submit(db, tenant or "", po_no, by)
     else:
+        if was in WITH_SUPPLIER:  # the supplier acknowledged another version: it answers this one again (DF-07)
+            db.execute(
+                text(
+                    "update po set acknowledged_at = null, "
+                    "status = case when status = 'acknowledged' then 'sent' else status end where no = :n"
+                ),
+                {"n": po_no},
+            )
         db.commit()
-        new_status = was
+        new_status = str(db.execute(text("select status from po where no = :n"), {"n": po_no}).scalar_one())
     told = False
     if was in WITH_SUPPLIER and not reapprove:
+        again = ""
+        if tenant and not supplier_asked:  # the supplier's own change needs no new answer from it
+            token = supplier_links.issue(db, tenant, po_no, "respond")
+            db.commit()
+            again = (
+                "\n\nPlease accept this version of the order, or tell us what you can do, here:\n"
+                f"{supplier_links.url(token)}"
+            )
         told = tell_supplier(
             db,
             po,
             f"Purchase order {po_no} (version {version}): revised",
-            f"Order {po_no} has been revised (version {version}). The revised order is attached. Reason: {why}",
+            f"Order {po_no} has been revised (version {version}). The revised order is attached. Reason: {why}{again}",
             [(f"{po_no}-v{version}.pdf", "application/pdf", document.order_document(db, po_no))],
         )
     return {
@@ -471,6 +500,13 @@ def revise(
         "reapproval": reapprove,
         "supplier_told": told,
     }
+
+
+def _date_tolerance(db: Session) -> int:
+    value = db.execute(
+        text("select value from tolerance where key = 'supplier_date_days' and category_code = 'ANY' limit 1")
+    ).scalar()
+    return int(Decimal(str(value))) if value not in (None, "") else 3
 
 
 def history(db: Session, po_no: str) -> list[dict[str, Any]]:

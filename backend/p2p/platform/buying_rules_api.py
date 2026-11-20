@@ -4,7 +4,8 @@ items bought from one supplier only.
 Each rule is versioned rows. A change is a new version from a date (today or later), made by the rule's own service,
 which closes the version in force and writes the audit row; the setup history gets a row too. An old version is never
 edited, so every decision keeps pointing at the version it used. For the Admin (permission `admin.rules`), like the
-approval chains; every change needs a reason.
+approval chains; every change needs a reason, and it applies only when a second administrator approves it (D-22,
+`setting_changes`): the endpoint checks it and answers 202 with the proposal.
 """
 
 from datetime import date
@@ -20,10 +21,12 @@ from p2p.formulas import selection as sel
 from p2p.formulas.calendar import business_today
 from p2p.formulas.money import round_money
 from p2p.orders import selection_rule, touchless
-from p2p.platform import routing
+from p2p.platform import routing, setting_changes
 from p2p.platform.permissions import require
 from p2p.platform.rows import rows as _rows
+from p2p.platform.setting_changes import Change
 from p2p.platform.setup_api import need_reason, record_history
+from p2p.platform.sod import Actor
 from p2p.platform.sod import user as user_actor
 from p2p.sourcing import route
 
@@ -86,6 +89,10 @@ def _check_start(db: Session, table: str, effective_from: date, where: str = "tr
         raise _422(f"the latest version starts on {latest:%d %b %Y}; a new one cannot start before it")
 
 
+def _submit(db: Session, ctx: routing.TenantContext, kind: str, args: dict[str, Any], reason: str) -> dict[str, Any]:
+    return setting_changes.submit(db, user_actor(ctx.user_id), kind, args, reason, tenant=ctx.slug)
+
+
 def _plain(values: dict[str, Any]) -> dict[str, str | None]:
     return {k: None if v is None else format(D(v).normalize(), "f") for k, v in values.items()}
 
@@ -116,25 +123,38 @@ class RouteVersion(BaseModel):
     reason: str | None = None
 
 
-@router.post("/buying-route", status_code=201)
+@router.post("/buying-route", status_code=202)
 def new_buying_route(body: RouteVersion, db: Db, ctx: RulesAdmin) -> dict[str, Any]:
     reason = need_reason(body.reason)
+    return _submit(db, ctx, "buying_route", body.model_dump(mode="json", exclude={"reason"}), reason)
+
+
+@setting_changes.handler("buying_route", "admin.rules")
+def _buying_route(db: Session, actor: Actor, args: dict[str, Any], reason: str, apply: bool) -> Change:
+    body = RouteVersion.model_validate(args)
     category = body.category or None
     if category and db.execute(text("select 1 from item_category where code = :c"), {"c": category}).first() is None:
         raise _422(f"there is no item category {category}")
     _check_start(db, "buying_route_rule", body.effective_from, "category_code is not distinct from :c", c=category)
-    actor = user_actor(ctx.user_id)
     old = route.in_force_row(db, category, body.effective_from)
     before = _plain({k: old[k] for k in ROUTE_FIELDS}) if old else None
-    record_history(db, actor, "buying_route_rule", category or "company", before, _plain(dict(body.values)), reason)
+    after = _plain(dict(body.values))
+    key = category or "company"
     try:
+        if apply:
+            record_history(db, actor, "buying_route_rule", key, before, after, reason)
         version = route.save_rule(
-            db, actor, dict(body.values), category=category, effective_from=body.effective_from, note=reason
+            db,
+            actor,
+            dict(body.values),
+            category=category,
+            effective_from=body.effective_from,
+            note=reason,
+            apply=apply,
         )
     except route.RouteError as exc:
-        db.rollback()
         raise _422(str(exc)) from None
-    return {"version": version}
+    return Change("buying_route_rule", key, before, after, {"version": version})
 
 
 # ---- the supplier selection rule -------------------------------------------------------------------
@@ -172,9 +192,15 @@ class SelectionVersion(BaseModel):
     reason: str | None = None
 
 
-@router.post("/supplier-selection", status_code=201)
+@router.post("/supplier-selection", status_code=202)
 def new_supplier_selection(body: SelectionVersion, db: Db, ctx: RulesAdmin) -> dict[str, Any]:
     reason = need_reason(body.reason)
+    return _submit(db, ctx, "supplier_selection", body.model_dump(mode="json", exclude={"reason"}), reason)
+
+
+@setting_changes.handler("supplier_selection", "admin.rules")
+def _supplier_selection(db: Session, actor: Actor, args: dict[str, Any], reason: str, apply: bool) -> Change:
+    body = SelectionVersion.model_validate(args)
     _check_start(db, "supplier_selection_rule", body.effective_from)
     try:
         weights = sel.Weights(*(body.weights[k] for k in ("price", "delivery", "quality", "payment_terms")))
@@ -182,7 +208,6 @@ def new_supplier_selection(body: SelectionVersion, db: Db, ctx: RulesAdmin) -> d
         raise _422("give the four weights: price, delivery, quality and payment terms") from None
     if weights.total != 100:
         raise _422(f"the weights must add up to 100; they add up to {format(weights.total.normalize(), 'f')}")
-    actor = user_actor(ctx.user_id)
     old = selection_rule.rule_for(db, body.effective_from)
     new = {**body.model_dump(exclude={"reason", "effective_from"}), "weights": _plain(dict(body.weights))}
     before = {
@@ -198,8 +223,9 @@ def new_supplier_selection(body: SelectionVersion, db: Db, ctx: RulesAdmin) -> d
         "tie_break": list(old.tie_break),
         "input_credit": old.input_credit,
     }
-    record_history(db, actor, "supplier_selection_rule", "company", before, new, reason)
     try:
+        if apply:
+            record_history(db, actor, "supplier_selection_rule", "company", before, new, reason)
         version = selection_rule.save_rule(
             db,
             actor,
@@ -209,11 +235,11 @@ def new_supplier_selection(body: SelectionVersion, db: Db, ctx: RulesAdmin) -> d
             tie_break=tuple(body.tie_break),
             input_credit=body.input_credit,
             note=reason,
+            apply=apply,
         )
     except selection_rule.SelectionRuleError as exc:
-        db.rollback()
         raise _422(str(exc)) from None
-    return {"version": version}
+    return Change("supplier_selection_rule", "company", before, new, {"version": version})
 
 
 # ---- the touchless order rule ----------------------------------------------------------------------
@@ -238,22 +264,22 @@ class TouchlessVersion(BaseModel):
     reason: str | None = None
 
 
-@router.post("/touchless", status_code=201)
+@router.post("/touchless", status_code=202)
 def new_touchless(body: TouchlessVersion, db: Db, ctx: RulesAdmin) -> dict[str, Any]:
     reason = need_reason(body.reason)
+    return _submit(db, ctx, "touchless", body.model_dump(mode="json", exclude={"reason"}), reason)
+
+
+@setting_changes.handler("touchless", "admin.rules")
+def _touchless(db: Session, actor: Actor, args: dict[str, Any], reason: str, apply: bool) -> Change:
+    body = TouchlessVersion.model_validate(args)
     _check_start(db, "touchless_rule", body.effective_from)
-    actor = user_actor(ctx.user_id)
     old = touchless.rule_for(db, body.effective_from)
-    record_history(
-        db,
-        actor,
-        "touchless_rule",
-        "company",
-        _plain({"value_limit": old.value_limit, "price_pct": old.price_pct}),
-        _plain({"value_limit": body.value_limit, "price_pct": body.price_pct}),
-        reason,
-    )
+    before = _plain({"value_limit": old.value_limit, "price_pct": old.price_pct})
+    after = _plain({"value_limit": body.value_limit, "price_pct": body.price_pct})
     try:
+        if apply:
+            record_history(db, actor, "touchless_rule", "company", before, after, reason)
         version = touchless.save_rule(
             db,
             actor,
@@ -261,11 +287,11 @@ def new_touchless(body: TouchlessVersion, db: Db, ctx: RulesAdmin) -> dict[str, 
             value_limit=body.value_limit,
             price_pct=body.price_pct,
             note=reason,
+            apply=apply,
         )
     except touchless.TouchlessRuleError as exc:
-        db.rollback()
         raise _422(str(exc)) from None
-    return {"version": version}
+    return Change("touchless_rule", "company", before, after, {"version": version})
 
 
 # ---- items bought from one supplier only ---------------------------------------------------------
@@ -298,34 +324,38 @@ class SingleSource(BaseModel):
     reason: str | None = None
 
 
-@router.put("/single-source/{item_code}")
-def put_single_source(item_code: str, body: SingleSource, db: Db, ctx: RulesAdmin) -> dict[str, str]:
+@router.put("/single-source/{item_code}", status_code=202)
+def put_single_source(item_code: str, body: SingleSource, db: Db, ctx: RulesAdmin) -> dict[str, Any]:
     reason = need_reason(body.reason)
-    if db.execute(text("select 1 from item where code = :c"), {"c": item_code}).first() is None:
-        raise HTTPException(404, f"there is no item {item_code}")
-    status = db.execute(text("select status from supplier where code = :c"), {"c": body.supplier_code}).scalar()
-    if status is None:
-        raise _422(f"there is no supplier {body.supplier_code}")
-    if status != "active":
-        raise _422(f"{body.supplier_code} is {status}: only an active supplier can be the single source")
-    actor = user_actor(ctx.user_id)
-    old = db.execute(
-        text("select supplier_code from item_single_source where item_code = :i"), {"i": item_code}
-    ).scalar()
-    record_history(db, actor, "item_single_source", item_code, old, body.supplier_code, reason)
-    route.mark_single_source(db, actor, item_code, body.supplier_code, reason)
-    return {"item_code": item_code, "supplier_code": body.supplier_code}
+    return _submit(db, ctx, "single_source", {"item_code": item_code, "supplier_code": body.supplier_code}, reason)
 
 
-@router.delete("/single-source/{item_code}")
-def drop_single_source(item_code: str, db: Db, ctx: RulesAdmin, reason: str = "") -> dict[str, str]:
+@router.delete("/single-source/{item_code}", status_code=202)
+def drop_single_source(item_code: str, db: Db, ctx: RulesAdmin, reason: str = "") -> dict[str, Any]:
     reason = need_reason(reason)
+    return _submit(db, ctx, "single_source", {"item_code": item_code, "supplier_code": None}, reason)
+
+
+@setting_changes.handler("single_source", "admin.rules")
+def _single_source(db: Session, actor: Actor, args: dict[str, Any], reason: str, apply: bool) -> Change:
+    """Mark an item as bought from one supplier only, or (supplier None) clear the mark."""
+    item_code, supplier = str(args["item_code"]), args.get("supplier_code")
     old = db.execute(
         text("select supplier_code from item_single_source where item_code = :i"), {"i": item_code}
     ).scalar()
-    if old is None:
-        raise HTTPException(404, f"{item_code} is not marked as single source")
-    actor = user_actor(ctx.user_id)
-    record_history(db, actor, "item_single_source", item_code, old, None, reason)
-    route.mark_single_source(db, actor, item_code, None, reason)
-    return {"item_code": item_code}
+    if supplier is None:
+        if old is None:
+            raise HTTPException(404, f"{item_code} is not marked as single source")
+    else:
+        if db.execute(text("select 1 from item where code = :c"), {"c": item_code}).first() is None:
+            raise HTTPException(404, f"there is no item {item_code}")
+        status = db.execute(text("select status from supplier where code = :c"), {"c": supplier}).scalar()
+        if status is None:
+            raise _422(f"there is no supplier {supplier}")
+        if status != "active":
+            raise _422(f"{supplier} is {status}: only an active supplier can be the single source")
+    change = Change("item_single_source", item_code, old, supplier, {"item_code": item_code, "supplier_code": supplier})
+    if apply:
+        record_history(db, actor, change.area, item_code, old, supplier, reason)
+        route.mark_single_source(db, actor, item_code, None if supplier is None else str(supplier), reason)
+    return change

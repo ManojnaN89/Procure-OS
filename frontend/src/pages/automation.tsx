@@ -7,7 +7,7 @@ import { Field, Input } from "../components/ui/input";
 import { Table, Td, Th } from "../components/ui/table";
 import { api } from "../lib/api";
 import { can, useMe } from "../lib/me";
-import { select } from "./setup-shared";
+import { PendingChanges, select } from "./setup-shared";
 
 type Decision = {
 	decision_type: string;
@@ -58,6 +58,7 @@ export function AutomationPage() {
 			setEdits({});
 			await queryClient.invalidateQueries({ queryKey: ["setup-automation"] });
 			await queryClient.invalidateQueries({ queryKey: ["setup-history"] });
+			await queryClient.invalidateQueries({ queryKey: ["setup-pending"] });
 		} catch (e) {
 			setError((e as Error).message);
 		}
@@ -86,7 +87,8 @@ export function AutomationPage() {
 						</strong>
 						<div className="text-sm text-muted-foreground">
 							Switching it on stops every automatic action at the next decision.
-							People can still do everything by hand.
+							People can still do everything by hand. Switching it off again
+							waits for a second administrator.
 							{d.last_kill_switch
 								? ` Last changed ${d.last_kill_switch.at.slice(0, 10)}: ${d.last_kill_switch.reason}`
 								: ""}
@@ -121,6 +123,7 @@ export function AutomationPage() {
 					{error}
 				</p>
 			) : null}
+			<PendingChanges />
 			<Card>
 				<CardHeader className="font-medium">Decisions</CardHeader>
 				<Table>

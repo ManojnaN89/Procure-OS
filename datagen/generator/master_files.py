@@ -48,7 +48,7 @@ HEADERS = {
     "supplier_document": "supplier_code,doc_type,number,issued_on,expires_on,verified",
     "supplier_status_history": "supplier_code,at,from_status,to_status,reason,by_user",
     "contract": "code,supplier_code,type,valid_from,valid_to,max_value,payment_terms_code,delivery_terms,freight_terms,warranty_months,sla_text,status",
-    "price_record": "supplier_code,item_code,contract_code,uom,price,min_qty,price_basis,freight_included,valid_from,valid_to,lead_days",
+    "price_record": "supplier_code,item_code,contract_code,uom,price,min_qty,price_basis,freight_included,valid_from,valid_to,lead_days,version,status",
     "delegation": "from_user,to_user,start_date,end_date,reason",
     "item_substitute": "item_code,substitute_code,note",
     "uom_conversion": "item_code,from_uom,to_uom,factor",

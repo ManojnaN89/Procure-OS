@@ -87,9 +87,11 @@ def save_rule(
     category: str | None = None,
     effective_from: date,
     note: str | None = None,
+    apply: bool = True,
 ) -> int:
     """Make the next version of the company's rule (category None) or of a category's row, from a date. The version in
-    force until then ends the day before. A category row keeps only the thresholds it names. Returns the version."""
+    force until then ends the day before. A category row keeps only the thresholds it names. Returns the version.
+    With apply False it only checks the change and says which version it would be."""
     unknown = set(values) - set(THRESHOLDS)
     if unknown:
         raise RouteError(f"not a threshold of the buying route: {', '.join(sorted(unknown))}")
@@ -109,6 +111,8 @@ def save_rule(
             {"c": category},
         ).scalar_one()
     )
+    if not apply:
+        return version
     if current is not None:
         db.execute(
             text("update buying_route_rule set effective_to = :t where id = :i"),
@@ -287,7 +291,7 @@ class Router:
             text(
                 "select p.contract_code, p.price, coalesce(p.min_qty, 0), p.lead_days, p.valid_to from price_record p "
                 "left join contract c on c.code = p.contract_code where p.supplier_code = :s and p.item_code = :i "
-                "and p.uom is not distinct from :u and p.valid_from <= :d and (p.valid_to is null or p.valid_to >= :d) "
+                "and p.uom is not distinct from :u and p.status = 'active' and p.valid_from <= :d and (p.valid_to is null or p.valid_to >= :d) "
                 "and (p.contract_code is null or (c.status = 'active' and c.valid_from <= :d "
                 "and (c.valid_to is null or c.valid_to >= :d)))"
             ),
@@ -338,7 +342,10 @@ class Router:
         codes = [
             r[0]
             for r in self.db.execute(
-                text("select distinct supplier_code from price_record where item_code = :i order by 1"), {"i": item}
+                text(
+                    "select distinct supplier_code from price_record where item_code = :i and status = 'active' order by 1"
+                ),
+                {"i": item},
             )
         ]
         priced = [

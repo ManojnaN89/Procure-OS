@@ -22,6 +22,7 @@ from p2p.formulas import matching
 from p2p.formulas.calendar import IST, BusinessCalendar
 from p2p.formulas.kpis import working_days_between
 from p2p.invoices.service import asked_or_confirmed
+from p2p.orders.workflow import NO_APPROVER
 from p2p.platform import alerts, permissions
 from p2p.platform.rows import rows as _rows
 from p2p.receiving import goods, services, unordered
@@ -33,6 +34,7 @@ KINDS: dict[str, str] = {
     "approval": "Approvals past their reminder",
     "proposal": "Decisions waiting",
     "supplier": "Suppliers to chase",
+    "order": "Orders nobody may approve",
 }
 
 AP = ("AP", "invoice.match", "Ask the supplier for a corrected invoice")
@@ -224,6 +226,16 @@ def _proposals(db: Session) -> Iterator[Stuck]:
         )  # fmt: skip
 
 
+def _orders(db: Session) -> Iterator[Stuck]:
+    """Orders every approver of which made them (C1): only a change to the approval rules lets them go on."""
+    for r in _rows(db, "select no, total, hold_reason, created_at from po where status = 'draft' and hold_reason like :h", h=f"{NO_APPROVER}%"):  # fmt: skip
+        yield Stuck(
+            "order", r["no"], f"#/purchase-orders/{r['no']}", str(r["hold_reason"]), "Admin (the approval rules)",
+            "Name an approver who did not make the order, then submit it again", _day(r["created_at"]),
+            amount=Decimal(r["total"]), act="admin.rules", see=("admin.rules", "po.create"),
+        )  # fmt: skip
+
+
 def _suppliers(db: Session, today: date, calendar: BusinessCalendar) -> Iterator[Stuck]:
     ctx = alerts.Context(db, today, calendar)
     for rule, (act, step) in BUYER_ALERTS.items():
@@ -243,6 +255,7 @@ def collect(db: Session, today: date, calendar: BusinessCalendar) -> list[Stuck]
         *_approvals(db),
         *_proposals(db),
         *_suppliers(db, today, calendar),
+        *_orders(db),
     ]
 
 

@@ -16,6 +16,7 @@ class PriceOption:
     min_qty: Decimal  # the quantity from which this price applies (a quantity break)
     lead_days: int | None
     valid_to: date | None
+    record_id: int | None = None  # the price record, so what is bought keeps the version it used
 
 
 def pick_contract_price(options: Sequence[PriceOption], qty: Decimal) -> PriceOption | None:

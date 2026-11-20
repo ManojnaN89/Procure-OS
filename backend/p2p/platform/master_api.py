@@ -5,7 +5,7 @@ from datetime import date
 from decimal import Decimal, InvalidOperation
 from typing import Annotated, Any
 
-from fastapi import APIRouter, Depends, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, Form, HTTPException, UploadFile
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
@@ -13,7 +13,7 @@ from p2p.formulas.calendar import business_today
 from p2p.masters import documents_and_contracts as masters
 from p2p.masters import suppliers
 from p2p.platform import audit, files, ratelimit, routing
-from p2p.platform.permissions import can_anywhere, require
+from p2p.platform.permissions import PermissionDenied, can_anywhere, require
 from p2p.platform.sod import user as user_actor
 
 router = APIRouter(prefix="/api", tags=["masters"])
@@ -151,6 +151,54 @@ def activate_contract(
     return _guard(go)
 
 
+@router.post("/contracts/{code}/versions/submit")
+def submit_price_version(
+    code: str, db: Db, ctx: Annotated[routing.TenantContext, Depends(require("contract.manage"))]
+) -> dict[str, Any]:
+    """Send the draft prices of an active contract to be activated by someone else."""
+    return _guard(lambda: {"proposal": masters.submit_version(db, code, ctx.user_id)})
+
+
+@router.post("/contracts/{code}/versions/activate")
+def activate_price_version(
+    code: str,
+    payload: dict[str, Any],
+    db: Db,
+    ctx: Annotated[routing.TenantContext, Depends(require("contract.activate"))],
+) -> dict[str, Any]:
+    def go() -> dict[str, Any]:
+        try:
+            return masters.activate_version(db, code, ctx.user_id, payload.get("note") or None)
+        except PermissionDenied as exc:
+            raise HTTPException(403, str(exc)) from None
+
+    return _guard(go)
+
+
+@router.post("/contracts/{code}/versions/withdraw")
+def withdraw_price_version(
+    code: str,
+    payload: dict[str, Any],
+    db: Db,
+    ctx: Annotated[routing.TenantContext, Depends(require("contract.manage"))],
+) -> dict[str, Any]:
+    """The maker drops the draft prices (and the activation they wait for)."""
+    return _guard(
+        lambda: {"dropped": masters.withdraw_version(db, code, ctx.user_id, str(payload.get("reason") or ""))}
+    )
+
+
+@router.post("/contracts/{code}/versions/reject")
+def reject_price_version(
+    code: str,
+    payload: dict[str, Any],
+    db: Db,
+    ctx: Annotated[routing.TenantContext, Depends(require("contract.activate"))],
+) -> dict[str, Any]:
+    reason = str(payload.get("reason") or "")
+    return _guard(lambda: {"dropped": masters.withdraw_version(db, code, ctx.user_id, reason, rejected=True)})
+
+
 # ---- supplier records: the onboarding form, edits and bank details ---------------------------------
 
 SUPPLIER_FIELDS = (
@@ -170,7 +218,11 @@ def _supplier_call(call: Callable[[], dict[str, Any]], db: Session) -> dict[str,
         message = str(exc)
         if "does not exist" in message:
             raise HTTPException(404, message) from None
-        raise HTTPException(409 if message.startswith("possible duplicate") else 422, message) from None
+        if message.startswith("segregation"):
+            raise HTTPException(403, message) from None
+        raise HTTPException(
+            409 if message.startswith(("possible duplicate", "this bank account is already")) else 422, message
+        ) from None
 
 
 @router.get("/payment-terms")
@@ -239,12 +291,24 @@ def vendor_profile(vendor_id: str, db: Db, ctx: Ctx) -> dict[str, Any]:
         .mappings()
         .first()
     )
-    bank = db.execute(
-        text(
-            "select account_no, ifsc, verified from supplier_bank_account where supplier_code = :c order by id limit 1"
-        ),
-        {"c": vendor_id},
-    ).first()
+    bank = (
+        db.execute(
+            text(
+                "select id, account_no, ifsc, coalesce(verified, false) as verified, submitted_by, verification_method, "
+                "verified_at from supplier_bank_account where supplier_code = :c order by id limit 1"
+            ),
+            {"c": vendor_id},
+        )
+        .mappings()
+        .first()
+    )
+    # the one who verifies sees the whole number to check it against the proof; everyone else sees the last four digits
+    can_verify = (
+        bank is not None
+        and not bank["verified"]
+        and bank["submitted_by"] != str(ctx.user_id)
+        and can_anywhere(db, ctx.user_id, "supplier.verify_bank")
+    )
     attached = db.execute(
         text(
             "select linked_id, id, filename from document where linked_type = 'supplier_document' and linked_id in "
@@ -276,11 +340,43 @@ def vendor_profile(vendor_id: str, db: Db, ctx: Ctx) -> dict[str, Any]:
         else [],
         "bank": None
         if bank is None
-        else {"account": f"****{str(bank[0])[-4:]}", "ifsc": bank[1], "verified": bool(bank[2])},
+        else {
+            "id": bank["id"],
+            "account": suppliers.mask(bank["account_no"]),
+            "ifsc": bank["ifsc"],
+            "verified": bank["verified"],
+            "method": bank["verification_method"],
+            "verified_at": bank["verified_at"].isoformat() if bank["verified_at"] else None,
+            **({"account_no": bank["account_no"]} if can_verify else {}),
+        },  # fmt: skip
+        "can_verify_bank": can_verify,
+        "bank_methods": suppliers.verification_methods(db) if can_verify else [],
         "files": {str(a[0]): {"id": a[1], "filename": a[2]} for a in attached},
         "can_edit": can_anywhere(db, ctx.user_id, "supplier.propose"),
         "can_add_documents": can_anywhere(db, ctx.user_id, "supplier.documents"),
     }
+
+
+@router.post("/vendors/{vendor_id}/bank/{account_id}/verify", dependencies=[ratelimit.limited("upload")])
+async def verify_vendor_bank(
+    vendor_id: str,
+    account_id: int,
+    method: Annotated[str, Form()],
+    file: UploadFile,
+    db: Db,
+    ctx: Annotated[routing.TenantContext, Depends(require("supplier.verify_bank"))],
+) -> dict[str, Any]:
+    """A second person verifies the supplier's bank account: how it was checked and the proof (PDF or picture)."""
+    name = file.filename or "file"
+    if not name.lower().endswith(FILE_TYPES):
+        raise HTTPException(422, "the proof must be a PDF, PNG or JPG file")
+    data = await file.read(files.MAX_BYTES + 1)
+    if len(data) > files.MAX_BYTES:
+        raise HTTPException(413, "File is too large")
+    proof = suppliers.Evidence(ctx.slug, data, name, file.content_type or "application/octet-stream")
+    return _supplier_call(
+        lambda: suppliers.verify_bank(db, vendor_id, account_id, method.strip(), proof, ctx.user_id), db
+    )
 
 
 @router.post(

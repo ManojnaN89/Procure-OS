@@ -22,7 +22,18 @@ from p2p.sourcing import documents
 
 client = TestClient(app)
 TODAY = date(2026, 11, 6)
-LOGINS = ["admin", "ap", "buyer", "director", "finance", "planthead", "production", "purchasemanager", "store"]
+LOGINS = [
+    "admin",
+    "admin2",
+    "ap",
+    "buyer",
+    "director",
+    "finance",
+    "planthead",
+    "production",
+    "purchasemanager",
+    "store",
+]
 
 
 @dataclass
@@ -63,13 +74,24 @@ def test_the_main_demo_company_is_apex() -> None:
         demo.company("flow")
 
 
-def test_each_of_the_nine_people_signs_in_with_the_role_the_script_names(apex: Apex) -> None:
+def test_each_of_the_ten_people_signs_in_with_the_role_the_script_names(apex: Apex) -> None:
     logins = _logins(apex.credentials)
 
     assert sorted(email.split("@")[0] for email in logins) == LOGINS
     assert all(email.endswith("@apexpumps.example") for email in logins)
     roles = sorted(role for _, role in logins.values())
-    assert roles == ["AP", "Admin", "Approver", "Approver", "Approver", "Buyer", "Finance", "Requester", "Store"]
+    assert roles == [
+        "AP",
+        "Admin",
+        "Admin",
+        "Approver",
+        "Approver",
+        "Approver",
+        "Buyer",
+        "Finance",
+        "Requester",
+        "Store",
+    ]
     for email, (password, role) in logins.items():
         signed_in = client.post("/api/auth/login", json={"email": email, "password": password})
         assert signed_in.status_code == 200, email
@@ -99,7 +121,12 @@ def test_six_suppliers_can_all_be_used_one_is_a_micro_enterprise_and_one_has_the
     assert tuple(micro) == ("micro", True, 45, "24")  # in Gujarat: IGST
     contracts = db.execute(text("select code, supplier_code, status from contract")).all()
     assert [tuple(c) for c in contracts] == [("CNT-0001", "SUP-001", "active")]
-    assert db.execute(text("select count(*) from price_record where contract_code = 'CNT-0001'")).scalar_one() == 5
+    by_status = dict(
+        db.execute(
+            text("select status, count(*) from price_record where contract_code = 'CNT-0001' group by status")
+        ).all()
+    )
+    assert by_status == {"active": 5, "draft": 2}  # the castings' revised rates from 1 Jan wait for a second person
 
 
 def test_nothing_is_open_yet_and_the_settings_are_in_place(apex: Apex) -> None:
@@ -145,8 +172,8 @@ def test_making_the_company_twice_leaves_one_company_and_one_set_of_logins(apex:
     apex.db.close()  # its database is about to be dropped and made again
     again = demo.reset_company(demo.company("apex"), apex.dataset, credentials=apex.credentials, slug=apex.slug)
 
-    assert len(again.logins) == 9 and again.report is not None and again.report.rejected == []
-    assert len(_logins(apex.credentials)) == 9
+    assert len(again.logins) == 10 and again.report is not None and again.report.rejected == []
+    assert len(_logins(apex.credentials)) == 10
     with Session(routing.engine_for(apex.slug)) as fresh:
         assert fresh.execute(text("select count(*) from request")).scalar_one() == 0  # the earlier requests are gone
     with Session(tenants.control_engine()) as control:

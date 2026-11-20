@@ -14,6 +14,9 @@ from p2p.formulas.contracts import ceiling_breach
 from p2p.formulas.money import format_inr
 from p2p.formulas.orders import variance_pct
 
+PRICE_LIST = (
+    "price_list"  # a supplier's listed price with no contract behind it: bought like one, never touchless (DF-09)
+)
 TOUCHLESS_ROUTES = ("contract", "reorder")  # single source, emergency and quotation lines always wait for a buyer
 
 
@@ -31,7 +34,7 @@ class TouchlessRule:
 @dataclass(frozen=True)
 class OrderLine:
     name: str
-    route: str  # contract, reorder, single_source, emergency or quotation
+    route: str  # contract, price_list, reorder, single_source, emergency or quotation
     price: Decimal
     estimate: Decimal | None
 
@@ -46,8 +49,8 @@ class ContractCeiling:
 @dataclass(frozen=True)
 class Facts:
     total: Decimal
-    buyer_tier: bool  # the approval rule for this total needs no approver: the buyer's own issue is the approval
-    buyer_tier_max: Decimal | None  # the top of the buyer's tier
+    buyer_tier: bool  # the approval rule for this total needs no person: only a touchless order is approved there
+    buyer_tier_max: Decimal | None  # the top of that band (the touchless band)
     supplier: str
     supplier_status: str
     lines: tuple[OrderLine, ...]
@@ -55,6 +58,7 @@ class Facts:
     budget_over: str | None  # the budget check's summary when it is over, else None
     gate_allowed: bool
     gate_reason: str
+    advance_pct: int = 0  # an advance agreed in the order's payment terms: never touchless (D-23)
 
 
 def limit(rule: TouchlessRule, buyer_tier_max: Decimal | None) -> Decimal | None:
@@ -88,7 +92,7 @@ def checks(facts: Facts, rule: TouchlessRule) -> list[Check]:
         Check(
             "touchless.tier",
             facts.buyer_tier,
-            "within the buyer's tier" if facts.buyer_tier else f"{format_inr(facts.total)} needs an approver",
+            "within the touchless band" if facts.buyer_tier else f"{format_inr(facts.total)} needs an approver",
         ),
         Check(
             "touchless.value",
@@ -122,6 +126,11 @@ def checks(facts: Facts, rule: TouchlessRule) -> list[Check]:
             "; ".join(priced) + f" (within {rule.price_pct.normalize():f}%)",
         ),
         Check("touchless.budget", facts.budget_over is None, facts.budget_over or "within budget"),
+        Check(
+            "touchless.advance",
+            facts.advance_pct == 0,
+            "no advance" if facts.advance_pct == 0 else f"an advance of {facts.advance_pct}% is agreed",
+        ),
         Check("touchless.gate", facts.gate_allowed, f"automatic issue: {facts.gate_reason}"),
     ]
 

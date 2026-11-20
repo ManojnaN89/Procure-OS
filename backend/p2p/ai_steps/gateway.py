@@ -3,6 +3,8 @@
 The model for each AI step comes from configuration, never from the step's code. A call is retried with backoff on
 rate limits and provider errors, then sent to the next model in the step's route list. Every call is logged with
 tokens, cost, time and outcome; identical prompts at temperature 0 are answered from a cache. A refusal is final.
+Before anything else, every message is masked (ai_steps/masking.py): bank accounts, IFSC codes, PANs and Aadhaar numbers
+never reach a provider, and the call's log row counts what was masked (never the values).
 """
 
 import hashlib
@@ -33,6 +35,7 @@ from p2p.ai_steps.adapters import (
     ServerError,
 )
 from p2p.ai_steps.limits import Limits, QuotaExhausted, RateLimiter, estimate_tokens
+from p2p.ai_steps.masking import mask_messages
 from p2p.config import get_settings
 
 OPENAI_COMPATIBLE = {
@@ -189,6 +192,7 @@ class Gateway:
         use_cache: bool = True,
         max_wait: float | None = None,
     ) -> Completion:
+        messages, masked = mask_messages(messages)  # the one place every prompt passes: nothing sensitive goes out
         route = self.routes.get(step) or self.routes["default"]
         started = time.monotonic()
         cache_key = self._hash(route, messages, temperature, max_tokens, json_output)
@@ -198,7 +202,7 @@ class Gateway:
             ).scalar()
             if hit:
                 done = Completion(**{**hit, "cost_usd": Decimal(0), "cached": True, "ms": 0})
-                self._log(db, step, prompt_version, done, "cache_hit", None, cache_key, cost=Decimal(0))
+                self._log(db, step, prompt_version, done, "cache_hit", None, cache_key, cost=Decimal(0), masked=masked)
                 return done
         last_error: ModelError | None = None
         attempts = 0
@@ -257,6 +261,7 @@ class Gateway:
                         "refusal",
                         "model refused",
                         cache_key,
+                        masked,
                     )
                     raise ModelRefusal(f"{provider}/{model} declined to answer")
                 if limiter is not None:
@@ -264,9 +269,20 @@ class Gateway:
                     if raw.tokens_in + raw.tokens_out:
                         limiter.settle(estimate, raw.tokens_in + raw.tokens_out)
                 return self._success(
-                    db, step, prompt_version, provider, model, raw, attempts, started, cache_key, temperature, use_cache
+                    db,
+                    step,
+                    prompt_version,
+                    provider,
+                    model,
+                    raw,
+                    attempts,
+                    started,
+                    cache_key,
+                    temperature,
+                    use_cache,
+                    masked,
                 )
-        self._fail(db, step, prompt_version, None, None, attempts, started, "error", str(last_error), cache_key)
+        self._fail(db, step, prompt_version, None, None, attempts, started, "error", str(last_error), cache_key, masked)
         raise last_error or ModelError("no model configured for this step")
 
     def extract[T: BaseModel](
@@ -354,6 +370,7 @@ class Gateway:
         cache_key: str,
         temperature: float,
         use_cache: bool,
+        masked: dict[str, int],
     ) -> Completion:
         price = PRICE_PER_MTOK.get((provider, model))
         cost = (
@@ -372,7 +389,7 @@ class Gateway:
             attempts,
         )
         if db is not None:
-            self._log(db, step, prompt_version, done, "ok", None, cache_key)
+            self._log(db, step, prompt_version, done, "ok", None, cache_key, masked=masked)
             if use_cache and temperature == 0:
                 payload = {**done.__dict__, "cost_usd": str(done.cost_usd)}
                 payload.pop("cached", None)
@@ -397,13 +414,14 @@ class Gateway:
         outcome: str,
         error: str,
         cache_key: str,
+        masked: dict[str, int],
     ) -> None:
         if db is None:
             return
         db.execute(
             text(
-                "insert into model_call (step, provider, model, prompt_version, attempts, ms, outcome, error, request_hash) "
-                "values (:s, :p, :m, :pv, :a, :ms, :o, :e, :h)"
+                "insert into model_call (step, provider, model, prompt_version, attempts, ms, outcome, error, request_hash, "
+                "masked) values (:s, :p, :m, :pv, :a, :ms, :o, :e, :h, cast(:mk as jsonb))"
             ),
             {
                 "s": step,
@@ -415,6 +433,7 @@ class Gateway:
                 "o": outcome,
                 "e": error[:500],
                 "h": cache_key,
+                "mk": json.dumps(masked) if masked else None,
             },
         )
         db.commit()
@@ -430,11 +449,13 @@ class Gateway:
         cache_key: str | None,
         *,
         cost: Decimal | None = None,
+        masked: dict[str, int] | None = None,
     ) -> None:
         db.execute(
             text(
                 "insert into model_call (step, provider, model, prompt_version, tokens_in, tokens_out, cost_usd, ms, attempts, "
-                "outcome, error, request_hash) values (:s, :p, :m, :pv, :ti, :to, :c, :ms, :a, :o, :e, :h)"
+                "outcome, error, request_hash, masked) values (:s, :p, :m, :pv, :ti, :to, :c, :ms, :a, :o, :e, :h, "
+                "cast(:mk as jsonb))"
             ),
             {
                 "s": step,
@@ -449,6 +470,7 @@ class Gateway:
                 "o": outcome,
                 "e": error,
                 "h": cache_key,
+                "mk": json.dumps(masked) if masked else None,
             },
         )
         db.commit()

@@ -9,6 +9,7 @@ above a limit. Whether other actions may skip this step is decided by the autono
 
 import json
 from collections.abc import Callable
+from contextvars import ContextVar
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from decimal import Decimal
@@ -37,9 +38,27 @@ Executor = Callable[[Session, dict[str, Any], Actor], dict[str, Any] | None]
 EXECUTORS: dict[str, Executor] = {}
 
 
+Guard = Callable[[Session, dict[str, Any], Actor], None]
+GUARDS: dict[str, Guard] = {}
+
+# While an executor runs: the proposal's id and who proposed it (an executor that records the maker reads it here).
+RUNNING: ContextVar[tuple[int, Actor] | None] = ContextVar("proposal_running", default=None)
+
+
 def executor(action: str) -> Callable[[Executor], Executor]:
     def wrap(fn: Executor) -> Executor:
         EXECUTORS[action] = fn
+        return fn
+
+    return wrap
+
+
+def guard(action: str) -> Callable[[Guard], Guard]:
+    """Checks an action needs on the approver beyond permission and limit (who the rule names, segregation of duties).
+    They run before the decision is claimed, so a refused person leaves the proposal waiting for the right one."""
+
+    def wrap(fn: Guard) -> Guard:
+        GUARDS[action] = fn
         return fn
 
     return wrap
@@ -112,7 +131,11 @@ def approve(
     note: str | None = None,
     now: datetime | None = None,
 ) -> ProposalRef:
-    """An allowed person approves, optionally with an edited payload. The action then runs."""
+    """An allowed person approves, and the action runs exactly as it was proposed.
+
+    An approver who changes the payload does not approve: the changed version becomes a new proposal by that person,
+    which someone else decides (DF-04). The decision is claimed and committed before the action runs, so an action that
+    commits part of its work, or fails half way, can never be run a second time by another approver (DF-28)."""
     now = now or datetime.now(UTC)
     p = _load(db, proposal_id)
     if p.status != "pending":
@@ -124,47 +147,92 @@ def approve(
     proposer = Actor(p.proposed_by_type, p.proposed_by_id, p.proposed_for)
     approver = sod.user(user_id)
     _authorize(db, p, user_id, proposer)
+    if edited_payload is not None and edited_payload != p.payload:
+        return _replace(db, p, approver, edited_payload, now, note)
 
-    payload = edited_payload if edited_payload is not None else p.payload
-    status = "approved" if edited_payload is None else "edited"
     run = EXECUTORS.get(p.action)
     if run is None:
         db.rollback()
         raise ProposalError(f"no executor registered for '{p.action}'")
-    try:
-        result = run(db, payload, approver)
-        execution = "ok"
-    except Exception as exc:  # noqa: BLE001 - the failure is recorded on the proposal
-        db.rollback()
-        result, execution = {"error": f"{type(exc).__name__}: {str(exc)[:300]}"}, "failed"
+    check = GUARDS.get(p.action)
+    if check is not None:
+        try:
+            check(db, dict(p.payload), approver)
+        except permissions.PermissionDenied:
+            db.rollback()
+            raise
+        except Exception as exc:  # the action's own refusal (segregation of duties, not the named person): a 403
+            db.rollback()
+            raise permissions.PermissionDenied(str(exc)) from None
     db.execute(
         text(
-            "update proposal set status = :s, execution = :x, result = cast(:r as jsonb), payload = cast(:p as jsonb), "
-            "decided_by = :u, decided_at = :n, decision_note = :note where id = :i"
+            "update proposal set status = 'approved', decided_by = :u, decided_at = :n, decision_note = :note where id = :i"
         ),
-        {
-            "s": status,
-            "x": execution,
-            "r": json.dumps(result, default=str) if result is not None else None,
-            "p": json.dumps(payload, default=str),
-            "u": user_id,
-            "n": now,
-            "note": note,
-            "i": proposal_id,
-        },
+        {"u": user_id, "n": now, "note": note, "i": proposal_id},
+    )
+    audit.record(db, approver, "proposal.approved", "proposal", proposal_id, reason=note)
+    db.commit()  # claimed: nobody else can approve it from here on
+    running = RUNNING.set((proposal_id, proposer))
+    try:
+        result = run(db, dict(p.payload), approver)
+        execution = "ok"
+        db.commit()
+    except Exception as exc:  # noqa: BLE001 - the failure is recorded on the proposal and shown to the person
+        db.rollback()
+        result, execution = {"error": f"{type(exc).__name__}: {str(exc)[:300]}"}, "failed"
+    finally:
+        RUNNING.reset(running)
+    db.execute(
+        text("update proposal set execution = :x, result = cast(:r as jsonb) where id = :i"),
+        {"x": execution, "r": json.dumps(result, default=str) if result is not None else None, "i": proposal_id},
+    )
+    audit.record(
+        db, approver, f"proposal.executed_{execution}", "proposal", proposal_id, after={"result": result}, reason=note
+    )
+    db.commit()
+    return ProposalRef(proposal_id, p.action, "approved", dict(p.payload))
+
+
+def _replace(
+    db: Session, p: Any, editor: Actor, payload: dict[str, Any], now: datetime, note: str | None
+) -> ProposalRef:
+    """The approver changed what was proposed: the original is closed and the changed version waits for someone else."""
+    row = db.execute(text("select summary, risk, case_id, expires_at from proposal where id = :i"), {"i": p.id}).one()
+    new_id = int(
+        db.execute(
+            text(
+                "insert into proposal (action, summary, payload, proposed_by_type, proposed_by_id, proposed_for, risk, "
+                "required_permission, document, value, case_id, expires_at) values (:a, :s, cast(:p as jsonb), :pt, :pi, "
+                ":pf, :r, :rp, :d, :v, :c, :e) returning id"
+            ),
+            {
+                "a": p.action, "s": f"{row[0]} (changed by the approver of proposal {p.id})",
+                "p": json.dumps(payload, default=str), "pt": editor.kind, "pi": editor.id, "pf": editor.acts_as,
+                "r": row[1], "rp": p.required_permission, "d": p.document, "v": p.value, "c": row[2], "e": row[3],
+            },
+        ).scalar_one()
+    )  # fmt: skip
+    why = f"changed before approval; the changed version is proposal {new_id}, for another person to decide"
+    db.execute(
+        text(
+            "update proposal set status = 'rejected', decided_by = :u, decided_at = :n, decision_note = :w where id = :i"
+        ),
+        {"u": editor.id, "n": now, "w": why + (f". {note}" if note else ""), "i": p.id},
+    )
+    audit.record(
+        db, editor, "proposal.replaced", "proposal", p.id, before=p.payload, after={"new": new_id}, reason=note
     )
     audit.record(
         db,
-        approver,
-        f"proposal.{status}",
+        editor,
+        "proposal.create",
         "proposal",
-        proposal_id,
-        before=p.payload if edited_payload is not None else None,
-        after={"payload": payload, "execution": execution, "result": result},
-        reason=note,
+        new_id,
+        before={"replaces": p.id},
+        after={"action": p.action, "payload": payload},
     )
     db.commit()
-    return ProposalRef(proposal_id, p.action, status, payload)
+    return ProposalRef(new_id, p.action, "pending", payload)
 
 
 def reject(db: Session, proposal_id: int, user_id: int, reason: str, *, now: datetime | None = None) -> None:
@@ -190,12 +258,14 @@ def withdraw(db: Session, proposal_id: int, user_id: int | None, note: str) -> N
     _set(db, proposal_id, "expired", user_id, datetime.now(UTC), note)
 
 
-def expire_due(db: Session, now: datetime | None = None) -> int:
+def expire_due(db: Session, now: datetime | None = None, *, action: str | None = None) -> int:
+    """Proposals past their expiry without a decision become expired (of one action only, when it is given)."""
     rows = db.execute(
         text(
-            "update proposal set status = 'expired', decided_at = :n where status = 'pending' and expires_at <= :n returning id"
+            "update proposal set status = 'expired', decided_at = :n where status = 'pending' and expires_at <= :n "
+            "and (cast(:a as text) is null or action = :a) returning id"
         ),
-        {"n": now or datetime.now(UTC)},
+        {"n": now or datetime.now(UTC), "a": action},
     ).all()
     for r in rows:
         audit.record(db, audit.SYSTEM, "proposal.expired", "proposal", r[0])

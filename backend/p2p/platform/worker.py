@@ -49,7 +49,7 @@ def load_handlers() -> None:
     from p2p.approvals import chasing  # noqa: F401, PLC0415 - approval reminders
     from p2p.invoices import reading  # noqa: F401, PLC0415 - reads invoice mails into drafts
     from p2p.orders import jobs as order_jobs  # noqa: F401, PLC0415
-    from p2p.platform import alerts, emails, notifications, tasks  # noqa: F401, PLC0415
+    from p2p.platform import alerts, emails, notifications, setting_changes, tasks  # noqa: F401, PLC0415
     from p2p.requests import jobs  # noqa: F401, PLC0415
     from p2p.sourcing import jobs as sourcing_jobs  # noqa: F401, PLC0415
     from p2p.sourcing import reminders  # noqa: F401, PLC0415

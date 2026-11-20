@@ -4,9 +4,11 @@ changed really changes what the platform does."""
 
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
+from typing import Any
 
 import pytest
 from fastapi.testclient import TestClient
+from setup_changes import change
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 from test_approvals import PASSWORD, db  # noqa: F401 - the fixture
@@ -48,6 +50,20 @@ class Setup:
     @property
     def a(self) -> dict[str, str]:
         return self.h(self.admin, "Admin")
+
+    @property
+    def a2(self) -> dict[str, str]:
+        return self.h(self.admin2, "Admin")
+
+    # A change by the first administrator, approved by the second when it waits for approval (D-22).
+    def put(self, path: str, **kw: Any) -> Any:
+        return change(client, "put", path, self.a, self.a2, **kw)
+
+    def post(self, path: str, **kw: Any) -> Any:
+        return change(client, "post", path, self.a, self.a2, **kw)
+
+    def delete(self, path: str, **kw: Any) -> Any:
+        return change(client, "delete", path, self.a, self.a2, **kw)
 
     def changes(self, area: str | None = None, key: str | None = None) -> list[dict]:
         self.db.expire_all()
@@ -151,64 +167,38 @@ def test_a_deactivated_person_cannot_log_in_and_nobody_can_deactivate_themselves
     email = f"buyer{s.db.info['sfx']}@x.example"
     assert client.post("/api/auth/login", json={"email": email, "password": PASSWORD}).status_code == 200
 
-    off = client.post(
-        f"/api/setup/people/{s.buyer}/active", json={"active": False, "reason": "Left the company"}, headers=s.a
-    )
+    off = s.post(f"/api/setup/people/{s.buyer}/active", json={"active": False, "reason": "Left the company"})
 
-    assert off.status_code == 200
+    assert off.status_code == 201  # applied once the second administrator approved it
     assert client.post("/api/auth/login", json={"email": email, "password": PASSWORD}).status_code in (401, 403)
-    assert (
-        client.post(
-            f"/api/setup/people/{s.admin}/active", json={"active": False, "reason": "x"}, headers=s.a
-        ).status_code
-        == 409
-    )
-    assert (
-        client.post(
-            f"/api/setup/people/{s.buyer}/active", json={"active": True, "reason": "Returned"}, headers=s.a
-        ).status_code
-        == 200
-    )
+    assert s.post(f"/api/setup/people/{s.admin}/active", json={"active": False, "reason": "x"}).status_code == 409
+    assert s.post(f"/api/setup/people/{s.buyer}/active", json={"active": True, "reason": "Returned"}).status_code == 201
     assert client.post("/api/auth/login", json={"email": email, "password": PASSWORD}).status_code == 200
-    assert (
-        client.post("/api/setup/people/99999/active", json={"active": False, "reason": "x"}, headers=s.a).status_code
-        == 404
-    )
+    assert s.post("/api/setup/people/99999/active", json={"active": False, "reason": "x"}).status_code == 404
     assert [c["new_value"] for c in s.changes("person", str(s.buyer))] == [{"active": False}, {"active": True}]
 
 
 def test_roles_are_given_and_taken_back_and_the_last_admin_cannot_lose_the_role(s: Setup) -> None:
     body = {"role": "Store", "location": "WH-BLR", "reason": "Covers the warehouse"}
-    assert client.post(f"/api/setup/people/{s.buyer}/roles", json=body, headers=s.a).status_code == 201
-    assert (
-        client.post(f"/api/setup/people/{s.buyer}/roles", json=body, headers=s.a).status_code == 409
-    )  # already has it
-    assert (
-        client.post(f"/api/setup/people/{s.buyer}/roles", json={**body, "role": "Chief"}, headers=s.a).status_code
-        == 422
-    )
+    assert s.post(f"/api/setup/people/{s.buyer}/roles", json=body).status_code == 201
+    assert s.post(f"/api/setup/people/{s.buyer}/roles", json=body).status_code == 409  # already has it
+    assert s.post(f"/api/setup/people/{s.buyer}/roles", json={**body, "role": "Chief"}).status_code == 422
     people = {p["user_id"]: p for p in client.get("/api/setup/people", headers=s.a).json()["people"]}
     row_id = next(r["id"] for r in people[s.buyer]["roles"] if r["role"] == "Store")
-    assert client.delete(f"/api/setup/people/{s.buyer}/roles/{row_id}", headers=s.a).status_code == 422  # no reason
-    assert client.delete(f"/api/setup/people/{s.buyer}/roles/{row_id}?reason=Moved", headers=s.a).status_code == 200
+    assert s.delete(f"/api/setup/people/{s.buyer}/roles/{row_id}").status_code == 422  # no reason
+    assert s.delete(f"/api/setup/people/{s.buyer}/roles/{row_id}?reason=Moved").status_code == 200
 
     own = next(r["id"] for r in people[s.admin]["roles"] if r["role"] == "Admin")
-    assert (
-        client.delete(f"/api/setup/people/{s.admin}/roles/{own}?reason=x", headers=s.a).status_code == 409
-    )  # not their own
+    assert s.delete(f"/api/setup/people/{s.admin}/roles/{own}?reason=x").status_code == 409  # not their own
     other = next(r["id"] for r in people[s.admin2]["roles"] if r["role"] == "Admin")
-    assert client.delete(f"/api/setup/people/{s.admin2}/roles/{other}?reason=Step down", headers=s.a).status_code == 200
-    assert (
-        client.delete(f"/api/setup/people/{s.admin}/roles/{own}?reason=x", headers=s.a).status_code == 409
-    )  # the last one
+    assert s.delete(f"/api/setup/people/{s.admin2}/roles/{other}?reason=Step down").status_code == 200
+    assert s.delete(f"/api/setup/people/{s.admin}/roles/{own}?reason=x").status_code == 409  # the last one
     assert [c["area"] for c in s.changes()] == ["role_grant", "role_revoke", "role_revoke"]
 
 
 def test_an_approval_limit_is_replaced_not_added_to_and_can_be_removed(s: Setup) -> None:
-    put = lambda value: client.put(  # noqa: E731
-        f"/api/setup/people/{s.approver}/limits",
-        json={"document": "po", "max_value": value, "reason": "Review"},
-        headers=s.a,
+    put = lambda value: s.put(  # noqa: E731
+        f"/api/setup/people/{s.approver}/limits", json={"document": "po", "max_value": value, "reason": "Review"}
     )
     assert put("500000").status_code == 200 and put("750000").status_code == 200
     s.db.expire_all()
@@ -222,32 +212,26 @@ def test_an_approval_limit_is_replaced_not_added_to_and_can_be_removed(s: Setup)
         ({"max_value": "500000.00"}, {"max_value": "750000"}),
     ]
     assert (
-        client.put(
-            f"/api/setup/people/{s.approver}/limits",
-            json={"document": "po", "max_value": "-1", "reason": "r"},
-            headers=s.a,
+        s.put(
+            f"/api/setup/people/{s.approver}/limits", json={"document": "po", "max_value": "-1", "reason": "r"}
         ).status_code
         == 422
     )
     assert (
-        client.put(
-            f"/api/setup/people/{s.approver}/limits",
-            json={"document": "nope", "max_value": "1", "reason": "r"},
-            headers=s.a,
+        s.put(
+            f"/api/setup/people/{s.approver}/limits", json={"document": "nope", "max_value": "1", "reason": "r"}
         ).status_code
         == 422
     )
     people = {p["user_id"]: p for p in client.get("/api/setup/people", headers=s.a).json()["people"]}
     limit_id = people[s.approver]["limits"][0]["id"]
-    assert (
-        client.delete(f"/api/setup/people/{s.approver}/limits/{limit_id}?reason=Left", headers=s.a).status_code == 200
-    )
+    assert s.delete(f"/api/setup/people/{s.approver}/limits/{limit_id}?reason=Left").status_code == 200
     assert permissions.within_limit(s.db, s.approver, "po", D("1")) is False  # no limit row: cannot approve
 
 
 def test_a_persons_manager_is_set_checked_for_loops_and_follows_the_login_address(s: Setup) -> None:
-    put = lambda user_id, manager: client.put(  # noqa: E731
-        f"/api/setup/people/{user_id}/manager", json={"manager_code": manager, "reason": "Reorganised"}, headers=s.a
+    put = lambda user_id, manager: s.put(  # noqa: E731
+        f"/api/setup/people/{user_id}/manager", json={"manager_code": manager, "reason": "Reorganised"}
     )
     assert put(s.keeper, "U5").status_code == 200  # the storekeeper now reports to the procurement head
     s.db.expire_all()
@@ -281,25 +265,24 @@ def test_the_permissions_of_a_role_are_changed_and_the_platform_follows(s: Setup
         r["permissions"] for r in client.get("/api/setup/roles", headers=s.a).json()["roles"] if r["role"] == "Buyer"
     )
 
-    r = client.put(
+    r = s.put(
         "/api/setup/roles/Buyer",
         json={"permissions": [*current, *wanted], "reason": "Procurement head is also the buyer"},
-        headers=s.a,
     )
 
     assert r.status_code == 200 and r.json() == {"role": "Buyer", "added": ["supplier.activate"], "removed": []}
     assert permissions.can_anywhere(s.db, s.buyer, "supplier.activate")
     (change,) = s.changes("role_permission", "Buyer")
     assert "supplier.activate" in change["new_value"] and "supplier.activate" not in change["old_value"]
-    again = client.put("/api/setup/roles/Buyer", json={"permissions": current, "reason": "Back again"}, headers=s.a)
+    again = s.put("/api/setup/roles/Buyer", json={"permissions": current, "reason": "Back again"})
     assert again.json()["removed"] == ["supplier.activate"] and not permissions.can_anywhere(
         s.db, s.buyer, "supplier.activate"
     )
 
 
 def test_admin_stays_a_setup_role_and_keeps_what_it_needs(s: Setup) -> None:
-    put = lambda role, perms: client.put(  # noqa: E731
-        f"/api/setup/roles/{role}", json={"permissions": perms, "reason": "Change"}, headers=s.a
+    put = lambda role, perms: s.put(  # noqa: E731
+        f"/api/setup/roles/{role}", json={"permissions": perms, "reason": "Change"}
     )  # noqa: E731
     required = sorted(ADMIN_REQUIRED)
 
@@ -324,7 +307,7 @@ def test_the_role_to_person_mapping_is_listed_with_who_it_resolves_to_and_edited
     assert by_role["procurement_head"]["resolves_to"] == "The head of PUR: Procure Vikram"
     assert by_role["manager"]["in_use"] is True and "Dir Rajesh" in {p["name"] for p in listed["people"]}
 
-    put = lambda role, body: client.put(f"/api/setup/approvers/{role}", json={"reason": "Change", **body}, headers=s.a)  # noqa: E731
+    put = lambda role, body: s.put(f"/api/setup/approvers/{role}", json={"reason": "Change", **body})  # noqa: E731
     assert put("owner", {"source": "designation", "value": "Managing Director"}).status_code == 200
     assert put("owner", {"source": "designation", "value": "Chief Dreamer"}).status_code == 422
     assert put("owner", {"source": "department_head_of", "value": "NOPE"}).status_code == 422
@@ -337,35 +320,23 @@ def test_the_role_to_person_mapping_is_listed_with_who_it_resolves_to_and_edited
         {"source": "designation", "value": "Managing Director"},
         {"source": "department_head_of", "value": "FIN"},
     ]
-    assert client.delete("/api/setup/approvers/manager?reason=x", headers=s.a).status_code == 409  # a chain uses it
-    assert client.delete("/api/setup/approvers/owner?reason=Not needed", headers=s.a).status_code == 200
-    assert client.delete("/api/setup/approvers/owner?reason=Not needed", headers=s.a).status_code == 404
+    assert s.delete("/api/setup/approvers/manager?reason=x").status_code == 409  # a chain uses it
+    assert s.delete("/api/setup/approvers/owner?reason=Not needed").status_code == 200
+    assert s.delete("/api/setup/approvers/owner?reason=Not needed").status_code == 404
 
 
 def test_changing_the_head_of_a_department_changes_who_the_chain_resolves_to(s: Setup) -> None:
     before = approval_rules.resolve_chain(s.db, ("procurement_head",), requester="U4", department="LOG", on_date=TODAY)
     assert [x.approver for x in before] == ["U5"]
 
-    r = client.put(
-        "/api/setup/departments/PUR/head", json={"person_code": "U2", "reason": "New procurement head"}, headers=s.a
-    )
+    r = s.put("/api/setup/departments/PUR/head", json={"person_code": "U2", "reason": "New procurement head"})
 
     assert r.status_code == 200
     s.db.expire_all()
     after = approval_rules.resolve_chain(s.db, ("procurement_head",), requester="U4", department="LOG", on_date=TODAY)
     assert [x.approver for x in after] == ["U2"]
-    assert (
-        client.put(
-            "/api/setup/departments/PUR/head", json={"person_code": "NOBODY", "reason": "x"}, headers=s.a
-        ).status_code
-        == 422
-    )
-    assert (
-        client.put(
-            "/api/setup/departments/NOPE/head", json={"person_code": "U2", "reason": "x"}, headers=s.a
-        ).status_code
-        == 404
-    )
+    assert s.put("/api/setup/departments/PUR/head", json={"person_code": "NOBODY", "reason": "x"}).status_code == 422
+    assert s.put("/api/setup/departments/NOPE/head", json={"person_code": "U2", "reason": "x"}).status_code == 404
     assert s.changes("department_head")[0]["old_value"] == {"head_user": "U5"}
 
 
@@ -374,7 +345,7 @@ def test_changing_the_head_of_a_department_changes_who_the_chain_resolves_to(s: 
 
 def _rule(s: Setup, **body: object) -> object:
     base = {"effective_from": (TODAY + timedelta(days=1)).isoformat(), "reason": "Review of limits"}
-    return client.post("/api/setup/approval-rules", json={**base, **body}, headers=s.a)
+    return s.post("/api/setup/approval-rules", json={**base, **body})
 
 
 def test_a_new_version_of_a_rule_starts_tomorrow_and_yesterdays_decisions_keep_the_old_one(s: Setup) -> None:
@@ -486,7 +457,7 @@ def test_a_new_rule_gets_the_next_code_and_the_screen_reports_problems_in_the_ta
     ],
 )
 def test_a_policy_value_that_makes_no_sense_is_refused(s: Setup, key: str, value: str) -> None:
-    r = client.put(f"/api/setup/policies/{key}", json={"value": value, "reason": "Trying"}, headers=s.a)
+    r = s.put(f"/api/setup/policies/{key}", json={"value": value, "reason": "Trying"})
 
     assert r.status_code == 422, r.text
     assert s.changes("policy") == []
@@ -495,8 +466,8 @@ def test_a_policy_value_that_makes_no_sense_is_refused(s: Setup, key: str, value
 def test_a_policy_change_is_stored_logged_and_read_back_by_the_code_that_uses_it(s: Setup) -> None:
     listed = {p["key"]: p for p in client.get("/api/setup/policies", headers=s.a).json()["settings"]}
     assert listed["budget_policy"]["value"] == "warn" and listed["budget_policy"]["set"] is False  # the default
-    put = lambda key, value, reason="Tighter control": client.put(  # noqa: E731
-        f"/api/setup/policies/{key}", json={"value": value, "reason": reason}, headers=s.a
+    put = lambda key, value, reason="Tighter control": s.put(  # noqa: E731
+        f"/api/setup/policies/{key}", json={"value": value, "reason": reason}
     )  # noqa: E731
 
     assert put("budget_policy", "block").status_code == 200
@@ -529,12 +500,14 @@ def test_a_policy_change_is_stored_logged_and_read_back_by_the_code_that_uses_it
 
 
 def test_what_a_policy_was_on_any_day_can_be_read_back(s: Setup) -> None:
-    put = lambda value: client.put(  # noqa: E731
-        "/api/setup/policies/price_band_pct", json={"value": value, "reason": "Review"}, headers=s.a
+    put = lambda value: s.put(  # noqa: E731
+        "/api/setup/policies/price_band_pct", json={"value": value, "reason": "Review"}
     )  # noqa: E731
     put("10")
     put("20")
     put("25")
+    # the history is insert only (migration 0059): back-dating it needs the database owner to switch the triggers off
+    s.db.execute(text("set local session_replication_role = replica"))
     for n, day in enumerate(
         (datetime(2026, 1, 1, tzinfo=UTC), datetime(2026, 6, 1, tzinfo=UTC), datetime(2026, 9, 1, tzinfo=UTC))
     ):
@@ -560,10 +533,8 @@ def test_what_a_policy_was_on_any_day_can_be_read_back(s: Setup) -> None:
 
 def test_a_tolerance_is_set_for_a_category_and_the_goods_receipt_uses_it(s: Setup) -> None:
     assert goods.over_pct(s.db, "PKG") == D(0)
-    put = lambda category, value, key="receipt_over_pct": client.put(  # noqa: E731
-        f"/api/setup/tolerances/{key}",
-        json={"category": category, "value": value, "reason": "Packaging varies"},
-        headers=s.a,
+    put = lambda category, value, key="receipt_over_pct": s.put(  # noqa: E731
+        f"/api/setup/tolerances/{key}", json={"category": category, "value": value, "reason": "Packaging varies"}
     )
 
     assert put("PKG", "10").status_code == 200 and put("ANY", "5").status_code == 200
@@ -614,7 +585,7 @@ def test_a_decision_is_set_to_act_within_limits_and_the_gate_obeys_the_new_setti
     gate = lambda value, conf: autonomy.gate(s.db, "rfq.award", value=D(value), confidence=conf)  # noqa: E731
     assert gate("1000", 1.0).allowed is False  # propose by default
 
-    r = client.put(
+    r = s.put(
         "/api/setup/automation/rfq.award",
         json={
             "level": "auto",
@@ -623,7 +594,6 @@ def test_a_decision_is_set_to_act_within_limits_and_the_gate_obeys_the_new_setti
             "max_wrong_rate": "0.01",
             "reason": "Trusted after a month",
         },
-        headers=s.a,
     )
 
     assert r.status_code == 200
@@ -644,9 +614,7 @@ def test_a_decision_is_set_to_act_within_limits_and_the_gate_obeys_the_new_setti
         and change["old_value"] is None
         and change["new_value"]["level"] == "auto"
     )
-    back = client.put(
-        "/api/setup/automation/rfq.award", json={"level": "propose", "reason": "Two wrong awards"}, headers=s.a
-    )
+    back = s.put("/api/setup/automation/rfq.award", json={"level": "propose", "reason": "Two wrong awards"})
     assert back.status_code == 200 and not gate("1", 1.0).allowed
     assert s.changes("automation", "rfq.award")[-1]["old_value"]["level"] == "auto"
 
@@ -661,16 +629,14 @@ def test_a_decision_is_set_to_act_within_limits_and_the_gate_obeys_the_new_setti
     ],
 )
 def test_a_nonsense_automation_setting_is_refused(s: Setup, body: dict) -> None:
-    assert client.put("/api/setup/automation/rfq.send", json={**body, "reason": "Try"}, headers=s.a).status_code == 422
-    assert client.put(
-        "/api/setup/automation/nonsense", json={"level": "auto", "reason": "Try"}, headers=s.a
-    ).status_code in (404, 422)
+    assert s.put("/api/setup/automation/rfq.send", json={**body, "reason": "Try"}).status_code == 422
+    assert s.put("/api/setup/automation/nonsense", json={"level": "auto", "reason": "Try"}).status_code in (404, 422)
     assert s.changes("automation") == []
 
 
 def test_payment_runs_vendor_status_and_releasing_a_block_can_never_act_alone(s: Setup) -> None:
     for locked in ("payment_run.approve", "supplier.set_status", "invoice.release_block"):
-        r = client.put(f"/api/setup/automation/{locked}", json={"level": "auto", "reason": "Faster"}, headers=s.a)
+        r = s.put(f"/api/setup/automation/{locked}", json={"level": "auto", "reason": "Faster"})
         assert r.status_code == 422 and "always decided by a person" in r.text, locked
         with pytest.raises(ValueError, match="always decided by a person"):
             autonomy.configure(s.db, sod.user(s.admin), locked, level="auto")
@@ -687,8 +653,8 @@ def test_payment_runs_vendor_status_and_releasing_a_block_can_never_act_alone(s:
 
 
 def test_orders_are_sent_by_a_person_or_automatically_never_by_nobody(s: Setup) -> None:
-    put = lambda level: client.put(  # noqa: E731
-        "/api/setup/automation/po.send", json={"level": level, "reason": "Policy"}, headers=s.a
+    put = lambda level: s.put(  # noqa: E731
+        "/api/setup/automation/po.send", json={"level": level, "reason": "Policy"}
     )  # noqa: E731
 
     assert put("off").status_code == 422
@@ -712,23 +678,18 @@ def test_orders_are_sent_by_a_person_or_automatically_never_by_nobody(s: Setup) 
 
 
 def test_the_kill_switch_is_set_from_the_screen_stops_automatic_action_and_is_logged(s: Setup) -> None:
-    client.put("/api/setup/automation/rfq.send", json={"level": "auto", "reason": "Go"}, headers=s.a)
+    s.put("/api/setup/automation/rfq.send", json={"level": "auto", "reason": "Go"})
     s.db.expire_all()
     assert autonomy.gate(s.db, "rfq.send", value=D(1), confidence=1.0).allowed is True
 
-    on = client.put(
-        "/api/setup/automation-kill-switch", json={"on": True, "reason": "Wrong emails went out"}, headers=s.a
-    )
+    on = s.put("/api/setup/automation-kill-switch", json={"on": True, "reason": "Wrong emails went out"})
 
     assert on.status_code == 200 and on.json() == {"kill_switch": True}
     s.db.expire_all()
     gate = autonomy.gate(s.db, "rfq.send", value=D(1), confidence=1.0)
     assert gate.allowed is False and "kill switch" in gate.reason
     assert client.get("/api/setup/automation", headers=s.a).json()["kill_switch"] is True
-    assert (
-        client.put("/api/setup/automation-kill-switch", json={"on": False, "reason": "Fixed"}, headers=s.a).status_code
-        == 200
-    )
+    assert s.put("/api/setup/automation-kill-switch", json={"on": False, "reason": "Fixed"}).status_code == 200
     assert [(c["old_value"], c["new_value"]) for c in s.changes("automation", "kill_switch")] == [
         ({"on": False}, {"on": True}),
         ({"on": True}, {"on": False}),
@@ -736,13 +697,9 @@ def test_the_kill_switch_is_set_from_the_screen_stops_automatic_action_and_is_lo
 
 
 def test_the_history_can_be_filtered_and_every_change_is_also_in_the_audit_log(s: Setup) -> None:
-    client.put("/api/setup/policies/budget_policy", json={"value": "block", "reason": "One"}, headers=s.a)
-    client.put("/api/setup/policies/min_quotes_default", json={"value": "3", "reason": "Two"}, headers=s.a)
-    client.put(
-        f"/api/setup/people/{s.approver}/limits",
-        json={"document": "po", "max_value": "1000", "reason": "Three"},
-        headers=s.a,
-    )
+    s.put("/api/setup/policies/budget_policy", json={"value": "block", "reason": "One"})
+    s.put("/api/setup/policies/min_quotes_default", json={"value": "3", "reason": "Two"})
+    s.put(f"/api/setup/people/{s.approver}/limits", json={"document": "po", "max_value": "1000", "reason": "Three"})
 
     everything = client.get("/api/setup/changes", headers=s.a).json()
     assert [c["reason"] for c in everything] == ["Three", "Two", "One"]  # newest first
@@ -763,14 +720,27 @@ def test_admin_can_see_the_flow_but_not_act_in_it(s: Setup) -> None:
     required = sorted(ADMIN_REQUIRED)
 
     assert (
-        client.put(
-            "/api/setup/roles/Admin", json={"permissions": [*required, *given_views], "reason": "See"}, headers=s.a
-        ).status_code
+        s.put("/api/setup/roles/Admin", json={"permissions": [*required, *given_views], "reason": "See"}).status_code
         == 200
     )
     assert (
-        client.put(
-            "/api/setup/roles/Admin", json={"permissions": [*required, "request.approve"], "reason": "Act"}, headers=s.a
+        s.put(
+            "/api/setup/roles/Admin", json={"permissions": [*required, "request.approve"], "reason": "Act"}
         ).status_code
         == 422
     )
+
+
+def test_an_administrator_cannot_give_themselves_a_role_or_an_approval_limit(s: Setup) -> None:
+    grant = s.post(f"/api/setup/people/{s.admin}/roles", json={"role": "Finance", "reason": "pay myself"})
+    limit = s.put(
+        f"/api/setup/people/{s.admin}/limits",
+        json={"document": "payment_run", "max_value": "10000000", "reason": "pay myself"},
+    )
+
+    assert grant.status_code == 403 and "another administrator" in grant.json()["detail"]
+    assert limit.status_code == 403
+    assert s.changes() == []  # nothing was written
+    assert (
+        s.post(f"/api/setup/people/{s.buyer}/roles", json={"role": "Store", "reason": "cover"}).status_code == 201
+    )  # another person, as before

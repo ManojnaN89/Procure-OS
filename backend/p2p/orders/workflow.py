@@ -13,7 +13,7 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from p2p.approvals import budget, rules
-from p2p.approvals.workflow import ApprovalError, name_of, org_code_of
+from p2p.approvals.workflow import ApprovalError, name_of, notify_person, org_code_of
 from p2p.formulas.calendar import business_today
 from p2p.formulas.money import format_inr
 from p2p.orders import dispatch, touchless
@@ -35,29 +35,126 @@ def _sla_hours(db: Session) -> Decimal:
     return Decimal(str(value)) if value else Decimal(DEFAULT_SLA_HOURS)
 
 
+# The people who shaped an order, from the audit log: who submitted or revised it, who awarded the quotation its lines
+# came from and who changed the buying route of those lines. A revision a price approver made by accepting a supplier's
+# price is that person's approval, not their making, so it is left out.
+_MAKERS_SQL = """
+select actor_id from audit_event
+ where actor_type = 'user' and entity = 'po' and entity_id = :n and action = 'po.submit'
+union
+select r.changed_by from po_revision r
+ where r.po_no = :n and not exists (
+   select 1 from po_change c where c.po_no = r.po_no and c.version_made = r.version and c.proposal_id is not null)
+union
+select a.actor_id from audit_event a
+  join rfq_line q on q.rfq_no = a.entity_id
+  join po_line l on l.request_no = q.request_no and l.request_line_no = q.request_line_no
+ where a.actor_type = 'user' and a.entity = 'rfq' and a.action = 'rfq.award' and l.po_no = :n
+union
+select a.actor_id from audit_event a
+  join po_line l on a.entity_id = l.request_no || '/' || l.request_line_no
+ where a.actor_type = 'user' and a.entity = 'request' and l.po_no = :n
+   and (a.action = 'sourcing.route_change_proposed'
+        or (a.action = 'sourcing.route_change' and a.after ->> 'route' = 'rfq'))
+"""
+
+
+def makers(db: Session, po: dict[str, Any]) -> frozenset[str]:
+    """Who made the order: its buyer, who submitted or revised it, who awarded its quotation and who changed its lines'
+    buying route. None of them approves it or its price, at any value, by any path (C1)."""
+    people = {str(po["buyer"])} if po["buyer"] else set()
+    for (uid,) in db.execute(text(_MAKERS_SQL), {"n": po["no"]}):
+        code = org_code_of(db, int(uid)) if str(uid).isdigit() else None
+        if code:
+            people.add(code)
+    return frozenset(people)
+
+
+def refuse_maker(db: Session, po: dict[str, Any], person: str | None) -> None:
+    """Segregation of duties on every path that approves an order or its price: its makers never do."""
+    if person and person in makers(db, po):
+        raise ApprovalError("segregation of duties: the person who made the order cannot approve it")
+
+
+def _above(db: Session, rule: rules.ApprovalRule, today: date) -> rules.ApprovalRule:
+    """The next order rule up: the first one past this rule's top."""
+    nobody = "nobody who did not make the order can approve it; add an approver to the order rules"
+    if rule.max_value is None:
+        raise ApprovalError(nobody)
+    try:
+        return rules.find_rule(db, "po", rule.max_value + Decimal("0.01"), today)
+    except rules.ApprovalRuleError:
+        raise ApprovalError(nobody) from None
+
+
+def _chain(
+    db: Session, po: dict[str, Any], rule: rules.ApprovalRule, today: date, also: frozenset[str] = frozenset()
+) -> tuple[rules.ApprovalRule, list[rules.Step]]:
+    """People to approve the order, never one who made it. A person approves only in a band that needs one: a band with
+    no approver (only touchless orders are approved there, by the rule) and a chain made only of the order's makers both
+    go up to the next rule."""
+    never = makers(db, po) | also  # `also`: who is submitting it now, not yet in the audit log
+    while True:
+        if not rule.is_automatic:
+            try:
+                return rule, rules.resolve_chain(
+                    db, rule.roles, requester=None, department=None, on_date=today, exclude=never
+                )
+            except rules.ApprovalRuleError:
+                pass  # nobody left once the makers are taken out
+        rule = _above(db, rule, today)
+
+
+def refuse_outside_band(db: Session, po: dict[str, Any], person: str | None, today: date | None = None) -> None:
+    """Accepting an order's price is for the people its approval band names, or a higher band, never its makers. This
+    is the approver's limit for that decision, from the same rule rows that approve the order (DF-08)."""
+    refuse_maker(db, po, person)
+    today = today or business_today()
+    rule, steps = _chain(db, po, rules.find_rule(db, "po", Decimal(po["total"]), today), today)
+    allowed = {s.approver for s in steps} | {s.delegate for s in steps if s.delegate}
+    while rule.max_value is not None:
+        try:
+            rule, steps = _chain(db, po, _above(db, rule, today), today)
+        except (ApprovalError, rules.ApprovalRuleError):
+            break
+        allowed |= {s.approver for s in steps} | {s.delegate for s in steps if s.delegate}
+    if person not in allowed:
+        raise ApprovalError(
+            f"{po['no']} totals {format_inr(po['total'])}, above what you may approve; its approval band decides it"
+        )
+
+
 def submit(db: Session, tenant: str, po_no: str, actor: Actor, *, today: date | None = None) -> str:
-    """Send the order for approval, or approve it on the spot when the rule says so. Returns the order's status."""
+    """Send the order for approval, or approve it on the spot when it is touchless. Returns the order's status.
+
+    Only the company's touchless policy approves without a person (approval by the rule, never by the buyer). Every
+    other order goes to people, none of whom made it."""
     today = today or business_today()
     po = _locked(db, po_no)
     if po["status"] != "draft":
         raise ApprovalError(f"{po_no} is {po['status']}; only a draft order can be submitted")
+    if po["hold_reason"] and str(po["hold_reason"]).startswith(NO_APPROVER):  # tried again once the rules may allow it
+        db.execute(text("update po set hold_reason = null where no = :n"), {"n": po_no})
+        po["hold_reason"] = None
     if po["hold_reason"]:
         raise ApprovalError(f"{po_no} is on hold: {po['hold_reason']}")
-    rule = rules.find_rule(db, "po", Decimal(po["total"]), today)
+    first = rules.find_rule(db, "po", Decimal(po["total"]), today)
     # the budget again, on the order's final prices (the request was checked on estimates)
     checks = budget.check_order(db, po_no, today)
     over = [c for c in checks if c.check.status == "over"]
-    budget_note = ""
-    if over:
-        budget_note = " " + budget.summary(checks)
-        if any(c.policy == "block" for c in over) and not po["budget_accepted"]:
-            return _hold_for_budget(db, tenant, po_no, budget.summary(checks), actor)
-        if rule.is_automatic and _requires_budget(db):
-            while rule.is_automatic:  # over budget: it never approves itself
-                rule = rules.find_rule(db, "po", rule.max_value + Decimal("0.01"), today)
-            budget_note += " It cannot approve itself, so it goes to a person."
-    steps = rules.resolve_chain(db, rule.roles, requester=None, department=None, on_date=today)
+    budget_note = " " + budget.summary(checks) if over else ""
+    if any(c.policy == "block" for c in over) and not po["budget_accepted"]:
+        return _hold_for_budget(db, tenant, po_no, budget.summary(checks), actor)
     round_no = int(po["approval_round"]) + 1
+    if first.is_automatic and touchless.decide(db, po_no, first, today):
+        return _approve_by_rule(db, tenant, po_no, po, first, round_no, actor, budget_note)
+    submitter = org_code_of(db, int(actor.id)) if actor.kind == "user" and str(actor.id).isdigit() else None
+    try:
+        rule, steps = _chain(db, po, first, today, frozenset({submitter}) if submitter else frozenset())
+    except ApprovalError as exc:  # every approver the rules name made it: held, with the reason on the order (C1)
+        return _hold_no_approver(db, tenant, po, str(exc), actor)
+    if rule is not first:
+        db.execute(text("update po set approval_tier = :t where no = :n"), {"t": touchless.tier_of(rule), "n": po_no})
     audit.record(
         db,
         actor,
@@ -68,33 +165,6 @@ def submit(db: Session, tenant: str, po_no: str, actor: Actor, *, today: date | 
         after={"rule": rule.code, "version": rule.version, "approvers": [s.approver for s in steps]},
         rule_version=f"{rule.code}:v{rule.version}",
     )
-    if rule.is_automatic:
-        reason = (
-            f"Within the buyer's limit under rule {rule.code} v{rule.version} (up to {format_inr(rule.max_value)}): "
-            f"the total {format_inr(po['total'])} needs no approver; the buyer's issue is the approval.{budget_note}"
-        )
-        db.execute(
-            text(
-                "update po set status = 'approved', approved_at = now(), rule_code = :rc, rule_version = :rv, "
-                "decision_reason = :why, approval_round = :r where no = :n"
-            ),
-            {"rc": rule.code, "rv": rule.version, "why": reason, "r": round_no, "n": po_no},
-        )
-        audit.record(
-            db,
-            Actor("rule", rule.code),
-            "po.auto_approve",
-            "po",
-            po_no,
-            reason=reason,
-            rule_version=f"{rule.code}:v{rule.version}",
-        )
-        db.commit()
-        if touchless.decide(db, po_no, rule, today):
-            touchless.issue(db, po_no, tenant)
-        else:
-            dispatch.queue_if_automatic(db, tenant, po_no)
-        return "approved"
     for n, step in enumerate(steps, start=1):
         db.execute(
             text(
@@ -112,29 +182,88 @@ def submit(db: Session, tenant: str, po_no: str, actor: Actor, *, today: date | 
             },
         )
     names = " then ".join(name_of(db, s.approver) for s in steps)
+    why = f"Waiting for approval by {names} under rule {rule.code} v{rule.version}"
+    if first.is_automatic:
+        why += ". Not touchless, so a person approves it, never the buyer who made it"
     db.execute(
         text(
             "update po set status = 'submitted', rule_code = :rc, rule_version = :rv, approval_round = :r, "
             "decision_reason = :why where no = :n"
         ),
-        {
-            "rc": rule.code,
-            "rv": rule.version,
-            "r": round_no,
-            "why": f"Waiting for approval by {names} under rule {rule.code} v{rule.version}"
-            + (f".{budget_note}" if budget_note else ""),
-            "n": po_no,
-        },
+        {"rc": rule.code, "rv": rule.version, "r": round_no, "why": why + budget_note.rstrip(), "n": po_no},
     )
     db.commit()
-    touchless.decide(db, po_no, rule, today)  # never touchless above the buyer's tier; the note says so
+    if not first.is_automatic:
+        touchless.decide(db, po_no, rule, today)  # never touchless above the touchless band; the note says so
     _open_step(db, tenant, po_no, po["total"], 1, round_no)
     return "submitted"
 
 
-def _requires_budget(db: Session) -> bool:
-    value = db.execute(text("select value from org_setting where key = 'auto_approve_requires_budget'")).scalar()
-    return str(value) != "false" if value is not None else True
+def _approve_by_rule(
+    db: Session,
+    tenant: str,
+    po_no: str,
+    po: dict[str, Any],
+    rule: rules.ApprovalRule,
+    round_no: int,
+    actor: Actor,
+    budget_note: str,
+) -> str:
+    """A touchless order: approved by the company's policy (the rule and its version), then sent by the system."""
+    audit.record(
+        db,
+        actor,
+        "po.submit",
+        "po",
+        po_no,
+        before={"status": "draft"},
+        after={"rule": rule.code, "version": rule.version, "approvers": []},
+        rule_version=f"{rule.code}:v{rule.version}",
+    )
+    reason = (
+        f"Touchless under rule {rule.code} v{rule.version} (up to {format_inr(rule.max_value)}): every touchless check "
+        f"passed, so the company's policy approves the total {format_inr(po['total'])}; no person approved it."
+        f"{budget_note}"
+    )
+    db.execute(
+        text(
+            "update po set status = 'approved', approved_at = now(), rule_code = :rc, rule_version = :rv, "
+            "decision_reason = :why, approval_round = :r where no = :n"
+        ),
+        {"rc": rule.code, "rv": rule.version, "why": reason, "r": round_no, "n": po_no},
+    )
+    audit.record(
+        db,
+        Actor("rule", rule.code),
+        "po.auto_approve",
+        "po",
+        po_no,
+        reason=reason,
+        rule_version=f"{rule.code}:v{rule.version}",
+    )
+    db.commit()
+    touchless.issue(db, po_no, tenant)
+    return "approved"
+
+
+NO_APPROVER = "Nobody may approve it:"
+
+
+def _hold_no_approver(db: Session, tenant: str, po: dict[str, Any], why: str, actor: Actor) -> str:
+    """No person the approval rules name is free of the order: it waits, visibly, until the rules name someone who is.
+    Submitting it again tries once more."""
+    hold = f"{NO_APPROVER} {why}"
+    db.execute(text("update po set hold_reason = :h where no = :n"), {"h": hold, "n": po["no"]})
+    audit.record(db, actor, "po.no_approver", "po", po["no"], reason=hold)
+    db.commit()
+    notify_person(
+        db, tenant, po["buyer"], "po", f"{po['no']} is held: the rules name no one free to decide it",
+        "Everyone the order rules name for this amount made the order. An administrator has to name someone else in "
+        "the rules; then submit it again.",
+        link=f"#/purchase-orders/{po['no']}",
+    )  # fmt: skip
+    db.commit()
+    return "held"
 
 
 def _hold_for_budget(db: Session, tenant: str, po_no: str, summary: str, actor: Actor) -> str:
@@ -206,9 +335,7 @@ def _acting(db: Session, po_no: str, user_id: int) -> tuple[dict[str, Any], dict
         raise ApprovalError(
             f"it is not your turn: {po_no} is waiting for {name_of(db, step['delegate'] or step['approver'])}"
         )
-    buyer = po["buyer"]
-    if buyer and me == buyer:
-        raise ApprovalError("segregation of duties: the buyer who ordered cannot approve the order")
+    refuse_maker(db, po, me)
     if not permissions.can_anywhere(db, user_id, "po.approve"):
         raise permissions.PermissionDenied("this role may not approve purchase orders")
     return po, dict(step), me
@@ -240,6 +367,7 @@ def approve(db: Session, tenant: str, po_no: str, user_id: int, comment: str | N
         "po",
         po_no,
         after={
+            "version": po["version"],  # the version of the order this person approved
             "step": step["step"],
             "role": step["role"],
             "approver": me,

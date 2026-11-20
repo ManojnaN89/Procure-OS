@@ -168,7 +168,7 @@ def test_a_proposal_can_be_edited_or_rejected_through_the_api(env: Env) -> None:
     r = client.post(
         f"/api/admin/proposals/{edited}/approve", json={"edited_payload": {"invoice": "INV-2"}}, headers=env.as_finance
     )
-    assert r.json()["status"] == "edited"
+    assert r.json()["status"] == "pending"  # the change is a new proposal for someone else
     assert (
         client.post(f"/api/admin/proposals/{rejected}/reject", json={}, headers=env.as_finance).status_code == 409
     )  # no reason

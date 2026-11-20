@@ -30,7 +30,7 @@ from history_check import history_problems  # noqa: E402
 from history_close import Closing  # noqa: E402
 from history_close import write as write_tables  # noqa: E402
 from history_money import Money  # noqa: E402
-from history_plan import production_lines  # noqa: E402
+from history_plan import mrp_results, production_lines  # noqa: E402
 from master_files import (  # noqa: E402
     EMPTY_TABLES,
     HEADERS,
@@ -383,7 +383,15 @@ class MasterWriter:
         units = {it["code"]: it["unit"] for it in self.p["items"]}
         contracts, prices = [], []
 
-        def price_rows(supplier: str, contract: str, lead: int, item_prices: dict[str, str], span: list[str]) -> None:
+        def price_rows(
+            supplier: str,
+            contract: str,
+            lead: int,
+            item_prices: dict[str, str],
+            span: list[str],
+            version: int = 1,
+            status: str = "active",
+        ) -> None:
             prices.extend(
                 {
                     "supplier_code": supplier,
@@ -397,6 +405,8 @@ class MasterWriter:
                     "valid_from": span[0],
                     "valid_to": span[1],
                     "lead_days": lead,
+                    "version": str(version),
+                    "status": status,
                 }
                 for item, price in item_prices.items()
             )
@@ -419,6 +429,9 @@ class MasterWriter:
                 }
             )
             price_rows(c["supplier"], c["code"], c["lead"], c["prices"], [c["valid_from"], c["valid_to"]])
+            for rev in c.get("revisions", []):  # a supplier's revised rates, waiting for a second person (D48)
+                span = [rev["valid_from"], c["valid_to"]]
+                price_rows(c["supplier"], c["code"], c["lead"], rev["prices"], span, rev["version"], "draft")
         for r in self.p["price_records"]:
             price_rows(r["supplier"], "", r["lead"], r["prices"], self.p["price_list_dates"])
         self.put("contract", contracts)
@@ -431,6 +444,8 @@ def write_inputs(profile: CompanyProfile, out: Path) -> dict[str, int]:
     tables = {name: _rows(t["columns"], t["rows"]) for name, t in profile["inputs"].items()}
     if "bom" in tables and "production_order" in tables:
         tables["production_order_line"] = production_lines(tables["bom"], tables["production_order"])
+    if profile.data.get("mrp_runs"):  # the ERP's MRP results for demand plans not yet on a production order
+        tables["mrp_result"] = mrp_results(tables["bom"], tables["demand_plan"], profile.data["mrp_runs"])
     for name, rows in tables.items():
         header = profile["inputs"][name]["columns"] if name in profile["inputs"] else list(rows[0])
         write_csv(out / "inputs" / f"{name}.csv", header, list(rows))

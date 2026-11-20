@@ -61,7 +61,10 @@ class Ctx:
 
 def rows(folder: str, name: str, dataset: Path = DATASET) -> list[dict[str, str]]:
     with (dataset / folder / f"{name}.csv").open(encoding="utf-8-sig", newline="") as f:
-        return list(csv.DictReader(f))
+        found = list(csv.DictReader(f))
+    if name == "price_record":  # a draft price version is not in force until a second person activates it (D48)
+        found = [r for r in found if r.get("status", "active") != "draft"]
+    return found
 
 
 def location(dataset: Path = DATASET) -> str:

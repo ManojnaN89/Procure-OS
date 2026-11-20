@@ -247,6 +247,7 @@ type Change = {
 	id: number;
 	at: string;
 	by_name: string | null;
+	approved_by_name: string | null;
 	area: string;
 	key: string;
 	old_value: unknown;
@@ -298,6 +299,7 @@ export function History() {
 					<tr>
 						<Th>When</Th>
 						<Th>Who</Th>
+						<Th>Approved by</Th>
 						<Th>What</Th>
 						<Th>Was</Th>
 						<Th>Now</Th>
@@ -309,6 +311,7 @@ export function History() {
 						<tr key={c.id}>
 							<Td>{c.at.slice(0, 16).replace("T", " ")}</Td>
 							<Td>{c.by_name ?? "-"}</Td>
+							<Td>{c.approved_by_name ?? "-"}</Td>
 							<Td>
 								{c.area}
 								<div className="text-xs text-muted-foreground">{c.key}</div>

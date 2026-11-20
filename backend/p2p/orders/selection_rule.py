@@ -66,8 +66,10 @@ def save_rule(
     tie_break: tuple[str, ...] | None = None,
     input_credit: bool | None = None,
     note: str | None = None,
+    apply: bool = True,
 ) -> int:
-    """Make the next version from a date; what is not given is kept from the version in force. Returns the version."""
+    """Make the next version from a date; what is not given is kept from the version in force. Returns the version.
+    With apply False it only checks the change."""
     current_row = _in_force(db, effective_from)
     if current_row is None:
         raise SelectionRuleError("the company has no supplier selection rule to change")
@@ -82,6 +84,8 @@ def save_rule(
     problems = sel.check_rule(new.method, new.weights, new.tie_break)
     if problems:
         raise SelectionRuleError("; ".join(problems))
+    if not apply:
+        return new.version
     db.execute(
         text("update supplier_selection_rule set effective_to = :t where id = :i"),
         {"t": effective_from - timedelta(days=1), "i": current_row["id"]},

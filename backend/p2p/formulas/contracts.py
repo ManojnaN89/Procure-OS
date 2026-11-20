@@ -1,6 +1,7 @@
 """How much of a contract's ceiling has been used. Plain arithmetic on numbers from the contract and the orders."""
 
 from dataclasses import dataclass
+from datetime import date
 from decimal import Decimal
 
 PAISE = Decimal("0.01")
@@ -27,3 +28,8 @@ def ceiling_breach(max_value: Decimal | None, used: Decimal, new: Decimal) -> De
     if max_value is None:
         return Decimal("0.00")
     return max(used + new - max_value, Decimal(0)).quantize(PAISE)
+
+
+def periods_overlap(a_from: date, a_to: date | None, b_from: date, b_to: date | None) -> bool:
+    """Whether two validity periods share a day. Both ends count; no end means open. Adjacent periods do not overlap."""
+    return (b_to is None or a_from <= b_to) and (a_to is None or b_from <= a_to)

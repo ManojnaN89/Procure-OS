@@ -2,16 +2,20 @@
 
 A new supplier is always saved as a draft: it cannot be used until its documents are verified and a person activates it
 (see supplier_status.py). Changing the bank account of a supplier that is already in use is a sensitive action (rule 5),
-so it only creates a proposal that another person approves. Every write is audited.
+so it only creates a proposal that another person approves. A new or changed account is paid into only after a second
+person verifies it against its proof (method, file, who and when). Every write is audited.
 """
 
+from dataclasses import dataclass
 from typing import Any
 
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from p2p.formulas import supplier_master as rules
-from p2p.platform import audit, proposals
+from p2p.formulas.calendar import business_today
+from p2p.invoices import payment
+from p2p.platform import audit, files, proposals, settings
 from p2p.platform.sod import Actor, user
 
 IDENTITY_FIELDS = (
@@ -122,10 +126,10 @@ def create_supplier(db: Session, data: dict[str, Any], user_id: int) -> str:
     if wants_bank:
         db.execute(
             text(
-                "insert into supplier_bank_account (supplier_code, bank_code, account_no, ifsc, verified) "
-                "values (:c, :b, :a, :i, false)"
+                "insert into supplier_bank_account (supplier_code, bank_code, account_no, ifsc, verified, submitted_by) "
+                "values (:c, :b, :a, :i, false, :u)"
             ),
-            {"c": code, "b": str(data["ifsc"])[:4], "a": data["account_no"], "i": data["ifsc"]},
+            {"c": code, "b": str(data["ifsc"])[:4], "a": data["account_no"], "i": data["ifsc"], "u": str(user_id)},
         )
     audit.record(
         db, user(user_id), "supplier.create", "supplier", code,
@@ -219,7 +223,7 @@ def change_bank(db: Session, code: str, data: dict[str, Any], actor: Actor, reas
         db,
         actor,
         action="supplier.set_bank",
-        summary=f"New bank account for {code}: ****{str(data['account_no'])[-4:]}, IFSC {data['ifsc']}. Reason: {reason.strip()}",
+        summary=f"New bank account for {code}: {mask(data['account_no'])}, IFSC {data['ifsc']}. Reason: {reason.strip()}",
         payload={"supplier": code, "account_no": data["account_no"], "ifsc": data["ifsc"], "reason": reason.strip()},
         required_permission="supplier.activate",
         risk="high",
@@ -228,17 +232,21 @@ def change_bank(db: Session, code: str, data: dict[str, Any], actor: Actor, reas
     return {"changed": False, "proposal": pid}
 
 
-def _set_bank(db: Session, code: str, account_no: str, ifsc: str, actor: Actor, reason: str) -> None:
+def _set_bank(
+    db: Session, code: str, account_no: str, ifsc: str, actor: Actor, reason: str, submitted_by: str | None = None
+) -> None:
+    """The new account replaces the old one, unverified: nothing is paid into it until a second person verifies it, and
+    the supplier's payments still waiting in a run leave it (a bank file already made for that run is voided)."""
     old = db.execute(
         text("select account_no, ifsc from supplier_bank_account where supplier_code = :c order by id"), {"c": code}
     ).all()
     db.execute(text("delete from supplier_bank_account where supplier_code = :c"), {"c": code})
     db.execute(
         text(
-            "insert into supplier_bank_account (supplier_code, bank_code, account_no, ifsc, verified) "
-            "values (:c, :b, :a, :i, false)"
+            "insert into supplier_bank_account (supplier_code, bank_code, account_no, ifsc, verified, submitted_by) "
+            "values (:c, :b, :a, :i, false, :u)"
         ),
-        {"c": code, "b": ifsc[:4], "a": account_no, "i": ifsc},
+        {"c": code, "b": ifsc[:4], "a": account_no, "i": ifsc, "u": submitted_by or actor.id},
     )
     # the bank proof on file belonged to the old account: it must be checked again against the new one
     db.execute(
@@ -249,9 +257,10 @@ def _set_bank(db: Session, code: str, account_no: str, ifsc: str, actor: Actor, 
     )
     audit.record(
         db, actor, "supplier.bank_change", "supplier", code,
-        before={"accounts": [f"****{str(a)[-4:]} {i}" for a, i in old]}, after={"account": f"****{account_no[-4:]} {ifsc}"},
+        before={"accounts": [f"{mask(a)} {i}" for a, i in old]}, after={"account": f"{mask(account_no)} {ifsc}"},
         reason=reason,
     )  # fmt: skip
+    payment.take_out_supplier(db, code, actor, f"the bank account of {code} changed and is not verified yet")
 
 
 @proposals.executor("supplier.set_bank")
@@ -263,6 +272,91 @@ def _apply_bank(db: Session, payload: dict[str, Any], actor: Actor) -> dict[str,
     dup = _duplicate_of(db, {"account_no": payload["account_no"]}, own=code)
     if dup:
         raise SupplierError(f"possible duplicate: {dup}")
-    _set_bank(db, code, str(payload["account_no"]), str(payload["ifsc"]), actor, str(payload.get("reason") or ""))
+    # who asked for the change, read from the proposal being run (not from its payload): that person never verifies it
+    asked_by = db.execute(
+        text(
+            "select proposed_by_id from proposal where action = 'supplier.set_bank' and status = 'approved' "
+            "and execution is null and payload ->> 'supplier' = :c and payload ->> 'account_no' = :a "
+            "order by decided_at desc limit 1"
+        ),
+        {"c": code, "a": str(payload["account_no"])},
+    ).scalar()
+    _set_bank(
+        db, code, str(payload["account_no"]), str(payload["ifsc"]), actor, str(payload.get("reason") or ""),
+        submitted_by=str(asked_by) if asked_by is not None else None,
+    )  # fmt: skip
     db.commit()
     return {"supplier": code, "bank_changed": True}
+
+
+# ---- verifying a bank account -----------------------------------------------------------------
+
+DEFAULT_METHODS = "cancelled_cheque,bank_letter,penny_drop"
+
+
+@dataclass(frozen=True)
+class Evidence:
+    """The proof an account was checked against: a scan of the cancelled cheque, the bank's letter, a penny-drop result."""
+
+    tenant: str
+    data: bytes
+    filename: str
+    content_type: str
+
+
+def mask(account_no: object) -> str:
+    """Only the last four digits of an account number are shown in a list or kept in the audit log."""
+    return f"****{str(account_no)[-4:]}"
+
+
+def verification_methods(db: Session) -> list[str]:
+    """The ways an account may be verified: the setting `bank_verification_methods`, a comma-separated list."""
+    words = settings.value(db, "bank_verification_methods", DEFAULT_METHODS).split(",")
+    return [w.strip() for w in words if w.strip()]
+
+
+def verify_bank(
+    db: Session, code: str, account_id: int, method: str, evidence: Evidence, user_id: int
+) -> dict[str, Any]:
+    """A second person checks the account against its proof. Until then the supplier is never put in a payment run."""
+    row = db.execute(
+        text(
+            "select account_no, submitted_by, coalesce(verified, false) from supplier_bank_account "
+            "where id = :i and supplier_code = :c for update"
+        ),
+        {"i": account_id, "c": code},
+    ).first()
+    if row is None:
+        raise SupplierError(f"bank account {account_id} of {code} does not exist")
+    if row[2]:
+        raise SupplierError("this bank account is already verified")
+    methods = verification_methods(db)
+    if method not in methods:
+        raise SupplierError(f"the method must be one of {', '.join(methods)}")
+    if row[1] == str(user_id):
+        raise SupplierError(
+            "segregation of duties: the person who entered or asked for a bank account cannot verify it"
+        )
+    if not evidence.data:
+        raise SupplierError("the proof the account was checked against is needed")
+    saved = files.save_file(
+        db, evidence.tenant, evidence.data, filename=evidence.filename, content_type=evidence.content_type,
+        doc_type="bank_verification", uploaded_by=user_id, linked_type="supplier_bank_account", linked_id=str(account_id),
+    )  # fmt: skip
+    done = db.execute(  # saving the file committed: verify only if nobody changed or verified the account meanwhile
+        text(
+            "update supplier_bank_account set verified = true, verified_on = :d, verified_at = now(), verified_by = :u, "
+            "verification_method = :m, evidence_document_id = :f where id = :i and not coalesce(verified, false) "
+            "returning id"
+        ),
+        {"d": business_today(), "u": str(user_id), "m": method, "f": saved.id, "i": account_id},
+    ).first()
+    if done is None:
+        db.rollback()
+        raise SupplierError(f"bank account {account_id} of {code} changed while it was being verified")
+    audit.record(
+        db, user(user_id), "supplier.bank_verify", "supplier", code, before={"verified": False},
+        after={"account": mask(row[0]), "method": method, "evidence": saved.id},
+    )  # fmt: skip
+    db.commit()
+    return {"verified": True, "method": method, "evidence": saved.id}

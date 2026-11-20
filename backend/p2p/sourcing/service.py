@@ -55,6 +55,7 @@ class LineOutcome:
     supplier_code: str | None = None
     contract_code: str | None = None
     price: Decimal | None = None
+    price_record_id: int | None = None  # the price (and so the contract price version) bought at
     rfq_no: str | None = None
     # the buying route (D37) and what it was based on
     route: str | None = None
@@ -106,22 +107,23 @@ def _app_setting(db: Session, key: str, default: str) -> str:
 
 
 def contract_options(db: Session, item_code: str, uom: str | None, as_of: date) -> list[PriceOption]:
-    """Contract prices for the item in force on the date: the price record, its contract and the supplier all valid.
+    """Contract prices for the item in force on the date: the price record (its active version), its contract and the
+    supplier all valid.
 
     A price record without a contract is only a price list, not a commitment, so it does not count here.
     """
     rows = db.execute(
         text(
-            "select pr.supplier_code, pr.contract_code, pr.price, coalesce(pr.min_qty, 0) as min_qty, pr.lead_days, pr.valid_to "
+            "select pr.supplier_code, pr.contract_code, pr.price, coalesce(pr.min_qty, 0) as min_qty, pr.lead_days, pr.valid_to, pr.id "
             "from price_record pr join contract c on c.code = pr.contract_code join supplier s on s.code = pr.supplier_code "
-            "where pr.item_code = :item and pr.uom is not distinct from :uom "
+            "where pr.item_code = :item and pr.uom is not distinct from :uom and pr.status = 'active' "
             "and pr.valid_from <= :d and (pr.valid_to is null or pr.valid_to >= :d) "
             "and c.status = 'active' and c.valid_from <= :d and (c.valid_to is null or c.valid_to >= :d) "
             "and s.status = 'active'"
         ),
         {"item": item_code, "uom": uom, "d": as_of},
     ).all()
-    return [PriceOption(r[0], r[1], r[2], r[3], r[4], r[5]) for r in rows]
+    return [PriceOption(r[0], r[1], r[2], r[3], r[4], r[5], r[6]) for r in rows]
 
 
 def _supplier_name(db: Session, code: str) -> str:
@@ -143,9 +145,9 @@ def _best_vendor(db: Session, line: dict[str, Any], as_of: date, base: dict[str,
     qty = Decimal(line["qty"])
     rows = db.execute(
         text(
-            "select p.supplier_code, p.contract_code, p.price, coalesce(p.min_qty, 0) as min_qty "
+            "select p.supplier_code, p.contract_code, p.price, coalesce(p.min_qty, 0) as min_qty, p.id "
             "from price_record p join supplier s on s.code = p.supplier_code left join contract c on c.code = p.contract_code "
-            "where p.item_code = :i and p.uom is not distinct from :u and p.valid_from <= :d "
+            "where p.item_code = :i and p.uom is not distinct from :u and p.status = 'active' and p.valid_from <= :d "
             "and (p.valid_to is null or p.valid_to >= :d) and s.status = 'active' "
             "and (p.contract_code is null or (c.status = 'active' and c.valid_from <= :d and (c.valid_to is null or c.valid_to >= :d)))"
         ),
@@ -188,6 +190,7 @@ def _best_vendor(db: Session, line: dict[str, Any], as_of: date, base: dict[str,
         supplier_code=top.supplier_code,
         contract_code=pick["contract_code"],
         price=top.price,
+        price_record_id=pick["id"],
         reason=(
             f"Best vendor {_supplier_name(db, top.supplier_code)} of {len(ranked)} priced: score {top.total} "
             f"(price {top.price_score:.2f}, delivery {top.delivery:.2f}, quality {top.quality:.2f}), "
@@ -284,6 +287,7 @@ def _on_contract(db: Session, line: dict[str, Any], as_of: date, base: dict[str,
         supplier_code=pick.supplier_code,
         contract_code=pick.contract_code,
         price=pick.price,
+        price_record_id=pick.record_id,
         reason=(
             f"Contract {pick.contract_code} with {_supplier_name(db, pick.supplier_code)}: "
             f"{format_inr(pick.price)} per {line['uom']}{until}"
@@ -310,7 +314,8 @@ def eligible_suppliers(
             "   order by c.is_primary desc nulls last, c.id limit 1) as email, "
             "(select c.name from supplier_contact c where c.supplier_code = s.code and c.email is not null "
             "   order by c.is_primary desc nulls last, c.id limit 1) as contact, "
-            "(select count(*) from price_record p where p.supplier_code = s.code and p.item_code = any(:items)) as history "
+            "(select count(*) from price_record p where p.supplier_code = s.code and p.item_code = any(:items) "
+            "and p.status = 'active') as history "
             "from supplier s join supplier_category sc on sc.supplier_code = s.code and sc.category_code = :cat "
             "and (sc.approved_from is null or sc.approved_from <= :d) "
             "where s.status = 'active' order by history desc, s.code"
@@ -511,8 +516,9 @@ def _save_decision(db: Session, request_no: str, outcome: LineOutcome, decided_o
     db.execute(
         text(
             "insert into sourcing_decision (request_no, line_no, method, supplier_code, contract_code, price, uom, rfq_no, "
-            "reason, route, route_rule, checks, line_value, window_value, min_quotes, decided_on, needs_agreement) "
-            "values (:n, :l, :m, :s, :c, :p, :u, :r, :why, :route, :rule, cast(:checks as jsonb), :lv, :wv, :mq, :on, :agree)"
+            "reason, route, route_rule, checks, line_value, window_value, min_quotes, decided_on, needs_agreement, "
+            "price_record_id) values (:n, :l, :m, :s, :c, :p, :u, :r, :why, :route, :rule, cast(:checks as jsonb), :lv, :wv, "
+            ":mq, :on, :agree, :prid)"
         ),
         {
             "n": request_no,
@@ -532,6 +538,7 @@ def _save_decision(db: Session, request_no: str, outcome: LineOutcome, decided_o
             "mq": outcome.min_quotes or None,
             "on": decided_on,
             "agree": outcome.needs_agreement,
+            "prid": outcome.price_record_id,
         },
     )
     db.execute(

@@ -93,7 +93,7 @@ const PaymentsView = {
           ${r.has_file ? `<div class="btn btn-secondary btn-sm" id="showFile">Show the bank file</div>` : ""}
           ${r.can_mark_paid ? `<input id="paidOn" type="date" style="padding:6px;"><div class="btn btn-primary btn-sm" id="markPaid">The bank has paid this run</div>` : ""}
         </div>
-        ${r.can_mark_paid ? `<div class="panel" style="margin-top:12px;"><div class="panel-title">Or settle it from the bank statement</div>
+        ${r.can_import_statement ? `<div class="panel" style="margin-top:12px;"><div class="panel-title">${r.can_mark_paid ? "Or settle" : "Settle"} it from the bank statement</div>
           <p class="cell-muted" style="font-size:12px;margin:0 0 8px;">A CSV with a date, the bank reference, the narration (it must carry the payment number) and the debit. A payment is settled when its reference and amount agree; every other line is listed for you.</p>
           <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;"><input id="stmtFile" type="file" accept=".csv,text/csv"><div class="btn btn-secondary btn-sm" id="importStmt">Import the bank statement</div></div>
           <div id="stmtResult" style="font-size:12.5px;margin-top:8px;"></div></div>` : ""}

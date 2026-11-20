@@ -221,20 +221,23 @@ def resolve_chain(
     on_date: date,
     location: str | None = None,
     sources: tuple[Source, ...] = (),
+    exclude: frozenset[str] = frozenset(),
 ) -> list[Step]:
     """Turn the roles of a chain into people, in order.
 
-    The same person twice in a row is one step. The requester never approves their own request. A person on leave on the
-    date (a delegation) is stood in for by their delegate.
+    The same person twice in a row is one step. The requester never approves their own request, nor does anyone in
+    `exclude` (the people who made a purchase order). A person on leave on the date (a delegation) is stood in for by
+    their delegate, unless the delegate is one of them.
     """
+    never = exclude | ({requester} if requester else set())
     steps: list[Step] = []
     for n, role in enumerate(roles):
         person = _person_for_role(db, role, requester, department, location)
-        if person == requester or (steps and steps[-1].approver == person):
+        if person in never or (steps and steps[-1].approver == person):
             continue
         delegate = deputy_on(db, person, on_date)
         source = sources[n] if n < len(sources) else None
-        steps.append(Step(role, person, delegate if delegate != requester else None, source))
+        steps.append(Step(role, person, delegate if delegate not in never else None, source))
     if roles and not steps:
         raise ApprovalRuleError("the only approver in the chain is the requester; someone else has to approve")
     return steps

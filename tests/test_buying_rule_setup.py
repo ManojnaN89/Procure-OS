@@ -10,6 +10,7 @@ from typing import Any
 
 import pytest
 from fastapi.testclient import TestClient
+from setup_changes import change
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 from test_buying_route import _ask, _decisions, apex  # noqa: F401 - fixtures
@@ -28,10 +29,24 @@ D = Decimal
 TOMORROW = (TODAY + timedelta(days=1)).isoformat()
 
 
-def _login(db: Session, role: str) -> dict[str, str]:
+_CHECKERS: dict[str, dict[str, str]] = {}  # an administrator's token -> a second administrator of the same company
+
+
+def _login(db: Session, role: str, *, checker: bool = True) -> dict[str, str]:
     slug = db.info["slug"]
     uid = users.create_user(slug, f"{role.lower()}{uuid.uuid4().hex[:6]}@x.example", PASSWORD, f"A {role}", role)
-    return {"Authorization": f"Bearer {create_access_token(uid, slug, role)}"}
+    headers = {"Authorization": f"Bearer {create_access_token(uid, slug, role)}"}
+    if role == "Admin" and checker:
+        _CHECKERS[headers["Authorization"]] = _login(db, "Admin", checker=False)
+    return headers
+
+
+def _apply(verb: str, path: str, headers: dict[str, str], **kw: Any) -> Any:
+    """A rule change by this administrator, approved by a second one when it waits for approval (D-22)."""
+    checker = _CHECKERS.get(headers["Authorization"])
+    if checker is None:
+        return getattr(client, verb)(path, headers=headers, **kw)
+    return change(client, verb, path, headers, checker, **kw)
 
 
 def _changes(db: Session, area: str) -> list[dict[str, Any]]:
@@ -77,7 +92,7 @@ def test_no_rule_changes_without_the_admin_role_or_without_a_reason(db: Session)
         assert getattr(client, verb)(path, json=body, headers=buyer).status_code == 403, path
         no_reason = {k: v for k, v in body.items() if k != "reason"}
         assert getattr(client, verb)(path, json=no_reason, headers=admin).status_code == 422, path
-    assert client.delete("/api/setup/single-source/A", headers=admin).status_code == 422
+    assert _apply("delete", "/api/setup/single-source/A", headers=admin).status_code == 422
     assert db.execute(text("select count(*) from setup_change")).scalar_one() == 0
     assert db.execute(text("select count(*) from buying_route_rule")).scalar_one() == 1
 
@@ -86,9 +101,11 @@ def test_one_company_never_sees_or_changes_anothers_rules(db: Session) -> None: 
     other = "b" + uuid.uuid4().hex[:8]
     assert tenants.create_tenant(other, load_reference=False).ok
     uid = users.create_user(other, f"admin{uuid.uuid4().hex[:6]}@x.example", PASSWORD, "Other Admin", "Admin")
+    uid2 = users.create_user(other, f"admin{uuid.uuid4().hex[:6]}@x.example", PASSWORD, "Their Checker", "Admin")
     theirs = {"Authorization": f"Bearer {create_access_token(uid, other, 'Admin')}"}
+    checker = {"Authorization": f"Bearer {create_access_token(uid2, other, 'Admin')}"}
 
-    assert client.post("/api/setup/touchless", json=TOUCHLESS, headers=theirs).status_code == 201
+    assert change(client, "post", "/api/setup/touchless", theirs, checker, json=TOUCHLESS).status_code == 201
 
     mine = client.get("/api/setup/touchless", headers=_login(db, "Admin")).json()
     assert [v["version"] for v in mine["versions"]] == [1]
@@ -114,7 +131,7 @@ def test_a_new_route_version_decides_the_next_line_and_the_earlier_decision_keep
     _source(apex, first, dispatch=False)  # ₹ 3,800 of bearings: a safe reorder under version 1
     admin = _login(apex, "Admin")
 
-    r = client.post("/api/setup/buying-route", json=ROUTE, headers=admin)
+    r = _apply("post", "/api/setup/buying-route", json=ROUTE, headers=admin)
 
     assert r.status_code == 201 and r.json() == {"version": 2}
     (line,) = _source(apex, _ask(apex, "R-2", [("RM-06", "10", None)]), dispatch=False).lines
@@ -139,7 +156,7 @@ def test_a_category_version_tightens_only_its_items_and_names_only_its_threshold
     admin = _login(apex, "Admin")
     body = {**ROUTE, "category": "C1", "reason": "Raw material reorders smaller"}
 
-    r = client.post("/api/setup/buying-route", json=body, headers=admin)
+    r = _apply("post", "/api/setup/buying-route", json=body, headers=admin)
 
     assert r.status_code == 201 and r.json() == {"version": 1}
     (line,) = _source(apex, _ask(apex, "R-1", [("RM-06", "100", None)]), dispatch=False).lines
@@ -155,7 +172,7 @@ def test_a_category_version_tightens_only_its_items_and_names_only_its_threshold
     assert "C1" in [c["code"] for c in shown["categories"]]
     assert [(v["category"], v["version"]) for v in shown["versions"]] == [(None, 1), ("C1", 1)]
     for bad, says in (({"category": "NOPE"}, "no item category NOPE"), ({"values": {"agree_above": "-5"}}, "negative")):
-        r = client.post("/api/setup/buying-route", json={**body, **bad}, headers=admin)
+        r = _apply("post", "/api/setup/buying-route", json={**body, **bad}, headers=admin)
         assert r.status_code == 422 and says in r.json()["detail"]
 
 
@@ -172,7 +189,7 @@ def test_a_category_version_tightens_only_its_items_and_names_only_its_threshold
     ],
 )
 def test_route_thresholds_that_make_no_sense_are_refused(db: Session, values: dict, says: str) -> None:  # noqa: F811
-    r = client.post("/api/setup/buying-route", json={**ROUTE, "values": values}, headers=_login(db, "Admin"))
+    r = _apply("post", "/api/setup/buying-route", json={**ROUTE, "values": values}, headers=_login(db, "Admin"))
 
     assert r.status_code == 422 and says in r.json()["detail"]
     assert db.execute(text("select count(*) from buying_route_rule")).scalar_one() == 1
@@ -182,11 +199,13 @@ def test_route_thresholds_that_make_no_sense_are_refused(db: Session, values: di
 def test_a_version_cannot_start_in_the_past_or_before_the_latest_one(db: Session) -> None:  # noqa: F811
     admin = _login(db, "Admin")
     past = {**ROUTE, "effective_from": (TODAY - timedelta(days=1)).isoformat()}
-    assert "starts today or later" in client.post("/api/setup/buying-route", json=past, headers=admin).json()["detail"]
+    assert (
+        "starts today or later" in _apply("post", "/api/setup/buying-route", json=past, headers=admin).json()["detail"]
+    )
     later = {**TOUCHLESS, "effective_from": (TODAY + timedelta(days=10)).isoformat()}
-    assert client.post("/api/setup/touchless", json=later, headers=admin).status_code == 201
+    assert _apply("post", "/api/setup/touchless", json=later, headers=admin).status_code == 201
 
-    r = client.post("/api/setup/touchless", json={**TOUCHLESS, "effective_from": TOMORROW}, headers=admin)
+    r = _apply("post", "/api/setup/touchless", json={**TOUCHLESS, "effective_from": TOMORROW}, headers=admin)
 
     assert r.status_code == 422 and "cannot start before it" in r.json()["detail"]
 
@@ -203,7 +222,7 @@ def test_a_new_selection_rule_ranks_the_next_rfq_and_the_earlier_award_keeps_ver
     _quote(shop, first, "S2", "110")
     quotes.award(shop, first, {1: "S1"}, sod.user(7), as_of=TODAY)
 
-    r = client.post("/api/setup/supplier-selection", json=SELECTION, headers=_login(shop, "Admin"))
+    r = _apply("post", "/api/setup/supplier-selection", json=SELECTION, headers=_login(shop, "Admin"))
 
     assert r.status_code == 201 and r.json() == {"version": 2}
     _, second = _sent_rfq(shop, outbox, no="R-2", lines=[("B", "5", None, "C1")])
@@ -229,7 +248,7 @@ def test_a_new_selection_rule_ranks_the_next_rfq_and_the_earlier_award_keeps_ver
     ],
 )
 def test_a_selection_rule_that_makes_no_sense_is_refused(db: Session, change: dict, says: str) -> None:  # noqa: F811
-    r = client.post("/api/setup/supplier-selection", json={**SELECTION, **change}, headers=_login(db, "Admin"))
+    r = _apply("post", "/api/setup/supplier-selection", json={**SELECTION, **change}, headers=_login(db, "Admin"))
 
     assert r.status_code == 422 and says in r.json()["detail"]
     assert db.execute(text("select count(*) from supplier_selection_rule")).scalar_one() == 1
@@ -249,7 +268,7 @@ def test_a_lower_touchless_limit_stops_the_next_order_and_the_earlier_one_keeps_
     shown = client.get("/api/setup/touchless", headers=admin).json()
     assert shown["buyer_tier_max"] == "100000.00" and shown["versions"][0]["value_limit"] is None
 
-    r = client.post("/api/setup/touchless", json=TOUCHLESS, headers=admin)
+    r = _apply("post", "/api/setup/touchless", json=TOUCHLESS, headers=admin)
 
     assert r.status_code == 201 and r.json() == {"version": 2}
     second = _po(tiers, _order(tiers, "R-2", "Z", "1", "60000"))
@@ -267,7 +286,7 @@ def test_a_lower_touchless_limit_stops_the_next_order_and_the_earlier_one_keeps_
      ({"price_pct": "101"}, "above 100")],
 )  # fmt: skip
 def test_a_touchless_rule_that_makes_no_sense_is_refused(db: Session, change: dict, says: str) -> None:  # noqa: F811
-    r = client.post("/api/setup/touchless", json={**TOUCHLESS, **change}, headers=_login(db, "Admin"))
+    r = _apply("post", "/api/setup/touchless", json={**TOUCHLESS, **change}, headers=_login(db, "Admin"))
 
     assert r.status_code == 422 and says in r.json()["detail"]
     assert db.execute(text("select count(*) from touchless_rule")).scalar_one() == 1
@@ -279,7 +298,7 @@ def test_a_touchless_rule_that_makes_no_sense_is_refused(db: Session, change: di
 def test_an_item_is_marked_single_source_listed_and_cleared_with_reasons(db: Session) -> None:  # noqa: F811
     admin = _login(db, "Admin")
 
-    assert client.put("/api/setup/single-source/A", json=WRITES[3][2], headers=admin).status_code == 200
+    assert _apply("put", "/api/setup/single-source/A", json=WRITES[3][2], headers=admin).status_code == 200
 
     (mark,) = client.get("/api/setup/single-source", headers=admin).json()["marks"]
     assert (mark["item_code"], mark["supplier_code"], mark["reason"], mark["marked_by"]) == (
@@ -289,7 +308,7 @@ def test_an_item_is_marked_single_source_listed_and_cleared_with_reasons(db: Ses
         "A Admin",
     )
     assert route.Router(db, TODAY)._single_source("A") == "S2"
-    r = client.delete("/api/setup/single-source/A?reason=Second%20maker%20found", headers=admin)
+    r = _apply("delete", "/api/setup/single-source/A?reason=Second%20maker%20found", headers=admin)
     assert r.status_code == 200 and client.get("/api/setup/single-source", headers=admin).json()["marks"] == []
     assert [(c["old_value"], c["new_value"]) for c in _changes(db, "item_single_source")] == [
         (None, "S2"),
@@ -305,12 +324,13 @@ def test_a_single_source_needs_a_known_item_and_an_active_supplier(db: Session) 
     body = {"reason": "x"}
 
     assert (
-        client.put("/api/setup/single-source/NOPE", json={**body, "supplier_code": "S2"}, headers=admin).status_code
+        _apply("put", "/api/setup/single-source/NOPE", json={**body, "supplier_code": "S2"}, headers=admin).status_code
         == 404
     )
-    r = client.put("/api/setup/single-source/A", json={**body, "supplier_code": "S3"}, headers=admin)
+    r = _apply("put", "/api/setup/single-source/A", json={**body, "supplier_code": "S3"}, headers=admin)
     assert r.status_code == 422 and "only an active supplier" in r.json()["detail"]
     assert (
-        client.put("/api/setup/single-source/A", json={**body, "supplier_code": "ZZ"}, headers=admin).status_code == 422
+        _apply("put", "/api/setup/single-source/A", json={**body, "supplier_code": "ZZ"}, headers=admin).status_code
+        == 422
     )
-    assert client.delete("/api/setup/single-source/A?reason=x", headers=admin).status_code == 404
+    assert _apply("delete", "/api/setup/single-source/A?reason=x", headers=admin).status_code == 404

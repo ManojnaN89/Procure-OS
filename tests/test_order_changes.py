@@ -384,22 +384,48 @@ def test_a_higher_total_goes_through_approval_again_on_the_new_amount(store: Ses
     assert outbox.sent[-1]["subject"] == f"Purchase order {po_no} (version 3)"
 
 
-def test_a_date_can_change_without_a_new_approval_and_the_history_says_what_changed(store: Session) -> None:  # noqa: F811
+@pytest.mark.parametrize(
+    ("to", "material"),
+    [(date(2026, 11, 23), False), (date(2026, 11, 24), True), (date(2026, 11, 17), False), (date(2026, 11, 16), True)],
+)  # promised 20 Nov; the date tolerance is 3 days either way (Q19)
+def test_a_date_within_the_tolerance_is_a_new_version_only_and_beyond_it_goes_for_approval_again(
+    store: Session,
+    outbox: Outbox,
+    to: date,
+    material: bool,  # noqa: F811
+) -> None:
     po_no, logins = _sent(store)
 
     done = changes.revise(
-        store,
-        store.info["slug"],
-        po_no,
-        logins["buyer"],
-        "Plant shutdown",
-        [changes.LineChange(1, need_by=date(2026, 12, 15))],
+        store, store.info["slug"], po_no, logins["buyer"], "Plant shutdown", [changes.LineChange(1, need_by=to)]
     )
 
-    assert (done["version"], done["status"], done["total"]) == (2, "sent", "1180.00")
-    assert store.execute(text("select need_by from po_line")).scalar_one() == date(2026, 12, 15)
+    assert (done["version"], done["reapproval"]) == (2, material)
+    assert done["status"] == ("submitted" if material else "sent")
+    assert store.execute(text("select need_by from po_line")).scalar_one() == to
     (entry,) = changes.history(store, po_no)
-    assert entry["changes"] == [{"line": 1, "need_by": {"from": "2026-11-20", "to": "2026-12-15"}}]
+    assert entry["changes"] == [{"line": 1, "need_by": {"from": "2026-11-20", "to": to.isoformat()}}]
+
+
+def test_a_revision_clears_the_suppliers_acknowledgement_and_its_new_link_answers_only_the_new_version(
+    store: Session,
+    outbox: Outbox,  # noqa: F811
+) -> None:
+    po_no, logins = _sent(store)
+    store.execute(text("update po set status = 'acknowledged', acknowledged_at = now()"))
+    store.commit()
+    outbox.sent.clear()
+
+    done = changes.revise(
+        store, store.info["slug"], po_no, logins["buyer"], "Production plan cut", [changes.LineChange(1, qty=D("8"))]
+    )
+
+    assert done["status"] == "sent"  # acknowledged version 1, not version 2
+    assert store.execute(text("select acknowledged_at from po")).scalar_one() is None
+    (mail,) = outbox.sent
+    assert "/supplier/" in mail["body"] and "accept this version" in mail["body"]
+    versions = store.execute(text("select po_version from supplier_link where purpose = 'respond' order by id")).all()
+    assert [v[0] for v in versions][-1] == 2
 
 
 @pytest.mark.parametrize(

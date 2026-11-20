@@ -13,8 +13,9 @@ client = TestClient(app)
 
 
 def _put(s_: Setup, key: str, value: str, reason: str | None = "company mailbox set up", **kw):  # type: ignore[no-untyped-def]
-    headers = kw.get("headers", s_.a)
-    return client.put(f"/api/setup/policies/{key}", json={"value": value, "reason": reason}, headers=headers)
+    if "headers" in kw:
+        return client.put(f"/api/setup/policies/{key}", json={"value": value, "reason": reason}, headers=kw["headers"])
+    return s_.put(f"/api/setup/policies/{key}", json={"value": value, "reason": reason})  # approved by a second admin
 
 
 def _row(s_: Setup, key: str) -> dict:

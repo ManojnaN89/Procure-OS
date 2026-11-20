@@ -115,12 +115,20 @@ const VendorsView = {
     const frozen = new Set(p.frozen_fields || []);
     const f = p.fields;
     const rows = this.FIELDS.map(([key, label, kind, hint]) => `<label style="font-size:12px;color:var(--text-secondary);">${label}${this.fieldInput(key, kind, hint, f[key], terms, !p.can_edit || frozen.has(key))}</label>`).join("");
-    const bank = p.bank ? `${escapeHtml(p.bank.account)} \u00b7 ${escapeHtml(p.bank.ifsc)} \u00b7 ${p.bank.verified ? "verified" : "not verified yet"}` : "no bank account yet";
+    const how = (m) => String(m || "").replace(/_/g, " ");
+    const checked = p.bank && p.bank.verified ? `verified${p.bank.method ? ` by ${escapeHtml(how(p.bank.method))}` : ""}${p.bank.verified_at ? ` on ${escapeHtml(p.bank.verified_at.slice(0, 10))}` : ""}` : "not verified: nothing is paid into it until a second person verifies it";
+    const bank = p.bank ? `${escapeHtml(p.bank.account)} \u00b7 ${escapeHtml(p.bank.ifsc)} \u00b7 ${checked}` : "no bank account yet";
+    const verify = p.can_verify_bank ? `<div style="margin-top:8px;display:flex;gap:6px;flex-wrap:wrap;align-items:center;font-size:12.5px;">
+        Check account <strong>${escapeHtml(p.bank.account_no)}</strong>, IFSC ${escapeHtml(p.bank.ifsc)} against the proof:
+        <select id="bankMethod" style="padding:5px;">${p.bank_methods.map((m) => `<option value="${escapeHtml(m)}">${escapeHtml(how(m))}</option>`).join("")}</select>
+        <input type="file" id="bankProof" accept=".pdf,.png,.jpg,.jpeg">
+        <div class="btn btn-primary btn-sm" id="bankVerify">Verify bank account</div><span id="bankVerifyNote" style="font-size:12.5px;color:var(--warning-text);"></span></div>` : "";
     box.innerHTML = `<div class="panel-title">Details</div>
       <div id="detailFields" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:10px;">${rows}</div>
       ${frozen.size ? `<div class="cell-muted" style="font-size:11px;margin-top:6px;">PAN, GST and MSME details are locked while the supplier is in use: put it under review first.</div>` : ""}
       ${p.can_edit ? `<div style="margin-top:10px;display:flex;gap:8px;align-items:center;"><div class="btn btn-secondary btn-sm" id="detailSave">Save details</div><span id="detailNote" style="font-size:12.5px;color:var(--warning-text);"></span></div>` : ""}
       <div style="margin-top:14px;font-size:12.5px;"><strong>Bank account:</strong> ${bank}</div>
+      ${verify}
       ${p.can_edit ? `<div style="margin-top:8px;display:flex;gap:6px;flex-wrap:wrap;align-items:center;">
         <input id="bankAccount" placeholder="New account number" style="padding:5px;"><input id="bankIfsc" placeholder="IFSC" style="padding:5px;width:130px;">
         ${p.status !== "draft" ? '<input id="bankReason" placeholder="Why? (needed)" style="padding:5px;">' : ""}
@@ -130,6 +138,20 @@ const VendorsView = {
     if (save) save.addEventListener("click", async () => {
       const res = await API.putJSON(`/api/vendors/${encodeURIComponent(id)}`, this.collect(document.getElementById("detailFields")));
       document.getElementById("detailNote").textContent = res.ok ? (res.data.changed.length ? "Saved." : "Nothing changed.") : (res.data.detail || "Not saved.");
+    });
+    const bankVerify = document.getElementById("bankVerify");
+    if (bankVerify) bankVerify.addEventListener("click", async () => {
+      const note = document.getElementById("bankVerifyNote");
+      const proof = document.getElementById("bankProof");
+      if (!proof.files.length) { note.textContent = "Attach the proof the account was checked against."; return; }
+      const form = new FormData();
+      form.append("method", document.getElementById("bankMethod").value);
+      form.append("file", proof.files[0]);
+      const res = await Auth.fetch(`/api/vendors/${encodeURIComponent(id)}/bank/${p.bank.id}/verify`, { method: "POST", body: form });
+      if (res.ok) return reload();
+      let detail = "Not verified.";
+      try { detail = (await res.json()).detail || detail; } catch {}
+      note.textContent = detail;
     });
     const bankSave = document.getElementById("bankSave");
     if (bankSave) bankSave.addEventListener("click", async () => {

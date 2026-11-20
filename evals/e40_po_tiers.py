@@ -4,9 +4,10 @@ oracle written from the plan on random orders.
 The oracle never calls the platform's formulas. From the dataset's own files (the 'po' approval bands, the supplier's
 state, the plant's GSTIN) and the numbers it planted, it works out each order's GST and total in whole paise, the tier
 the band names, and whether the order is touchless: every line on a contract (a single-source line never is), the total
-within the buyer's band and the touchless limit (the band's top by default, Rs 50,000 in the second half under rule
-version 2), the supplier active, the contract not over its ceiling, the price at most 2% above the estimate and the
-autonomy gate on. Then it checks the order's status, tier and touchless flag, that a touchless order was sent with no
+within the band with no approver and the touchless limit (the band's top by default, Rs 50,000 in the second half under
+rule version 2), the supplier active, the contract not over its ceiling, the price at most 2% above the estimate and the
+autonomy gate on. An order in that band that is not touchless goes up to the next band's approver: the buyer who made an
+order never approves it (v1.1). Then it checks the order's status, tier and touchless flag, that a touchless order was sent with no
 person in its audit trail, and that lines for two places become two orders. The plan's worked example is worked out too.
 """
 
@@ -21,8 +22,8 @@ from sqlalchemy import text
 ID = "E40"
 TITLE = "PO tiers by value, delivery location, touchless orders only within every limit"
 REQUIREMENT = (
-    "Plan step 7 / P1-35, D35, D36: buyer up to Rs 1,00,000 (own issue is the approval), purchase manager to Rs 5,00,000, "
-    "director above; touchless for contract and safe-reorder lines within the limit, active supplier, contract room, "
+    "Plan step 7 / P1-35, D35, D36, v1.1: up to Rs 1,00,000 only a touchless order is approved, by the rule, else the "
+    "purchase manager, who approves to Rs 5,00,000; director above; never the buyer who made the order; touchless for contract and safe-reorder lines within the limit, active supplier, contract room, "
     "price within 2%, budget and the autonomy gate, recorded with the facts and the rule version; delivery place on the PO"
 )
 SUPPLIER = "SUP-001"
@@ -50,7 +51,8 @@ def oracle(case: Case, bands: list[tuple[Decimal, Decimal, str]], intra: bool, l
         total = taxable + 2 * half
     else:
         total = taxable + money(taxable * case.gst / 100)
-    chain = next(c for lo, hi, c in bands if lo <= total <= hi)
+    at = next(i for i, (lo, hi, _) in enumerate(bands) if lo <= total <= hi)
+    chain = bands[at][2]
     tier = "buyer" if chain == "auto" else chain.split(">")[-1]
     breach = case.ceiling == "under" and not case.single  # a single-source line has no contract to go over
     variance = ((case.price - case.est) * 100 / case.est).quantize(CENT, rounding=ROUND_HALF_UP)
@@ -58,7 +60,9 @@ def oracle(case: Case, bands: list[tuple[Decimal, Decimal, str]], intra: bool, l
         not case.single and tier == "buyer" and total <= limit and not case.blocked and not breach
         and variance <= 2 and case.gate
     )  # fmt: skip
-    status = "draft" if breach else ("sent" if touchless else "approved") if tier == "buyer" else "submitted"
+    if tier == "buyer" and not touchless:  # not touchless: up to the next band's approver, never the buyer
+        tier = bands[at + 1][2].split(">")[-1]  # the bands are sorted by value
+    status = "draft" if breach else "sent" if touchless else "submitted"
     return {"taxable": taxable, "total": total, "tier": None if breach else tier, "touchless": touchless,
             "status": status, "variance": variance}  # fmt: skip
 

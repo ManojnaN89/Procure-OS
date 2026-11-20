@@ -1,52 +1,75 @@
 # Evals report
 
-Run on 2026-11-12 08:43; AI evals used a scripted model.
+Run on 2026-11-20 17:32; AI evals used a scripted model.
+
+E30 failed in this run (two supplier replies with documents were not read into quotes while another worktree's tests loaded the machine) and passed when run alone the same evening (227 s). Every other eval passed; E15 needs a live model.
 
 | ID | What it checks | Result | Seconds | Key figures |
 |---|---|---|---|---|
-| E01 | Replenishment orders the right items in the right quantities | **PASS** | 2.9 | lines expected 1; lines planned 1; missing 0; extra 0 |
-| E02 | Approval routing follows the rule table and the organisation | **PASS** | 17.0 | cases 2334; rule agreement % 100.0; cases with no rule 657; chain cases 1677 |
-| E03 | Sourcing picks the right contract price, or sends the line to quotation | **PASS** | 3.2 | items 15; cases 360; decided on a contract 60; sent to quotation 300 |
-| E04 | GST and order arithmetic is exact, to the paisa | **PASS** | 0.3 | random lines 5000; net price errors 0; line errors 0; identity errors 0 |
-| E05 | Quote comparison recommends the right supplier and the award rules hold | **PASS** | 19.1 | scenarios 160; lines compared 306; recommendation correct % 100.0; compliance flags correct % 100.0 |
-| E06 | The whole flow, stock level to approved purchase order, keeps its promises | **PASS** | 3.3 | requests 1; lines 1; lines ordered 1; RFQs 1 |
-| E07 | Repeating or racing any stage makes no duplicates | **PASS** | 0.5 | serial repeats 3; concurrent callers 6; seconds for the race 0.2; tables that grew none |
+| E01 | Replenishment orders the right items in the right quantities | **PASS** | 3.4 | lines expected 1; lines planned 1; missing 0; extra 0 |
+| E02 | Approval routing follows the rule table and the organisation | **PASS** | 21.2 | cases 2334; rule agreement % 100.0; cases with no rule 647; chain cases 1687 |
+| E03 | Sourcing picks the right contract price, or sends the line to quotation | **PASS** | 3.8 | items 15; cases 360; decided on a contract 60; sent to quotation 300 |
+| E04 | GST and order arithmetic is exact, to the paisa | **PASS** | 0.4 | random lines 5000; net price errors 0; line errors 0; identity errors 0 |
+| E05 | Quote comparison recommends the right supplier and the award rules hold | **PASS** | 21.7 | scenarios 160; lines compared 306; recommendation correct % 100.0; compliance flags correct % 100.0 |
+| E06 | The whole flow, stock level to approved purchase order, keeps its promises | **PASS** | 3.2 | requests 1; lines 1; lines ordered 1; RFQs 1 |
+| E07 | Repeating or racing any stage makes no duplicates | **PASS** | 0.3 | serial repeats 3; concurrent callers 6; seconds for the race 0.2; tables that grew none |
 | E08 | Decisions stay reproducible when the rules change | **PASS** | 0.3 | decisions 1; band holds before / after the change 1/0 and 1/0; old rule rows untouched True; past date reproduces the old version % 100.0 |
-| E09 | Every write action is open to exactly the roles the plan names | **PASS** | 16.8 | actions 58; roles tried 8; cells checked 464; too permissive 0 |
-| E10 | One company cannot see another company's data | **PASS** | 6.6 | probes 73; leaks 0; company A sees its own records True |
-| E11 | Hostile text is shown as text and never run | **PASS** | 29.5 | screens opened 18; hostile payloads 6; script ran or markup injected 0; SQL probes 12 |
-| E12 | No floats in money, exact amounts on the wire, India's calendar, no secrets, synthetic data stays synthetic | **PASS** | 0.8 | money modules scanned 6; float uses 0; money fields as JSON numbers 0; UTC dates in business logic 0 |
-| E13 | Supplier emails are read into the right quotes, and when unsure the system asks a person | **PASS** | 11.2 | email cases 39; perfect reader: exact % 100.0; perfect reader: silent errors 0; sloppy reader: mistakes that did not slip through {'invented price': '33/33 not clean-but-wrong', 'invented gst': '33/33 not clean-but-wrong', 'invented delivery': '33/33 not clean-but-wrong', 'swapped prices': '16/16 not clean-but-wrong'} |
-| E14 | Hostile emails, even obeyed by the model, change nothing they should not | **PASS** | 4.6 | attacks 13; runs 26; defended 26; failed 0 |
+| E09 | Every write action is open to exactly the roles the plan names | **PASS** | 18.2 | actions 66; roles tried 8; cells checked 528; too permissive 0 |
+| E10 | One company cannot see another company's data | **PASS** | 5.8 | probes 73; leaks 0; company A sees its own records True |
+| E11 | Hostile text is shown as text and never run | **PASS** | 28.4 | screens opened 18; hostile payloads 6; script ran or markup injected 0; SQL probes 12 |
+| E12 | No floats in money, exact amounts on the wire, India's calendar, no secrets, synthetic data stays synthetic | **PASS** | 0.9 | money modules scanned 6; float uses 0; money fields as JSON numbers 0; UTC dates in business logic 0 |
+| E13 | Supplier emails are read into the right quotes, and when unsure the system asks a person | **PASS** | 12.4 | email cases 39; perfect reader: exact % 100.0; perfect reader: silent errors 0; sloppy reader: mistakes that did not slip through {'invented price': '33/33 not clean-but-wrong', 'invented gst': '33/33 not clean-but-wrong', 'invented delivery': '33/33 not clean-but-wrong', 'swapped prices': '16/16 not clean-but-wrong'} |
+| E14 | Hostile emails, even obeyed by the model, change nothing they should not | **PASS** | 4.9 | attacks 13; runs 26; defended 26; failed 0 |
 | E15 | The assistant tells the truth from the data, adds nothing up on its own, and changes nothing | **SKIP** | 0.0 |  |
-| E16 | Documents, budget, contract ceilings and reminders do what the plan says | **PASS** | 6.7 | documents: suppliers checked 6; documents: spoiled cases 6 (6 right); documents: bad suppliers asked to quote 0; budget: cases (over / within) 80 (42 / 38) |
-| E17 | Orders are sent to the right supplier with the right amounts, only when approved, and acknowledged on time | **PASS** | 3.3 | orders by status before sending {'approved': 1}; orders sent 1; acknowledged 1; late promises flagged 0 |
-| E18 | Goods receipt: tolerance, rejections, inspection, stock and order progress are right | **PASS** | 3.1 | order lines to receive 1; scenarios {'inspect': 1}; stock positions changed 1; receipts posted 1 |
-| E19 | Invoices are matched to orders and receipts the way the dataset's answers say | **PASS** | 39.0 | invoices entered 434; judged against the dataset 431; verdict agrees % 100.0; copies expected / found / false alarms 3 / 3 / 0 |
-| E20 | Due dates and tax at source are worked out the way the dataset's answers say | **PASS** | 42.8 | invoices booked 432; invoices left out (advance paid on the order) 0; due dates agree % 100.0; tax amounts agree % 100.0 |
-| E21 | Payments are for the right amounts, in the right order, once, and only for invoices that may be paid | **PASS** | 52.1 | payments compared 383; amounts agree % 100.0; interest agrees % (small suppliers) 100.0; invoices in the run 426 |
-| E22 | Company setup is admin-only, logged, validated, and its locks cannot be undone | **PASS** | 14.8 | permission cells checked 112; permission cells wrong 0; policy values tried 227; policy problems (accepted bad / refused good / badly logged) 0 / 0 / 0 |
-| E23 | Vendor scores follow how suppliers really behave, and planted repeat requests are caught | **PASS** | 14.8 | suppliers scored 6; rank agreement: delivery score vs true on-time rate 0.9; rank agreement: quality score vs true acceptance rate 0.51; mean score by hidden profile {'average': 88.2, 'poor': 75.5, 'reliable': 88.4} |
-| E24 | Plain-words requests become the right drafts or one right question, and never a wrong draft | **PASS** | 16.3 | cases 72; careful reader: right action % 100.0; careful reader: lines mapped to the right item and quantity % 100.0; careful reader: wrong drafts 0 |
-| E25 | Blocked invoices are explained with the right cause, and a block is never changed by the agent | **PASS** | 45.7 | invoices entered 434; blocked by the match 10; of those, with a cause the dataset planted 10; blocked without a planted cause (part-delivery carry-over, see E19) 0 |
-| E26 | Advances, early-payment discounts and the closing notice are right | **PASS** | 110.6 | supplier-years checked (limit lowered) 12; of which cross the limit 4; invoices with discount terms 276; discount checks 2592 |
-| E27 | Invoices are read from documents correctly, e-invoices without a model, and a wrong reading never looks clean | **PASS** | 34.5 | invoices: e-invoices / plain / sloppy-reader 12 / 18 / 12; e-invoices read with a model call 0; fields right % (e-invoices + plain, all fields) 100.0; fields right % (e-invoices only) 100.0 |
-| E28 | Supplier emails are classified, small changes applied, the rest handed to a person, nothing wrong applied | **PASS** | 32.1 | orders sent and acknowledged / RFQs to answer 1 / 1; replies 84; careful reader: handled the right way % 100.0; careful reader: wrong changes / unsafe effects / spoofed mail read 0 / 0 / 0 |
-| E29 | The control tower, the key figures and the alerts agree with an independent recount | **PASS** | 52.2 | control tower: cases by stage {'request_approval': 7, 'sourcing': 4, 'rfq_out': 3, 'award': 4, 'po_approval': 0, 'po_sent': 1, 'awaiting_receipt': 0, 'awaiting_invoice': 0, 'invoice_blocked': 16, 'awaiting_payment': 43}; key figures {'spend under management % / on contract %': ('100.0', '21.6'), 'savings': {'rfqs': 139, 'total': '73137.15', 'per_rfq': '526.17', 'rfqs_with_saving': 102}, 'on-time delivery (lines, %)': (555, '85.2'), 'invoices matched first time (n, %)': (437, '96.3'), "  … by the dataset's answer key %": '97.7', 'small suppliers paid on time (n, %)': (115, '91.3'), 'touchless (requests, %)': (90, '95.6'), 'duplicates stopped (requests, invoices)': {'requests': {'count': 0, 'value': '0'}, 'invoices': {'count': 3, 'value': '69970.00'}}, 'cycle time, request to paid, working days': {'cases': 60, 'median': '45.5', 'p90': '58.0'}, 'paid invoices set up from the dataset': 378}; first-pass gap to the dataset's answer key, points 1.4; alerts raised, by rule {'contract_expiring': 1, 'invoice_blocked': 16, 'invoice_due': 13, 'po_not_acknowledged': 1, 'rfq_no_quotes': 3, 'stale_requisition': 4} |
-| E30 | Demo runs through the real screens: a normal run, a part delivery and a price mismatch on the invoice, each typed in and with documents, and a held order | **PASS** | 194.2 | straight: steps / checks passed / failed 24 / 64 / 0; blocked: steps / checks passed / failed 20 / 66 / 0; held: steps / checks passed / failed 10 / 39 / 0; part: steps / checks passed / failed 29 / 83 / 0 |
-| E31 | Synthetic invoices and replies read back correctly by the code readers, and what still needs a model is counted | **PASS** | 308.4 | documents: invoices / replies 440 / 406; looks low_contrast_pdf 44, multipage_pdf 66, photo_png 44, scan_pdf 66, skewed_jpg 44, text_pdf 176; dev / hold-out documents 517 / 329; hold-out layouts seen {'invoice': ['low_contrast_pdf', 'multipage_pdf', 'photo_png', 'scan_pdf', 'skewed_jpg', 'text_pdf'], 'quote_reply': ['body_table', 'body_text', 'pdf_attachment']} |
-| E32 | Hostile text, even obeyed by the model, changes nothing it must not; limits, secrets and dependencies hold | **PASS** | 45.9 | company B: invoices entered / blocked 120 / 2; agent tool lists as written down 7 + 6 (all read-only); quotation replies (attacks) 13; quotation replies (runs) 26 |
-| E33 | The main demo company completes the whole flow, from low stock to a paid invoice, with separate people for each job | **PASS** | 17.5 | people / master rows loaded 9 / 426; items at or below reorder point ['SP-01']; recommended by the comparison (seal / copper wire) SUP-002 / SUP-005; orders issued touchless 1 |
-| E34 | The whole application for a real user: the demo script from low stock to a paid invoice in a browser, every role guide followed as a new user, and every screen swept for errors, overflow and raw codes | **PASS** | 230.7 | people / master rows loaded 9 / 426; people per step (audit log) {'approved the requests': 2, 'approved the orders': 1, 'received the goods': 1, 'entered the invoices': 1, 'released the block': 1, 'planned the run': 1, 'approved the run': 1}; screens swept (role x screen x width) 236; steps taken at screens 76 |
-| E35 | ERP demand files load exactly once, with every bad row explained | **PASS** | 5.4 | rows in the files 24; requirements checked against the BOM 20; planted faults caught 8 of 8; rows loaded twice 0 |
-| E36 | The buying route: contract, single source, emergency, safe reorder, else quotation with the right quotes | **PASS** | 9.9 | cases 68; agreement % 100.0; routes {'contract': 1, 'emergency': 1, 'reorder': 7, 'rfq': 58, 'single_source': 2}; decisions without rule version or tests 0 |
-| E37 | Stock is set aside earliest need-by first and only the shortfall is bought | **PASS** | 3.9 | production orders 2; lines checked against the oracle 20; lines set aside differently 0; items short per order {'MO-1': 6, 'MO-2': 8} |
-| E38 | Shortfalls of several orders combine into one line, and the budget is checked per location | **PASS** | 4.8 | orders 4; requisition lines (oracle) 17; combined lines 13; joins 14 |
-| E39 | Supplier selection: must-haves, total cost, tie-break, split only when it saves, reasons, orders per supplier | **PASS** | 17.9 | quote sets compared 126; must-haves correct % 100.0; total costs correct % 100.0; ranking correct % 100.0 |
-| E40 | PO tiers by value, delivery location, touchless orders only within every limit | **PASS** | 18.8 | worked example: casting order 38350.00 (touchless); worked example: the four orders at the dataset's GST rates 84937.90; orders checked 88; totals correct % 100.0 |
-| E41 | Approval by email: the right person, a full email, one reminder, escalation on time, a code above the limit | **PASS** | 15.5 | requests routed / agree with the oracle 108 / 108; approval emails checked 83; reminder due (oracle) / sent at Tue 10 Nov 15:30 / Tue 10 Nov 15:30; escalated to (platform / oracle) U09 / U09 |
+| E16 | Documents, budget, contract ceilings and reminders do what the plan says | **PASS** | 7.6 | documents: suppliers checked 6; documents: spoiled cases 6 (6 right); documents: bad suppliers asked to quote 0; budget: cases (over / within) 80 (42 / 38) |
+| E17 | Orders are sent to the right supplier with the right amounts, only when approved, and acknowledged on time | **PASS** | 3.9 | orders by status before sending {'approved': 1}; orders sent 1; acknowledged 1; late promises flagged 0 |
+| E18 | Goods receipt: tolerance, rejections, inspection, stock and order progress are right | **PASS** | 3.7 | order lines to receive 1; scenarios {'inspect': 1}; stock positions changed 1; receipts posted 1 |
+| E19 | Invoices are matched to orders and receipts the way the dataset's answers say | **PASS** | 45.7 | invoices entered 478; judged against the dataset 475; verdict agrees % 100.0; copies expected / found / false alarms 3 / 3 / 0 |
+| E20 | Due dates and tax at source are worked out the way the dataset's answers say | **PASS** | 46.0 | invoices booked 470; invoices left out (advance paid on the order) 0; due dates agree % 100.0; tax amounts agree % 100.0 |
+| E21 | Payments are for the right amounts, in the right order, once, and only for invoices that may be paid | **PASS** | 66.5 | payments compared 419; amounts agree % 100.0; interest agrees % (small suppliers) 100.0; invoices in the run 464 |
+| E22 | Company setup is admin-only, logged, validated, and its locks cannot be undone | **PASS** | 25.2 | permission cells checked 112; permission cells wrong 0; policy values tried 298; policy problems (accepted bad / refused good / badly logged) 0 / 0 / 0 |
+| E23 | Vendor scores follow how suppliers really behave, and planted repeat requests are caught | **PASS** | 16.6 | suppliers scored 6; rank agreement: delivery score vs true on-time rate 0.81; rank agreement: quality score vs true acceptance rate 0.51; mean score by hidden profile {'average': 85.2, 'poor': 77.4, 'reliable': 86.2} |
+| E24 | Plain-words requests become the right drafts or one right question, and never a wrong draft | **PASS** | 18.4 | cases 72; careful reader: right action % 100.0; careful reader: lines mapped to the right item and quantity % 100.0; careful reader: wrong drafts 0 |
+| E25 | Blocked invoices are explained with the right cause, and a block is never changed by the agent | **PASS** | 53.9 | invoices entered 478; blocked by the match 10; of those, with a cause the dataset planted 10; blocked without a planted cause (part-delivery carry-over, see E19) 0 |
+| E26 | Advances, early-payment discounts and the closing notice are right | **PASS** | 166.7 | supplier-years checked (limit lowered) 12; of which cross the limit 6; invoices with discount terms 322; discount checks 2820 |
+| E27 | Invoices are read from documents correctly, e-invoices without a model, and a wrong reading never looks clean | **PASS** | 42.9 | invoices: e-invoices / plain / sloppy-reader 12 / 18 / 12; e-invoices read with a model call 0; fields right % (e-invoices + plain, all fields) 100.0; fields right % (e-invoices only) 100.0 |
+| E28 | Supplier emails are classified, small changes applied, the rest handed to a person, nothing wrong applied | **PASS** | 47.4 | orders sent and acknowledged / RFQs to answer 1 / 1; replies 84; careful reader: handled the right way % 100.0; careful reader: wrong changes / unsafe effects / spoofed mail read 0 / 0 / 0 |
+| E29 | The control tower, the key figures and the alerts agree with an independent recount | **PASS** | 75.0 | control tower: cases by stage {'request_approval': 7, 'sourcing': 4, 'rfq_out': 3, 'award': 4, 'po_approval': 0, 'po_sent': 0, 'awaiting_receipt': 1, 'awaiting_invoice': 0, 'invoice_blocked': 10, 'awaiting_payment': 45}; key figures {'spend under management % / on contract %': ('100.0', '18.4'), 'savings': {'rfqs': 172, 'total': '71306.01', 'per_rfq': '414.57', 'rfqs_with_saving': 126}, 'on-time delivery (lines, %)': (589, '78.9'), 'invoices matched first time (n, %)': (475, '97.9'), "  … by the dataset's answer key %": '97.9', 'small suppliers paid on time (n, %)': (145, '95.2'), 'touchless (requests, %)': (95, '95.8'), 'duplicates stopped (requests, invoices)': {'requests': {'count': 0, 'value': '0'}, 'invoices': {'count': 3, 'value': '39139.00'}}, 'cycle time, request to paid, working days': {'cases': 71, 'median': '44.0', 'p90': '57.0'}, 'paid invoices set up from the dataset': 420}; first-pass gap to the dataset's answer key, points 0.0; alerts raised, by rule {'contract_expiring': 1, 'invoice_blocked': 10, 'invoice_due': 19, 'po_not_acknowledged': 0, 'rfq_no_quotes': 3, 'stale_requisition': 4} |
+| E30 | Demo runs through the real screens: a normal run, a part delivery and a price mismatch on the invoice, each typed in and with documents, and a held order | **FAIL** | 233.3 | straight: steps / checks passed / failed 26 / 66 / 0; blocked: steps / checks passed / failed 22 / 68 / 0; held: steps / checks passed / failed 18 / 39 / 0; part: steps / checks passed / failed 31 / 85 / 0 |
+| E31 | Synthetic invoices and replies read back correctly by the code readers, and what still needs a model is counted | **PASS** | 375.5 | documents: invoices / replies 478 / 497; looks low_contrast_pdf 48, multipage_pdf 72, photo_png 48, scan_pdf 72, skewed_jpg 48, text_pdf 190; dev / hold-out documents 580 / 395; hold-out layouts seen {'invoice': ['low_contrast_pdf', 'multipage_pdf', 'photo_png', 'scan_pdf', 'skewed_jpg', 'text_pdf'], 'quote_reply': ['body_table', 'body_text', 'pdf_attachment']} |
+| E32 | Hostile text, even obeyed by the model, changes nothing it must not; limits, secrets and dependencies hold | **PASS** | 68.2 | company B: invoices entered / blocked 120 / 2; agent tool lists as written down 7 + 6 (all read-only); quotation replies (attacks) 13; quotation replies (runs) 26 |
+| E33 | The main demo company completes the whole flow, from low stock to a paid invoice, with separate people for each job | **PASS** | 37.4 | people / master rows loaded 10 / 441; items at or below reorder point ['SP-01']; recommended by the comparison (seal / copper wire) SUP-002 / SUP-005; orders issued touchless 1 |
+| E34 | The whole application for a real user: the demo script from low stock to a paid invoice in a browser, every role guide followed as a new user, and every screen swept for errors, overflow and raw codes | **PASS** | 333.8 | people / master rows loaded 10 / 441; people per step (audit log) {'approved the requests': 2, 'approved the orders': 1, 'received the goods': 1, 'entered the invoices': 1, 'released the block': 1, 'planned the run': 1, 'approved the run': 1}; screens swept (role x screen x width) 274; steps taken at screens 95 |
+| E35 | ERP demand files load exactly once, with every bad row explained | **PASS** | 10.9 | Brightwave joiner rows (kits / plan) 12 / 2; Brightwave requirements checked against kit x joiners 12; Brightwave planted joiner faults caught 6 of 6; rows in the files 25 |
+| E36 | The buying route: contract, single source, emergency, safe reorder, else quotation with the right quotes | **PASS** | 11.0 | cases 68; agreement % 100.0; routes {'contract': 1, 'emergency': 1, 'reorder': 7, 'rfq': 58, 'single_source': 2}; decisions without rule version or tests 0 |
+| E37 | Stock is set aside earliest need-by first and only the shortfall is bought | **PASS** | 4.3 | production orders 2; lines checked against the oracle 20; lines set aside differently 0; items short per order {'MO-1': 4, 'MO-2': 8} |
+| E38 | Shortfalls of several orders combine into one line, and the budget is checked per location | **PASS** | 5.6 | orders 4; requisition lines (oracle) 15; combined lines 11; joins 14 |
+| E39 | Supplier selection: must-haves, total cost, tie-break, split only when it saves, reasons, orders per supplier | **PASS** | 24.3 | quote sets compared 126; must-haves correct % 100.0; total costs correct % 100.0; ranking correct % 100.0 |
+| E40 | PO tiers by value, delivery location, touchless orders only within every limit | **PASS** | 23.4 | worked example: casting order 38350.00 (touchless); worked example: the four orders at the dataset's GST rates 84937.90; orders checked 88; totals correct % 100.0 |
+| E41 | Approval by email: the right person, a full email, one reminder, escalation on time, a code above the limit | **PASS** | 21.5 | requests routed / agree with the oracle 120 / 120; approval emails checked 93; reminder due (oracle) / sent at Tue 10 Nov 15:30 / Tue 10 Nov 15:30; escalated to (platform / oracle) U09 / U09 |
+| E42 | Supplier confirmation: the link works once, every change is the buyer's, a new version tells the requester | **PASS** | 9.3 | orders the pipeline made, by status {'approved': 1}; orders sent with a link 7; worked example: version / new date / requester told 2 / 2026-12-06 / True; price at the 2% edge 192.8346 -> 196.69: buyer |
+| E43 | Service entry, the two-way match of services, receipts without an order and serial numbers are right | **PASS** | 12.9 | service order lines 79; invoices held before confirmation 3; confirmations checked 75; refused as the oracle said (buyer asked, or beyond the order) 0 |
+| E44 | The exceptions screen lists every stuck case with the right reason, owner and age, by role | **PASS** | 51.5 | invoices replayed 478; rows the oracle expects 18; rows by kind {'approval': 1, 'invoice': 10, 'proposal': 1, 'service': 2, 'supplier': 1, 'unordered': 3}; rows checked (owner, reason, age) 18 |
+| E45 | Received not invoiced, supplier statements, small-supplier deadlines and the order trace reconcile | **PASS** | 69.6 | received not invoiced today (Rs) 0; invoiced not received today (Rs) 15358.15; dates checked 12; answer-key month ends 11 |
+| E46 | The IT services company (Brightwave) through all 13 steps in a browser: services, a serialised laptop, two-way match | **PASS** | 68.8 | approvers per request {'REQ-BLR-2627-00001': ['depthead', 'ithead'], 'REQ-BLR-2627-00002': ['depthead', 'ithead'], 'REQ-BLR-2627-00003': ['depthead']}; steps taken at screens 42; plan steps shown 13 of 13; checks passed / failed 32 / 0 |
+| E47 | Cancelling a production order releases its stock to the next order at once, never stocked and bought twice | **PASS** | 6.2 | production orders (one planted) 3; lines checked against the oracle, before and after 30 / 20; lines differing (first check / after the cancel) 0 / 0; lines whose request was not cut to what stock leaves short 0 |
+| E48 | Shortfall requests are estimated at the contract price, else the last price paid, else the standard price | **PASS** | 19.9 | orders planted (one cancelled) 5; last price paid per item (from the order rows) {'RM-06': '39.5000', 'RM-01': '660.0000'}; estimate basis per short item {'RM-01': 'contract', 'RM-06': 'last price paid', 'RM-08': 'standard price', 'PK-01': 'standard price', 'RM-02': 'contract', 'RM-04': 'contract', 'RM-05': 'contract', 'RM-07': 'standard price', 'RM-09': 'standard price'}; disagreements 0 |
+| E49 | Supplier selection by weighted score, and the answer key's cheapest supplier, match an independent oracle | **PASS** | 30.0 | weighted quote sets compared 88; scores correct % 100.0; ranking correct % 100.0; recommendation correct % 100.0 |
+| E50 | Contract price versions: a draft is never used, a second person activates it, the old one ends the day before | **PASS** | 33.0 | dataset draft version RM-01 672.00 from 2027-01-01, RM-02 496.00 from 2027-01-01; before activation: prices and estimates off the oracle 0; order before activation: RM-02 on 2027-01-04 480.00 (version 1); activation refused (sender, pricer, no permission) {'the plant head who sent it': 403, 'the purchase manager who priced it': 403, 'the buyer (no permission)': 403} |
+| E51 | Control changes wait for a second administrator; nobody approves their own change or their own access | **PASS** | 20.2 | kinds of change checked / correct 11 / 11; per kind {'policy (budget_policy)': 'ok', 'tolerance (price_pct)': 'ok', 'approval rule version (REQ-02 to the purchase manager)': 'ok', 'buying route version': 'ok', 'supplier selection version': 'ok', 'touchless rule version': 'ok', 'role given (Store to the buyer)': 'ok', 'approval limit (plant head, orders)': 'ok', 'automation level (rfq.award to act alone)': 'ok', 'person deactivated (AP)': 'ok', 'manager changed (storekeeper)': 'ok'}; kill switch: gate before / on at once / off waits / after approval True / 200 True / 202 True / 200 True; rejected: value kept / approve later 5.00 / 409 |
+| E52 | Bank accounts: verified by a second person against a proof before anything is paid into them | **PASS** | 9.1 | approved bank changes left unverified 2; advances due (unverified supplier / verified supplier) False / True; run 1: suppliers paid / oracle, total / oracle 4 / 4, 39226.00 / 39226.00; bank file lines into an unverified account 0 |
+| E53 | PO makers never approve: not the order, its price, a supplier's price rise, nor as a deputy | **PASS** | 21.9 | oracle: band people (PO-02 / PO-03 / price rise) ['U08'] / ['U09'] / U08; maker refused on every path (kinds x paths) 20 of 20; ways of making an order checked buyer, submitter, reviser, awarder, route changer; no-approver band, not touchless: status / rule / approvers submitted / PO-02 / ['U08'] |
+| E54 | A maker of a purchase order never approves it, by any route (C1), written without the implementation | **PASS** | 41.7 | deputy routing observed for orders (control) True; order approval emails checked / with a signed approval link 27 / 0; cases where a rule ignoring makers gives another answer 8 of 14; cases where a maker would be the only approver (must be refused) ['C9 director awards, PO-03 (no band left)', 'C10 purchase manager awards above the estimate', 'C12 supplier price rise on an order the purchase manager made'] |
 
-**40 of 41 passed.**
+**52 of 54 passed.**
+
+## Findings
+
+- **high** (E30): straight_docs: the quotes the replies made: price and discount of each supplier, as the emails say: the platform says {}, the dataset's answer is {'SUP-001': (Decimal('92'), Decimal('0')), 'SUP-003': (Decimal('88'), Decimal('2'))}
+- **high** (E30): straight_docs: no reply was left unread: every draft is entered: the platform says 2, the dataset's answer is 0
+- **high** (E30): straight_docs: stopped after 'compares the quotes: the cheaper one after discount is recommended; awards it': AssertionError: Locator expected to contain text '2 of'
+- **high** (E30): part_docs: the quotes the replies made: price and discount of each supplier, as the emails say: the platform says {'SUP-003': (Decimal('88.0000'), Decimal('2.0000'))}, the dataset's answer is {'SUP-001': (Decimal('92'), Decimal('0')), 'SUP-003': (Decimal('88'), Decimal('2'))}
+- **high** (E30): part_docs: no reply was left unread: every draft is entered: the platform says 1, the dataset's answer is 0
 
 ## Details
 
@@ -70,10 +93,10 @@ Checks: Rule 8, the plan and D36: a rule is chosen by value band, spend type, ca
 
 - cases: 2334
 - rule agreement %: 100.0
-- cases with no rule: 657
-- chain cases: 1677
+- cases with no rule: 647
+- chain cases: 1687
 - chain agreement %: 100.0
-- chains that name people: 1647
+- chains that name people: 1660
 
 ### E03 Sourcing picks the right contract price, or sends the line to quotation
 
@@ -118,9 +141,9 @@ Checks: Plan: nothing is lost, money reconciles, every change is audited, only e
 - purchase orders: 1
 - orders approved: 1
 - line fates: {'ordered': 1}
-- stage seconds: {'replenishment and submission': 0.09, 'request approvals': 0.0, 'sourcing and RFQ emails': 0.09, 'quotes and awards': 0.08, 'purchase orders and their approval': 0.14}
-- total seconds: 0.4
-- company build seconds: 2.81
+- stage seconds: {'replenishment and submission': 0.12, 'request approvals': 0.0, 'sourcing and RFQ emails': 0.11, 'quotes and awards': 0.09, 'purchase orders and their approval': 0.3}
+- total seconds: 0.6
+- company build seconds: 2.52
 - orders lines checked: 1
 
 ### E07 Repeating or racing any stage makes no duplicates
@@ -148,9 +171,9 @@ Checks: Rule 8: rules and rates are versioned data; a decision stays reproducibl
 
 Checks: Rule 7 and the plan: requester, buyer, approver and administrator duties are separate; nobody else can do them; nobody can without logging in
 
-- actions: 58
+- actions: 66
 - roles tried: 8
-- cells checked: 464
+- cells checked: 528
 - too permissive: 0
 - too strict: 0
 - reads open without login: 0
@@ -184,7 +207,7 @@ Checks: Rules 1, 9, 10 and the generated-data safety rule
 - float uses: 0
 - money fields as JSON numbers: 0
 - UTC dates in business logic: 0
-- tracked files scanned for secrets: 549
+- tracked files scanned for secrets: 640
 - secret hits: 0
 - unsafe generated values: 0
 - note: money fields sent as numbers: []
@@ -255,13 +278,13 @@ Checks: Plan: goods are received against a sent order; over-delivery is accepted
 
 Checks: Plan P1-16/17: three-way match per line (quantity against accepted receipt, price within tolerance), tax and identity checks, duplicates caught, credit notes taken in; nothing is paid that the match blocks
 
-- invoices entered: 434
-- judged against the dataset: 431
+- invoices entered: 478
+- judged against the dataset: 475
 - verdict agrees %: 100.0
 - copies expected / found / false alarms: 3 / 3 / 0
 - credit notes taken in: 0
 - intake errors: 0
-- by expected -> got: {'matched -> matched': 421, 'blocked price_variance -> blocked price_variance': 6, 'blocked qty_over_received -> blocked qty_over_received': 4}
+- by expected -> got: {'matched -> matched': 465, 'blocked price_variance -> blocked price_variance': 6, 'blocked qty_over_received -> blocked qty_over_received': 4}
 - differences explained by part deliveries: 0
 - verdict agrees % (part-delivery differences aside): 100.0
 - order lines invoiced beyond what was received: 0
@@ -271,7 +294,7 @@ Checks: Plan P1-16/17: three-way match per line (quantity against accepted recei
 
 Checks: Plan P1-19 (FR23, FR26): due date from the payment terms with the 45-day rule for micro and small suppliers; tax on goods (194Q) at booking on the part of a supplier's year above 50 lakh
 
-- invoices booked: 432
+- invoices booked: 470
 - invoices left out (advance paid on the order): 0
 - due dates agree %: 100.0
 - tax amounts agree %: 100.0
@@ -283,13 +306,13 @@ Checks: Plan P1-19 (FR23, FR26): due date from the payment terms with the 45-day
 
 Checks: Plan P1-19/20: due date and tax at booking, credit notes netted, MSME first, MSME interest, the run approved by a person, the file equal to the approved run, invoices paid once, the case closed on payment
 
-- payments compared: 383
+- payments compared: 419
 - amounts agree %: 100.0
 - interest agrees % (small suppliers): 100.0
-- invoices in the run: 426
+- invoices in the run: 464
 - payments in the run: 6
-- orders closed by the payment: 349
-- run total: 6559966.15
+- orders closed by the payment: 375
+- run total: 6605557.68
 - note: differences: 
 
 ### E22 Company setup is admin-only, logged, validated, and its locks cannot be undone
@@ -298,7 +321,7 @@ Checks: Plan P1-24 and rule 5/8: who approves, tolerances and automation are dat
 
 - permission cells checked: 112
 - permission cells wrong: 0
-- policy values tried: 227
+- policy values tried: 298
 - policy problems (accepted bad / refused good / badly logged): 0 / 0 / 0
 - policies the code never reads: 0
 - tolerance problems: 0
@@ -314,17 +337,17 @@ Checks: Plan P1-24 and rule 5/8: who approves, tolerances and automation are dat
 Checks: Plan P1-05 and the vendor choice: a supplier's score reflects its delivery, quality and price; the best-vendor mode is no worse than the cheapest; a request that repeats another is flagged and an ordinary one is not
 
 - suppliers scored: 6
-- rank agreement: delivery score vs true on-time rate: 0.9
+- rank agreement: delivery score vs true on-time rate: 0.81
 - rank agreement: quality score vs true acceptance rate: 0.51
-- mean score by hidden profile: {'average': 88.2, 'poor': 75.5, 'reliable': 88.4}
-- receipt lines judged per supplier (on average): 106.2
+- mean score by hidden profile: {'average': 85.2, 'poor': 77.4, 'reliable': 86.2}
+- receipt lines judged per supplier (on average): 114.2
 - scores that differ from the independent recomputation: 0
 - items with two or more suppliers priced: 2
 - picks that differ from the cheapest: 2
 - true on-time rate of the picks vs of the cheapest: 0.825 vs 0.700
 - planted repeat requests / caught: 0 / 0
-- other requests flagged: 16 of 108
-- requests flagged in all: 16
+- other requests flagged: 15 of 113
+- requests flagged in all: 15
 
 ### E24 Plain-words requests become the right drafts or one right question, and never a wrong draft
 
@@ -343,7 +366,7 @@ Checks: Plan P1-08 (AG01): at least 90% of lines mapped to the right item and qu
 
 Checks: Plan P1-18 (AG03): at least 80% of mismatch cases diagnosed correctly (proposed target); the payment block stays until a person releases it; numbers in the answer come from the data
 
-- invoices entered: 434
+- invoices entered: 478
 - blocked by the match: 10
 - of those, with a cause the dataset planted: 10
 - blocked without a planted cause (part-delivery carry-over, see E19): 0
@@ -361,16 +384,16 @@ Checks: Plan P1-18 (AG03): at least 80% of mismatch cases diagnosed correctly (p
 Checks: Plan P1-19/20: 30% advance on an order and its adjustment against invoices (tax at source on the advance), a cash discount for paying inside the window, the requester told when the order is paid and closed
 
 - supplier-years checked (limit lowered): 12
-- of which cross the limit: 4
-- invoices with discount terms: 276
-- discount checks: 2592
-- of which on or just after a window's last day: 552
+- of which cross the limit: 6
+- invoices with discount terms: 322
+- discount checks: 2820
+- of which on or just after a window's last day: 644
 - discount agrees %: 100.0
-- run date: 2026-04-18
-- invoices pulled into the run only by their discount: 17
-- early-payment discount earned: 2767.43
-- orders closed by the run: 118
-- closing notices: 118
+- run date: 2026-08-08
+- invoices pulled into the run only by their discount: 16
+- early-payment discount earned: 3339.41
+- orders closed by the run: 271
+- closing notices: 271
 - note: apex-v1 has no advance payments in its history: part A (advances) was skipped
 
 ### E27 Invoices are read from documents correctly, e-invoices without a model, and a wrong reading never looks clean
@@ -403,9 +426,9 @@ Checks: Plan P1-14 (AG02): at least 90% of replies handled the right way; a chan
 - careful reader: handled the right way %: 100.0
 - careful reader: wrong changes / unsafe effects / spoofed mail read: 0 / 0 / 0
 - replies by type: {'ack': 13, 'bank_change': 3, 'date_change': 9, 'decline_rfq': 4, 'delay': 4, 'extension_request': 2, 'invoice_cover': 4, 'other': 2, 'partial_dispatch': 4, 'payment_followup': 4, 'price_change': 7, 'qty_change': 6, 'question': 8, 'quote': 8, 'reject': 4, 'substitution': 2}
-- date changes: applied in tolerance / handed to a buyer: 6 / 11
+- date changes: applied in tolerance / handed to a buyer: 3 / 14
 - sloppy readers (invented date / invented quantity / unsure): wrong changes: {'date': 0, 'qty': 0, 'unsure': 0}
-- gate off: emails that became tasks / orders changed: 10 of 10 / 0
+- gate off: emails that became tasks / orders changed: 7 of 7 / 0
 - mutation checks (rule broken on purpose: caught?): {'a date of any size is accepted': 'caught', 'a quantity of any size is accepted': 'caught', 'anyone counts as the supplier': 'caught', 'a price change moves the promised date': 'caught', 'the autonomy gate is ignored': 'caught'}
 - note: too few orders to test the chasers
 - note: the real models were not called (run with --live)
@@ -414,63 +437,584 @@ Checks: Plan P1-14 (AG02): at least 90% of replies handled the right way; a chan
 
 Checks: Plan P1-21/P1-23: every role sees what needs it and nothing else; the control tower shows every case by stage, location and age in working days; the key figures reconcile with the raw data; alerts are raised once, routed by role, and resolved when their cause goes away
 
-- control tower: cases by stage: {'request_approval': 7, 'sourcing': 4, 'rfq_out': 3, 'award': 4, 'po_approval': 0, 'po_sent': 1, 'awaiting_receipt': 0, 'awaiting_invoice': 0, 'invoice_blocked': 16, 'awaiting_payment': 43}
-- key figures: {'spend under management % / on contract %': ('100.0', '21.6'), 'savings': {'rfqs': 139, 'total': '73137.15', 'per_rfq': '526.17', 'rfqs_with_saving': 102}, 'on-time delivery (lines, %)': (555, '85.2'), 'invoices matched first time (n, %)': (437, '96.3'), "  … by the dataset's answer key %": '97.7', 'small suppliers paid on time (n, %)': (115, '91.3'), 'touchless (requests, %)': (90, '95.6'), 'duplicates stopped (requests, invoices)': {'requests': {'count': 0, 'value': '0'}, 'invoices': {'count': 3, 'value': '69970.00'}}, 'cycle time, request to paid, working days': {'cases': 60, 'median': '45.5', 'p90': '58.0'}, 'paid invoices set up from the dataset': 378}
-- first-pass gap to the dataset's answer key, points: 1.4
-- alerts raised, by rule: {'contract_expiring': 1, 'invoice_blocked': 16, 'invoice_due': 13, 'po_not_acknowledged': 1, 'rfq_no_quotes': 3, 'stale_requisition': 4}
-- role homes: sections shown: {'Admin': ['blocked', 'due', 'rfq_award', 'rfq_wait', 'to_acknowledge', 'to_receive', 'to_source'], 'Requester': [], 'Buyer': ['rfq_award', 'rfq_wait', 'to_acknowledge', 'to_source'], 'Approver': [], 'Store': ['to_receive'], 'AP': ['blocked'], 'Finance': ['due'], 'kpi_keys': ['cycle_time', 'duplicates_avoided', 'first_pass_match', 'msme_on_time_payment', 'on_time_delivery', 'savings', 'spend_under_management', 'touchless']}
+- control tower: cases by stage: {'request_approval': 7, 'sourcing': 4, 'rfq_out': 3, 'award': 4, 'po_approval': 0, 'po_sent': 0, 'awaiting_receipt': 1, 'awaiting_invoice': 0, 'invoice_blocked': 10, 'awaiting_payment': 45}
+- key figures: {'spend under management % / on contract %': ('100.0', '18.4'), 'savings': {'rfqs': 172, 'total': '71306.01', 'per_rfq': '414.57', 'rfqs_with_saving': 126}, 'on-time delivery (lines, %)': (589, '78.9'), 'invoices matched first time (n, %)': (475, '97.9'), "  … by the dataset's answer key %": '97.9', 'small suppliers paid on time (n, %)': (145, '95.2'), 'touchless (requests, %)': (95, '95.8'), 'duplicates stopped (requests, invoices)': {'requests': {'count': 0, 'value': '0'}, 'invoices': {'count': 3, 'value': '39139.00'}}, 'cycle time, request to paid, working days': {'cases': 71, 'median': '44.0', 'p90': '57.0'}, 'paid invoices set up from the dataset': 420}
+- first-pass gap to the dataset's answer key, points: 0.0
+- alerts raised, by rule: {'contract_expiring': 1, 'invoice_blocked': 10, 'invoice_due': 19, 'po_not_acknowledged': 0, 'rfq_no_quotes': 3, 'stale_requisition': 4}
+- role homes: sections shown: {'Admin': ['blocked', 'due', 'rfq_award', 'rfq_wait', 'to_receive', 'to_source'], 'Requester': [], 'Buyer': ['rfq_award', 'rfq_wait', 'to_source'], 'Approver': [], 'Store': ['to_receive'], 'AP': ['blocked'], 'Finance': ['due'], 'kpi_keys': ['cycle_time', 'duplicates_avoided', 'first_pass_match', 'msme_on_time_payment', 'on_time_delivery', 'savings', 'spend_under_management', 'touchless']}
 - formula checks against brute force: 1030
-- alert rules compared with the recount: ['stale_requisition: 4', 'rfq_no_quotes: 3', 'invoice_blocked: 16', 'late_delivery: 0', 'invoice_due: 13', 'contract_expiring: 1']
+- alert rules compared with the recount: ['stale_requisition: 4', 'rfq_no_quotes: 3', 'invoice_blocked: 10', 'late_delivery: 0', 'invoice_due: 19', 'contract_expiring: 1']
 
 ### E30 Demo runs through the real screens: a normal run, a part delivery and a price mismatch on the invoice, each typed in and with documents, and a held order
 
 Checks: Plan P1-25: the flow from stock level to a paid and closed order works for real people at real screens: the right person sees the right work, every money figure equals an independent calculation from the dataset, a document (an emailed quotation, an uploaded invoice) leaves the same figures as typing them in, and the separation of duties holds at every step
 
-- straight: steps / checks passed / failed: 24 / 64 / 0
-- blocked: steps / checks passed / failed: 20 / 66 / 0
-- held: steps / checks passed / failed: 10 / 39 / 0
-- part: steps / checks passed / failed: 29 / 83 / 0
-- straight_docs: steps / checks passed / failed: 27 / 70 / 0
-- part_docs: steps / checks passed / failed: 33 / 92 / 0
-- blocked_docs: steps / checks passed / failed: 21 / 70 / 0
-- steps taken at screens: 164
-- checks against the dataset: 484
+- straight: steps / checks passed / failed: 26 / 66 / 0
+- blocked: steps / checks passed / failed: 22 / 68 / 0
+- held: steps / checks passed / failed: 18 / 39 / 0
+- part: steps / checks passed / failed: 31 / 85 / 0
+- straight_docs: steps / checks passed / failed: 13 / 15 / 2
+- part_docs: steps / checks passed / failed: 35 / 92 / 2
+- blocked_docs: steps / checks passed / failed: 23 / 72 / 0
+- steps taken at screens: 168
+- checks against the dataset: 441
 - transcripts and screenshots: evals/results/demo_runs/
+- note: Traceback (most recent call last):
+  File "C:\CBC\PR to PO\.claude\worktrees\c1-po-sod\evals\e30_demo_runs.py", line 2319, in run
+    fn(d, c, co, pick)
+  File "C:\CBC\PR to PO\.claude\worktrees\c1-po-sod\evals\e30_demo_runs.py", line 1591, in run_straight_through
+    po, winner, unit, taxable, total, igst = quotation_to_order(d, c, co, pick, by_documents)
+                                             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\CBC\PR to PO\.claude\worktrees\c1-po-sod\evals\e30_demo_runs.py", line 1516, in quotation_to_order
+    expect(page.locator("#appContent")).to_contain_text("2 of")
+  File "C:\CBC\PR to PO\.claude\worktrees\c1-po-sod\backend\.venv\Lib\site-packages\playwright\sync_api\_generated.py", line 14961, in to_contain_text
+    self._sync(
+AssertionError: Locator expected to contain text '2 of'
+Actual value: 
+        
+          ← Quotations
+          Raw materials: 1 item for REQ-CKN-2627-00001
+          RFQ-2627-00001 · Sent · for REQ-CKN-2627-00001
+             · reply by 27 Nov 2026 · sent 20 Nov 2026
+        
+        ✓Request✓Approval3Price4Order5Receipt6Invoice7PaymentNow: Waiting for the suppliers' quotations; the buyer compares them and awards
+        
+        
+        
+          
+            SUPPLIEREMAILSTATEPRINT
+            
+              
+                
+                  Deccan Castings Pvt LtdSUP-001
+                  sales@deccancastings.example
+                  invited
+                  RFQ (PDF)
+                
+                
+                  Gujarat Bearings and SealsSUP-002
+                  sales@gujaratbearings.example
+                  invited
+                  RFQ (PDF)
+                
+                
+                  Shree Wires and Electricals Pvt LtdSUP-003
+                  sales@shreewires.example
+                  replied
+                  RFQ (PDF)
+                
+            
+          
+        
+        
+          
+            ITEMQTYNEEDED BY
+            
+              
+                
+                  Run capacitorRM-09
+                  150 NOS
+                  13 Nov 2026
+                
+            
+          
+        
+        
+        Replies read from email · 1 to look at
+        
+          
+            Deccan Castings Pvt Ltd · Re: Request for quotation RFQ-2627-00001 · read as quote (95% sure)
+          
+          
+          
+            ITEMPRICEDISCOUNT %GST %DAYS
+            
+              
+                
+                  Run capacitor
+                  
+                  
+                  
+                  
+                
+            
+          
+          valid until 6 Dec 2026
+          
+          
+          
+            Confirm this quote
+            Dismiss
+          
+          
+        
+        Quotes · 1 of 3 suppliers have replied (2 are wanted)Still to reply: SUP-001, SUP-002
+      
+        Run capacitor · 150 NOS · needed by 13 Nov 2026 · 1 qualifying
+        
+        
+          RANKSUPPLIERPRICETOTAL COSTDAYSNOTES
+          
+            
+              
+                
+                1
+                Shree Wires and Electricals Pvt Ltd recommendedpays in 30 days
+                ₹86.24₹88 less 2%
+                ₹12,936₹12,936; GST ₹2,328.48 (18%) shown, claimed back
+                5
+                
+              
+            
+          
+        
+        Lowest total cost among 1 qualifying offer: ₹ 12,936.00 (price and freight; GST is claimed back, so it is shown but not counted)
+      Compared on price and freight; GST is claimed back, so it is shown but not counted (Supplier selection rule, version 1)
+         
+           
+         
+         Select these suppliers
+         Enter another quote
+        
+      
+        Enter a quote
+        
+          Deccan Castings Pvt LtdGujarat Bearings and SealsShree Wires and Electricals Pvt Ltd
+          Valid until 
+          Freight 
+          Packing 
+        
+        
+          ITEMPRICEDISCOUNT %GST %DAYS
+          
+            
+              
+                Run capacitor 150 NOS
+                
+                
+                
+                
+              
+          
+        
+        Save the quoteCancel
+        
+      
+       
+Call log:
+  - Expect "to_contain_text" locator("#appContent") with timeout 20000ms
+  - waiting for locator("#appContent")
+    6 × locator resolved to <main class="page" id="appContent">…</main>
+      - unexpected value "
+        
+          ← Quotations
+          Raw materials: 1 item for REQ-CKN-2627-00001
+          RFQ-2627-00001 · Sent · for REQ-CKN-2627-00001
+             · reply by 27 Nov 2026 · sent 20 Nov 2026
+        
+        ✓Request✓Approval3Price4Order5Receipt6Invoice7PaymentNow: Waiting for the suppliers' quotations; the buyer compares them and awards
+        
+        
+        
+          
+            SUPPLIEREMAILSTATEPRINT
+            
+              
+                
+                  Deccan Castings Pvt LtdSUP-001
+                  sales@deccancastings.example
+                  invited
+                  RFQ (PDF)
+                
+                
+                  Gujarat Bearings and SealsSUP-002
+                  sales@gujaratbearings.example
+                  invited
+                  RFQ (PDF)
+                
+                
+                  Shree Wires and Electricals Pvt LtdSUP-003
+                  sales@shreewires.example
+                  invited
+                  RFQ (PDF)
+                
+            
+          
+        
+        
+          
+            ITEMQTYNEEDED BY
+            
+              
+                
+                  Run capacitorRM-09
+                  150 NOS
+                  13 Nov 2026
+                
+            
+          
+        
+        
+        Replies read from email · 2 to look at
+        
+          
+            Shree Wires and Electricals Pvt Ltd · Re: Request for quotation RFQ-2627-00001 · read as quote (95% sure)
+          
+          
+          
+            ITEMPRICEDISCOUNT %GST %DAYS
+            
+              
+                
+                  Run capacitor
+                  
+                  
+                  
+                  
+                
+            
+          
+          valid until 6 Dec 2026
+          
+          
+          
+            Confirm this quote
+            Dismiss
+          
+          
+        
+        
+          
+            Deccan Castings Pvt Ltd · Re: Request for quotation RFQ-2627-00001 · read as quote (95% sure)
+          
+          
+          
+            ITEMPRICEDISCOUNT %GST %DAYS
+            
+              
+                
+                  Run capacitor
+                  
+                  
+                  
+                  
+                
+            
+          
+          valid until 6 Dec 2026
+          
+          
+          
+            Confirm this quote
+            Dismiss
+          
+          
+        
+        Quotes · 0 of 3 suppliers have replied (2 are wanted)No quotes received yet.
+        Enter a quote
+        
+      
+        Enter a quote
+        
+          Deccan Castings Pvt LtdGujarat Bearings and SealsShree Wires and Electricals Pvt Ltd
+          Valid until 
+          Freight 
+          Packing 
+        
+        
+          ITEMPRICEDISCOUNT %GST %DAYS
+          
+            
+              
+                Run capacitor 150 NOS
+                
+                
+                
+                
+              
+          
+        
+        Save the quoteCancel
+        
+      
+      "
+    37 × locator resolved to <main class="page" id="appContent">…</main>
+       - unexpected value "
+        
+          ← Quotations
+          Raw materials: 1 item for REQ-CKN-2627-00001
+          RFQ-2627-00001 · Sent · for REQ-CKN-2627-00001
+             · reply by 27 Nov 2026 · sent 20 Nov 2026
+        
+        ✓Request✓Approval3Price4Order5Receipt6Invoice7PaymentNow: Waiting for the suppliers' quotations; the buyer compares them and awards
+        
+        
+        
+          
+            SUPPLIEREMAILSTATEPRINT
+            
+              
+                
+                  Deccan Castings Pvt LtdSUP-001
+                  sales@deccancastings.example
+                  invited
+                  RFQ (PDF)
+                
+                
+                  Gujarat Bearings and SealsSUP-002
+                  sales@gujaratbearings.example
+                  invited
+                  RFQ (PDF)
+                
+                
+                  Shree Wires and Electricals Pvt LtdSUP-003
+                  sales@shreewires.example
+                  replied
+                  RFQ (PDF)
+                
+            
+          
+        
+        
+          
+            ITEMQTYNEEDED BY
+            
+              
+                
+                  Run capacitorRM-09
+                  150 NOS
+                  13 Nov 2026
+                
+            
+          
+        
+        
+        Replies read from email · 1 to look at
+        
+          
+            Deccan Castings Pvt Ltd · Re: Request for quotation RFQ-2627-00001 · read as quote (95% sure)
+          
+          
+          
+            ITEMPRICEDISCOUNT %GST %DAYS
+            
+              
+                
+                  Run capacitor
+                  
+                  
+                  
+                  
+                
+            
+          
+          valid until 6 Dec 2026
+          
+          
+          
+            Confirm this quote
+            Dismiss
+          
+          
+        
+        Quotes · 1 of 3 suppliers have replied (2 are wanted)Still to reply: SUP-001, SUP-002
+      
+        Run capacitor · 150 NOS · needed by 13 Nov 2026 · 1 qualifying
+        
+        
+          RANKSUPPLIERPRICETOTAL COSTDAYSNOTES
+          
+            
+              
+                
+                1
+                Shree Wires and Electricals Pvt Ltd recommendedpays in 30 days
+                ₹86.24₹88 less 2%
+                ₹12,936₹12,936; GST ₹2,328.48 (18%) shown, claimed back
+                5
+                
+              
+            
+          
+        
+        Lowest total cost among 1 qualifying offer: ₹ 12,936.00 (price and freight; GST is claimed back, so it is shown but not counted)
+      Compared on price and freight; GST is claimed back, so it is shown but not counted (Supplier selection rule, version 1)
+         
+           
+         
+         Select these suppliers
+         Enter another quote
+        
+      
+        Enter a quote
+        
+          Deccan Castings Pvt LtdGujarat Bearings and SealsShree Wires and Electricals Pvt Ltd
+          Valid until 
+          Freight 
+          Packing 
+        
+        
+          ITEMPRICEDISCOUNT %GST %DAYS
+          
+            
+              
+                Run capacitor 150 NOS
+                
+                
+                
+                
+              
+          
+        
+        Save the quoteCancel
+        
+      
+      "
+
+Aria snapshot:
+- main:
+  - link "← Quotations":
+    - /url: "#/rfqs"
+  - 'heading "Raw materials: 1 item for REQ-CKN-2627-00001" [level=1]'
+  - paragraph:
+    - text: RFQ-2627-00001 · Sent · for
+    - link "REQ-CKN-2627-00001":
+      - /url: "#/requisitions/REQ-CKN-2627-00001"
+    - text: · reply by 27 Nov 2026 · sent 20 Nov 2026
+  - list "Where this case is in the flow":
+    - listitem: ✓ Request
+    - listitem: ✓ Approval
+    - listitem: 3 Price
+    - listitem: 4 Order
+    - listitem: 5 Receipt
+    - listitem: 6 Invoice
+    - listitem: 7 Payment
+  - strong: "Now:"
+  - text: Waiting for the suppliers' quotations; the buyer compares them and awards
+  - table:
+    - rowgroup:
+      - row "SUPPLIER EMAIL STATE PRINT":
+        - columnheader "SUPPLIER"
+        - columnheader "EMAIL"
+        - columnheader "STATE"
+        - columnheader "PRINT"
+    - rowgroup:
+      - row "Deccan Castings Pvt Ltd SUP-001 sales@deccancastings.example invited RFQ (PDF)":
+        - cell "Deccan Castings Pvt Ltd SUP-001"
+        - cell "sales@deccancastings.example"
+        - cell "invited"
+        - cell "RFQ (PDF)":
+          - link "RFQ (PDF)":
+            - /url: "#"
+      - row "Gujarat Bearings and Seals SUP-002 sales@gujaratbearings.example invited RFQ (PDF)":
+        - cell "Gujarat Bearings and Seals SUP-002"
+        - cell "sales@gujaratbearings.example"
+        - cell "invited"
+        - cell "RFQ (PDF)":
+          - link "RFQ (PDF)":
+            - /url: "#"
+      - row "Shree Wires and Electricals Pvt Ltd SUP-003 sales@shreewires.example replied RFQ (PDF)":
+        - cell "Shree Wires and Electricals Pvt Ltd SUP-003"
+        - cell "sales@shreewires.example"
+        - cell "replied"
+        - cell "RFQ (PDF)":
+          - link "RFQ (PDF)":
+            - /url: "#"
+  - table:
+    - rowgroup:
+      - row "ITEM QTY NEEDED BY":
+        - columnheader "ITEM"
+        - columnheader "QTY"
+        - columnheader "NEEDED BY"
+    - rowgroup:
+      - row "Run capacitor RM-09 150 NOS 13 Nov 2026":
+        - cell "Run capacitor RM-09"
+        - cell "150 NOS"
+        - cell "13 Nov 2026"
+  - text: "Replies read from email · 1 to look at Deccan Castings Pvt Ltd · Re: Request for quotation RFQ-2627-00001 · read as quote (95% sure)"
+  - table:
+    - rowgroup:
+      - row "ITEM PRICE DISCOUNT % GST % DAYS":
+        - columnheader "ITEM"
+        - columnheader "PRICE"
+        - columnheader "DISCOUNT %"
+        - columnheader "GST %"
+        - columnheader "DAYS"
+    - rowgroup:
+      - row "Run capacitor 92 0 18 5":
+        - cell "Run capacitor"
+        - cell "92":
+          - textbox: "92"
+        - cell "0":
+          - textbox: "0"
+        - cell "18":
+          - textbox: "18"
+        - cell "5":
+          - textbox: "5"
+  - text: valid until 6 Dec 2026
+  - button "Confirm this quote"
+  - button "Dismiss"
+  - text: "Quotes · 1 of 3 suppliers have replied (2 are wanted) Still to reply: SUP-001, SUP-002 Run capacitor · 150 NOS · needed by 13 Nov 2026 · 1 qualifying"
+  - table:
+    - rowgroup:
+      - row "RANK SUPPLIER PRICE TOTAL COST DAYS NOTES":
+        - columnheader
+        - columnheader "RANK"
+        - columnheader "SUPPLIER"
+        - columnheader "PRICE"
+        - columnheader "TOTAL COST"
+        - columnheader "DAYS"
+        - columnheader "NOTES"
+    - rowgroup:
+      - row "1 Shree Wires and Electricals Pvt Ltd recommended pays in 30 days ₹86.24 ₹88 less 2% ₹12,936 ₹12,936; GST ₹2,328.48 (18%) shown, claimed back 5":
+        - cell:
+          - radio [checked]
+        - cell "1"
+        - cell "Shree Wires and Electricals Pvt Ltd recommended pays in 30 days"
+        - cell "₹86.24 ₹88 less 2%"
+        - cell "₹12,936 ₹12,936; GST ₹2,328.48 (18%) shown, claimed back"
+        - cell "5"
+        - cell
+  - text: "Lowest total cost among 1 qualifying offer: ₹ 12,936.00 (price and freight; GST is claimed back, so it is shown but not counted) Compared on price and freight; GST is claimed back, so it is shown but not counted (Supplier selection rule, version 1)"
+  - textbox "Reason (needed when you select other than the recommended, cheapest qualifying quote, or when fewer qualifying quotes came in than wanted)"
+  - button " Select these suppliers"
+  - button " Enter another quote"
+
 
 ### E31 Synthetic invoices and replies read back correctly by the code readers, and what still needs a model is counted
 
 Checks: Plan P1-03: documents generated from the dataset with an answer key; QR >=95% (100% on clean), rows by arithmetic >=95% on text-layer invoices, silent errors 0, perfect readings pass the evidence check, deterministic, nothing real
 
-- documents: invoices / replies: 440 / 406
-- looks: low_contrast_pdf 44, multipage_pdf 66, photo_png 44, scan_pdf 66, skewed_jpg 44, text_pdf 176
-- dev / hold-out documents: 517 / 329
+- documents: invoices / replies: 478 / 497
+- looks: low_contrast_pdf 48, multipage_pdf 72, photo_png 48, scan_pdf 72, skewed_jpg 48, text_pdf 190
+- dev / hold-out documents: 580 / 395
 - hold-out layouts seen: {'invoice': ['low_contrast_pdf', 'multipage_pdf', 'photo_png', 'scan_pdf', 'skewed_jpg', 'text_pdf'], 'quote_reply': ['body_table', 'body_text', 'pdf_attachment']}
 - key differs from the CSV rows: 0
-- files vs rows: invoices 440/440, replies 406/406
-- QR read, all looks: 137/137 (100.0%)
-- QR read, dev slice: 113/113 (100.0%)
-- QR read, hold_out slice: 24/24 (100.0%)
-- rows exact, text layer: 242/242 (100.0%)
+- files vs rows: invoices 478/478, replies 497/497
+- QR read, all looks: 136/136 (100.0%)
+- QR read, dev slice: 115/115 (100.0%)
+- QR read, hold_out slice: 21/21 (100.0%)
+- rows exact, text layer: 262/262 (100.0%)
 - silent errors: 0
-- e-invoice gate passes, text layer: 80/242
+- e-invoice gate passes, text layer: 76/262
 - perfect readings failing the evidence check: 0
-- OCR sample: rows exact / gate passes / evidence passes: 6/8 / 6/8 / 6/8
+- OCR sample: rows exact / gate passes / evidence passes: 6/8 / 6/8 / 8/8
 - OCR sample: rows exact if a repeated row is ignored: 6/8
-- need a model or a person: 317/440 (72.05%)
-- replies routed by address / evidence passes: 406/406 / 406/406
+- need a model or a person: 357/478 (74.69%)
+- replies routed by address / evidence passes: 497/497 / 497/497
 - real-looking identifiers found: 0
 - same seed, same bytes: yes
-- note: QR low_contrast_pdf: 10/10
-- note: QR multipage_pdf: 24/24
-- note: QR photo_png: 11/11
-- note: QR scan_pdf: 22/22
+- note: QR low_contrast_pdf: 7/7
+- note: QR multipage_pdf: 21/21
+- note: QR photo_png: 10/10
+- note: QR scan_pdf: 29/29
 - note: QR skewed_jpg: 14/14
-- note: QR text_pdf: 56/56
-- note: needs a model or a person: 303 - no IRN, so no QR code (a model or a person reads it)
-- note: needs a model or a person: 14 - scan/photo whose OCR text the arithmetic cannot read (estimated from the sample)
-- note: read by code alone: 123/440 (text-layer gate passes 80, plus an estimate of 43 scans and photographs from the OCR sample)
-- note: reply looks: body_table 135, body_text 135, pdf_attachment 136
-- note: reply quirks: incl_gst 40, relative_validity 40, unit_differs 41
+- note: QR text_pdf: 55/55
+- note: needs a model or a person: 342 - no IRN, so no QR code (a model or a person reads it)
+- note: needs a model or a person: 15 - scan/photo whose OCR text the arithmetic cannot read (estimated from the sample)
+- note: read by code alone: 121/478 (text-layer gate passes 76, plus an estimate of 45 scans and photographs from the OCR sample)
+- note: reply looks: body_table 165, body_text 166, pdf_attachment 166
+- note: reply quirks: incl_gst 50, relative_validity 49, unit_differs 50
 - note: no quotation in the dataset has two lines, so no reply can be partial
 
 ### E32 Hostile text, even obeyed by the model, changes nothing it must not; limits, secrets and dependencies hold
@@ -484,8 +1028,8 @@ Checks: Plan P1-26: injected instructions cause no action; each agent has its ow
 - quotation replies (defended): 26
 - quotation replies (failed): 0
 - failed logins / uploads / assistant questions allowed before 429: 4 / 3 / 3 (settings)
-- files scanned for secrets / values looked for: 549 / 5 from .env
-- dependency audit: 2 finding(s), 0 open
+- files scanned for secrets / values looked for: 639 / 5 from .env
+- dependency audit: 0 finding(s), 0 open
 - hostile inputs run (a model that obeys each one): 25
 - inputs that changed something they must not: 0
 - mutations: defences broken / noticed: 6 / 6
@@ -497,35 +1041,38 @@ Checks: Plan P1-26: injected instructions cause no action; each agent has its ow
 
 Checks: Phase 1: request, approval, price or quotation, order with GST, receipt, invoice match, payment run, closing; requester, approver, receiver, invoice enterer and payer differ for the same case; Rs 10,000 approves itself, up to Rs 1,00,000 the plant head, above that the director; orders above Rs 1,00,000 the purchase manager; payment runs the director
 
-- people / master rows loaded: 9 / 426
+- people / master rows loaded: 10 / 441
 - items at or below reorder point: ['SP-01']
 - recommended by the comparison (seal / copper wire): SUP-002 / SUP-005
 - orders issued touchless: 1
-- orders waiting for the purchase manager: 1
+- orders waiting for the purchase manager: 3
 - micro supplier: due date (45-day terms and agreement): 2026-12-21
 - people per step (audit log): {'approved the requests': 1, 'approved the orders': 1, 'sent the orders': 1, 'received the goods': 1, 'entered the invoices': 1, 'planned the payment run': 1, 'approved the payment run': 1}
 - documents with no audit row at all: none
-- steps checked (one assertion each): 136
-- emails sent (quotation requests, orders, payment advice, ...): 47
+- steps checked (one assertion each): 142
+- emails sent (quotation requests, orders, payment advice, ...): 50
 
 ### E34 The whole application for a real user: the demo script from low stock to a paid invoice in a browser, every role guide followed as a new user, and every screen swept for errors, overflow and raw codes
 
 Checks: Phase 1 acceptance: the flow works end to end for real people at real screens; a new user completes their first task from the guide; no screen shows an error, a blank panel, a raw code or sideways scrolling
 
-- people / master rows loaded: 9 / 426
+- people / master rows loaded: 10 / 441
 - people per step (audit log): {'approved the requests': 2, 'approved the orders': 1, 'received the goods': 1, 'entered the invoices': 1, 'released the block': 1, 'planned the run': 1, 'approved the run': 1}
-- screens swept (role x screen x width): 236
-- steps taken at screens: 76
-- checks passed / failed: 346 / 0
+- screens swept (role x screen x width): 274
+- steps taken at screens: 95
+- checks passed / failed: 410 / 0
 - transcript and screenshots: evals/results/journeys/
 - note: control tower with the seal invoice blocked: {'request_approval': 0, 'sourcing': 0, 'rfq_out': 0, 'award': 0, 'po_approval': 0, 'po_sent': 0, 'awaiting_receipt': 0, 'awaiting_invoice': 0, 'invoice_blocked': 1, 'awaiting_payment': 3}
-- note: kpis at the end: {"cycle_time": {"approval": {"label": "request raised to approved", "cases": 4, "median": "0.0", "p90": "0.0"}, "ordering": {"label": "approved to order made", "cases": 4, "median": "0.0", "p90": "0.0"}, "po_approval": {"label": "order made to order approved", "cases": 4, "median": "0.0", "p90": "0.0"}, "dispatch": {"label": "order approved to sent", "cases": 4, "median": "0.0", "p90": "0.0"}, "delivery": {"label": "sent to goods received", "cases": 4, "median": "0.0", "p90": "0.0"}, "invoicing": {"label": "goods received to invoice received", "cases": 4, "median": "0.0", "p90": "0.0"}, "payment": {"label": "invoice received to paid", "cases": 4, "median": "26.0", "p90": "26.0"}, "total": {"
+- note: kpis at the end: {"cycle_time": {"approval": {"label": "request raised to approved", "cases": 4, "median": "0.0", "p90": "0.0"}, "ordering": {"label": "approved to order made", "cases": 4, "median": "0.0", "p90": "0.0"}, "po_approval": {"label": "order made to order approved", "cases": 4, "median": "0.0", "p90": "0.0"}, "dispatch": {"label": "order approved to sent", "cases": 4, "median": "0.0", "p90": "0.0"}, "delivery": {"label": "sent to goods received", "cases": 4, "median": "0.0", "p90": "0.0"}, "invoicing": {"label": "goods received to invoice received", "cases": 4, "median": "0.0", "p90": "0.0"}, "payment": {"label": "invoice received to paid", "cases": 4, "median": "20.0", "p90": "20.0"}, "total": {"
 
 ### E35 ERP demand files load exactly once, with every bad row explained
 
-Checks: Plan P1-29: production orders with their component lines, MRP results, sales orders and the demand plan are imported from the client's ERP files; every rejected row is listed with its reason; the same ERP order is never loaded twice; a changed order is reported, not overwritten; one company never sees another's imports
+Checks: Plan P1-29: production orders with their component lines, MRP results, sales orders and the demand plan are imported from the client's ERP files; every rejected row is listed with its reason; the same ERP order is never loaded twice; a changed order is reported, not overwritten; one company never sees another's imports. For an IT services company the joiner kits and the joiner plan load the same way: each joiner row becomes its kit's items times the joiners, by the start date, for the joiner's department, and one material request per plan and department
 
-- rows in the files: 24
+- Brightwave joiner rows (kits / plan): 12 / 2
+- Brightwave requirements checked against kit x joiners: 12
+- Brightwave planted joiner faults caught: 6 of 6
+- rows in the files: 25
 - requirements checked against the BOM: 20
 - planted faults caught: 8 of 8
 - rows loaded twice: 0
@@ -546,18 +1093,17 @@ Checks: Plan P1-30 and step 2 of the flow: each imported production order gets a
 - production orders: 2
 - lines checked against the oracle: 20
 - lines set aside differently: 0
-- items short per order: {'MO-1': 6, 'MO-2': 8}
-- purchase request value per order: {'MO-1': '80030.00', 'MO-2': '211500.00'}
+- items short per order: {'MO-1': 4, 'MO-2': 8}
+- purchase request value per order: {'MO-1': '72930.00', 'MO-2': '209700.00'}
 - MO-1, the plan's four items: Rs 72930.00
-- note: MO-1 in the dataset has 6 items short, not 4: the bill of materials also has RM-07, RM-09, so its request is Rs 80030.00 (the plan's four items are Rs 72930.00)
 
 ### E38 Shortfalls of several orders combine into one line, and the budget is checked per location
 
-Checks: Plan P1-31 and step 3 of the flow: shortfall lines for the same item and delivery location needed within the combining window (setting, default 7 days) become one requisition line that keeps each order's own quantity; lines further apart stay separate; cancelling one order takes its part off the combined line; the budget is checked per department and per location (decision D36: warn at 90% used, over above 100%), naming the location, the department and the months of the financial year it counted; every combination and reduction is audited
+Checks: Plan P1-31 and step 3 of the flow: shortfall lines for the same item and delivery location needed within the combining window (setting, default 7 days) become one requisition line that keeps each order's own quantity; lines further apart stay separate; cancelling one order takes its part off the combined line (and the stock it held covers, earliest need-by first, the parts of the others, which are cut by as much); the budget is checked per department and per location (decision D36: warn at 90% used, over above 100%), naming the location, the department and the months of the financial year it counted; every combination and reduction is audited
 
 - orders: 4
-- requisition lines (oracle): 17
-- combined lines: 13
+- requisition lines (oracle): 15
+- combined lines: 11
 - joins: 14
 - location budget checks verified: 6
 - lines reduced on cancelling: 8
@@ -579,7 +1125,7 @@ Checks: Plan step 6 / P1-34: drop quotes failing a must-have; compare total cost
 
 ### E40 PO tiers by value, delivery location, touchless orders only within every limit
 
-Checks: Plan step 7 / P1-35, D35, D36: buyer up to Rs 1,00,000 (own issue is the approval), purchase manager to Rs 5,00,000, director above; touchless for contract and safe-reorder lines within the limit, active supplier, contract room, price within 2%, budget and the autonomy gate, recorded with the facts and the rule version; delivery place on the PO
+Checks: Plan step 7 / P1-35, D35, D36, v1.1: up to Rs 1,00,000 only a touchless order is approved, by the rule, else the purchase manager, who approves to Rs 5,00,000; director above; never the buyer who made the order; touchless for contract and safe-reorder lines within the limit, active supplier, contract room, price within 2%, budget and the autonomy gate, recorded with the facts and the rule version; delivery place on the PO
 
 - worked example: casting order: 38350.00 (touchless)
 - worked example: the four orders at the dataset's GST rates: 84937.90
@@ -597,8 +1143,206 @@ Checks: Plan step 7 / P1-35, D35, D36: buyer up to Rs 1,00,000 (own issue is the
 
 Checks: Plan step 4 and D36: who approves follows the rule table by value, category, department and location (rows that add an approver too); each step keeps its rule row; the email carries the lines, the estimated total, the budget, why it came to this person and approve / reject / return links that work once; one reminder after a working day and escalation after two, counted on the business calendar with holidays; a one-time code above Rs 5,00,000 that is hashed, expires in 10 minutes, allows 5 tries and works once; a deputy; the requester never approves
 
-- requests routed / agree with the oracle: 108 / 108
-- approval emails checked: 83
+- requests routed / agree with the oracle: 120 / 120
+- approval emails checked: 93
 - reminder due (oracle) / sent at: Tue 10 Nov 15:30 / Tue 10 Nov 15:30
 - escalated to (platform / oracle): U09 / U09
 - one-time code checks passed: 8 / 8
+
+### E42 Supplier confirmation: the link works once, every change is the buyer's, a new version tells the requester
+
+Checks: Plan step 8, P1-36: accept, decline or ask for a change from a signed link that works once (or by email); each change goes to the buyer old value to new; an accepted date, quantity or price makes a new version and tells the requester; a price above tolerance needs the purchase manager; a decline goes back to the buyer to source again; dispatch notes for the store; reminders before the promised date and after it while nothing has arrived, on the business calendar, each once. Done when a date change makes PO version 2 and tells the requester
+
+- orders the pipeline made, by status: {'approved': 1}
+- orders sent with a link: 7
+- worked example: version / new date / requester told: 2 / 2026-12-06 / True
+- price at the 2% edge: 192.8346 -> 196.69: buyer
+- price one paisa above the 2% edge: 192.8346 -> 196.70: purchase manager
+- declined order / lines left for a buyer / new orders made: cancelled / True / 0
+- part dispatch: checks passed / notes the store sees: 3 of 3 / 2
+- links refused (reused, expired, altered, other supplier, other key): 5
+- reminders (platform / oracle): ['12 Nov before 1', '18 Nov overdue 1', '23 Nov overdue 2', '26 Nov overdue 3'] / 4 expected
+- audit rows: {'po.change_proposed': 4, 'po.change_accepted': 4, 'po.revise': 3, 'po.change_referred': 1, 'po.dispatch_note': 2, 'po.delivery_reminder': 11, 'po.acknowledge': 2}
+- mutation checks (rule broken on purpose: caught?): {"a price rise of any size is the buyer's": 'caught', 'a link works more than once': 'caught'}
+
+### E43 Service entry, the two-way match of services, receipts without an order and serial numbers are right
+
+Checks: Plan step 9, P1-37: the requester confirms a service (quantity, percent or amount), a service invoice is matched against the order and the confirmation, an unconfirmed service cannot be invoiced, a receipt without an order needs the purchase manager's approval and an after-the-fact order, serialised items need a unique serial per unit
+
+- service order lines: 79
+- invoices held before confirmation: 3
+- confirmations checked: 75
+- refused as the oracle said (buyer asked, or beyond the order): 0
+- receipts without an order: 2
+
+### E44 The exceptions screen lists every stuck case with the right reason, owner and age, by role
+
+Checks: Plan step 11/12, P1-38: one list of everything stuck that needs a person (blocked invoices, goods without an order, services not confirmed, approvals past their reminder, proposals, suppliers to chase) with what, reason, owner, next step, age in working days and amount, oldest first, filtered by kind and mine, by permission
+
+- invoices replayed: 478
+- rows the oracle expects: 18
+- rows by kind: {'approval': 1, 'invoice': 10, 'proposal': 1, 'service': 2, 'supplier': 1, 'unordered': 3}
+- rows checked (owner, reason, age): 18
+- Store: rows seen / mine: 3 / 1
+- AP: rows seen / mine: 10 / 9
+- Buyer: rows seen / mine: 6 / 2
+- Finance: rows seen / mine: 10 / 1
+- Requester: rows seen / mine: 0 / 0
+
+### E45 Received not invoiced, supplier statements, small-supplier deadlines and the order trace reconcile
+
+Checks: Plan step 13, P1-39: received not invoiced (and the reverse) exact to the paisa with its age; a supplier's statement matched line by line with the reason for each difference; MSME invoices listed against the MSMED Act deadline (Q16); the whole chain of a document traced end to end
+
+- received not invoiced today (Rs): 0
+- invoiced not received today (Rs): 15358.15
+- dates checked: 12
+- answer-key month ends: 11
+- open order lines checked: 73
+- received-not-invoiced differences: 0
+- small-supplier invoices listed: 154
+- statements imported: 3
+- statement lines wrong: 0
+- trace of: PI-2526-000061 (PO-CKN-2526-00067)
+- trace stages: 6
+
+### E46 The IT services company (Brightwave) through all 13 steps in a browser: services, a serialised laptop, two-way match
+
+Checks: Phase 1 done-when: both demo companies run through all 13 steps in the browser; services are confirmed by the requester and matched two ways; a serialised item is received with its serial; each step by its own person
+
+- approvers per request: {'REQ-BLR-2627-00001': ['depthead', 'ithead'], 'REQ-BLR-2627-00002': ['depthead', 'ithead'], 'REQ-BLR-2627-00003': ['depthead']}
+- steps taken at screens: 42
+- plan steps shown: 13 of 13
+- checks passed / failed: 32 / 0
+- transcript and screenshots: evals/results/journeys/brightwave.md
+
+### E47 Cancelling a production order releases its stock to the next order at once, never stocked and bought twice
+
+Checks: Plan P1-30 and step 2 of the flow: cancelling an order releases its reservation (a reason is needed; only the store; once); the freed stock is set aside at once for the open orders earliest need-by first, each up to what it still lacks, never more than is on the shelf; a purchase request still open for that shortfall is cut by as much (set aside plus requested never exceeds the need) and the next check buys nothing; purchase requests made only for the cancelled order stay and are named; issue never moves more than is set aside; the cancel is audited
+
+- production orders (one planted): 3
+- lines checked against the oracle, before and after: 30 / 20
+- lines differing (first check / after the cancel): 0 / 0
+- lines whose request was not cut to what stock leaves short: 0
+- freed per item: {'RM-03': '50', 'RM-05': '50', 'RM-06': '40.000', 'RM-07': '50', 'RM-08': '50.000', 'RM-09': '50', 'RM-10': '50', 'RM-11': '10.0', 'PK-01': '20.000'}
+- edges hit: {'exact': ['RM-03->MO-3'], 'less': ['RM-05->MO-2', 'RM-06->MO-2', 'RM-07->MO-2', 'RM-08->MO-2', 'RM-09->MO-2', 'PK-01->MO-2'], 'more': ['RM-10->MO-3', 'RM-11->MO-3']}
+- purchase requests left after the cancel: ['REQ-CKN-2627-00001']
+
+### E48 Shortfall requests are estimated at the contract price, else the last price paid, else the standard price
+
+Checks: Plan step 3 (estimated price): the contract price if one is valid, else the last price paid (the latest order that is not a draft and not cancelled), else the item's standard price; the estimate sets the request's value and so its approver
+
+- orders planted (one cancelled): 5
+- last price paid per item (from the order rows): {'RM-06': '39.5000', 'RM-01': '660.0000'}
+- estimate basis per short item: {'RM-01': 'contract', 'RM-06': 'last price paid', 'RM-08': 'standard price', 'PK-01': 'standard price', 'RM-02': 'contract', 'RM-04': 'contract', 'RM-05': 'contract', 'RM-07': 'standard price', 'RM-09': 'standard price'}
+- disagreements: 0
+- purchase request value per order: {'MO-1': '73020.00', 'MO-2': '210000.00'}
+
+### E49 Supplier selection by weighted score, and the answer key's cheapest supplier, match an independent oracle
+
+Checks: Plan step 6 / P1-34: quotes failing a must-have are dropped; the rest are compared on total cost or, when the company's versioned rule says so, on a weighted score of price, delivery, quality and payment terms; ties by earlier delivery; the rule version is recorded with each selection; the dataset's RFQs select the supplier its answer key names
+
+- weighted quote sets compared: 88
+- scores correct %: 100.0
+- ranking correct %: 100.0
+- recommendation correct %: 100.0
+- selections recording their rule version: 75 of 75
+- answer-key RFQs replayed (splits left out: the key has no part quantities): 149 (23 left out)
+- answer key matched %: 100.0
+- oracle agrees with the answer key %: 100.0
+
+### E50 Contract price versions: a draft is never used, a second person activates it, the old one ends the day before
+
+Checks: D48: a contract price is a version; a draft is used for nothing until someone other than who stored the contract, entered a price of the version or sent it activates it; the version it replaces ends the day before it starts; prices of one supplier for an item never apply on the same day; an order keeps the version it was bought at
+
+- dataset draft version: RM-01 672.00 from 2027-01-01, RM-02 496.00 from 2027-01-01
+- before activation: prices and estimates off the oracle: 0
+- order before activation: RM-02 on 2027-01-04: 480.00 (version 1)
+- activation refused (sender, pricer, no permission): {'the plant head who sent it': 403, 'the purchase manager who priced it': 403, 'the buyer (no permission)': 403}
+- version 1 ends (replaced items): ['2026-12-31']
+- after activation: prices and estimates off the oracle: 0
+- order made before activation, after it: 650.00 (version 1)
+- order after activation: RM-01 on 2026-12-31: 650.00 (version 1)
+- order after activation: RM-01 on 2027-01-01: 672.00 (version 2)
+- order after activation: RM-02 on 2027-01-04: 496.00 (version 2)
+- a price of RM-01 on a second contract from: {'same day (2027-03-31)': 409, 'next day (2027-04-01)': 200}
+- second contract activated by who stored it / by the director: 403 / 200
+- audit rows (action, person): 6
+- another company: contract / activate / list: {'contract': 404, 'activate': 404, 'list': []}
+- mutation checks (rule broken on purpose: caught?): {'whoever priced a version may activate it': 'caught', 'prices may share a day': 'caught'}
+
+### E51 Control changes wait for a second administrator; nobody approves their own change or their own access
+
+Checks: D-22 (second administrator): a change to rules, rule versions, policies, tolerances, automation, roles, limits, logins and managers applies only when a different administrator approves it; the proposer never approves; a rejection keeps the old value; stopping automation is immediate; an unapproved change expires after seven days; one change at a time per setting; the history shows maker and approver; nobody widens or approves their own access
+
+- kinds of change checked / correct: 11 / 11
+- per kind: {'policy (budget_policy)': 'ok', 'tolerance (price_pct)': 'ok', 'approval rule version (REQ-02 to the purchase manager)': 'ok', 'buying route version': 'ok', 'supplier selection version': 'ok', 'touchless rule version': 'ok', 'role given (Store to the buyer)': 'ok', 'approval limit (plant head, orders)': 'ok', 'automation level (rfq.award to act alone)': 'ok', 'person deactivated (AP)': 'ok', 'manager changed (storekeeper)': 'ok'}
+- kill switch: gate before / on at once / off waits / after approval: True / 200 True / 202 True / 200 True
+- rejected: value kept / approve later: 5.00 / 409
+- expiry: days to expire / approve after / value: 7 / 409 / 5
+- duplicate pending change / another setting: 409 / 202
+- add a person as Admin: 403
+- own access, at once: {'give yourself a role': 403, 'set your own limit': 403, 'deactivate yourself': 409}
+- admin2 approves a change to their own (role, limit, login, manager): {'role': True, 'limit': True, 'login': True, 'manager': True}
+- mutation checks (rule broken on purpose: caught?): {'the proposer may approve': 'caught', 'a change applies before approval': 'caught', 'the person a change is for may approve it': 'caught', 'a change waits thirty days': 'caught'}
+
+### E52 Bank accounts: verified by a second person against a proof before anything is paid into them
+
+Checks: DF-03 / F1: a new or changed supplier bank account is unverified; it is never planned into a payment run, advanced or written to a bank file until a person other than the one who entered or asked for it verifies it (Finance, an allowed method from `bank_verification_methods`, a proof file); a bank change after a run is approved takes that supplier out, recomputes the total and voids a file already made; lists show the last four digits; the audit never holds the whole number; another company sees nothing
+
+- approved bank changes left unverified: 2
+- advances due (unverified supplier / verified supplier): False / True
+- run 1: suppliers paid / oracle, total / oracle: 4 / 4, 39226.00 / 39226.00
+- bank file lines into an unverified account: 0
+- verification attempts refused as the oracle says: 9 of 9
+- verified by Finance with method and proof: 2 of 2
+- run 2 after verification: suppliers paid / oracle: 2 / 2
+- run 1 after the change: status / total / oracle / file void: approved / 7236.00 / 7236.00 / True
+- profiles and lists with a whole account number: none
+- whole account numbers in the proposals list: 0
+- whole account numbers in the audit log: 0
+- audit rows: {'supplier.bank_change': 3, 'supplier.bank_verify': 2, 'payment_run.supplier_removed': 1}
+- mutation checks (rule broken on purpose: caught?): {'the profile shows the whole number': 'caught', 'the asker verifies their own account': 'caught', 'a bank change leaves the run and its file alone': 'caught', 'an unverified account is planned': 'caught'}
+
+### E53 PO makers never approve: not the order, its price, a supplier's price rise, nor as a deputy
+
+Checks: C1 (v1.1): the people who made a purchase order (its buyer, submitter, reviser, the awarder of its quotation, who changed its buying route) never approve it, accept its price or a supplier's price rise (even within tolerance), nor stand in as a deputy; the chain skips them and goes up a tier; in the band with no approver only a touchless order is approved by the rule, any other goes to a person; accepting a price is not making the order; a refused person changes nothing
+
+- oracle: band people (PO-02 / PO-03 / price rise): ['U08'] / ['U09'] / U08
+- maker refused on every path (kinds x paths): 20 of 20
+- ways of making an order checked: buyer, submitter, reviser, awarder, route changer
+- no-approver band, not touchless: status / rule / approvers: submitted / PO-02 / ['U08']
+- real buyer / real submitter skipped: True / True
+- accepting a price leaves the acceptor free to approve: 8 of 8
+- mutation checks (rule broken on purpose: caught?): {'the awarder approves': 'caught', 'the buyer accepts a rise within the tolerance': 'caught', 'a maker accepts the price above the estimate': 'caught'}
+
+### E54 A maker of a purchase order never approves it, by any route (C1), written without the implementation
+
+Checks: C1, D43, AT-03: the buyer, submitter, reviser, awarder and route changer of an order never approve it, accept its price above the estimate or accept a supplier's price rise on it (screen, proposal, link, deputy); all makers named means the next band; no band left means refused with a reason; only the touchless policy approves with no person; a checker is not a maker; a refused attempt leaves it waiting for the right person
+
+- deputy routing observed for orders (control): True
+- order approval emails checked / with a signed approval link: 27 / 0
+- cases where a rule ignoring makers gives another answer: 8 of 14
+- cases where a maker would be the only approver (must be refused): ['C9 director awards, PO-03 (no band left)', 'C10 purchase manager awards above the estimate', 'C12 supplier price rise on an order the purchase manager made']
+- cases: {'C1 buyer awards, PO-02': "screen; makers ['U03']; expected Sanjay Rao; broken rule Sanjay Rao; actual Sanjay Rao; PASS", 'C2 buyer awards, PO-01 not touchless': "screen; makers ['U03']; expected Sanjay Rao; broken rule Sanjay Rao; actual Sanjay Rao; PASS", 'C3 purchase manager awards, PO-02': "screen; makers ['U03', 'U08']; expected Meera Iyer; broken rule Sanjay Rao; actual Meera Iyer; PASS", 'C4 purchase manager awards, PO-01': "screen; makers ['U03', 'U08']; expected Meera Iyer; broken rule Sanjay Rao; actual Meera Iyer; PASS", 'C5 purchase manager revises, PO-02': "screen; makers ['U03', 'U08']; expected Meera Iyer; broken rule Sanjay Rao; actual Meera Iyer; PASS", 'C6 purchase manager changes the route, PO-02': "screen; makers ['U03', 'U08']; expected Meera Iyer; broken rule Sanjay Rao; actual Meera Iyer; PASS", "C7 buyer awards and is the approver's deputy": "deputy; makers ['U03']; expected Sanjay Rao; broken rule Sanjay Rao; actual Sanjay Rao; PASS", "C8 purchase manager awards and is the director's deputy": "deputy; makers ['U03', 'U08']; expected Meera Iyer; broken rule Sanjay Rao; actual Meera Iyer; PASS", 'C9 director awards, PO-03 (no band left)': "screen; makers ['U03', 'U09']; expected refused; broken rule Meera Iyer; actual refused (409): PO-CKN-2627-00010 is draft, not waiting for approval; PASS", 'C10 purchase manager awards above the estimate': "proposal (price above estimate); makers ['U03', 'U08']; expected refused; broken rule Sanjay Rao; actual refused; still waiting; PASS", 'C11 purchase manager accepted the price (checker)': "screen; makers ['U03']; expected Sanjay Rao; broken rule Sanjay Rao; actual Sanjay Rao; PASS", 'C12 supplier price rise on an order the purchase manager made': "proposal (supplier price); makers ['U03', 'U08']; expected refused; broken rule Sanjay Rao; actual refused; price 345.0000 (was 345.0000); 0 proposal(s) waiting for []; PASS", 'C13 supplier price rise, the approver is not a maker': "proposal (supplier price); makers ['U03']; expected Sanjay Rao; broken rule Sanjay Rao; actual Sanjay Rao; PASS", 'C14 contract line within the touchless policy': 'policy; makers []; expected policy; broken rule policy; actual policy; PASS'}
+- checks: 120
+- note: C1 buyer awards, PO-02: U03 refused on PO-CKN-2627-00001 on the screen: 409 {"detail":"it is not your turn: PO-CKN-2627-00001 is waiting for Sanjay Rao"}
+- note: C2 buyer awards, PO-01 not touchless: U03 refused on PO-CKN-2627-00002 on the screen: 409 {"detail":"it is not your turn: PO-CKN-2627-00002 is waiting for Sanjay Rao"}
+- note: C3 purchase manager awards, PO-02: U08 refused on PO-CKN-2627-00003 on the screen (he awarded the quotation): 409 {"detail":"it is not your turn: PO-CKN-2627-00003 is waiting for Meera Iyer"}
+- note: C3 purchase manager awards, PO-02: U03 refused on PO-CKN-2627-00003 on the screen: 409 {"detail":"it is not your turn: PO-CKN-2627-00003 is waiting for Meera Iyer"}
+- note: C4 purchase manager awards, PO-01: U08 refused on PO-CKN-2627-00004 on the screen (he awarded it; the 'auto' band went up to him): 409 {"detail":"it is not your turn: PO-CKN-2627-00004 is waiting for Meera Iyer"}
+- note: C5 revision by the purchase manager: 200 {"version":2,"status":"submitted","total":"138768.00","reapproval":true,"supplier_told":false}
+- note: C5 purchase manager revises, PO-02: U08 refused on PO-CKN-2627-00005 on the screen (he revised it): 409 {"detail":"it is not your turn: PO-CKN-2627-00005 is waiting for Meera Iyer"}
+- note: C6 route change agreed by the plant head: 200 {"id":10,"status":"approved","execution":"ok","result":{"line_no":1,"supplier":"SUP-003","request_no":"REQ-CKN-2627-0000
+- note: C6 purchase manager changes the route, PO-02: U08 refused on PO-CKN-2627-00006 on the screen (he changed the route of its line): 409 {"detail":"it is not your turn: PO-CKN-2627-00006 is waiting for Meera Iyer"}
+- note: U08 named U03 deputy from 2026-11-06
+- note: C7: PO-CKN-2627-00007 waits for Sanjay Rao; steps [('Sanjay Rao', 'pending', None)]
+- note: C7 buyer awards and is the approver's deputy: U03 refused on PO-CKN-2627-00007 as the purchase manager's deputy: 409 {"detail":"it is not your turn: PO-CKN-2627-00007 is waiting for Sanjay Rao"}
+- note: U09 named U08 deputy from 2026-11-06
+- note: C8: PO-CKN-2627-00008 waits for Meera Iyer; steps [('Meera Iyer', 'pending', None)]
+- note: C8 purchase manager awards and is the director's deputy: U08 refused on PO-CKN-2627-00008 as the director's deputy: 409 {"detail":"it is not your turn: PO-CKN-2627-00008 is waiting for Meera Iyer"}
+- note: deputy control: PO-CKN-2627-00009 (598024.00) waits for Sanjay Rao; steps [('Meera Iyer', 'pending', 'Sanjay Rao')]
+- note: C9: PO-CKN-2627-00010 is draft; the order shows ['Nobody may approve it: nobody who did not make the order can approve it; add an approver to the order rules', None, None]; named in ['/api/exceptions', '/api/exceptions', '/api/notifications']
+- note: C11 purchase manager accepted the price (checker): U03 refused on PO-CKN-2627-00012 on the screen: 409 {"detail":"it is not your turn: PO-CKN-2627-00012 is waiting for Sanjay Rao"}
+- note: PO-CKN-2627-00003: the buyer accepted the supplier's price 362.25: 409 {"detail":"everyone the price variance rule names made this order, so none of them may accept its price; the rule has to name someone else"}
+- note: PO-CKN-2627-00001: the buyer accepted the supplier's price 914.05: 200 {"status":"waiting_approval","proposal_id":19,"approver":"Sanjay Rao"}
+- note: No order approval email carries a signed /approve/ link (they are task notices), so the link path for orders is checked only as: no approval email for an order ever goes to one of its makers

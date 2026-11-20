@@ -121,7 +121,9 @@ function ProposalCard({ p, onDone }: { p: Proposal; onDone: () => void }) {
 							disabled={decide.isPending}
 							onClick={() => approve(mode === "edit")}
 						>
-							{mode === "edit" ? "Approve with changes" : "Approve"}
+							{mode === "edit"
+								? "Send changes for another approver"
+								: "Approve"}
 						</Button>
 					)}
 					<Button

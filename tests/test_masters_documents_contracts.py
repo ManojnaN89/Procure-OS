@@ -214,8 +214,8 @@ def test_the_screens_add_verify_and_store_through_the_api_with_the_right_permiss
     assert client.get(f"/api/contracts/{code}", headers=h_boss).json()["can_activate"] is True
     assert client.post(f"/api/contracts/{code}/activate", headers=h_boss).status_code == 200
     assert (
-        client.get(f"/api/contracts/{code}", headers=h_buyer).json()["can_manage"] is False
-    )  # an active contract is not edited
+        client.get(f"/api/contracts/{code}", headers=h_buyer).json()["can_manage"] is True
+    )  # an active contract takes new prices only as a draft version someone else activates (D48)
     assert client.post(f"/api/contracts/{code}/activate", headers=h_boss).status_code == 409
     assert (
         client.post("/api/contracts/NOPE/prices", json={"item_code": "A", "price": "1"}, headers=h_buyer).status_code

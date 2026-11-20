@@ -6,6 +6,10 @@ The Admin sets the company up. An Admin cannot take part in purchases: no approv
 
 **Admin** in the menu opens the admin area. Every change asks for a reason (the box at the top) and is recorded: **Audit**, or **Company setup** → **History**.
 
+## Two administrators
+
+A change to roles, limits, approvers, approval chains, the buying rules, policies, tolerances or automation, deactivating or reactivating a person, and changing a person's manager wait for a second administrator. It is listed under **Changes waiting for a second administrator** on Company setup and Automation: the value now, the new value and the reason. Another administrator presses **Approve**, or writes a reason and presses **Reject**. Whoever proposed a change cannot approve it, and nobody approves a change to their own access, roles, limits or manager. A change not approved within 7 days expires and nothing is applied; propose it again if it is still needed. While one change to a setting waits, a second change to the same setting is refused. **History** shows who made each change and who approved it. With one administrator a change only waits. A new person is never made an Admin in one step: add them, then give the Admin role.
+
 ## Company setup
 
 - **People**: **Add person**, **Give role**, **Set limit** (the most a person may approve per document type).
@@ -21,7 +25,7 @@ The Admin sets the company up. An Admin cannot take part in purchases: no approv
 **Automation** shows each decision the platform can make, and how much it may do alone: off, recommend (a person approves each), or act within a value cap and a confidence limit.
 
 - Paying, activating a supplier and releasing a block show **person only**. They cannot be automatic.
-- **Stop all automation** is the kill switch. It stops every automatic action at once. People can still work by hand. **Switch off** puts it back.
+- **Stop all automation** is the kill switch. It stops every automatic action at once. People can still work by hand. **Switch off** puts it back once a second administrator approves.
 - Start at recommend. Raise a decision to automatic only after its record shows no wrong results.
 
 ## Look at what happened

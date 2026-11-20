@@ -34,6 +34,33 @@ def production_lines(bom: list[dict[str, str]], orders: list[dict[str, str]]) ->
     ]
 
 
+def mrp_results(
+    bom: list[dict[str, str]], plans: list[dict[str, str]], runs: list[dict[str, str]]
+) -> list[dict[str, str]]:
+    """The ERP's material planning run for a demand plan: one line per material, the quantity per product times the plan
+    quantity, needed by the run's date (ahead of the production week). Gross requirements: the ERP does not net stock."""
+    per_product: dict[str, list[dict[str, str]]] = defaultdict(list)
+    for b in bom:
+        per_product[b["product_code"]].append(b)
+    plan_of = {p["plan_no"]: p for p in plans}
+    rows: list[dict[str, str]] = []
+    for run in runs:
+        plan = plan_of[run["demand_plan"]]
+        for n, b in enumerate(per_product[plan["product_code"]], start=1):
+            rows.append(
+                {
+                    "plan_no": run["plan_no"],
+                    "line_no": str(n),
+                    "item_code": b["item_code"],
+                    "qty": f"{(Decimal(b['qty']) * Decimal(plan['qty'])).quantize(QTY)}",
+                    "unit": b["unit"],
+                    "need_by": run["need_by"],
+                    "location_code": "",
+                }
+            )
+    return rows
+
+
 @dataclass
 class MaterialRequest:
     """Materials asked for from the store for one purpose: stock first, a requisition for what is short."""

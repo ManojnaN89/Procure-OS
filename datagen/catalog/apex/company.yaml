@@ -54,6 +54,7 @@ people:
   - {code: U07, name: Vikram Joshi, designation: Plant Head, department: MGT, manager: U09, limit: "100000.00", login: planthead, roles: [requester, approver]}
   - {code: U08, name: Sanjay Rao, designation: Purchase Manager, department: PUR, manager: U07, limit: "500000.00", login: purchasemanager, roles: [requester, approver]}
   - {code: U09, name: Meera Iyer, designation: Director, department: MGT, manager: "", limit: "99999999.00", login: director, roles: [requester, approver]}
+  - {code: U10, name: Kavita Bhosale, designation: ERP Administrator, department: FIN, manager: U05, limit: "0.00", login: admin2, roles: [requester, admin]}  # the second administrator who approves control changes (D-22)
 
 # how a role named in an approval chain becomes a person (the approver_role table)
 approver_roles:
@@ -114,6 +115,7 @@ settings:
   - [approval_otp_above, "500000.00", Approving a request by email above this value needs a one-time code sent to the approver]
   - [auto_approve_requires_budget, "true", Auto-approval only when budget is available]
   - [po_send_requires_confirmation, "true", A person confirms before a PO is sent to a supplier]
+  - [manual_mark_paid, "true", "Synthetic demo data only, Finance may record a payment by hand (off for every real company until settlement evidence is built)"]
   - [grn_edit_window_days, "3", Days a goods receipt can be corrected after posting]
   - [invoice_receipt_mailbox, invoices@apexpumps.example, Mailbox where supplier invoices arrive]
   - [request_mailbox, requests@apexpumps.example, Mailbox where staff email requests]
@@ -187,6 +189,10 @@ contracts:
     terms: NET30
     lead: 10
     prices: {RM-01: "650.00", RM-02: "480.00", RM-03: "220.00", RM-04: "160.00", RM-05: "180.00"}
+    # the foundry's revised rates for the castings from 1 Jan 2027 (pig iron and power costs up about 3.4%): entered as
+    # a draft version 2 that a second person activates (D48); until then version 1 stays in force
+    revisions:
+      - {version: 2, valid_from: "2027-01-01", prices: {RM-01: "672.00", RM-02: "496.00"}}
 
 # last prices paid (a price list, no contract)
 price_records:
@@ -195,6 +201,11 @@ price_records:
   - {supplier: SUP-004, lead: 4, prices: {PK-01: "45.00"}}
   - {supplier: SUP-005, lead: 8, prices: {RM-08: "905.00"}}
   - {supplier: SUP-006, lead: 5, prices: {SP-01: "210.00", SP-02: "140.00", SP-03: "180.00", RM-11: "350.00", RM-06: "40.00", SV-01: "12000.00"}}
+
+# the ERP's material planning run for the January plan: gross requirements from the bill of materials, needed ten days
+# into January, ahead of the production week (step 1 input; MRP results become requirements, task 6.4)
+mrp_runs:
+  - {plan_no: MRP-2027-01, demand_plan: DP-2027-01, need_by: "2027-01-10"}
 
 # ERP input files (decision D36), written to inputs/ as they are. production_order_line is worked out from the bill of
 # materials: one line per material, quantity per pump times pumps to make.
@@ -235,6 +246,7 @@ inputs:
     columns: [plan_no, product_code, qty, period, status]
     rows:
       - [DP-2026-12, FG-02, "100", "2026-12", approved]
+      - [DP-2027-01, FG-01, "120", "2027-01", approved]  # the pre-summer build-up of 1 HP pumps
   production_order:
     columns: [order_no, product_code, qty, need_by, reason]
     rows:

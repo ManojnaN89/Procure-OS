@@ -212,3 +212,30 @@ def test_the_masters_can_be_loaded_again_while_requests_and_stock_refer_to_them(
     finally:
         tenant_db.execute(text("delete from request where no = 'R-KEEP'"))
         tenant_db.commit()
+
+
+def test_a_new_import_never_changes_the_status_or_bank_details_of_a_supplier_already_there(
+    tenant_db: Session, dataset: Path, tmp_path: Path
+) -> None:
+    import_masters(tenant_db, dataset)
+    tenant_db.execute(text("update supplier set status = 'blocked' where code = 'SUP-001'"))
+    tenant_db.execute(
+        text(
+            "update supplier_bank_account set account_no = '000100000999', verified = false where supplier_code = 'SUP-001'"
+        )
+    )  # as a second person's bank change left it
+    tenant_db.commit()
+
+    def change_bank(rows: list[dict[str, str]]) -> None:
+        rows[0]["account_no"], rows[0]["verified"] = "000177777777", "true"  # SUP-001, claimed verified by the file
+
+    report = import_masters(tenant_db, _copy_with(dataset, tmp_path, "supplier_bank_account", change_bank))
+
+    assert tenant_db.execute(text("select status from supplier where code = 'SUP-001'")).scalar_one() == "blocked"
+    bank = tenant_db.execute(
+        text("select account_no, verified from supplier_bank_account where supplier_code = 'SUP-001'")
+    ).all()
+    assert [tuple(b) for b in bank] == [("000100000999", False)]
+    reasons = [w.reason for w in report.warnings]
+    assert "SUP-001: status stays blocked; an import does not change it" in reasons
+    assert "SUP-001: bank details kept; change them through a bank change" in reasons

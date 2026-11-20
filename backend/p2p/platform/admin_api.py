@@ -10,8 +10,10 @@ from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
+from sqlalchemy import text
 from sqlalchemy.orm import Session
 
+from p2p.masters import suppliers
 from p2p.platform import permissions, proposals, routing, users
 from p2p.platform.permissions import require
 from p2p.platform.rows import rows as _rows
@@ -136,18 +138,25 @@ def list_proposals(db: Db, ctx: Ctx, status: str = "pending") -> Rows:
         "status, created_at, expires_at, decision_note from proposal where status = :s order by id desc limit 200",
         s=status,
     )
-    return [r for r in rows if permissions.can_anywhere(db, ctx.user_id, r["required_permission"])]
+    mine = [r for r in rows if permissions.can_anywhere(db, ctx.user_id, r["required_permission"])]
+    for r in mine:  # a bank account is never listed in full: only its last four digits (F1)
+        if isinstance(r.get("payload"), dict) and r["payload"].get("account_no"):
+            r["payload"] = {**r["payload"], "account_no": suppliers.mask(str(r["payload"]["account_no"]))}
+    return mine
 
 
 @router.post("/proposals/{proposal_id}/approve")
 def approve_proposal(proposal_id: int, body: Decision, db: Db, ctx: Ctx) -> dict[str, Any]:
+    if body.edited_payload and "*" in str(body.edited_payload.get("account_no", "")):
+        raise HTTPException(422, "bank details are not changed here: ask for a bank change on the supplier's page")
     try:
         ref = proposals.approve(db, proposal_id, ctx.user_id, edited_payload=body.edited_payload, note=body.note)
     except permissions.PermissionDenied as exc:
         raise HTTPException(403, str(exc)) from None
     except proposals.ProposalError as exc:
         raise HTTPException(409, str(exc)) from None
-    return {"id": ref.id, "status": ref.status}
+    ran = db.execute(text("select execution, result from proposal where id = :i"), {"i": ref.id}).one()
+    return {"id": ref.id, "status": ref.status, "execution": ran[0], "result": ran[1]}  # did it run, and what it did
 
 
 @router.post("/proposals/{proposal_id}/reject")

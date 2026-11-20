@@ -54,6 +54,7 @@ people:
   - {code: U07, name: Kavya Rao, designation: Head of Engineering, department: ENG, manager: U09, limit: "100000.00", login: depthead, roles: [requester, approver]}
   - {code: U08, name: Vivek Menon, designation: IT Head, department: ITO, manager: U09, limit: "100000.00", login: ithead, roles: [requester, approver]}
   - {code: U09, name: Farah Khan, designation: Chief Financial Officer, department: MGT, manager: "", limit: "99999999.00", login: cfo, roles: [requester, approver]}
+  - {code: U10, name: Sneha Pillai, designation: IT Systems Administrator, department: ITO, manager: U08, limit: "0.00", login: admin2, roles: [requester, admin]}  # the second administrator who approves control changes (D-22)
 
 # how a role named in an approval chain becomes a person (the approver_role table)
 approver_roles:
@@ -118,6 +119,7 @@ settings:
   - [approval_otp_above, "500000.00", Approving a request by email above this value needs a one-time code sent to the approver]
   - [auto_approve_requires_budget, "true", Auto-approval only when budget is available]
   - [po_send_requires_confirmation, "true", A person confirms before a PO is sent to a supplier]
+  - [manual_mark_paid, "true", "Synthetic demo data only, Finance may record a payment by hand (off for every real company until settlement evidence is built)"]
   - [grn_edit_window_days, "3", Days a goods receipt can be corrected after posting]
   - [invoice_receipt_mailbox, invoices@brightwave.example, Mailbox where supplier invoices arrive]
   - [request_mailbox, requests@brightwave.example, Mailbox where staff email requests]
@@ -191,6 +193,9 @@ contracts:
     terms: NET30
     lead: 5
     prices: {LP-01: "62000.00", LP-02: "105000.00", MN-01: "12500.00", DK-01: "9800.00"}
+    # the distributor cuts the standard laptop from 1 Jan 2027 after a model refresh: a draft version 2 to activate (D48)
+    revisions:
+      - {version: 2, valid_from: "2027-01-01", prices: {LP-01: "59500.00"}}
   - code: CNT-0002
     supplier: SUP-005
     type: service_contract
