@@ -92,6 +92,9 @@ def main(argv: list[str] | None = None) -> int:
     rem.add_argument("tenant")
     rem.add_argument("--dry-run", action="store_true")
     rem.add_argument("--schedule", action="store_true")
+    rev = sub.add_parser("review")
+    rev.add_argument("tenant")
+    rev.add_argument("--dry-run", action="store_true")
     ordr = sub.add_parser("order")
     ordr.add_argument("tenant")
     ordr.add_argument("--request")
@@ -199,6 +202,18 @@ def main(argv: list[str] | None = None) -> int:
             )
         for reason, n in replenishment.summary(result)["skipped"].items():
             print(f"  skipped {n}: {reason}")
+        return 0
+    if args.group == "review":
+        from sqlalchemy.orm import Session
+
+        from p2p.sourcing import price_review
+
+        with Session(routing.engine_for(args.tenant)) as db:
+            found = price_review.run(db, args.tenant, business_today(), dry_run=args.dry_run)
+        for label, rows in (("opened", found.opened), ("joined", found.joined), ("below the thresholds", found.below)):
+            for row in rows:
+                print(f"{label}: {row}")
+        print(f"{len(found.opened)} opened, {len(found.joined)} joined, {len(found.below)} below the thresholds")
         return 0
     if args.group == "remind":
         from sqlalchemy.orm import Session

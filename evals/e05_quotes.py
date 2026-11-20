@@ -31,7 +31,14 @@ def run(ctx) -> Outcome:
     items = {r["code"]: r for r in rows("master", "item") if r["stocked"] == "true"}
     category = lib.busiest_category()
     category_items = [c for c, r in items.items() if r["category_code"] == category][:30]
-    suppliers = [r["supplier_code"] for r in rows("master", "supplier_category") if r["category_code"] == category][:6]
+    # block 0b (task 4.4, spec 4.6) plants a blocked supplier and prospects in the category: only active suppliers are
+    # the ones whose quotes this comparison judges (a non-active supplier's quote is dropped, as it always was)
+    active = {r["code"] for r in rows("master", "supplier") if (r.get("status") or "active") == "active"}
+    suppliers = [
+        r["supplier_code"]
+        for r in rows("master", "supplier_category")
+        if r["category_code"] == category and r["supplier_code"] in active
+    ][:6]
     min_quotes = int(next(r["min_quotes"] for r in rows("master", "category") if r["code"] == category) or 2)
     buyer = sod.user(world.logins["Buyer"])
     db.execute(

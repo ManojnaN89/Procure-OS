@@ -130,3 +130,22 @@ def test_the_screen_loads_the_catalogue_and_saves_through_the_api_for_people_who
         == 403
     )
     assert client.post("/api/requisitions", json={}).status_code == 401
+
+
+def test_a_place_chosen_on_the_form_may_be_a_location_that_is_not_a_store_yet(world: Session) -> None:  # noqa: F811
+    world.execute(
+        text(
+            "insert into location (code, name, type, state_code, is_stock_location) "
+            "values ('PLT-NEW', 'Plant 2 (opening)', 'plant', '24', false)"
+        )
+    )
+    world.commit()
+
+    result = intake.create_from_form(world, _asker(world), [("B1", Decimal(1))], NEED, "PLT-NEW", None, today=TODAY)
+
+    place = world.execute(
+        text("select ship_to_location from request where no = any(:n)"), {"n": result.request_nos}
+    ).scalar_one()
+    assert place == "PLT-NEW"
+    with pytest.raises(intake.FormError, match="Choose where"):
+        intake.create_from_form(world, _asker(world), [("B1", Decimal(1))], NEED, "NO-SUCH", None, today=TODAY)

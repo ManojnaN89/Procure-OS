@@ -18,6 +18,7 @@ import json
 import re
 import sys
 from collections import defaultdict
+from datetime import date, timedelta
 from decimal import Decimal
 from pathlib import Path
 from typing import Any
@@ -25,6 +26,7 @@ from typing import Any
 import yaml
 
 sys.path.insert(0, str(Path(__file__).parent))
+from common import Calendar, stable_hash  # noqa: E402
 from history import simulate  # noqa: E402
 from history_check import history_problems  # noqa: E402
 from history_close import Closing  # noqa: E402
@@ -42,6 +44,7 @@ from master_files import (  # noqa: E402
     months,
     read,
     supplier_tables,
+    tolerance_on,
     write_csv,
     write_table,
 )
@@ -89,6 +92,24 @@ class CompanyProfile:
     def email_of(self, person: dict[str, Any]) -> str:
         return f"{person['login']}@{self['company']['email_domain']}"
 
+    @property
+    def places(self) -> list[dict[str, Any]]:
+        """Every location: the first (where the history happened), then the others."""
+        return [self["location"], *self.data.get("locations", [])]
+
+    @property
+    def regions(self) -> dict[str, list[str]]:
+        """Region code -> its locations."""
+        return {r["code"]: list(r["locations"]) for r in self.data.get("regions", [])}
+
+    def scope_of(self, code: str) -> dict[str, str]:
+        """A scope code from the profile as a row's location_code and region_code (an empty code is everywhere)."""
+        if not code:
+            return {"location_code": "", "region_code": ""}
+        if code in self.regions:
+            return {"location_code": "", "region_code": code}
+        return {"location_code": code, "region_code": ""}
+
 
 def _rows(columns: list[str], values: list[list[Any]]) -> list[dict[str, str]]:
     return [dict(zip(columns, (str(v) for v in row), strict=True)) for row in values]
@@ -117,6 +138,7 @@ class MasterWriter:
         self.catalogue()
         self.suppliers()
         self.contracts()
+        self.benchmarks()
         for name in EMPTY_TABLES:
             self.put(name, [])
         return self.counts
@@ -136,25 +158,29 @@ class MasterWriter:
                 }
             ],
         )
+        self.put("region", [{"code": r["code"], "name": r["name"]} for r in self.p.data.get("regions", [])])
+        region_of = {place: code for code, places in self.p.regions.items() for place in places}
         self.put(
             "location",
             [
                 {
-                    "code": loc["code"],
-                    "name": loc["name"],
-                    "type": loc["type"],
-                    "gstin": self.p.gstin,
-                    "address": loc["address"],
-                    "city": loc["city"],
-                    "state_code": loc["state_code"],
-                    "pincode": loc["pincode"],
-                    "is_stock_location": "true",
-                    "working_days": loc["working_days"],
-                    "receiving_hours": loc["receiving_hours"],
-                    "holiday_scope": f"central;{loc['state_code']}",
-                    "loc_short": loc["loc_short"],
-                    "head_user": loc.get("head", ""),
+                    "code": place["code"],
+                    "name": place["name"],
+                    "type": place["type"],
+                    "gstin": gstin(place["state_code"], co["pan"]),
+                    "address": place["address"],
+                    "city": place["city"],
+                    "state_code": place["state_code"],
+                    "pincode": place["pincode"],
+                    "is_stock_location": str(place.get("stock", True)).lower(),
+                    "working_days": place["working_days"],
+                    "receiving_hours": place["receiving_hours"],
+                    "holiday_scope": f"central;{place['state_code']}",
+                    "loc_short": place["loc_short"],
+                    "head_user": place.get("head", ""),
+                    "region_code": region_of.get(place["code"], ""),
                 }
+                for place in self.p.places
             ],
         )
         self.put("department", [{"code": c, "name": n, "head_user": h} for c, n, h in self.p["departments"]])
@@ -210,9 +236,31 @@ class MasterWriter:
             "approval_rule", [{**r, "location_code": r.get("location_code") or "ANY"} for r in csv.DictReader(lines)]
         )
         self.put("setting", [{"key": k, "value": v, "description": d} for k, v, d in self.p["settings"]])
+        rows, versions, current = [], [], {}
+        for v in self.p["tolerances"]:  # each version copies the one before it with its changes
+            if "values" in v:
+                current = {(k, "ANY"): (value, note) for k, value, note in v["values"]}
+            for key, category, value, *note in v.get("changes", []):
+                current[(key, category)] = (value, note[0] if note else current[(key, "ANY")][1])
+            versions.append({"version": v["version"], "effective_from": v["effective_from"], "note": v["note"]})
+            rows += [
+                {"key": k, "value": value, "category_code": c, "note": note, "version": v["version"],
+                 "effective_from": v["effective_from"]}
+                for (k, c), (value, note) in current.items()
+            ]  # fmt: skip
+        self.put("tolerance_version", versions)
+        self.put("tolerance", rows)
+        t = self.p["price_thresholds"]
         self.put(
-            "tolerance", [{"key": k, "value": v, "category_code": "ANY", "note": n} for k, v, n in self.p["tolerances"]]
-        )
+            "price_threshold_rule",
+            [
+                {
+                    "category_code": "", "version": "1", "effective_from": "2000-01-01", "effective_to": "",
+                    **{k: t[k] for k in ("gap_pct", "gap_inr_per_unit", "min_saving_inr", "evidence_max_age_days",
+                                         "min_sources", "expiry_review_days", "note")},
+                }
+            ],
+        )  # fmt: skip
 
     def money(self) -> None:
         bank, loc = self.p["company_bank_account"], self.p["location"]
@@ -224,12 +272,15 @@ class MasterWriter:
             "gst_registration",
             [
                 {
-                    "gstin": self.p.gstin,
-                    "state_code": loc["state_code"],
-                    "legal_address": self.p["company"]["registered_address"],
-                    "pincode": loc["pincode"],
-                    "is_default": "true",
+                    "gstin": gstin(place["state_code"], self.p["company"]["pan"]),
+                    "state_code": place["state_code"],
+                    "legal_address": self.p["company"]["registered_address"]
+                    if place is loc
+                    else f"{place['address']}, {place['city']} {place['pincode']}",
+                    "pincode": place["pincode"],
+                    "is_default": str(place is loc).lower(),
                 }
+                for place in self.p.places
             ],
         )
         b = self.p["budgets"]
@@ -373,11 +424,30 @@ class MasterWriter:
                 pincode=s["pincode"],
                 tds_section=s.get("tds", "194Q"),
                 onboarded_by=buyer,
+                status=s.get("status", "active"),
+                registered_by=s.get("registered_by", ""),
+                registered_on=s.get("registered_on", ""),
+                blocked_on=s.get("blocked_on", ""),
+                blocked_reason=s.get("blocked_reason", ""),
+                blocked_by=s.get("blocked_by", ""),
+                address=s.get("address", ""),
+                phone=s.get("phone", ""),
             )
             for s in self.p["suppliers"]
         ]
-        for name, rows in supplier_tables(specs).items():
+        tables = supplier_tables(specs)
+        for name, rows in tables.items():
             self.put(name, rows)
+        self.put(
+            "supplier_category_scope",
+            [
+                {"supplier_code": s["code"], "category_code": category, **self.p.scope_of(code)}
+                for s in self.p["suppliers"]
+                for category, codes in (s.get("scopes") or {}).items()
+                for code in codes
+            ],
+        )
+        self.put("supplier_flag", prospect_flags(tables, self.p))
 
     def contracts(self) -> None:
         units = {it["code"]: it["unit"] for it in self.p["items"]}
@@ -391,6 +461,7 @@ class MasterWriter:
             span: list[str],
             version: int = 1,
             status: str = "active",
+            scope: str = "",
         ) -> None:
             prices.extend(
                 {
@@ -407,6 +478,7 @@ class MasterWriter:
                     "lead_days": lead,
                     "version": str(version),
                     "status": status,
+                    **self.p.scope_of(scope),
                 }
                 for item, price in item_prices.items()
             )
@@ -428,14 +500,99 @@ class MasterWriter:
                     "status": "active",
                 }
             )
-            price_rows(c["supplier"], c["code"], c["lead"], c["prices"], [c["valid_from"], c["valid_to"]])
+            where = c.get("region", "")
+            price_rows(c["supplier"], c["code"], c["lead"], c["prices"], [c["valid_from"], c["valid_to"]], scope=where)
             for rev in c.get("revisions", []):  # a supplier's revised rates, waiting for a second person (D48)
                 span = [rev["valid_from"], c["valid_to"]]
-                price_rows(c["supplier"], c["code"], c["lead"], rev["prices"], span, rev["version"], "draft")
+                price_rows(c["supplier"], c["code"], c["lead"], rev["prices"], span, rev["version"], "draft", where)
         for r in self.p["price_records"]:
-            price_rows(r["supplier"], "", r["lead"], r["prices"], self.p["price_list_dates"])
+            price_rows(r["supplier"], "", r["lead"], r["prices"], self.p["price_list_dates"], scope=r.get("region", ""))
         self.put("contract", contracts)
         self.put("price_record", prices)
+
+    def benchmarks(self) -> None:
+        """Market benchmarks (D52): one row a month, effective on its last day, entered the next working day and
+        verified by a different person 1 to 3 working days later, unless the month is left unverified."""
+        b = self.p.data.get("benchmarks") or {"series": []}
+        if b["series"] and b["entered_by"] == b["verified_by"]:
+            raise ValueError("a benchmark is never verified by the person who entered it")
+        cal, loc = Calendar(self.p.places), self.p["location"]["code"]
+        units = {it["code"]: it for it in self.p["items"]}
+        rows = []
+        for series in b["series"]:
+            if series["item"] not in units:
+                raise ValueError(f"benchmark for unknown item {series['item']}")
+            span = series.get("months") or months("2025-11", "2026-10")
+            if len(span) != len(series["prices"]):
+                raise ValueError(f"benchmark {series['item']} {series['source_name']}: one price a month")
+            for month, price in zip(span, series["prices"], strict=True):
+                y, m = int(month[:4]), int(month[5:])
+                last = date(y + m // 12, m % 12 + 1, 1) - timedelta(days=1)
+                entered = cal.next_working(last + timedelta(days=1), loc)
+                verified = month not in series.get("unverified", [])
+                checked = cal.add_working(entered, 1 + stable_hash(f"{series['item']}{month}", 3), loc)
+                rows.append(
+                    {
+                        "item_code": series["item"],
+                        "price": f"{Decimal(str(price)):.4f}",
+                        "uom": series["uom"],
+                        "basis": series["basis"],
+                        "effective_date": last.isoformat(),
+                        "region_code": series.get("region") or "",
+                        "source_kind": series["source_kind"],
+                        "source_name": series["source_name"],
+                        "source_ref": series["source_ref"].format(month=month),
+                        "note": "synthetic: fictional source, made-up numbers for the demo",
+                        "status": "verified" if verified else "unverified",
+                        "entered_by": b["entered_by"],
+                        "entered_at": f"{entered.isoformat()}T11:00:00+05:30",
+                        "verified_by": b["verified_by"] if verified else "",
+                        "verified_at": f"{checked.isoformat()}T15:30:00+05:30" if verified else "",
+                        "verify_note": "Checked against the source" if verified else "",
+                        "rejected_reason": "",
+                    }
+                )
+        self.put("market_benchmark", rows)
+
+
+PUBLIC_MAIL = {"gmail.example", "yahoo.example", "outlook.example", "rediffmail.example"}
+
+
+def prospect_flags(tables: dict[str, list[dict[str, object]]], profile: CompanyProfile) -> list[dict[str, object]]:
+    """What a correct platform flags when each prospect is registered (D-03 R8): a contact email or phone shared with
+    another supplier (with a blocked one: blocked_match) or with a member of staff, the same address line and pincode as
+    another supplier, the same email domain unless it is a public mail provider."""
+    status = {str(s["code"]): str(s["status"]) for s in tables["supplier"]}
+    contact = {str(c["supplier_code"]): c for c in tables["supplier_contact"]}
+    address = {str(a["supplier_code"]): a for a in tables["supplier_address"]}
+    staff = [(u["code"], profile.email_of(u), f"+91 00000 {int(u['code'][1:]):05d}") for u in profile["people"]]
+    flags: list[dict[str, object]] = []
+    for s in profile["suppliers"]:
+        if s.get("status") != "prospect":
+            continue
+        me, at = s["code"], f"{s['registered_on']}T10:30:00+05:30"
+
+        def flag(kind: str, other: str, detail: str) -> None:
+            flags.append({"supplier_code": me, "kind": kind, "other_ref": other, "detail": detail, "raised_at": at})  # noqa: B023
+
+        mine, where = contact[me], address[me]
+        for other in sorted(status):
+            if other == me:
+                continue
+            theirs, there = contact[other], address[other]
+            shared = [f"{what} {mine[what]}" for what in ("email", "phone") if mine[what] == theirs[what]]
+            if shared:
+                kind = "blocked_match" if status[other] == "blocked" else "same_contact"
+                flag(kind, other, f"contact {' and '.join(shared)} is also {other}'s")
+            if (where["address"], where["pincode"]) == (there["address"], there["pincode"]):
+                flag("same_address", other, f"address {where['address']}, {where['pincode']} is also {other}'s")
+            domain = str(mine["email"]).split("@")[1]
+            if domain not in PUBLIC_MAIL and domain == str(theirs["email"]).split("@")[1]:
+                flag("same_domain", other, f"email domain {domain} is also {other}'s")
+        for code, email, phone in staff:
+            if mine["email"] == email or mine["phone"] == phone:
+                flag("staff_contact", code, f"contact is also staff member {code}'s")
+    return flags
 
 
 def write_inputs(profile: CompanyProfile, out: Path) -> dict[str, int]:
@@ -521,6 +678,21 @@ REFERENCES = [
     ("price_record", "supplier_code", "supplier", "code"),
     ("price_record", "item_code", "item", "code"),
     ("price_record", "contract_code", "contract", "code"),
+    ("price_record", "location_code", "location", "code"),
+    ("price_record", "region_code", "region", "code"),
+    ("location", "region_code", "region", "code"),
+    ("supplier", "registered_by", "user", "code"),
+    ("supplier_category_scope", "supplier_code", "supplier", "code"),
+    ("supplier_category_scope", "category_code", "category", "code"),
+    ("supplier_category_scope", "location_code", "location", "code"),
+    ("supplier_category_scope", "region_code", "region", "code"),
+    ("supplier_flag", "supplier_code", "supplier", "code"),
+    ("tolerance", "version", "tolerance_version", "version"),
+    ("price_threshold_rule", "category_code", "category", "code"),
+    ("market_benchmark", "item_code", "item", "code"),
+    ("market_benchmark", "region_code", "region", "code"),
+    ("market_benchmark", "entered_by", "user", "code"),
+    ("market_benchmark", "verified_by", "user", "code"),
 ]
 # an input column of this name must name a row of that table
 INPUT_REFERENCES = {
@@ -665,11 +837,110 @@ def check(out: Path, profile: CompanyProfile | None = None) -> list[str]:
         if c and not (c["valid_from"] <= r["valid_from"] <= r["valid_to"] <= c["valid_to"]):
             problems.append(f"price of {r['item_code']} on {c['code']} runs outside the contract's dates")
 
+    problems += _scope_problems(t)
+    problems += _version_problems(t)
+    problems += _benchmark_problems(t)
     problems += _input_problems(out, t)
     if profile is not None:
         problems += _profile_problems(profile, t, per_month)
         if "history" in profile.data and not problems:
             problems += history_problems(out, profile)
+    return problems
+
+
+Scope = frozenset[str] | None  # the locations a price or an approval covers; None is everywhere
+
+
+def _scope(row: dict[str, str], regions: dict[str, set[str]]) -> Scope:
+    if row["region_code"]:
+        return frozenset(regions.get(row["region_code"], set()))
+    return frozenset({row["location_code"]}) if row["location_code"] else None
+
+
+def _meet(a: Scope, b: Scope) -> bool:
+    return a is None or b is None or bool(a & b)
+
+
+def _scope_problems(t: dict[str, list[dict[str, str]]]) -> list[str]:
+    """Regions and scopes (D44): every location in a region; a scope row names a location or a region, never both,
+    for a category the supplier is approved for; a price is inside its supplier's approval for the item's category;
+    two prices of one supplier for the same item, unit and break never apply on the same day where their scopes meet."""
+    problems: list[str] = []
+    regions: dict[str, set[str]] = defaultdict(set)
+    for loc in t["location"]:
+        if not loc["region_code"]:
+            problems.append(f"location {loc['code']} is in no region")
+        regions[loc["region_code"]].add(loc["code"])
+    approved = {(r["supplier_code"], r["category_code"]) for r in t["supplier_category"]}
+    scopes: dict[tuple[str, str], set[str]] = defaultdict(set)
+    for r in t["supplier_category_scope"]:
+        if bool(r["location_code"]) == bool(r["region_code"]):
+            problems.append(
+                f"scope of {r['supplier_code']} for {r['category_code']}: a location or a region, one of them"
+            )
+        if (r["supplier_code"], r["category_code"]) not in approved:
+            problems.append(f"{r['supplier_code']} has a scope for {r['category_code']} but is not approved for it")
+        scopes[(r["supplier_code"], r["category_code"])] |= set(_scope(r, regions) or ())
+    category = {r["code"]: r["category_code"] for r in t["item"]}
+    prices = t["price_record"]
+    for r in prices:
+        if r["location_code"] and r["region_code"]:
+            problems.append(f"price of {r['item_code']} from {r['supplier_code']} names a location and a region")
+        allowed = scopes.get((r["supplier_code"], category.get(r["item_code"], "")))
+        mine = _scope(r, regions)
+        if allowed is not None and (mine is None or not mine <= allowed):
+            problems.append(
+                f"price of {r['item_code']} from {r['supplier_code']} applies outside where the supplier is approved"
+            )
+    live = [r for r in prices if r["status"] == "active"]
+    for i, a in enumerate(live):
+        for b in live[i + 1 :]:
+            same = all(a[k] == b[k] for k in ("supplier_code", "item_code", "uom", "min_qty"))
+            if same and a["valid_from"] <= b["valid_to"] and b["valid_from"] <= a["valid_to"]:
+                if _meet(_scope(a, regions), _scope(b, regions)):
+                    problems.append(
+                        f"two prices of {a['item_code']} from {a['supplier_code']} overlap in dates and scope"
+                    )
+    return problems
+
+
+def _version_problems(t: dict[str, list[dict[str, str]]]) -> list[str]:
+    """Tolerance versions: in date order, each a full set of the company's keys."""
+    problems: list[str] = []
+    versions = sorted(t["tolerance_version"], key=lambda v: int(v["version"]))
+    if [v["effective_from"] for v in versions] != sorted(v["effective_from"] for v in versions):
+        problems.append("tolerance versions do not start in date order")
+    keys = {v["version"]: {r["key"] for r in t["tolerance"] if r["version"] == v["version"] and r["category_code"] == "ANY"}
+            for v in versions}  # fmt: skip
+    first = keys.get("1", set())
+    for v, have in keys.items():
+        if have != first:
+            problems.append(f"tolerance version {v} is not a full set of the company's tolerances")
+    for r in t["tolerance"]:
+        start = next((v["effective_from"] for v in versions if v["version"] == r["version"]), None)
+        if start != r["effective_from"]:
+            problems.append(f"tolerance {r['key']} version {r['version']}: effective_from differs from its version")
+    if versions and versions[0]["version"] != "1":
+        problems.append("tolerance versions do not start at 1")
+    on_cutoff = tolerance_on(t["tolerance"], t["tolerance_version"], "2026-10-31") if versions else None
+    if on_cutoff is not None and "price_pct" not in on_cutoff[1]:
+        problems.append("no price tolerance in force at the end of the history")
+    return problems
+
+
+def _benchmark_problems(t: dict[str, list[dict[str, str]]]) -> list[str]:
+    """Benchmarks: a verified one names who verified it, never the person who entered it; an unverified one nobody."""
+    problems: list[str] = []
+    for r in t["market_benchmark"]:
+        what = f"benchmark {r['item_code']} {r['source_name']} {r['effective_date']}"
+        if r["status"] == "verified" and (not r["verified_by"] or r["verified_by"] == r["entered_by"]):
+            problems.append(f"{what} is verified by nobody or by the person who entered it")
+        if r["status"] == "unverified" and r["verified_by"]:
+            problems.append(f"{what} is unverified but names a verifier")
+        if "synthetic" not in r["note"]:
+            problems.append(f"{what} does not say it is synthetic")
+        if Decimal(r["price"]) <= 0:
+            problems.append(f"{what}: price must be above zero")
     return problems
 
 

@@ -10,8 +10,8 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from p2p.formulas.calendar import business_today
+from p2p.masters import categories, prospects, suppliers
 from p2p.masters import documents_and_contracts as masters
-from p2p.masters import suppliers
 from p2p.platform import audit, files, ratelimit, routing
 from p2p.platform.permissions import PermissionDenied, can_anywhere, require
 from p2p.platform.sod import user as user_actor
@@ -134,9 +134,16 @@ def add_price(
             "valid_from": _date(payload.get("valid_from"), "valid_from"),
             "valid_to": _date(payload.get("valid_to"), "valid_to"),
             "lead_days": int(payload["lead_days"]) if payload.get("lead_days") not in (None, "") else None,
+            "location_code": payload.get("location_code") or None,
+            "region_code": payload.get("region_code") or None,
         }
     except (KeyError, ValueError):
         raise HTTPException(422, "a price needs an item_code and a price") from None
+    if data["location_code"] and data["region_code"]:
+        raise HTTPException(422, "a price applies at one location or in one region, not both")
+    for table, value in (("location", data["location_code"]), ("region", data["region_code"])):
+        if value and db.execute(text(f"select 1 from {table} where code = :c"), {"c": value}).first() is None:  # noqa: S608
+            raise HTTPException(422, f"there is no {table} {value}")
     return _guard(lambda: {"id": masters.add_price(db, code, data, ctx.user_id)})
 
 
@@ -354,6 +361,8 @@ def vendor_profile(vendor_id: str, db: Db, ctx: Ctx) -> dict[str, Any]:
         "files": {str(a[0]): {"id": a[1], "filename": a[2]} for a in attached},
         "can_edit": can_anywhere(db, ctx.user_id, "supplier.propose"),
         "can_add_documents": can_anywhere(db, ctx.user_id, "supplier.documents"),
+        "categories": categories.categories_of(db, vendor_id),
+        "identity": prospects.identity(db, vendor_id),
     }
 
 

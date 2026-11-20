@@ -95,6 +95,16 @@ On `python -m p2p.cli demo reset brightwave` (logins `@brightwave.example`, same
 | 5 | ithead@, then buyer@ | ithead@: **Receive without order** → **Approve**. buyer@: **Raise the order** at ₹62,000 a laptop, then send it | An order for ₹1,24,000 plus GST, linked to the receipt |
 | 6 | facilities@ | **Post the receipt** | Two laptops in stock with their serials; the same serial again is refused |
 
+## Two plants, prospects, market prices and tolerance versions (block 0b)
+
+The data holds what these show; the screens come with the backend of block 0b.
+
+- **Sanand cartons with a prospect.** Apex has a second plant, Plant 2 at Sanand (Gujarat, region GJ), starting in January 2027 with no history. Western Packaging (SUP-004) is approved for cartons in Maharashtra only and the casting contract CNT-0001 is priced for Maharashtra, so a Sanand request for cartons finds no approved supplier and a Sanand request for RM-01 goes to quotation. Sabarmati Corrugators (SUP-008, Ahmedabad) is a prospect the buyer registered on 2 Nov 2026: it can quote, but its quote counts only after someone other than the buyer checks its identity, and no order is made until it is activated. Chakan Enamel Wires (SUP-009) is a prospect flagged for review: same phone and address as Pune Copper (SUP-005). Shivneri Foundry Works (SUP-007) is blocked since 15 Jun 2026.
+- **The October copper benchmark to verify.** The copper wire reference rate for October 2026 (897.00 a kg, entered 2 Nov) is unverified, so on 20 Nov the latest counting benchmark is September's, 51 days old and stale at 45 days: the item shows no market evidence until purchasemanager@ verifies October. The RM-01 price list (628.00 in October) is 3.38% under the contract's 650.00: below the 5% threshold, no review. A Gujarat price (600.00) never counts for the Maharashtra contract.
+- **The LP-01 5% boundary (Brightwave).** The laptop channel price fell to 58,900.00 on 31 Oct 2026, exactly 5.0000% under CNT-0001's 62,000.00: not above the threshold, so no review opens.
+- **Hyderabad housekeeping (Brightwave).** The new Hyderabad office (region TS) opens in January 2027. Clean and Secure (SUP-005) and its contract CNT-0002 cover Karnataka only, so housekeeping for Hyderabad never uses CNT-0002; Deccan Facility Management (SUP-006) is the prospect registered to quote for it.
+- **Tolerance versions (Apex).** Version 2 from 1 Jul 2026 removed the quantity tolerance and cut the rupee tolerance to 300.00. Bearings invoiced 3% over what was accepted pass in June (version 1) and are blocked in August (version 2); a line Rs 400 over passes in March and is blocked in August.
+
 ## Start with cases in flight
 
 `python -m p2p.cli demo populate apex --reset` (about 20 seconds, local database only) makes the company and then does what the people would do, through the real API, so every figure, email, notification and audit row is real:

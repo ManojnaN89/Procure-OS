@@ -20,6 +20,10 @@ A change to roles, limits, approvers, approval chains, the buying rules, policie
 - **Single-source items**: items bought from one supplier only. **Mark single source** adds one; remove takes it off.
 - **Policies**: budget behaviour, quotation days, reminders, payment window, tolerances for price and quantity by item category (**Save tolerance**), and the mailboxes. **Requests mailbox** and **Invoices mailbox** are the addresses the company reads mail from; leave one empty to switch it off. Also here: the wording of the quotation request email (fields such as {items} and {reference} are filled in for each supplier) and how far below the others a price must be to need a question.
 
+## Tolerances and price thresholds
+
+**Policies** → **Tolerances** shows the version in force and every earlier one. A change is a new version from a date (today or later): invoices already matched keep the version they were judged under, and an invoice is judged by the version in force on the day it was received. **Price thresholds** sets when a contract above the market opens a review (gap %, rupees per unit, saving, evidence age, sources, days before expiry). The values set at the start are a recommended default that needs validating with the company. Both need a second administrator.
+
 ## Automation controls
 
 **Automation** shows each decision the platform can make, and how much it may do alone: off, recommend (a person approves each), or act within a value cap and a confidence limit.

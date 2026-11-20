@@ -276,7 +276,7 @@ class Buying:
             slip = self.R.randint(*b["slip"])
             asked = self.later(ack, self.R.uniform(2, 9))
             # within the company's tolerance (calendar days) the supplier agent applies it, else a buyer accepts it
-            limit = int(next(t["value"] for t in self.m["tolerance"] if t["key"] == "supplier_date_days"))
+            limit = int(self.tolerance(asked.date(), "supplier_date_days")[1])
             for o in goods:
                 old = o.line["promised_date"]
                 o.line["promised_date"] = iso(self.plus(date.fromisoformat(old), slip))

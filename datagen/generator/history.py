@@ -19,7 +19,7 @@ from typing import Any
 from common import Calendar, D, Numbering, daterange, iso, money, months_between, q2, q3, qty_s, sub_rng, ts, dt_at
 from history_buying import ZERO, Buying, Need
 from history_plan import MaterialRequest, PlanMaker
-from master_files import read
+from master_files import read, tolerance_on
 
 
 WEEKDAYS = {"Mon": 0, "Tue": 1, "Wed": 2, "Thu": 3, "Fri": 4, "Sat": 5, "Sun": 6}
@@ -87,7 +87,9 @@ class History(Buying):
         self.prices = self._end_prices()
         self.contracts = [c for c in m["contract"] if c["status"] == "active"]
         self.contract_price = {
-            (r["contract_code"], r["item_code"]): D(r["price"]) for r in m["price_record"] if r["contract_code"]
+            (r["contract_code"], r["item_code"]): D(r["price"])
+            for r in m["price_record"]
+            if r["contract_code"] and r["status"] == "active"  # a draft version is not in force until it is activated
         }
         self.lead = {(r["supplier_code"], r["item_code"]): int(r["lead_days"]) for r in m["price_record"]}
         count = self.h["planted"].get("receipt_without_po", 0)  # every other breakdown, from the second
@@ -121,6 +123,11 @@ class History(Buying):
             d = self.plus(d, 1)
         return dt_at(d, hour)
 
+    def tolerance(self, day: date, key: str, category: str | None = None) -> tuple[int, Decimal]:
+        """A tolerance in force on a day, and its version."""
+        version, values = tolerance_on(self.m["tolerance"], self.m["tolerance_version"], day.isoformat(), category)
+        return version, values[key]
+
     def rate_on(self, item: dict[str, str], d: date) -> Decimal:
         change = item["gst_rate_change_date"]
         return D(item["gst_rate_after"] if not change or d.isoformat() >= change else item["gst_rate_before"])
@@ -139,10 +146,16 @@ class History(Buying):
 
     def _end_prices(self) -> dict[tuple[str, str], Decimal]:
         """Each supplier's price for each item at the end of history: the price records, and the quoters' shares."""
-        prices = {(r["supplier_code"], r["item_code"]): D(r["price"]) for r in self.m["price_record"]}
+        trading = {code for code, s in self.sup.items() if s["status"] == "active"}  # never a prospect or a blocked one
+        prices = {
+            (r["supplier_code"], r["item_code"]): D(r["price"])
+            for r in self.m["price_record"]
+            if r["supplier_code"] in trading
+        }
         for item, quoters in self.h.get("quoters", {}).items():
             for supplier, share in quoters.items():
-                prices.setdefault((supplier, item), q2(D(self.items[item]["standard_price"]) * D(share)))
+                if supplier in trading:
+                    prices.setdefault((supplier, item), q2(D(self.items[item]["standard_price"]) * D(share)))
         return prices
 
     def pool(self, item: str) -> list[str]:

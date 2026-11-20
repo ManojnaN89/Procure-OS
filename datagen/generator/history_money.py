@@ -15,6 +15,7 @@ from common import D, fy, fy4, iso, money, q2, qty_s, sub_rng, ts, dt_at
 from finance import due_date, quarter_of, run_after, run_on_or_before, section_label, tds_on
 from history import WEEKDAYS, History
 from history_buying import ZERO, Order
+from master_files import tolerance_on
 
 
 DAY_END = 23.99
@@ -28,7 +29,8 @@ class Money:
         self.R = sub_rng(f"{hist.p.name}:{hist.h['seed']}", "money")
         self.T = hist.tables
         self.end = dt_at(hist.cutoff, DAY_END)
-        self.tol = {r["key"]: D(r["value"]) for r in hist.m["tolerance"] if r["category_code"] == "ANY"}
+        self.edges = self.h.get("tolerance_edges", {})
+        self.edge_line: dict[int, int] = {}  # a tolerance-edge receipt: the order line that gets the extra
         self.terms = {r["code"]: r for r in hist.m["payment_terms"]}
         self.weekday = WEEKDAYS[self.h["payment_day"]]
         self.planted = self.h["planted"]
@@ -81,7 +83,38 @@ class Money:
         )
         pick(early, "grni_month_end", self.planted.get("grni_month_end", 0))
         pick(early, "invoice_not_received", self.planted.get("invoice_not_received", 0))
+        self.pick_edges(goods, chosen)
         return chosen
+
+    def pick_edges(self, goods: list[dict[str, Any]], chosen: dict[int, str]) -> None:
+        """Invoices on either side of a tolerance version's start (task 3.2): one receipt in each month listed, a line
+        invoiced a little over the accepted quantity, or a little above the order price on a small line."""
+        for kind, edge in (
+            ("tolerance_edge_qty", self.edges.get("qty")),
+            ("tolerance_edge_price", self.edges.get("price")),
+        ):
+            if not edge or not self.planted.get(kind):
+                continue
+            for month in edge["months"]:
+                found = []
+                for d in goods:  # early in the month, so the invoice is received in the same month
+                    if id(d) in chosen or iso(d["day"])[:7] != month or d["day"].day > 20:
+                        continue
+                    if d["doc"]["inspection_status"] == "failed":
+                        continue
+                    for o, q in d["lines"]:
+                        if kind == "tolerance_edge_qty":
+                            ok = (d["po"]["supplier_code"] == edge["supplier"] and o.item["code"] == edge["item"]
+                                  and q >= 25)  # fmt: skip
+                        else:  # the rupee amount lets it through, the percentage (3 to 6% over) does not
+                            ok = D(6700) <= q2(o.price * q) <= D(13000)
+                        if ok:
+                            found.append((d, o))
+                            break
+                if not found:
+                    raise RuntimeError(f"no receipt in {month} to plant {kind}")
+                d, o = found[len(found) // 2]
+                chosen[id(d)], self.edge_line[id(d)] = kind, id(o)
 
     def supplier_no(self, supplier: str, d: date) -> str:
         s = self.s.sup[supplier]
@@ -107,9 +140,16 @@ class Money:
             if plant:
                 raise RuntimeError(f"a planted {plant} falls after the cutoff")
             return
+        if plant.startswith("tolerance_edge") and iso(received.date())[:7] != iso(day)[:7]:
+            raise RuntimeError(f"a planted {plant} is received in another month")
         lines = []
         for k, (o, qty) in enumerate(draft["lines"]):
             price = o.price
+            if id(o) == self.edge_line.get(id(draft)):
+                if plant == "tolerance_edge_qty":
+                    qty = qty + max(D(1), (qty * D(self.edges["qty"]["pct"]) / 100).quantize(D(1)))
+                else:
+                    price = o.price + q2(D(self.edges["price"]["over"]) / qty)
             if plant == "price_mismatch" and q2(o.price * qty) >= 10000 and not any(x[3] for x in lines):
                 price = q2(o.price * D(str(round(self.R.uniform(1.05, 1.1), 3))))
             if plant == "qty_mismatch" and k == 0:
@@ -119,12 +159,19 @@ class Money:
         row = self.book(draft, number, received, lines)
         if draft["kind"] == "goods":
             draft["doc"]["supplier_invoice_ref"] = number
-        result, reason = self.judge(row, draft)
+        result, reason, version = self.judge(row, draft)
         row["_truth"] = {
             "result": result,
             "reason_codes": reason,
-            "planted": plant if plant in ("price_mismatch", "qty_mismatch") else "",
+            "planted": plant
+            if plant in ("price_mismatch", "qty_mismatch", "tolerance_edge_qty", "tolerance_edge_price")
+            else "",
+            "tolerance_version": version,
         }
+        if plant.startswith("tolerance_edge") and result != "blocked":
+            what = "quantity" if plant == "tolerance_edge_qty" else "price"
+            self.s.case(plant, f"{row['no']};{po['no']}", f"Invoiced {what} a little over, received under tolerance version {version}",
+                        f"Within tolerance version {version}: approved for payment", received.date())  # fmt: skip
         if statement:
             self.statement(row, statement)
         if plant == "grni_month_end":
@@ -132,7 +179,7 @@ class Money:
                         f"Invoice arrived {lag} working days after the receipt, after a month end",
                         "Shown as goods received not invoiced at the month end (truth_grni)", day)  # fmt: skip
         if result == "blocked":
-            self.block(row, draft, lines, plant)
+            self.block(row, draft, lines, plant, reason)
 
     def book(self, draft: dict[str, Any], number: str, received: datetime, lines: list[tuple[Order, Decimal, Decimal, bool]],
              *, of: str = "") -> dict[str, Any]:  # fmt: skip
@@ -173,29 +220,33 @@ class Money:
         self.invoices.append(row)
         return row
 
-    def judge(self, row: dict[str, Any], draft: dict[str, Any]) -> tuple[str, str]:
-        """The three-way match (two-way for a service): price against the order, quantity against what was accepted."""
-        result = "matched"
+    def judge(self, row: dict[str, Any], draft: dict[str, Any]) -> tuple[str, str, int]:
+        """The three-way match (two-way for a service): price against the order, quantity against what was accepted,
+        with the tolerance version in force on the day the invoice was received."""
+        result, version = "matched", 0
         for o, qty, price, _ in row["_lines"]:
+            version, tol = tolerance_on(self.s.m["tolerance"], self.s.m["tolerance_version"], row["received_on"],
+                                        o.item["category_code"])  # fmt: skip
             available = next(q for x, q in draft["lines"] if x is o)
             diff = price - o.price
             if diff > 0:
-                if not (diff <= o.price * self.tol["price_pct"] / 100 or diff * qty <= self.tol["price_abs"]):
-                    return "blocked", "price_variance"
+                if not (diff <= o.price * tol["price_pct"] / 100 or diff * qty <= tol["price_abs"]):
+                    return "blocked", "price_variance", version
                 result = "within_tolerance"
-            if qty > available + available * self.tol["qty_pct"] / 100:
-                return "blocked", "qty_over_received"
-        return result, ""
+            if qty > available + available * tol["qty_pct"] / 100:
+                return "blocked", "qty_over_received", version
+        return result, "", version
 
-    def block(self, row: dict[str, Any], draft: dict[str, Any], lines: list[Any], plant: str) -> None:
+    def block(self, row: dict[str, Any], draft: dict[str, Any], lines: list[Any], plant: str, reason: str) -> None:
         """A blocked invoice: a price variance accepted by its approver; too much quantity sent back for a corrected
         invoice. The last price problem of the year is still blocked at the cutoff."""
         row["status"], row["payment_block"] = "blocked", "match"
         received = datetime.fromisoformat(row["received_at"][:19])
         decided = dt_at(self.s.plus(received.date(), self.R.randint(2, 5)), self.R.uniform(10, 17))
         po = draft["po"]
-        if plant == "price_mismatch":
-            self.s.case("price_mismatch", f"{row['no']};{po['no']}", "Invoice price above the order price beyond tolerance",
+        if reason == "price_variance":
+            self.s.case(plant, f"{row['no']};{po['no']}", "Invoice price above the order price beyond tolerance"
+                        + (f" (version {row['_truth']['tolerance_version']})" if plant != "price_mismatch" else ""),
                         "Blocked for price variance; paid only after the variance is accepted", received.date())  # fmt: skip
             if id(draft) == self.open_block or decided > self.end:
                 row["_ready"] = None  # still blocked at the cutoff
@@ -204,14 +255,21 @@ class Money:
             self.s.approve("price_variance", row["no"], value, decided, "ANY")
             row["status"], row["payment_block"], row["_ready"] = "approved", "none", self.s.later(decided, 1)
             return
-        self.s.case("qty_mismatch", f"{row['no']};{po['no']}", "Invoiced quantity above the accepted quantity",
+        self.s.case(plant, f"{row['no']};{po['no']}", "Invoiced quantity above the accepted quantity"
+                    + (f" (version {row['_truth']['tolerance_version']})" if plant != "qty_mismatch" else ""),
                     "Blocked for quantity; the supplier sends a corrected invoice for what was accepted", received.date())  # fmt: skip
         row["status"], row["_ready"] = "cancelled", None
         again = dt_at(self.s.plus(decided.date(), self.R.randint(1, 3)), 11)
         if again <= self.end:
             right = [(o, next(q for x, q in draft["lines"] if x is o), o.price, False) for o, *_ in lines]
             fixed = self.book(draft, row["supplier_invoice_no"] + "-R", again, right, of=row["no"])
-            fixed["_truth"] = {"result": "matched", "reason_codes": "", "planted": "corrected_invoice"}
+            version = tolerance_on(self.s.m["tolerance"], self.s.m["tolerance_version"], fixed["received_on"])[0]
+            fixed["_truth"] = {
+                "result": "matched",
+                "reason_codes": "",
+                "planted": "corrected_invoice",
+                "tolerance_version": version,
+            }
             if draft["kind"] == "goods":
                 draft["doc"]["supplier_invoice_ref"] = fixed["supplier_invoice_no"]
 

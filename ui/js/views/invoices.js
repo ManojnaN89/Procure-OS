@@ -190,6 +190,7 @@ const InvoicesView = {
               <td>${m.result ? `<span class="badge ${m.result === "blocked" ? "badge-held" : "badge-approved"}">${this.esc(m.result.replace("_", " "))}</span>${m.reason ? `<div class="cell-muted" style="font-size:11px;">${this.esc(this.REASON[m.reason] || m.reason)}</div>` : ""}` : ""}</td></tr>`; }).join("")}
         </tbody></table>
           <div class="table-foot">${UI.totals([["Taxable", i.taxable], ["CGST", i.cgst], ["SGST", i.sgst], ["IGST", i.igst], ["Total", i.total]])}</div></div>
+        ${(() => { const t = (i.match.find((m) => m.tolerance) || {}).tolerance; return t ? `<div class="cell-muted" style="font-size:12px;margin-bottom:6px;">Judged under tolerance version ${this.esc(t.version)} (from ${formatDate(t.effective_from)})</div>` : ""; })()}
         ${problems.filter((m) => m.line_no === null && m.detail).map((m) => `<div class="cell-muted" style="font-size:12px;margin-bottom:6px;">${this.esc(m.detail)}</div>`).join("")}
         ${i.can_act ? `<div class="panel"><div class="panel-title">What you can do</div><div class="btn-row">
             <div class="btn btn-primary" id="invExplain"><i class="ti ti-search"></i>Explain why and what to do</div>

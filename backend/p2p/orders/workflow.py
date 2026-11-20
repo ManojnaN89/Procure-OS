@@ -124,6 +124,24 @@ def refuse_outside_band(db: Session, po: dict[str, Any], person: str | None, tod
         )
 
 
+def record_refusal(db: Session, actor: Actor, supplier: str, status: str, ref: str) -> None:
+    """An order to a supplier that is not active is refused by every route, touchless included, and the refusal is
+    audited (D-03 R5)."""
+    audit.record(
+        db, actor, "po.issue_refused", "po", ref, after={"supplier": supplier, "status": status},
+        reason=f"the supplier {supplier} is {status}, not active",
+    )  # fmt: skip
+    db.commit()
+
+
+def refuse_inactive(db: Session, po: dict[str, Any], actor: Actor) -> None:
+    status = db.execute(text("select status from supplier where code = :c"), {"c": po["supplier_code"]}).scalar()
+    if status != "active":
+        db.rollback()
+        record_refusal(db, actor, str(po["supplier_code"]), str(status), str(po["no"]))
+        raise ApprovalError(f"the supplier {po['supplier_code']} is {status}, not active: the order cannot be issued")
+
+
 def submit(db: Session, tenant: str, po_no: str, actor: Actor, *, today: date | None = None) -> str:
     """Send the order for approval, or approve it on the spot when it is touchless. Returns the order's status.
 
@@ -138,6 +156,8 @@ def submit(db: Session, tenant: str, po_no: str, actor: Actor, *, today: date | 
         po["hold_reason"] = None
     if po["hold_reason"]:
         raise ApprovalError(f"{po_no} is on hold: {po['hold_reason']}")
+    # an order to a supplier that is not active may wait for a person (never touchless: its test needs an active
+    # supplier), but it is never issued: approving and sending it are refused (D-03 R5)
     first = rules.find_rule(db, "po", Decimal(po["total"]), today)
     # the budget again, on the order's final prices (the request was checked on estimates)
     checks = budget.check_order(db, po_no, today)
@@ -354,6 +374,7 @@ def approve(db: Session, tenant: str, po_no: str, user_id: int, comment: str | N
     # step; it is checked here, before the decision is written, once that step is built.
     po, step, me = _acting(db, po_no, user_id)
     actor = Actor("user", str(user_id))
+    refuse_inactive(db, po, actor)  # the supplier may have been blocked while the order waited (D-03 R5)
     db.execute(
         text(
             "update po_approval_step set status = 'approved', acted_by = :me, acted_at = now(), comment = :c where id = :i"

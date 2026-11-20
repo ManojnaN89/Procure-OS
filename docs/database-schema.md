@@ -27,7 +27,7 @@ Reading a line: `name*` is part of the primary key, `name?` may be empty, then t
 
 ## Tenant database (one per company)
 
-130 tables.
+136 tables.
 
 **advance** · payment_no* text, po_no text, gross num, taxable num, used_gross num, used_taxable num, paid_on? date
 
@@ -55,7 +55,7 @@ Reading a line: `name*` is part of the primary key, `name?` may be empty, then t
 
 **autonomy_setting** · decision_type* text, level text, value_cap? num, min_confidence num, max_wrong_rate num, updated_by? int, updated_at timestamptz
 
-**award** · rfq_no* text, rfq_line_no* int, supplier_code* text, quote_no text, qty num, price num, reason? text, overridden bool, by_user? text, at timestamptz, split bool, selection_rule? text
+**award** · rfq_no* text, rfq_line_no* int, supplier_code* text, quote_no text, qty num, price num, reason? text, overridden bool, by_user? text, at timestamptz, split bool, selection_rule? text, conditional bool, lapsed_at? timestamptz, lapse_reason? text, awarded_on? date
 
 **bank** · code* text, name? text, ifsc_prefix? text
 
@@ -97,7 +97,7 @@ Reading a line: `name*` is part of the primary key, `name?` may be empty, then t
 
 **gl_account** · code* text, name? text, type? text, is_capex? bool, is_tax_account? bool, parent_code? text
 
-**goods_receipt** · no* text, po_no text, location_code text, gate_entry_at timestamptz, received_by text, delivery_challan_no? text, supplier_invoice_ref? text, eway_bill_no? text, vehicle_no? text, inspection_status text, accepted_on? date, remarks? text, posted_by text, created_at timestamptz
+**goods_receipt** · no* text, po_no text, location_code text, gate_entry_at timestamptz, received_by text, delivery_challan_no? text, supplier_invoice_ref? text, eway_bill_no? text, vehicle_no? text, inspection_status text, accepted_on? date, remarks? text, posted_by text, created_at timestamptz, tolerance_version? int
 
 **gr_line** · gr_no* text, po_no text, po_line_no* int, qty_received num, qty_accepted? num, qty_rejected? num, reject_reason? text
 
@@ -105,7 +105,7 @@ Reading a line: `name*` is part of the primary key, `name?` may be empty, then t
 
 **intake_pending** · id* bigint, user_id int, channel text, source_text text, question text, asked text, attempts int, status text, created_at timestamptz, updated_at timestamptz
 
-**invoice** · no* text, type text, supplier_code text, supplier_gstin? text, buyer_gstin? text, place_of_supply? text, supplier_invoice_no text, dedupe_key text, invoice_date date, fy text, irn? text, ack_no? text, ack_date? date, eway_bill_no? text, reverse_charge bool, received_at timestamptz, received_on date, channel text, taxable num, cgst num, sgst num, igst num, cess num, round_off num, total num, ref_invoice_no? text, due_date? date, payment_block text, status text, duplicate_of? text, block_reason? text, cancel_reason? text, document_ref? text, entered_by? text, created_at timestamptz, tds_amount num, paid_on? date, booked_at? timestamptz, advance_used num, advance_taxable_used num, discount_taken num
+**invoice** · no* text, type text, supplier_code text, supplier_gstin? text, buyer_gstin? text, place_of_supply? text, supplier_invoice_no text, dedupe_key text, invoice_date date, fy text, irn? text, ack_no? text, ack_date? date, eway_bill_no? text, reverse_charge bool, received_at timestamptz, received_on date, channel text, taxable num, cgst num, sgst num, igst num, cess num, round_off num, total num, ref_invoice_no? text, due_date? date, payment_block text, status text, duplicate_of? text, block_reason? text, cancel_reason? text, document_ref? text, entered_by? text, created_at timestamptz, tds_amount num, paid_on? date, booked_at? timestamptz, advance_used num, advance_taxable_used num, discount_taken num, tolerance_version? int
 
 **invoice_charge** · id* bigint, invoice_no text, type text, amount num, gst_rate num, sac? text
 
@@ -127,9 +127,11 @@ Reading a line: `name*` is part of the primary key, `name?` may be empty, then t
 
 **joiner_kit** · id* bigint, kit text, item_code text, qty num, unit text, base_qty num, import_id bigint, created_at timestamptz
 
-**location** · code* text, name? text, type? text, gstin? text, address? text, city? text, state_code? text, pincode? text, is_stock_location? bool, working_days? text, receiving_hours? text, holiday_scope? text, loc_short? text, head_user? text
+**location** · code* text, name? text, type? text, gstin? text, address? text, city? text, state_code? text, pincode? text, is_stock_location? bool, working_days? text, receiving_hours? text, holiday_scope? text, loc_short? text, head_user? text, region_code? text
 
-**match_result** · id* bigint, invoice_no text, invoice_line_no? int, result text, reason_codes? text, price_var? num, qty_var? num, detail? text, created_at timestamptz, resolved_by? text, resolved_at? timestamptz, resolution? text
+**market_benchmark** · id* bigint, item_code text, price num, uom text, basis text, effective_date date, region_code? text, source_kind text, source_name text, source_ref? text, document_id? bigint, note? text, status text, entered_by? text, entered_at timestamptz, verified_by? text, verified_at? timestamptz, verify_note? text, rejected_reason? text, replaces? bigint
+
+**match_result** · id* bigint, invoice_no text, invoice_line_no? int, result text, reason_codes? text, price_var? num, qty_var? num, detail? text, created_at timestamptz, resolved_by? text, resolved_at? timestamptz, resolution? text, tolerance_version? int
 
 **material_request** · no* text, production_order_id? bigint, order_no text, product_code text, location_code text, need_by date, status text, cancel_reason? text, created_by? text, created_at timestamptz, source_kind text, department_code? text
 
@@ -179,7 +181,9 @@ Reading a line: `name*` is part of the primary key, `name?` may be empty, then t
 
 **po_revision** · id* bigint, po_no text, version int, changed_by? text, changed_at timestamptz, reason text, changes jsonb, total_before num, total_after num, reapproval bool
 
-**price_record** · id* bigint, supplier_code? text, item_code? text, contract_code? text, uom? text, price? num, min_qty? int, price_basis? text, freight_included? bool, valid_from? date, valid_to? date, lead_days? int, version int, status text, created_by? text, activated_by? text, activated_at? timestamptz
+**price_record** · id* bigint, supplier_code? text, item_code? text, contract_code? text, uom? text, price? num, min_qty? int, price_basis? text, freight_included? bool, valid_from? date, valid_to? date, lead_days? int, version int, status text, created_by? text, activated_by? text, activated_at? timestamptz, location_code? text, region_code? text
+
+**price_threshold_rule** · id* bigint, category_code? text, version int, effective_from date, effective_to? date, gap_pct num, gap_inr_per_unit num, min_saving_inr num, evidence_max_age_days int, min_sources int, expiry_review_days int, note? text, created_by? text, created_at timestamptz
 
 **product_demand** · id* bigint, kind text, doc_no text, product_code text, customer? text, qty num, need_by? date, period? text, status? text, import_id bigint, created_at timestamptz
 
@@ -213,17 +217,19 @@ Reading a line: `name*` is part of the primary key, `name?` may be empty, then t
 
 **ref_uom** · code* text, name text
 
+**region** · code* text, name text
+
 **request** · no* text, requester? text, on_behalf_of? text, department_code? text, ship_to_location text, type text, priority text, project_code? text, created_at timestamptz, need_by? date, channel text, source_ref? text, justification? text, preferred_supplier? text, status text, total_value num, rule_code? text, rule_version? int, decision_reason? text, submitted_at? timestamptz, decided_at? timestamptz, approval_round int, budget_check? jsonb
 
 **request_check** · id* bigint, request_no text, kind text, other_request text, similarity num, detail? jsonb, flagged_at timestamptz, override_reason? text, overridden_by? text, overridden_at? timestamptz
 
 **request_line** · request_no* text, line_no* int, item_code? text, free_text? text, attributes? jsonb, qty num, uom? text, base_qty? num, est_price? num, need_by? date, delivery_location? text, cost_centre_code? text, gl_code? text, category_code? text, project_code? text, reason? text, status text, stock_qty? num, est_source? text
 
-**rfq** · no* text, buyer? text, request_no? text, category_code? text, created_at timestamptz, due_date date, type text, delivery_terms? text, payment_terms_proposed? text, status text, sent_at? timestamptz, proposal_id? bigint, note? text, min_quotes? int
+**rfq** · no* text, buyer? text, request_no? text, category_code? text, created_at timestamptz, due_date date, type text, delivery_terms? text, payment_terms_proposed? text, status text, sent_at? timestamptz, proposal_id? bigint, note? text, min_quotes? int, min_quotes_rule? text, delivery_location? text
 
 **rfq_line** · rfq_no* text, line_no* int, request_no text, request_line_no int, item_code? text, description? text, qty num, uom? text, need_by? date
 
-**rfq_supplier** · rfq_no* text, supplier_code* text, email? text, invited_at? timestamptz, send_error? text, reminders_sent int, responded_at? timestamptz, declined bool, decline_reason? text, last_reminded_at? timestamptz
+**rfq_supplier** · rfq_no* text, supplier_code* text, email? text, invited_at? timestamptz, send_error? text, reminders_sent int, responded_at? timestamptz, declined bool, decline_reason? text, last_reminded_at? timestamptz, invited_by? text
 
 **role_permission** · role* text, action* text
 
@@ -245,7 +251,7 @@ Reading a line: `name*` is part of the primary key, `name?` may be empty, then t
 
 **stock_opening** · item_code* text, location_code* text, qty? num, unit_cost? num, as_of? date
 
-**supplier** · code* text, legal_name? text, trade_name? text, legal_form? text, pan? text, pan_status? text, gst_reg_type? text, gstin? text, state_code? text, e_invoice_applicable? bool, hsn_digits? text, msme_category? text, udyam_no? text, msme_agreement? bool, agreed_payment_days? int, payment_terms_code? text, tds_section_default? text, lower_tds_rate? num, lower_tds_valid_to? date, lower_tds_limit? num, reverse_charge? text, status? text, turnover_band? text
+**supplier** · code* text, legal_name? text, trade_name? text, legal_form? text, pan? text, pan_status? text, gst_reg_type? text, gstin? text, state_code? text, e_invoice_applicable? bool, hsn_digits? text, msme_category? text, udyam_no? text, msme_agreement? bool, agreed_payment_days? int, payment_terms_code? text, tds_section_default? text, lower_tds_rate? num, lower_tds_valid_to? date, lower_tds_limit? num, reverse_charge? text, status? text, turnover_band? text, registered_by? text, invited_by? text, identity_checked_by? text, identity_checked_at? timestamptz, identity_method? text, identity_document_ids? ARRAY, identity_note? text
 
 **supplier_address** · id* bigint, supplier_code? text, type? text, gstin? text, address? text, city? text, state_code? text, pincode? text
 
@@ -253,11 +259,15 @@ Reading a line: `name*` is part of the primary key, `name?` may be empty, then t
 
 **supplier_category** · supplier_code* text, category_code* text, approved_from? date
 
+**supplier_category_scope** · id* bigint, supplier_code text, category_code text, location_code? text, region_code? text
+
 **supplier_chase** · id* bigint, po_no text, kind text, how text, sent_at timestamptz, task_id? bigint
 
 **supplier_contact** · id* bigint, supplier_code? text, name? text, role? text, email? text, phone? text, is_primary? bool
 
 **supplier_document** · id* bigint, supplier_code? text, doc_type? text, number? text, issued_on? date, expires_on? date, verified? bool, added_by? text, verified_by? text, verified_at? timestamptz
+
+**supplier_flag** · id* bigint, supplier_code text, kind text, other_ref? text, detail? text, raised_at timestamptz, cleared_by? text, cleared_at? timestamptz, clear_reason? text
 
 **supplier_link** · id* bigint, po_no text, supplier_code text, purpose text, po_version int, issued_at timestamptz, expires_at timestamptz, used_at? timestamptz, used_for? text
 
@@ -271,7 +281,9 @@ Reading a line: `name*` is part of the primary key, `name?` may be empty, then t
 
 **tds_entry** · id* bigint, invoice_no? text, payment_no? text, section text, base num, rate num, amount num, booked_on date, quarter text
 
-**tolerance** · id* bigint, key? text, value? text, category_code? text, note? text
+**tolerance** · id* bigint, key? text, value? text, category_code? text, note? text, version int
+
+**tolerance_version** · version* int, effective_from date, effective_to? date, note? text, created_by? text, created_at timestamptz
 
 **touchless_rule** · id* bigint, version int, effective_from date, effective_to? date, value_limit? num, price_pct num, note? text, created_by? text, created_at timestamptz
 

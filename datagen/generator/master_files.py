@@ -9,6 +9,7 @@ import re
 import shutil
 import sys
 from dataclasses import dataclass
+from decimal import Decimal
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
@@ -25,14 +26,17 @@ HEADERS = {
     "payment_terms": "code,name,days,baseline,advance_pct,discount_pct,discount_days",
     "number_series": "document_type,prefix,scope,format,reset",
     "company": "code,legal_name,short_name,pan,cin,registered_address,turnover_band,fy_start_month,currency,email_domain,letterhead_text",
-    "location": "code,name,type,gstin,address,city,state_code,pincode,is_stock_location,working_days,receiving_hours,holiday_scope,loc_short,head_user",
+    "region": "code,name",
+    "location": "code,name,type,gstin,address,city,state_code,pincode,is_stock_location,working_days,receiving_hours,holiday_scope,loc_short,head_user,region_code",
     "department": "code,name,head_user",
     "cost_centre": "code,name,department_code,location_code,owner_user,active",
     "user": "code,employee_no,name,designation,email,phone,department_code,location_code,manager_code,approval_limit,notify_by,active",
     "user_role": "user_code,role,scope_location,scope_department",
     "approval_rule": "rule_code,document,min_value,max_value,category_code,department_code,spend_type,approver_chain,version,effective_from,effective_to,location_code",
     "setting": "key,value,description",
-    "tolerance": "key,value,category_code,note",
+    "tolerance_version": "version,effective_from,note",
+    "tolerance": "key,value,category_code,note,version,effective_from",
+    "price_threshold_rule": "category_code,version,effective_from,effective_to,gap_pct,gap_inr_per_unit,min_saving_inr,evidence_max_age_days,min_sources,expiry_review_days,note",
     "company_bank_account": "code,bank_code,account_no,ifsc,purpose,payment_file_format",
     "gst_registration": "gstin,state_code,legal_address,pincode,is_default",
     "budget": "cost_centre_code,gl_code,project_code,period,amount,version,policy,location_code",
@@ -40,15 +44,18 @@ HEADERS = {
     "item": "code,name,description,category_code,kind,default_gl,brand,base_uom,purchase_uom,pack_size,moq,hsn_sac,gst_rate_before,gst_rate_after,gst_rate_alt_before,gst_rate_alt_after,gst_rate_change_date,gst_rate_confidence,gst_reverse_charge,gst_note,standard_price,abc_class,stocked,capex,inspection_required,serialised,hazardous,default_lead_days,attributes,active",
     "item_location": "item_code,location_code,reorder_policy,reorder_point,safety_stock,min_qty,max_qty,order_qty,service_level_pct,lead_days_override",
     "stock_opening": "item_code,location_code,qty,unit_cost,as_of",
-    "supplier": "code,legal_name,trade_name,legal_form,pan,pan_status,gst_reg_type,gstin,state_code,e_invoice_applicable,hsn_digits,msme_category,udyam_no,msme_agreement,agreed_payment_days,payment_terms_code,tds_section_default,lower_tds_rate,lower_tds_valid_to,lower_tds_limit,reverse_charge,status,turnover_band",
+    "supplier": "code,legal_name,trade_name,legal_form,pan,pan_status,gst_reg_type,gstin,state_code,e_invoice_applicable,hsn_digits,msme_category,udyam_no,msme_agreement,agreed_payment_days,payment_terms_code,tds_section_default,lower_tds_rate,lower_tds_valid_to,lower_tds_limit,reverse_charge,status,turnover_band,registered_by",
     "supplier_address": "supplier_code,type,gstin,address,city,state_code,pincode",
     "supplier_bank_account": "supplier_code,bank_code,account_no,ifsc,verified,verified_on",
     "supplier_category": "supplier_code,category_code,approved_from",
+    "supplier_category_scope": "supplier_code,category_code,location_code,region_code",
     "supplier_contact": "supplier_code,name,role,email,phone,is_primary",
     "supplier_document": "supplier_code,doc_type,number,issued_on,expires_on,verified",
     "supplier_status_history": "supplier_code,at,from_status,to_status,reason,by_user",
+    "supplier_flag": "supplier_code,kind,other_ref,detail,raised_at",
     "contract": "code,supplier_code,type,valid_from,valid_to,max_value,payment_terms_code,delivery_terms,freight_terms,warranty_months,sla_text,status",
-    "price_record": "supplier_code,item_code,contract_code,uom,price,min_qty,price_basis,freight_included,valid_from,valid_to,lead_days,version,status",
+    "price_record": "supplier_code,item_code,contract_code,uom,price,min_qty,price_basis,freight_included,valid_from,valid_to,lead_days,version,status,location_code,region_code",
+    "market_benchmark": "item_code,price,uom,basis,effective_date,region_code,source_kind,source_name,source_ref,note,status,entered_by,entered_at,verified_by,verified_at,verify_note,rejected_reason",
     "delegation": "from_user,to_user,start_date,end_date,reason",
     "item_substitute": "item_code,substitute_code,note",
     "uom_conversion": "item_code,from_uom,to_uom,factor",
@@ -62,6 +69,21 @@ PAN_OK = re.compile(r"^[A-Z]{5}0000[A-Z]$")
 def gstin(state: str, pan: str) -> str:
     """The first registration of a PAN in a state."""
     return make_gstin(state, pan, 1)
+
+
+def tolerance_on(
+    rows: list[dict[str, str]], versions: list[dict[str, str]], day: str, category: str | None = None
+) -> tuple[int, dict[str, Decimal]]:
+    """The tolerance version in force on a day ('YYYY-MM-DD') and its values: the 'ANY' rows, overridden key by key by
+    the category's own rows of the same version."""
+    started = [v for v in versions if v["effective_from"] <= day]
+    version = max(started, key=lambda v: (v["effective_from"], int(v["version"])))["version"]
+    values: dict[str, Decimal] = {}
+    for scope in ("ANY", category):
+        for r in rows:
+            if r["version"] == version and r["category_code"] == scope:
+                values[r["key"]] = Decimal(r["value"])
+    return int(version), values
 
 
 def write_csv(path: Path, header: list[str], rows: list[dict[str, object]]) -> None:
@@ -125,6 +147,20 @@ class Supplier:
     pincode: str
     tds_section: str = "194Q"
     onboarded_by: str = ""  # the buyer who activated it
+    status: str = (
+        "active"  # active, blocked (was active, then blocked) or prospect (registered to quote, not onboarded)
+    )
+    registered_by: str = ""  # a prospect: who registered it
+    registered_on: str = ""
+    blocked_on: str = ""  # a blocked supplier: when, why and who approved the block
+    blocked_reason: str = ""
+    blocked_by: str = ""
+    address: str = ""  # the registered address line, when not the made-up one
+    phone: str = ""  # the contact's phone, when not the made-up one
+
+    @property
+    def prospect(self) -> bool:
+        return self.status == "prospect"
 
 
 def supplier_tables(suppliers: list[Supplier]) -> dict[str, list[dict[str, object]]]:
@@ -166,8 +202,9 @@ def supplier_tables(suppliers: list[Supplier]) -> dict[str, list[dict[str, objec
                 "lower_tds_valid_to": "",
                 "lower_tds_limit": "",
                 "reverse_charge": "no",
-                "status": "active",
+                "status": s.status,
                 "turnover_band": s.turnover,
+                "registered_by": s.registered_by,
             }
         )
         t["supplier_address"].append(
@@ -175,24 +212,26 @@ def supplier_tables(suppliers: list[Supplier]) -> dict[str, list[dict[str, objec
                 "supplier_code": s.code,
                 "type": "registered",
                 "gstin": g,
-                "address": f"{10 + i}, Industrial Area",
+                "address": s.address or f"{10 + i}, Industrial Area",
                 "city": s.city,
                 "state_code": s.state,
                 "pincode": s.pincode,
             }
         )
-        t["supplier_bank_account"].append(
-            {
-                "supplier_code": s.code,
-                "bank_code": s.bank,
-                "account_no": f"00010000{i:04d}",
-                "ifsc": f"{s.bank[:4].ljust(4, 'X')}0900{i:03d}",
-                "verified": "true",
-                "verified_on": "2024-09-15",
-            }
-        )
-        t["supplier_category"] += [
-            {"supplier_code": s.code, "category_code": c, "approved_from": "2024-04-01"} for c in s.categories
+        if not s.prospect:  # a prospect quotes before it gives its bank details (D-03 R6)
+            t["supplier_bank_account"].append(
+                {
+                    "supplier_code": s.code,
+                    "bank_code": s.bank,
+                    "account_no": f"00010000{i:04d}",
+                    "ifsc": f"{s.bank[:4].ljust(4, 'X')}0900{i:03d}",
+                    "verified": "true",
+                    "verified_on": "2024-09-15",
+                }
+            )
+        t["supplier_category"] += [  # for a prospect: the category it asked to quote for
+            {"supplier_code": s.code, "category_code": c, "approved_from": s.registered_on or "2024-04-01"}
+            for c in s.categories
         ]
         t["supplier_contact"].append(
             {
@@ -200,15 +239,16 @@ def supplier_tables(suppliers: list[Supplier]) -> dict[str, list[dict[str, objec
                 "name": s.contact,
                 "role": "sales",
                 "email": f"sales@{s.domain}.example",
-                "phone": f"+91 00000 9{i:04d}",
+                "phone": s.phone or f"+91 00000 9{i:04d}",
                 "is_primary": "true",
             }
         )
         docs = [
             ("gst_cert", g, "2019-10-07", ""),
             ("pan", s.pan, "2015-04-01", ""),
-            ("cancelled_cheque", f"CHQ-{i:04d}", "2024-09-10", ""),
         ]
+        if not s.prospect:
+            docs.append(("cancelled_cheque", f"CHQ-{i:04d}", "2024-09-10", ""))
         if s.msme != "none":
             docs += [
                 ("udyam", s.udyam, "2022-03-17", ""),
@@ -221,10 +261,22 @@ def supplier_tables(suppliers: list[Supplier]) -> dict[str, list[dict[str, objec
                 "number": number,
                 "issued_on": issued,
                 "expires_on": expires,
-                "verified": "true",
+                "verified": str(not s.prospect).lower(),  # a prospect's papers are uploaded, not yet checked
             }
             for kind, number, issued, expires in docs
         ]
+        if s.prospect:
+            t["supplier_status_history"].append(
+                {
+                    "supplier_code": s.code,
+                    "at": f"{s.registered_on}T10:30:00+05:30",
+                    "from_status": "",
+                    "to_status": "prospect",
+                    "reason": "Registered as a prospect to quote",
+                    "by_user": s.registered_by,
+                }
+            )
+            continue
         t["supplier_status_history"].append(
             {
                 "supplier_code": s.code,
@@ -235,6 +287,17 @@ def supplier_tables(suppliers: list[Supplier]) -> dict[str, list[dict[str, objec
                 "by_user": s.onboarded_by,
             }
         )
+        if s.status == "blocked":
+            t["supplier_status_history"].append(
+                {
+                    "supplier_code": s.code,
+                    "at": f"{s.blocked_on}T16:00:00+05:30",
+                    "from_status": "active",
+                    "to_status": "blocked",
+                    "reason": s.blocked_reason,
+                    "by_user": s.blocked_by,
+                }
+            )
     return t
 
 
@@ -278,6 +341,8 @@ def common_problems(out: Path) -> list[str]:
             problems.append(f"{r['code']}'s manager {r['manager_code']} is not a person")
     docs = rows("supplier_document")
     for r in rows("supplier"):
+        if r["status"] != "active":
+            continue  # a prospect's papers wait for the identity check; a blocked supplier is not used
         have = {d["doc_type"] for d in docs if d["supplier_code"] == r["code"] and d["verified"] == "true"}
         need = {"pan", "cancelled_cheque", "gst_cert"} | ({"udyam"} if r["msme_category"] != "none" else set())
         if need - have:

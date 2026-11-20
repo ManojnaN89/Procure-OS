@@ -140,7 +140,9 @@ def plan(db: Session, as_of: date, *, location: str | None = None) -> tuple[list
         if qty == 0:
             skipped.append(Skipped(*key, "Nothing to order"))
             continue
-        estimate = estimates.for_item(db, line.item_code, purchase_uom, qty, as_of, item["standard_price"])
+        estimate = estimates.for_item(
+            db, line.item_code, purchase_uom, qty, as_of, item["standard_price"], line.location_code
+        )
         if estimate is None:
             skipped.append(
                 Skipped(*key, "No price to estimate the request with (no contract, no order, no standard price)")

@@ -23,6 +23,7 @@ from p2p.ai_steps.adapters import ModelError
 from p2p.ai_steps.evidence import numbers_in
 from p2p.approvals import workflow as approvals
 from p2p.formulas.money import format_qty
+from p2p.masters import prospects
 from p2p.platform import audit, permissions
 from p2p.platform.rows import rows as _rows
 from p2p.platform.sod import Actor
@@ -156,7 +157,11 @@ def build_registry(db: Session, user_id: int) -> ToolRegistry:
         return {**_clean(head)[0], "lines": lines, "orders": orders}
 
     def get_rfq(db: Session, p: ByNumber, actor: Actor) -> dict[str, Any]:
-        head = _rows(db, "select no, status, request_no, due_date from rfq where no = :n", n=p.no)
+        head = _rows(
+            db,
+            "select no, status, request_no, due_date, min_quotes, min_quotes_rule, delivery_location from rfq where no = :n",
+            n=p.no,
+        )
         if not head:
             return {"error": f"no quotation request called {p.no}"}
         suppliers = _clean(
@@ -168,6 +173,8 @@ def build_registry(db: Session, user_id: int) -> ToolRegistry:
                 n=p.no,
             )
         )
+        for s in suppliers:  # the same counting rule as the screen and the API (D-03 R12)
+            s["counts"], s["why_not"] = prospects.counts_as_checked(db, str(s["supplier_code"]))
         offers = _clean(
             _rows(
                 db,
@@ -181,7 +188,10 @@ def build_registry(db: Session, user_id: int) -> ToolRegistry:
         )
         awards = _clean(
             _rows(
-                db, "select rfq_line_no, supplier_code, price from award where rfq_no = :n order by rfq_line_no", n=p.no
+                db,
+                "select rfq_line_no, supplier_code, price, conditional, lapsed_at is not null as lapsed from award "
+                "where rfq_no = :n order by rfq_line_no",
+                n=p.no,
             )
         )
         return {**_clean(head)[0], "suppliers": suppliers, "quotes": offers, "awards": awards}

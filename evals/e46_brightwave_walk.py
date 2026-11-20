@@ -14,6 +14,7 @@ close the orders. Every figure is compared with the dataset's own files; who did
 import hashlib
 import re
 import tempfile
+import time
 import traceback
 from datetime import date, timedelta
 from decimal import Decimal
@@ -255,6 +256,17 @@ def _run(ctx: Any) -> Outcome:  # noqa: C901 - one story, step by step
                             d.go(key, f"requisitions/{no}")
                             page.locator("#approveBtn").click()
                             page.wait_for_load_state("networkidle")
+                            # wait until the click is saved before looking up the next approver (bounded)
+                            for _ in range(40):
+                                if one(
+                                    "select count(*) from approval_step s join request r on r.no = s.request_no "
+                                    "and s.round = r.approval_round where s.request_no = :n and s.status = 'pending' "
+                                    "and coalesce(s.delegate, s.approver) = :who",
+                                    n=no,
+                                    who=pending[0][0],
+                                ) == 0:
+                                    break
+                                time.sleep(0.5)
                     who_approved.append(key)
                     d.sync()
                     work()

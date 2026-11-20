@@ -95,7 +95,7 @@ def confirm(db: Session, c: Confirmation, user_id: int, *, as_of: date, via: str
     if c.period_from and c.period_to and c.period_to < c.period_from:
         raise ServiceEntryError("the period ends before it starts")
     ordered, price = Decimal(line["qty"]), Decimal(line["unit_price"])
-    room = rules.room_left(ordered, Decimal(line["received_qty"]), goods.over_pct(db, line["category_code"]))
+    room = rules.room_left(ordered, Decimal(line["received_qty"]), goods.over_pct(db, line["category_code"], as_of))
     try:
         done = rules.confirm_service(c.basis, c.value, ordered, price, room)
     except ValueError as exc:

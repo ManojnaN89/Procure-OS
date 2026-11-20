@@ -613,3 +613,39 @@ def test_an_approver_who_revises_an_order_waiting_for_them_hands_its_approval_to
     assert steps and all(a != head for a, _ in steps)  # the reviser is now one of its makers
     with pytest.raises(workflow.ApprovalError, match="segregation of duties|not your turn"):
         workflow.approve(tiers, tiers.info["slug"], po, logins["procurement"])
+
+
+def test_an_order_waiting_for_approval_is_not_issued_once_its_supplier_is_blocked(
+    tiers: Session, outbox: Outbox
+) -> None:
+    logins = _logins(tiers)
+    po = _order(tiers, "R-BLK", "Z", "1", "200000")
+    tiers.execute(
+        text("update supplier set status = 'blocked' where code = :c"), {"c": _po(tiers, po)["supplier_code"]}
+    )
+    tiers.commit()
+
+    with pytest.raises(workflow.ApprovalError, match="not active"):
+        workflow.approve(tiers, tiers.info["slug"], po, logins["procurement"])
+
+    assert _po(tiers, po)["status"] == "submitted"
+    refused = tiers.execute(
+        text("select count(*) from audit_event where action = 'po.issue_refused' and entity_id = :n"), {"n": po}
+    ).scalar_one()
+    assert refused == 1
+
+
+def test_an_order_to_a_supplier_blocked_after_sourcing_is_made_but_never_touchless(
+    tiers: Session, outbox: Outbox
+) -> None:
+    _gate(tiers)
+    _price(tiers, "S1", "Z", "500", contract="K-ACTIVE")
+    request = _ask(tiers, "R-BLK2", [("Z", "1", "500")])
+    _source(tiers, request, dispatch=False)
+    tiers.execute(text("update supplier set status = 'blocked' where code = 'S1'"))
+    tiers.commit()
+
+    (po,) = orders.order_request(tiers, tiers.info["slug"], request, as_of=TODAY).pos
+
+    row = _po(tiers, po)
+    assert row["touchless"] is False and row["status"] == "submitted"  # waits for a person, who cannot approve it

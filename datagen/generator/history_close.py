@@ -53,13 +53,13 @@ HISTORY = {
 }
 TRUTH = {
     "truth_case": "case_id,type,documents,cause,expected_result,planted_on",
-    "truth_match_expected": "invoice_no,result,reason_codes,planted",
+    "truth_match_expected": "invoice_no,result,reason_codes,planted,tolerance_version",
     "truth_shortfall": "material_request_no,line_no,item_code,needed,on_hand,on_order,held_for_earlier,reserved,short,request_no,request_line_no",
     "truth_combined_lines": "po_no,po_line_no,request_no,request_line_no,item_code,qty,route",
     "truth_supplier_selection": "rfq_no,rfq_line_no,item_code,qty,value_counted,quotes_required,suppliers_asked,options,selected,reason",
     "truth_grni": "month_end,receipt_no,po_no,po_line_no,item_code,qty_accepted,qty_invoiced,qty_not_invoiced,value_not_invoiced",
     "truth_payment": "invoice_no,supplier_code,total,tds_section,tds_amount,net_payable,due_date,msme,status_at_cutoff,paid_on",
-    "truth_supplier": "supplier_code,profile,on_time_prob,part_delivery_prob,rejection_rate,writing_style",
+    "truth_supplier": "supplier_code,profile,on_time_prob,part_delivery_prob,rejection_rate,writing_style,expected_flags",
 }
 STYLES = ("formal", "terse", "chatty")
 # inputs/history/: the planning files of inputs/ over the year, each with a status; material requests are new
@@ -131,12 +131,20 @@ class Closing:
         """How each supplier was made to behave (the profile's `history.suppliers`), for checking the vendor scores: a
         supplier on time at least 90% of the time is 'reliable', at least 70% 'average', else 'poor'. The rejection rate
         is the share of inspected lots partly rejected."""
+        flags: dict[str, set[str]] = defaultdict(set)  # what a correct platform flags on registering a prospect
+        for f in self.s.m.get("supplier_flag", []):
+            flags[f["supplier_code"]].add(f["kind"])
         for code, b in sorted(self.s.behaviour.items()):
             on_time = float(b["on_time"])
             profile = "reliable" if on_time >= 0.9 else "average" if on_time >= 0.7 else "poor"
             self.T["truth_supplier"].append({"supplier_code": code, "profile": profile, "on_time_prob": b["on_time"],
                                              "part_delivery_prob": b["part"], "rejection_rate": b["reject"],
-                                             "writing_style": style_of(code), "_t": dt_at(self.s.start, 0)})  # fmt: skip
+                                             "writing_style": style_of(code), "expected_flags": ";".join(sorted(flags[code])),
+                                             "_t": dt_at(self.s.start, 0)})  # fmt: skip
+        for code in sorted(set(self.s.sup) - set(self.s.behaviour)):  # blocked or prospects: they never traded
+            self.T["truth_supplier"].append({"supplier_code": code, "profile": "not_trading", "on_time_prob": "",
+                                             "part_delivery_prob": "", "rejection_rate": "", "writing_style": "",
+                                             "expected_flags": ";".join(sorted(flags[code])), "_t": dt_at(self.s.start, 0)})  # fmt: skip
 
     def keys_before_cutoff(self) -> None:
         """The answer keys that follow invoices and material requests, and the tax deposits, before anything is cut."""

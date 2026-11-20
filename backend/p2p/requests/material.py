@@ -186,7 +186,9 @@ def _shortfall_request(
         item = info[ln["item_code"]]
         unit, factor = drafts.purchase_unit(item)
         qty = purchase_quantity(qty_short, base_per_purchase_unit=factor, moq=Decimal(item["moq"] or 0))
-        estimate = estimates.for_item(db, ln["item_code"], unit, qty, as_of, item["standard_price"])
+        estimate = estimates.for_item(
+            db, ln["item_code"], unit, qty, as_of, item["standard_price"], ln["location_code"]
+        )
         if estimate is None:
             checked.unpriced.append(ln["item_code"])
             continue

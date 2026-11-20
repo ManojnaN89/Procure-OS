@@ -14,12 +14,16 @@ const VendorsView = {
         <div class="btn btn-primary" id="newVendorBtn"><i class="ti ti-plus"></i>Onboard vendor</div>
       </div>
       <div id="vendorForm"></div>
+      <div style="margin-bottom:10px;font-size:12.5px;">Show <select id="vendorStatus" style="padding:5px;">
+        ${[["", "All"], ["active", "Active"], ["draft", "Under review"], ["prospect", "Prospects"], ["blocked", "Blocked"]].map(([v, l]) => `<option value="${v}"${v === (this.status || "") ? " selected" : ""}>${l}</option>`).join("")}
+      </select></div>
       <div class="table-wrap" id="tableWrap"><div class="empty-state">Loading\u2026</div></div>
     `;
     document.getElementById("newVendorBtn").addEventListener("click", () => this.showOnboarding(document.getElementById("vendorForm")));
+    document.getElementById("vendorStatus").addEventListener("change", (e) => { this.status = e.target.value; this.renderList(container); });
 
     try {
-      const rows = await API.listVendors();
+      const rows = await API.getJSON(`/api/vendors${this.status ? `?status=${encodeURIComponent(this.status)}` : ""}`);
       const wrap = document.getElementById("tableWrap");
       if (!wrap) return; // the person has already gone to another page
       if (!rows.length) {
@@ -32,7 +36,7 @@ const VendorsView = {
           <tbody>
             ${rows.map((v) => `
               <tr data-id="${escapeHtml(v.id)}">
-                <td>${escapeHtml(v.name)}</td>
+                <td>${escapeHtml(v.name)}${this.statusBadges(v)}</td>
                 <td class="cell-muted">${escapeHtml(v.category || "\u2014")}</td>
                 <td>${formatCurrency(v.total_spend)}</td>
               </tr>
@@ -47,6 +51,14 @@ const VendorsView = {
       const gone = document.getElementById("tableWrap");
       if (gone) gone.innerHTML = `<div class="empty-state">Couldn't load vendors.</div>`;
     }
+  },
+
+  statusBadges(v) {
+    const out = [];
+    if (v.prospect) out.push(`<span class="badge badge-pending" style="font-size:10px;margin-left:6px;">prospect${v.identity_checked ? ", identity checked" : ""}</span>`);
+    if (v.open_flags) out.push(`<span class="badge badge-rejected" style="font-size:10px;margin-left:4px;">${escapeHtml(plural(v.open_flags, "flag"))} to review</span>`);
+    if (v.status === "blocked") out.push('<span class="badge badge-rejected" style="font-size:10px;margin-left:4px;">blocked</span>');
+    return out.join("");
   },
 
   // The fields of a supplier record, in the order the form shows them: [key, label, kind, hint]
@@ -95,17 +107,35 @@ const VendorsView = {
         ${this.FIELDS.map(([key, label, kind, hint]) => `<label style="font-size:12px;color:var(--text-secondary);">${label}${this.fieldInput(key, kind, hint, key === "gst_reg_type" ? "regular" : key === "msme_category" ? "none" : "", terms, false)}</label>`).join("")}
         <label style="font-size:12px;color:var(--text-secondary);">Bank account number<input data-f="account_no" placeholder="9 to 18 digits"></label>
         <label style="font-size:12px;color:var(--text-secondary);">IFSC<input data-f="ifsc" placeholder="HDFC0001234"></label>
+        <label style="font-size:12px;color:var(--text-secondary);">Category to quote for (a prospect)<input data-f="category" placeholder="e.g. PKG"></label>
       </div>
       <div style="margin-top:12px;display:flex;gap:8px;align-items:center;">
         <div class="btn btn-primary btn-sm" id="vendorSave">Save as draft</div>
+        <div class="btn btn-secondary btn-sm" id="prospectSave">Register a prospect</div>
         <div class="btn btn-secondary btn-sm" id="vendorCancel">Cancel</div>
         <span id="vendorNote" style="font-size:12.5px;color:var(--warning-text);"></span>
       </div>
       <div class="cell-muted" style="font-size:11px;margin-top:6px;">After saving you add the documents (PAN, bank proof, GST and Udyam certificates). A person other than you verifies them, and another person activates the supplier.</div>
+      <div class="cell-muted" style="font-size:11px;margin-top:4px;">A prospect may be asked to quote at once. Its quote counts only after someone other than you checks its identity; it is ordered from only once it is activated.</div>
+      <div id="prospectFlags"></div>
     </div>`;
     document.getElementById("vendorCancel").addEventListener("click", () => { box.innerHTML = ""; });
+    document.getElementById("prospectSave").addEventListener("click", async () => {
+      const data = this.collect(box);
+      const bank = { account_no: data.account_no, ifsc: data.ifsc };
+      delete data.account_no; delete data.ifsc;
+      if (bank.account_no || bank.ifsc) data.bank = bank;
+      const res = await API.postJSON("/api/vendors/prospects", data);
+      if (!res.ok) { document.getElementById("vendorNote").textContent = res.data.detail || "The prospect was not registered."; return; }
+      const flags = res.data.flags || [];
+      if (!flags.length) { window.location.hash = `#/vendors/${res.data.code}`; return; }
+      document.getElementById("prospectFlags").innerHTML = UI.callout("warning", `Registered ${escapeHtml(res.data.code)} with ${escapeHtml(plural(flags.length, "flag"))} for review`,
+        `${flags.map((f) => `<p>${escapeHtml(f.kind.replace(/_/g, " "))}: ${escapeHtml(f.detail)}</p>`).join("")}<p><a href="#/vendors/${escapeHtml(res.data.code)}">Open the prospect</a>. Its quote does not count until a person other than you clears the flags.</p>`);
+    });
     document.getElementById("vendorSave").addEventListener("click", async () => {
-      const res = await API.postJSON("/api/vendors", this.collect(box));
+      const data = this.collect(box);
+      delete data.category;
+      const res = await API.postJSON("/api/vendors", data);
       if (res.ok) { window.location.hash = `#/vendors/${res.data.id}`; return; }
       document.getElementById("vendorNote").textContent = res.data.detail || "The vendor was not saved.";
     });
@@ -161,6 +191,89 @@ const VendorsView = {
       if (!res.ok) { note.textContent = res.data.detail || "Not changed."; return; }
       if (res.data.proposal) { note.textContent = `Sent for approval (proposal ${res.data.proposal}). The account does not change until a person approves it.`; return; }
       return reload();
+    });
+  },
+
+  // D-03: the independent basic identity check of a prospect, and the flags a person reviews
+  async showIdentity(box, id, v, files, reload) {
+    const i = v.identity;
+    const when = (s) => (s ? formatDate(s) : "");
+    const flags = i.flags || [];
+    const proofs = (v.documents ? v.documents.on_file : []).filter((d) => files[String(d.id)]);
+    let methods = [];
+    if (i.prospect && !i.checked && v.can_check_identity) {
+      try { methods = (await API.getJSON(`/api/vendors/${encodeURIComponent(id)}/identity`)).methods || []; } catch { /* no form */ }
+    }
+    box.innerHTML = `<div class="panel-title">Identity check ${i.checked ? '<span class="badge badge-approved" style="font-size:10px;">checked</span>' : '<span class="badge badge-pending" style="font-size:10px;">not checked</span>'}</div>
+      <div style="font-size:12.5px;color:var(--text-secondary);">
+        ${i.checked ? `Checked by ${escapeHtml(i.checked_by)} on ${when(i.checked_at)} \u00b7 ${escapeHtml(String(i.method || "").replace(/_/g, " "))} \u00b7 proof ${escapeHtml((i.documents || []).join(", ") || "none")}${i.note ? ` \u00b7 ${escapeHtml(i.note)}` : ""}`
+          : "Not checked yet: a quote from this prospect is shown but does not count toward the minimum and cannot be selected."}
+        ${i.registered_by ? `<div class="cell-muted" style="font-size:11px;margin-top:4px;">Registered by ${escapeHtml(i.registered_by)}${(i.invited_by || []).length ? `; invited by ${escapeHtml(i.invited_by.join(", "))}` : ""}. They do not check its identity or clear its flags.</div>` : ""}
+      </div>
+      ${flags.length ? `<table class="data-table" style="margin-top:8px;"><thead><tr><th>FLAG</th><th>WITH</th><th>WHAT MATCHED</th><th>STATE</th></tr></thead><tbody>
+        ${flags.map((f) => `<tr><td>${escapeHtml(f.kind.replace(/_/g, " "))}</td><td>${escapeHtml(f.other_ref || "")}</td><td class="cell-muted">${escapeHtml(f.detail || "")}</td>
+          <td>${f.cleared_at ? `cleared by ${escapeHtml(f.cleared_by)}: ${escapeHtml(f.clear_reason || "")}` : (v.can_check_identity ? `<input class="flag-reason" data-id="${f.id}" placeholder="Why it is fine (needed)" style="padding:4px;font-size:11.5px;"> <span class="btn btn-secondary btn-sm flag-clear" data-id="${f.id}" style="padding:2px 8px;font-size:11px;">Clear</span>` : '<span class="badge badge-rejected">open</span>')}</td></tr>`).join("")}
+      </tbody></table>` : ""}
+      ${methods.length ? `<div style="margin-top:10px;display:flex;gap:6px;flex-wrap:wrap;align-items:center;font-size:12.5px;">
+        <select id="idMethod" style="padding:5px;">${methods.map((m) => `<option value="${escapeHtml(m)}">${escapeHtml(m.replace(/_/g, " "))}</option>`).join("")}</select>
+        ${proofs.length ? proofs.map((d) => `<label><input type="checkbox" class="id-proof" value="${files[String(d.id)].id}"> ${escapeHtml(d.type)}</label>`).join("") : '<span class="cell-muted">Attach a scan of the PAN card or GST certificate below first.</span>'}
+        <input id="idNote" placeholder="What you checked (needed)" style="padding:5px;min-width:220px;">
+        <div class="btn btn-primary btn-sm" id="idCheck">Record the identity check</div></div>` : ""}
+      <p id="idNote2" style="font-size:12px;color:var(--warning-text);margin:6px 0 0;"></p>`;
+    const note = box.querySelector("#idNote2");
+    box.querySelectorAll(".flag-clear").forEach((b) => b.addEventListener("click", async () => {
+      const reason = box.querySelector(`.flag-reason[data-id="${b.dataset.id}"]`).value.trim();
+      const res = await API.postJSON(`/api/vendors/${encodeURIComponent(id)}/flags/${b.dataset.id}/clear`, { reason });
+      if (res.ok) return reload();
+      note.textContent = res.data.detail || "The flag was not cleared.";
+    }));
+    const check = box.querySelector("#idCheck");
+    if (check) check.addEventListener("click", async () => {
+      const res = await API.postJSON(`/api/vendors/${encodeURIComponent(id)}/identity-check`, {
+        method: box.querySelector("#idMethod").value,
+        document_ids: [...box.querySelectorAll(".id-proof:checked")].map((c) => Number(c.value)),
+        note: box.querySelector("#idNote").value.trim(),
+      });
+      if (res.ok) return reload();
+      note.textContent = res.data.detail || "The identity check was not recorded.";
+    });
+  },
+
+  // D44: the categories the supplier is approved for, from when and where; a change waits for another person
+  async showApproved(box, id, v) {
+    if (!box) return;
+    const rows = v.approved_for || [];
+    box.innerHTML = `<div class="panel-title">Approved for</div>
+      ${rows.length ? `<table class="data-table"><thead><tr><th>CATEGORY</th><th>FROM</th><th>WHERE</th></tr></thead><tbody>
+        ${rows.map((c) => `<tr><td>${escapeHtml(c.code)}</td><td>${c.approved_from ? formatDate(c.approved_from) : "\u2014"}</td><td>${escapeHtml(c.where)}</td></tr>`).join("")}</tbody></table>`
+        : '<p class="cell-muted" style="font-size:12px;margin:0;">Not approved for any category: it cannot be asked to quote.</p>'}
+      ${v.can_propose ? '<div style="margin-top:8px;"><span class="btn btn-secondary btn-sm" id="scopeOpen">Ask for a change</span></div><div id="scopeForm"></div>' : ""}`;
+    const open = box.querySelector("#scopeOpen");
+    if (!open) return;
+    open.addEventListener("click", async () => {
+      const form = box.querySelector("#scopeForm");
+      if (form.innerHTML) { form.innerHTML = ""; return; }
+      let regions = [];
+      try { regions = await API.getJSON("/api/regions"); } catch { /* everywhere only */ }
+      const places = regions.flatMap((r) => [[`r:${r.code}`, `${r.name} (region)`], ...r.locations.map((l) => [`l:${l.code}`, `${l.name}`])]);
+      form.innerHTML = `<div style="margin-top:10px;display:flex;gap:6px;flex-wrap:wrap;align-items:flex-start;font-size:12.5px;">
+        <input id="scopeCat" placeholder="Category, e.g. PKG" style="padding:5px;width:150px;">
+        <input id="scopeFrom" type="date" title="Approved from" style="padding:5px;">
+        <select id="scopeWhere" multiple size="${Math.min(6, Math.max(2, places.length))}" title="Where (none chosen: everywhere)" style="padding:5px;min-width:200px;">${places.map(([v2, l]) => `<option value="${escapeHtml(v2)}">${escapeHtml(l)}</option>`).join("")}</select>
+        <input id="scopeReason" placeholder="Why? (needed)" style="padding:5px;min-width:200px;">
+        <div class="btn btn-primary btn-sm" id="scopeSend">Send for approval</div></div>
+        <div class="cell-muted" style="font-size:11px;margin-top:4px;">Choose nothing under where for everywhere. A person other than you approves it (Admin \u2192 Approvals).</div>
+        <p id="scopeNote" style="font-size:12px;margin:6px 0 0;"></p>`;
+      form.querySelector("#scopeSend").addEventListener("click", async () => {
+        const chosen = [...form.querySelector("#scopeWhere").selectedOptions].map((o) => o.value);
+        const res = await API.postJSON(`/api/vendors/${encodeURIComponent(id)}/categories`, {
+          category: form.querySelector("#scopeCat").value.trim().toUpperCase(),
+          approved_from: form.querySelector("#scopeFrom").value || null,
+          scope: { regions: chosen.filter((c) => c.startsWith("r:")).map((c) => c.slice(2)), locations: chosen.filter((c) => c.startsWith("l:")).map((c) => c.slice(2)) },
+          reason: form.querySelector("#scopeReason").value.trim(),
+        });
+        form.querySelector("#scopeNote").textContent = res.ok ? `Waiting for approval (proposal ${res.data.proposal_id}). Nothing changes until another person approves it.` : (res.data.detail || "Not sent.");
+      });
     });
   },
 
@@ -247,13 +360,15 @@ const VendorsView = {
               <span class="btn btn-secondary btn-sm" id="docAdd">Add a document</span><span id="docNote" style="font-size:12px;color:var(--warning-text);"></span></div>
               <div class="cell-muted" style="font-size:11px;margin-top:4px;">A document counts once a person other than the one who added it has checked it against the original and verified it.</div>` : ""}
           </div>` : ""}
+        ${v.identity && (v.identity.prospect || v.identity.checked || (v.identity.flags || []).length) ? '<div class="panel" id="identityPanel" style="margin-bottom:16px;"></div>' : ""}
+        <div class="panel" id="approvedPanel" style="margin-bottom:16px;"></div>
         <div class="panel" style="margin-bottom:16px;">
           <div class="panel-title">Vendor status: ${escapeHtml(v.status || "")}</div>
           ${v.verification_note ? `<p style="color:var(--text-muted);font-size:11px;margin:0 0 10px;">Verification note: ${escapeHtml(v.verification_note)}</p>` : ""}
           ${v.pending_change ? `<p style="font-size:12.5px;color:var(--warning-text);margin:0 0 10px;">Waiting for approval: ${escapeHtml(v.pending_change.summary)} (approve it under Admin → Approvals).</p>` : ""}
           ${v.can_propose && !v.pending_change ? `
             <div style="display:flex;gap:8px;flex-wrap:wrap;">
-              ${(({ draft: [["active", "Activate"]], active: [["blocked", "Block"], ["draft", "Put under review"]], blocked: [["active", "Reactivate"]] })[v.status] || []).map(([to, label]) => `<div class="btn btn-secondary vendor-status-btn" data-to="${escapeHtml(to)}" style="font-size:11.5px;padding:6px 12px;">${escapeHtml(label)}</div>`).join("")}
+              ${(({ draft: [["active", "Activate"]], active: [["blocked", "Block"], ["draft", "Put under review"]], blocked: [["active", "Reactivate"]], prospect: [["active", "Activate"], ["blocked", "Block"]] })[v.status] || []).map(([to, label]) => `<div class="btn btn-secondary vendor-status-btn" data-to="${escapeHtml(to)}" style="font-size:11.5px;padding:6px 12px;">${escapeHtml(label)}</div>`).join("")}
             </div>
             <div id="statusReasonBox" style="display:none;margin-top:10px;">
               <input id="statusReason" placeholder="Why? (needed)" style="width:60%;padding:6px 8px;font-size:12.5px;">
@@ -275,6 +390,9 @@ const VendorsView = {
         </div>
       `;
 
+      const identityBox = document.getElementById("identityPanel");
+      if (identityBox) this.showIdentity(identityBox, id, v, files, () => this.renderDetail(container, id));
+      this.showApproved(document.getElementById("approvedPanel"), id, v);
       const detailsBox = document.getElementById("detailsPanel");
       if (detailsBox && profile) this.showDetails(detailsBox, id, profile, terms, () => this.renderDetail(container, id));
       container.querySelectorAll(".doc-open").forEach((a) => a.addEventListener("click", (e) => { e.preventDefault(); this.openFile(a.dataset.file, a.dataset.name); }));

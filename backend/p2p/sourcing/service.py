@@ -27,6 +27,7 @@ from p2p.formulas.contracts import ceiling_breach
 from p2p.formulas.money import format_inr, format_qty
 from p2p.formulas.sourcing import PriceOption, pick_contract_price
 from p2p.formulas.words import count
+from p2p.masters import regions
 from p2p.orders import contracts as contract_usage
 from p2p.platform import audit, emails, numbering, proposals, reference, worker
 from p2p.platform.sod import Actor
@@ -106,24 +107,42 @@ def _app_setting(db: Session, key: str, default: str) -> str:
 # ---- contract or quotation --------------------------------------------------------------------
 
 
-def contract_options(db: Session, item_code: str, uom: str | None, as_of: date) -> list[PriceOption]:
-    """Contract prices for the item in force on the date: the price record (its active version), its contract and the
-    supplier all valid.
+def contract_options(
+    db: Session, item_code: str, uom: str | None, as_of: date, location: str | None = None
+) -> list[PriceOption]:
+    """Contract prices for the item in force on the date at the delivery location: the price record (its active version)
+    applies there (D44), and its contract and the supplier are valid. With no location (a report) every price counts.
 
     A price record without a contract is only a price list, not a commitment, so it does not count here.
     """
     rows = db.execute(
         text(
-            "select pr.supplier_code, pr.contract_code, pr.price, coalesce(pr.min_qty, 0) as min_qty, pr.lead_days, pr.valid_to, pr.id "
+            "select pr.supplier_code, pr.contract_code, pr.price, coalesce(pr.min_qty, 0) as min_qty, pr.lead_days, pr.valid_to, pr.id "  # noqa: S608
             "from price_record pr join contract c on c.code = pr.contract_code join supplier s on s.code = pr.supplier_code "
             "where pr.item_code = :item and pr.uom is not distinct from :uom and pr.status = 'active' "
             "and pr.valid_from <= :d and (pr.valid_to is null or pr.valid_to >= :d) "
             "and c.status = 'active' and c.valid_from <= :d and (c.valid_to is null or c.valid_to >= :d) "
-            "and s.status = 'active'"
+            f"and s.status = 'active' and {regions.price_in_scope('pr')}"
         ),
-        {"item": item_code, "uom": uom, "d": as_of},
+        {"item": item_code, "uom": uom, "d": as_of, "loc": location},
     ).all()
     return [PriceOption(r[0], r[1], r[2], r[3], r[4], r[5], r[6]) for r in rows]
+
+
+def scoped_out(db: Session, item_code: str, uom: str | None, as_of: date, location: str | None) -> list[str]:
+    """Contract prices in force that apply somewhere else, in words ('CNT-0001 applies in Maharashtra plants only')."""
+    rows = db.execute(
+        text(
+            "select pr.contract_code, pr.location_code, pr.region_code from price_record pr "  # noqa: S608
+            "join contract c on c.code = pr.contract_code where pr.item_code = :item and pr.uom is not distinct from :uom "
+            "and pr.status = 'active' and pr.valid_from <= :d and (pr.valid_to is null or pr.valid_to >= :d) "
+            "and c.status = 'active' and c.valid_from <= :d and (c.valid_to is null or c.valid_to >= :d) "
+            f"and not {regions.price_in_scope('pr')} order by pr.contract_code"
+        ),
+        {"item": item_code, "uom": uom, "d": as_of, "loc": location},
+    ).all()
+    words = regions.names(db)
+    return list(dict.fromkeys(f"{r[0]} applies in {words.get(r[1] or r[2], r[1] or r[2])} only" for r in rows))
 
 
 def _supplier_name(db: Session, code: str) -> str:
@@ -145,13 +164,14 @@ def _best_vendor(db: Session, line: dict[str, Any], as_of: date, base: dict[str,
     qty = Decimal(line["qty"])
     rows = db.execute(
         text(
-            "select p.supplier_code, p.contract_code, p.price, coalesce(p.min_qty, 0) as min_qty, p.id "
+            "select p.supplier_code, p.contract_code, p.price, coalesce(p.min_qty, 0) as min_qty, p.id "  # noqa: S608
             "from price_record p join supplier s on s.code = p.supplier_code left join contract c on c.code = p.contract_code "
             "where p.item_code = :i and p.uom is not distinct from :u and p.status = 'active' and p.valid_from <= :d "
             "and (p.valid_to is null or p.valid_to >= :d) and s.status = 'active' "
-            "and (p.contract_code is null or (c.status = 'active' and c.valid_from <= :d and (c.valid_to is null or c.valid_to >= :d)))"
+            "and (p.contract_code is null or (c.status = 'active' and c.valid_from <= :d and (c.valid_to is null or c.valid_to >= :d))) "
+            f"and {regions.price_in_scope('p')}"
         ),
-        {"i": line["item_code"], "u": line["uom"], "d": as_of},
+        {"i": line["item_code"], "u": line["uom"], "d": as_of, "loc": line.get("delivery_location")},
     ).mappings()
     per_supplier: dict[str, dict[str, Any]] = {}
     for r in rows:
@@ -251,7 +271,7 @@ _METHOD = {"single_source": "direct", "emergency": "direct", "reorder": "direct"
 
 def _on_contract(db: Session, line: dict[str, Any], as_of: date, base: dict[str, Any]) -> LineOutcome:
     """The contract the line can be bought on (method contract), or why not (method rfq)."""
-    options = contract_options(db, line["item_code"], line["uom"], as_of)
+    options = contract_options(db, line["item_code"], line["uom"], as_of, line.get("delivery_location"))
     blocked = {
         code: docs.blocking
         for code in sorted({o.supplier_code for o in options})
@@ -266,6 +286,8 @@ def _on_contract(db: Session, line: dict[str, Any], as_of: date, base: dict[str,
             why = "The contract supplier cannot be used: " + "; ".join(
                 f"{code}: {', '.join(problems)}" for code, problems in blocked.items()
             )
+        elif elsewhere := scoped_out(db, line["item_code"], line["uom"], as_of, line.get("delivery_location")):
+            why = "No contract here: " + "; ".join(elsewhere)
         else:
             why = "No contract price in force for this item"
         return LineOutcome(**base, method="rfq", reason=why)
@@ -299,9 +321,10 @@ def _on_contract(db: Session, line: dict[str, Any], as_of: date, base: dict[str,
 
 
 def eligible_suppliers(
-    db: Session, category: str, item_codes: list[str], as_of: date
+    db: Session, category: str, item_codes: list[str], as_of: date, location: str | None = None
 ) -> tuple[list[Invitee], list[str]]:
-    """Active suppliers approved for the category that have an email address and are not on the sanctions list.
+    """Active suppliers approved for the category at the delivery location (D44) that have an email address and are not
+    on the sanctions list.
 
     Those that already have prices for these items come first, then the rest by code, so the choice is repeatable.
     Returns the suppliers and a note for each one left out.
@@ -309,7 +332,7 @@ def eligible_suppliers(
     sanctioned = _sanctioned_names(db)
     rows = db.execute(
         text(
-            "select s.code, s.legal_name, coalesce(s.trade_name, s.legal_name) as name, s.trade_name, "
+            "select s.code, s.legal_name, coalesce(s.trade_name, s.legal_name) as name, s.trade_name, "  # noqa: S608
             "(select c.email from supplier_contact c where c.supplier_code = s.code and c.email is not null "
             "   order by c.is_primary desc nulls last, c.id limit 1) as email, "
             "(select c.name from supplier_contact c where c.supplier_code = s.code and c.email is not null "
@@ -318,9 +341,9 @@ def eligible_suppliers(
             "and p.status = 'active') as history "
             "from supplier s join supplier_category sc on sc.supplier_code = s.code and sc.category_code = :cat "
             "and (sc.approved_from is null or sc.approved_from <= :d) "
-            "where s.status = 'active' order by history desc, s.code"
+            f"where s.status = 'active' and {regions.approved_in_scope('sc')} order by history desc, s.code"
         ),
-        {"cat": category, "items": item_codes, "d": as_of},
+        {"cat": category, "items": item_codes, "d": as_of, "loc": location},
     ).mappings()
     chosen: list[Invitee] = []
     notes: list[str] = []
@@ -363,8 +386,10 @@ def source_request(
         for r in db.execute(
             text(
                 "select rl.line_no, rl.item_code, coalesce(i.name, rl.free_text) as name, rl.qty, rl.uom, rl.need_by, "
-                "rl.est_price, i.standard_price, coalesce(nullif(rl.category_code, ''), i.category_code) as category "
-                "from request_line rl left join item i on i.code = rl.item_code where rl.request_no = :n "
+                "rl.est_price, i.standard_price, coalesce(nullif(rl.category_code, ''), i.category_code) as category, "
+                "coalesce(rl.delivery_location, r.ship_to_location) as delivery_location "
+                "from request_line rl join request r on r.no = rl.request_no "
+                "left join item i on i.code = rl.item_code where rl.request_no = :n "
                 "and rl.status = 'open' and not exists (select 1 from sourcing_decision d "
                 "where d.request_no = rl.request_no and d.line_no = rl.line_no) order by rl.line_no"
             ),
@@ -377,15 +402,16 @@ def source_request(
         return result
 
     router = route.Router(db, as_of)
-    quote_lines: dict[str | None, list[tuple[dict[str, Any], LineOutcome]]] = {}
+    # one RFQ per category and delivery location (D44): who may be asked depends on where the goods go
+    quote_lines: dict[tuple[str | None, str | None], list[tuple[dict[str, Any], LineOutcome]]] = {}
     for line in lines:
         outcome = _decide(db, router, line, req["priority"] == "emergency", as_of)
         result.lines.append(outcome)
         if outcome.method == "rfq":
-            quote_lines.setdefault(line["category"], []).append((line, outcome))
+            quote_lines.setdefault((line["category"], line["delivery_location"]), []).append((line, outcome))
 
-    for category, group in quote_lines.items():
-        _quotation(db, req, category, group, as_of, actor, result)
+    for (category, location), group in quote_lines.items():
+        _quotation(db, req, category, location, group, as_of, actor, result)
 
     for outcome in result.lines:
         _save_decision(db, request_no, outcome, as_of)
@@ -421,6 +447,7 @@ def _quotation(
     db: Session,
     req: dict[str, Any],
     category: str | None,
+    location: str | None,
     group: list[tuple[dict[str, Any], LineOutcome]],
     as_of: date,
     actor: Actor,
@@ -438,26 +465,33 @@ def _quotation(
     cat = db.execute(
         text("select name, min_quotes, buyer_user from item_category where code = :c"), {"c": category}
     ).first()
-    min_quotes = int(cat[1]) if cat and cat[1] else int(_org_setting(db, "min_quotes_default", "2"))
-    min_quotes = max(min_quotes, *(o.min_quotes for _, o in group))  # the route's value bands can ask for more
+    min_quotes, min_rule = quotation_count(db, category, cat[1] if cat else None, group)
     wanted = max(int(_app_setting(db, "rfq_supplier_count", "3")), min_quotes)
     items = [line["item_code"] for line, _ in group if line["item_code"]]
-    suppliers, left_out = eligible_suppliers(db, category, items, as_of)
+    suppliers, left_out = eligible_suppliers(db, category, items, as_of, location)
     result.notes.extend(left_out)
+    note = None
     if not suppliers:
-        return give_up(f"No active supplier approved for category {category} with an email address")
+        where = ""
+        if location and int(db.execute(text("select count(*) from location")).scalar_one()) > 1:
+            where = f" (for delivery at {regions.names(db).get(location, location)})"
+        none_approved = f"No active supplier approved for category {category} with an email address{where}"
+        if not _has_prospects(db, category):
+            return give_up(none_approved)
+        # a registered prospect of the category can still be invited (D-03 R1): the RFQ waits for the buyer to do so
+        note = f"{none_approved}: invite a prospect"
+        result.notes.append(note)
     invited = suppliers[:wanted]
 
     rfq_no = numbering.next_number(db, "rfq", as_of)
     due = reference.calendar_for(db).add_working_days(as_of, int(_org_setting(db, "default_rfq_response_days", "5")))
-    note = None
-    if len(invited) < min_quotes:
+    if invited and len(invited) < min_quotes:
         note = f"Only {count(len(invited), 'supplier')} {'is' if len(invited) == 1 else 'are'} approved for {category}; at least {min_quotes} quotes are wanted"
         result.notes.append(note)
     db.execute(
         text(
-            "insert into rfq (no, buyer, request_no, category_code, due_date, status, note, min_quotes) "
-            "values (:no, :buyer, :req, :cat, :due, 'draft', :note, :mq)"
+            "insert into rfq (no, buyer, request_no, category_code, due_date, status, note, min_quotes, "
+            "min_quotes_rule, delivery_location) values (:no, :buyer, :req, :cat, :due, 'draft', :note, :mq, :mqr, :loc)"
         ),
         {
             "no": rfq_no,
@@ -467,6 +501,8 @@ def _quotation(
             "due": due,
             "note": note,
             "mq": min_quotes,
+            "mqr": min_rule,
+            "loc": location,
         },
     )
     for n, (line, outcome) in enumerate(group, start=1):
@@ -509,6 +545,36 @@ def _quotation(
         },
     )
     result.rfqs.append(rfq_no)
+
+
+def _has_prospects(db: Session, category: str) -> bool:
+    """A prospect registered for the category, who a buyer may invite to its RFQ."""
+    return (
+        db.execute(
+            text(
+                "select 1 from supplier s join supplier_category c on c.supplier_code = s.code "
+                "where s.status = 'prospect' and c.category_code = :c limit 1"
+            ),
+            {"c": category},
+        ).first()
+        is not None
+    )
+
+
+def quotation_count(
+    db: Session, category: str | None, category_min: int | None, group: list[tuple[dict[str, Any], LineOutcome]]
+) -> tuple[int, str]:
+    """How many quotes the RFQ wants and the rule that said so (R12): the category's minimum, else the company's
+    default, raised by the buying route's value bands. Stored on the RFQ; every reader uses the stored value."""
+    if category_min:
+        count_, rule = int(category_min), f"category {category}"
+    else:
+        count_, rule = int(_org_setting(db, "min_quotes_default", "2")), "setting min_quotes_default"
+    route_min = max((o.min_quotes for _, o in group), default=0)
+    if route_min > count_:
+        rules_used = sorted({o.route_rule for _, o in group if o.min_quotes == route_min and o.route_rule})
+        count_, rule = route_min, ", ".join(rules_used) or "buying route"
+    return count_, rule
 
 
 def _save_decision(db: Session, request_no: str, outcome: LineOutcome, decided_on: date) -> None:
@@ -584,9 +650,11 @@ def _decision(db: Session, request_no: str, line_no: int) -> dict[str, Any]:
             text(
                 "select d.*, rl.item_code, coalesce(i.name, rl.free_text) as name, rl.qty, rl.need_by, "
                 "coalesce(nullif(rl.category_code, ''), i.category_code) as category, "
+                "coalesce(rl.delivery_location, r.ship_to_location) as delivery_location, "
                 "exists (select 1 from po_line p where p.request_no = d.request_no and p.request_line_no = d.line_no "
                 "and p.status <> 'cancelled') as ordered from sourcing_decision d join request_line rl "
-                "on rl.request_no = d.request_no and rl.line_no = d.line_no left join item i on i.code = rl.item_code "
+                "on rl.request_no = d.request_no and rl.line_no = d.line_no join request r on r.no = rl.request_no "
+                "left join item i on i.code = rl.item_code "
                 "where d.request_no = :n and d.line_no = :l for update of d"
             ),
             {"n": request_no, "l": line_no},
@@ -705,7 +773,7 @@ def _tighten(
         outcome.min_quotes = quotes_needed(old["window_value"], route.rule_for(db, old["category"], as_of))
     db.execute(text("delete from sourcing_decision where id = :i"), {"i": old["id"]})
     result = SourcingResult(request_no)
-    _quotation(db, req, old["category"], [(old, outcome)], as_of, actor, result)
+    _quotation(db, req, old["category"], old["delivery_location"], [(old, outcome)], as_of, actor, result)
     _save_decision(db, request_no, outcome, old["decided_on"] or as_of)
     audit.record(
         db,
@@ -781,13 +849,24 @@ def _take_off_rfq(db: Session, rfq_no: str, request_no: str, line_no: int, actor
 # ---- sending ----------------------------------------------------------------------------------
 
 
+def confirm_send(db: Session, rfq_no: str, actor: Actor) -> None:
+    """Ask for (or give) the confirmation to send an RFQ that went out to nobody yet, once someone is invited to it."""
+    row = db.execute(
+        text("select r.no, r.total_value from rfq q join request r on r.no = q.request_no where q.no = :n"),
+        {"n": rfq_no},
+    ).one()
+    _dispatch(db, rfq_no, Decimal(row[1] or 0), actor, SourcingResult(str(row[0])))
+
+
 def _dispatch(db: Session, rfq_no: str, value: Decimal, actor: Actor, result: SourcingResult) -> None:
+    asked = db.execute(text("select count(*) from rfq_supplier where rfq_no = :r"), {"r": rfq_no}).scalar_one()
+    if not asked:  # only prospects may be asked: nothing to send until the buyer invites one (confirm_send)
+        return
     gate = autonomy.gate(db, DECISION_TYPE, value=value, confidence=1.0)  # nothing here is a model's guess
     if gate.allowed:
         result.sent += send_rfq(db, rfq_no, actor)
         autonomy.record_outcome(db, DECISION_TYPE, auto=True, ref=rfq_no)
         return
-    asked = db.execute(text("select count(*) from rfq_supplier where rfq_no = :r"), {"r": rfq_no}).scalar_one()
     pid = proposals.propose(
         db,
         SERVICE,

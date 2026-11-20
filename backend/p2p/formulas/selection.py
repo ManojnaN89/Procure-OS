@@ -81,9 +81,10 @@ class OfferFacts:
     gst_rate: Decimal
     expected_gst_rate: Decimal | None  # the item's rate on the date
     supplier_status: str | None
-    approved: bool  # approved for the RFQ's category on the date
+    approved: bool  # approved for the RFQ's category on the date, at its delivery location (D44)
     gst_reg_type: str | None
     gstin: str | None
+    location_name: str | None = None  # where the goods go, for the words
 
 
 def days_late(as_of: date, delivery_days: int | None, need_by: date | None) -> int:
@@ -107,10 +108,14 @@ def must_haves(f: OfferFacts) -> list[str]:
         out.append(f"delivers {count(late, 'day')} after it is needed")
     if f.expected_gst_rate is not None and f.gst_rate != f.expected_gst_rate:
         out.append(f"GST rate {format_qty(f.gst_rate)}% differs from the expected {format_qty(f.expected_gst_rate)}%")
-    if f.supplier_status != "active":
+    if f.supplier_status not in ("active", "prospect"):  # a prospect may quote (D-03 R1); whether it counts is apart
         out.append(f"supplier is {f.supplier_status or 'not set up'}, not active")
     elif not f.approved:
-        out.append("supplier is not approved for this category")
+        out.append(
+            f"not approved for this category at {f.location_name}"
+            if f.location_name
+            else "supplier is not approved for this category"
+        )
     if f.gst_reg_type in REGISTERED and not f.gstin:
         out.append("GST details missing: no GSTIN on file for a registered supplier")
     return out

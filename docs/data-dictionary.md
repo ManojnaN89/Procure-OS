@@ -35,7 +35,9 @@ The single reference for every table the platform stores and the generator produ
 
 **gst_registration** · gstin, state_code, legal_address, pincode, is_default · *buyer GSTIN on PO and invoice must match the delivery state*
 
-**location** · code, name, type enum(office,plant,warehouse), gstin →gst_registration, address, city, state_code, pincode, is_stock_location, working_days (e.g. Mon-Sat), receiving_hours, holiday_scope (central + state), head_user →user (the plant or office head; approver role source `location_head`) · *ship-to, stock, calendar*
+**location** · code, name, type enum(office,plant,warehouse), gstin →gst_registration, address, city, state_code, pincode, is_stock_location, working_days (e.g. Mon-Sat), receiving_hours, holiday_scope (central + state), head_user →user (the plant or office head; approver role source `location_head`), region_code →region · *ship-to, stock, calendar*
+
+**region** · code, name · *a named group of locations; a location is in at most one (D44). A supplier approval or a contract price limited to a region applies at its locations only*
 
 **department** · code, name, head_user →user
 
@@ -79,7 +81,7 @@ The single reference for every table the platform stores and the generator produ
 
 ### B4. Suppliers
 
-**supplier** · code, legal_name, trade_name, legal_form enum(pvt_ltd,public_ltd,llp,partnership,proprietorship), pan, pan_status enum(operative,inoperative), cin_llpin, gst_reg_type enum(regular,composition,unregistered), turnover_band, e_invoice_applicable, hsn_digits enum(4,6), msme_category enum(micro,small,medium,none), udyam_no, msme_agreement bool, agreed_payment_days, payment_terms_code, tds_section_default, lower_tds_rate, lower_tds_valid_to, lower_tds_limit, reverse_charge, status enum(draft,active,blocked), blocked_reason, website
+**supplier** · code, legal_name, trade_name, legal_form enum(pvt_ltd,public_ltd,llp,partnership,proprietorship), pan, pan_status enum(operative,inoperative), cin_llpin, gst_reg_type enum(regular,composition,unregistered), turnover_band, e_invoice_applicable, hsn_digits enum(4,6), msme_category enum(micro,small,medium,none), udyam_no, msme_agreement bool, agreed_payment_days, payment_terms_code, tds_section_default, lower_tds_rate, lower_tds_valid_to, lower_tds_limit, reverse_charge, status enum(draft,active,blocked,prospect), blocked_reason, website, registered_by (who registered a prospect), invited_by (the buyer who first invited it), identity_checked_by, identity_checked_at, identity_method (one of the setting `identity_check_methods`), identity_document_ids, identity_note · *a prospect (D-03) may be invited and quote; its quote counts only after an identity check by a person other than its registerer or inviter and with no open flag; it is activated by the usual proposal*
 
 **supplier_address** · supplier_code, type enum(registered,dispatch,billing), gstin (a supplier can hold one per state), address, city, state_code, pincode · *the dispatching GSTIN decides IGST vs CGST+SGST*
 
@@ -87,7 +89,11 @@ The single reference for every table the platform stores and the generator produ
 
 **supplier_bank_account** · supplier_code, bank_code, account_no (fictional; lists show the last four digits), ifsc, verified bool, verified_on, submitted_by (who entered it or asked for the change: never its verifier), verification_method (one of the setting `bank_verification_methods`), evidence_document_id (the proof), verified_by, verified_at · *a new or changed account is unverified and never put in a payment run until a second person verifies it*
 
-**supplier_category** · supplier_code, category_code, approved_from
+**supplier_category** · supplier_code, category_code, approved_from · *for a prospect: the category it may be invited for, not an approval*
+
+**supplier_category_scope** · supplier_code, category_code (→supplier_category), location_code or region_code (exactly one) · *no rows: approved everywhere; rows: only at those locations and regions (D44). Changed through the proposal `supplier.approve_category` (permission `supplier.activate`, never the asker)*
+
+**supplier_flag** · supplier_code, kind enum(same_contact,same_address,same_domain,staff_contact,blocked_match,same_quote), other_ref (the other supplier or staff member), detail, raised_at, cleared_by, cleared_at, clear_reason · *a possible conflict for independent review (D-03 R8), never a verdict; an open flag keeps a prospect's quote from counting, and two suppliers an open flag links count as one*
 
 **supplier_document** · supplier_code, doc_type enum(gst_cert,pan,udyam,msme_agreement,iso,licence,insurance,lower_tds_cert,cancelled_cheque), number, issued_on, expires_on, verified, file_ref
 
@@ -101,9 +107,15 @@ The single reference for every table the platform stores and the generator produ
 
 **contract** · code, supplier_code, type enum(rate_contract,service_contract,annual_maintenance), valid_from, valid_to, max_value, payment_terms_code, delivery_terms enum(for_destination,ex_works,door_delivery), freight_terms, warranty_months, sla_text, status enum(draft,active,expired,terminated), created_by (never activates it)
 
-**price_record** · supplier_code, item_code, contract_code (optional), uom, price, min_qty (quantity break), price_basis enum(ex_works,for_destination), freight_included, valid_from, valid_to, lead_days, version, status enum(draft,active,withdrawn), created_by, activated_by, activated_at. A contract price is a version (D48): entered as a draft, used only once someone who neither stored the contract nor entered a price of that version activates it (with the contract, or on an active contract through a proposal); from its first day it ends the version in force the day before. Two contract prices of one supplier for the same item, unit and quantity break never apply on the same day
+**price_record** · supplier_code, item_code, contract_code (optional), uom, price, min_qty (quantity break), price_basis enum(ex_works,for_destination), freight_included, valid_from, valid_to, lead_days, version, status enum(draft,active,withdrawn), created_by, activated_by, activated_at. A contract price is a version (D48): entered as a draft, used only once someone who neither stored the contract nor entered a price of that version activates it (with the contract, or on an active contract through a proposal); from its first day it ends the version in force the day before. Two contract prices of one supplier for the same item, unit and quantity break never apply on the same day in a place both cover. A price may carry one location_code or one region_code (none: everywhere) and is never used outside it (D44)
 
-**tolerance** · key enum(price_pct,price_abs,qty_pct,small_diff_abs,receipt_over_pct,supplier_change_pct,supplier_date_days,supplier_price_pct), value, category_code|ANY
+**tolerance_version** · version, effective_from, effective_to, note, created_by, created_at · *the tolerance set is versioned as a whole (task 3.2); version 1 is the company's set from 2000-01-01; a change makes the next version from a date, ending the one in force the day before*
+
+**tolerance** · version →tolerance_version, key enum(price_pct,price_abs,qty_pct,small_diff_abs,receipt_over_pct,supplier_change_pct,supplier_date_days,supplier_price_pct), value, category_code|ANY · *an invoice is judged under the version in force on its received date, a receipt under its business date, a supplier change under the day the buyer decides; `match_result`, `invoice` and `goods_receipt` keep `tolerance_version`*
+
+**price_threshold_rule** · category_code (empty: the company), version, effective_from, effective_to, gap_pct, gap_inr_per_unit, min_saving_inr, evidence_max_age_days, min_sources, expiry_review_days, note, created_by, created_at · *when a contract price above the market opens a strategic review (D41, task 12.5); a category row may only be stricter; the default (5%, Rs 10 a unit, Rs 25,000 saving, 45 days, 1 source, 60 days before expiry) needs validating with each company (O2)*
+
+**market_benchmark** · item_code, price (per uom, before GST), uom, basis enum(delivered,ex_works), effective_date, region_code (empty: national), source_kind enum(index,price_list,market_survey,other), source_name, source_ref, document_id, note, status enum(unverified,verified,rejected), entered_by, entered_at, verified_by, verified_at, verify_note, rejected_reason, replaces · *evidence only (D52): never an estimate, a route, a quote ranking or an order price. Counts only when verified by someone other than its enterer, no older than the rule's freshness limit, for the region and in a convertible unit. A verified record is never edited: a correction replaces it*
 
 **stock_opening** · item_code, location_code, qty, unit_cost, as_of
 
@@ -129,7 +141,7 @@ A request is taken back and ended by its requester, not only by an approver. `re
 
 ### C2. Sourcing
 
-**rfq** · no, buyer, created_at, due_date, type enum(commercial,combined), weights json, delivery_terms, payment_terms_proposed, terms_version, status enum(draft,sent,closed,awarded,cancelled), sent_at
+**rfq** · no, buyer, created_at, due_date, type enum(commercial,combined), weights json, delivery_terms, payment_terms_proposed, terms_version, status enum(draft,sent,closed,awarded,cancelled), sent_at, delivery_location (one RFQ per category and delivery location, D44), min_quotes and min_quotes_rule (kept when the RFQ is made, e.g. `category RAW`, `setting min_quotes_default` or a buying route version; every reader uses them, D-03 R12)
 
 **rfq_line** · rfq_no, line_no, request_no, request_line_no, item_code, description, attributes json, qty, uom, need_by
 
@@ -139,7 +151,7 @@ A request is taken back and ended by its requester, not only by an approver. `re
 
 **quote_line** · quote_no, rfq_line_no, item_code, offered_brand, qty, moq, unit_price, discount_pct, gst_rate, delivery_days, deviation
 
-**award** · rfq_no, rfq_line_no, supplier_code, quote_no, qty, price, reason, overridden bool, by_user, at, split bool, selection_rule
+**award** · rfq_no, rfq_line_no, supplier_code, quote_no, qty, price, reason, overridden bool, by_user, at, split bool, selection_rule, conditional bool (a checked prospect: no order until it is active), lapsed_at, lapse_reason (not activated within `prospect_qualification_days` working days, or its activation rejected; nothing is awarded to anyone else automatically), awarded_on (the business date of the award: the deadline counts from it)
 
 Supplier selection (plan step 6, P1-34). A quote is dropped when it fails a must-have, each with its reason: delivered after the need-by date (on the date is on time), expired (valid until today still counts), a minimum order above the quantity, a GST rate other than the item's, a supplier not `active` or not approved for the RFQ's category on the date (`supplier_category.approved_from`), or a GST-registered supplier (`regular`, `composition`) with no GSTIN. The rest are ranked on total cost: quantity times the net price, plus the line's share of the quote's freight and packing, plus GST only when the input credit cannot be claimed (the rule claims it and the delivery place, or the default registration, has a GSTIN); a composition or unregistered supplier charges no GST. `quote_line.qty` is what the supplier offers, less than asked when it can supply only part. How quotes are compared is a row of `supplier_selection_rule` (version, effective_from, effective_to, `method` `total_cost` or `weighted`, `weight_price`, `weight_delivery`, `weight_quality`, `weight_payment_terms`, `tie_break` e.g. `delivery,vendor_score`, `input_credit`; plan default v1: total cost, 40/30/20/10, claim the credit); a change adds the next version and closes the old one (audit `supplier_selection.change`). The weighted score is price (lowest cost over this cost), delivery and quality (the vendor score's parts) and payment terms (the quote's or the supplier's days over the longest on offer). Equal results go by the tie-break, then the supplier code. A line is split between suppliers only when the best split (every group of two or more offers, cheapest per unit first, within what each offers) saves more on the goods than it adds in freight, or when no one quote covers the quantity. A selection needs a written reason when it is not the recommended, cheapest qualifying offer (or the recommended split), or when the line has fewer qualifying quotes than `rfq.min_quotes`. Each selected supplier is one `award` row with its part (`split` true when shared) and the rule version; the audit row `rfq.award` carries the ranking, the dropped reasons and the reason in words. Orders follow one per supplier; a shared line is one order line per quote (`po_line_request_line` is unique per request line and `source_ref`). The printable RFQ is a PDF per supplier asked (`/api/rfqs/{no}/suppliers/{code}/pdf`).
 
@@ -207,7 +219,7 @@ In the platform, `stock_movement` also has `source` (`import` for a loaded histo
 
 **invoice_charge** · invoice_no, type, amount, gst_rate, sac
 
-**match_result** · invoice_no, invoice_line_no, result enum(matched,within_tolerance,blocked), reason_codes, price_var, qty_var, resolved_by, resolved_at, resolution
+**match_result** · invoice_no, invoice_line_no, result enum(matched,within_tolerance,blocked), reason_codes, price_var, qty_var, resolved_by, resolved_at, resolution, tolerance_version (the version it was judged under; the invoice keeps the version of its latest match and a re-match uses it)
 
 **tds_entry** · invoice_no or payment_no, section, base, rate, amount, booked_on, quarter
 

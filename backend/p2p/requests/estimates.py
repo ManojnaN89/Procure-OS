@@ -14,10 +14,17 @@ from p2p.sourcing.service import contract_options
 
 
 def for_item(
-    db: Session, item_code: str, unit: str | None, qty: Decimal, as_of: date, standard: Decimal | None
+    db: Session,
+    item_code: str,
+    unit: str | None,
+    qty: Decimal,
+    as_of: date,
+    standard: Decimal | None,
+    location: str | None = None,
 ) -> Estimate | None:
-    """The estimate of `qty` of an item bought in `unit` on a date. None when the item has no price at all."""
-    contract = pick_contract_price(contract_options(db, item_code, unit, as_of), qty)
+    """The estimate of `qty` of an item bought in `unit` on a date for a delivery location (a regional contract price
+    only inside its scope). None when the item has no price at all. A market benchmark is never an estimate."""
+    contract = pick_contract_price(contract_options(db, item_code, unit, as_of, location), qty)
     return estimated_price(
         (contract.price, contract.contract_code) if contract else None,
         last_paid(db, [item_code]).get(item_code),

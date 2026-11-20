@@ -109,8 +109,10 @@ def test_every_login_has_the_same_throwaway_development_password_and_it_passes_t
 def test_six_suppliers_can_all_be_used_one_is_a_micro_enterprise_and_one_has_the_castings_contract(apex: Apex) -> None:
     db = apex.db
 
-    codes = [r[0] for r in db.execute(text("select code from supplier order by code"))]
+    codes = [r[0] for r in db.execute(text("select code from supplier where status = 'active' order by code"))]
     assert codes == [f"SUP-00{n}" for n in range(1, 7)]
+    others = db.execute(text("select code, status from supplier where status <> 'active' order by code")).all()
+    assert [tuple(r) for r in others] == [("SUP-007", "blocked"), ("SUP-008", "prospect"), ("SUP-009", "prospect")]
     for code in codes:
         assert documents.check_supplier(db, code, TODAY).ok, code
     micro = db.execute(

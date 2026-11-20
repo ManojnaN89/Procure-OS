@@ -16,6 +16,7 @@ from sqlalchemy.orm import Session
 from p2p.formulas import buying_route as br
 from p2p.formulas.money import round_money
 from p2p.formulas.sourcing import PriceOption, pick_contract_price
+from p2p.masters import regions
 from p2p.platform import audit
 from p2p.platform.sod import Actor
 from p2p.sourcing import documents
@@ -208,8 +209,9 @@ class Router:
         rule = rule_for(db, line["category"], self.as_of)
         single = self._single_source(item)
         last = self.last_purchase(item, line["uom"]) if item else None
-        last_price = self.price_on_file(last.supplier_code, item, line["uom"], qty) if last else None
-        single_price = self._known_price(single, item, line["uom"], qty, last) if single else None
+        loc = line.get("delivery_location")
+        last_price = self.price_on_file(last.supplier_code, item, line["uom"], qty, loc) if last else None
+        single_price = self._known_price(single, item, line["uom"], qty, last, loc) if single else None
         # the value is the price the line will be bought at when it is known (a contract, the single source), else the
         # requester's estimate, else the item's standard price, else what the last supplier charges now (or charged)
         unit = next(
@@ -253,7 +255,7 @@ class Router:
         elif choice.route == "reorder" and last:
             route.supplier_code, route.price = last.supplier_code, last_price or last.price
         elif choice.route == "emergency":
-            route.supplier_code, route.price = self._emergency_supplier(item, line["uom"], qty, last)
+            route.supplier_code, route.price = self._emergency_supplier(item, line["uom"], qty, last, loc)
         if item and line_value is not None:
             self._added[item] = self._added.get(item, Decimal(0)) + line_value
         return route
@@ -285,17 +287,20 @@ class Router:
         ).first()
         return Purchase(row[0], Decimal(row[1]), row[2]) if row else None
 
-    def price_on_file(self, supplier: str, item: str, uom: str | None, qty: Decimal) -> Decimal | None:
-        """The supplier's price in force for the item and quantity (a price list or a contract that is in force)."""
+    def price_on_file(
+        self, supplier: str, item: str, uom: str | None, qty: Decimal, location: str | None = None
+    ) -> Decimal | None:
+        """The supplier's price in force for the item and quantity at the delivery location (a price list or a contract
+        that is in force; a regional price only inside its scope, D44)."""
         rows = self.db.execute(
             text(
-                "select p.contract_code, p.price, coalesce(p.min_qty, 0), p.lead_days, p.valid_to from price_record p "
+                "select p.contract_code, p.price, coalesce(p.min_qty, 0), p.lead_days, p.valid_to from price_record p "  # noqa: S608
                 "left join contract c on c.code = p.contract_code where p.supplier_code = :s and p.item_code = :i "
                 "and p.uom is not distinct from :u and p.status = 'active' and p.valid_from <= :d and (p.valid_to is null or p.valid_to >= :d) "
                 "and (p.contract_code is null or (c.status = 'active' and c.valid_from <= :d "
-                "and (c.valid_to is null or c.valid_to >= :d)))"
+                f"and (c.valid_to is null or c.valid_to >= :d))) and {regions.price_in_scope('p')}"
             ),
-            {"s": supplier, "i": item, "u": uom, "d": self.as_of},
+            {"s": supplier, "i": item, "u": uom, "d": self.as_of, "loc": location},
         ).all()
         pick = pick_contract_price(
             [PriceOption(supplier, r[0] or "", Decimal(r[1]), Decimal(r[2]), r[3], r[4]) for r in rows], qty
@@ -324,21 +329,21 @@ class Router:
         return str(found) if found else None
 
     def _known_price(
-        self, supplier: str, item: str, uom: str | None, qty: Decimal, last: Purchase | None
+        self, supplier: str, item: str, uom: str | None, qty: Decimal, last: Purchase | None, location: str | None
     ) -> Decimal | None:
-        on_file = self.price_on_file(supplier, item, uom, qty)
+        on_file = self.price_on_file(supplier, item, uom, qty, location)
         if on_file is not None:
             return on_file
         return last.price if last and last.supplier_code == supplier else None
 
     def _emergency_supplier(
-        self, item: str | None, uom: str | None, qty: Decimal, last: Purchase | None
+        self, item: str | None, uom: str | None, qty: Decimal, last: Purchase | None, location: str | None
     ) -> tuple[str | None, Decimal | None]:
         """In an emergency the last supplier, if it can still be used; otherwise the lowest price on file."""
         if not item:
             return None, None
         if last and self.supplier_problem(last.supplier_code) is None:
-            return last.supplier_code, self._known_price(last.supplier_code, item, uom, qty, last)
+            return last.supplier_code, self._known_price(last.supplier_code, item, uom, qty, last, location)
         codes = [
             r[0]
             for r in self.db.execute(
@@ -351,7 +356,8 @@ class Router:
         priced = [
             (price, code)
             for code in codes
-            if self.supplier_problem(code) is None and (price := self.price_on_file(code, item, uom, qty)) is not None
+            if self.supplier_problem(code) is None
+            and (price := self.price_on_file(code, item, uom, qty, location)) is not None
         ]
         if not priced:
             return None, None

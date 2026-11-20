@@ -35,6 +35,7 @@ from p2p.ai_steps.runner import run_step
 from p2p.formulas import supplier_changes as rules
 from p2p.formulas.calendar import IST, business_today
 from p2p.formulas.money import format_inr, format_qty
+from p2p.invoices import tolerances
 from p2p.orders import confirmation, dispatch, dispatch_notes
 from p2p.platform import audit, emails, routing, tasks, worker
 from p2p.platform.sod import Actor
@@ -61,13 +62,9 @@ class Handled:
 
 
 def _tolerance(db: Session) -> tuple[int, Decimal]:
-    def value(key: str, default: str) -> str:
-        found = db.execute(
-            text("select value from tolerance where key = :k and category_code = 'ANY' limit 1"), {"k": key}
-        ).scalar()
-        return str(found) if found not in (None, "") else default
-
-    return int(Decimal(value("supplier_date_days", "3"))), Decimal(value("supplier_change_pct", "5"))
+    """The supplier change limits on the day the change is read, from the tolerance version in force then."""
+    tol = tolerances.in_force(db, business_today())
+    return int(tol.decimal("supplier_date_days", "3")), tol.decimal("supplier_change_pct", "5")
 
 
 def _setting(db: Session, key: str, default: str) -> str:

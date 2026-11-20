@@ -143,9 +143,10 @@ def ready_lines(db: Session, request_no: str, as_of: date) -> tuple[list[ReadyLi
             )
             continue
         # one row per supplier selected; a line shared between suppliers is ordered in parts, each from its own quote
-        for supplier, price, quote_no, gst_rate, part, split in db.execute(
+        for supplier, price, quote_no, gst_rate, part, split, conditional, lapsed, status in db.execute(
             text(
-                "select a.supplier_code, a.price, a.quote_no, ql.gst_rate, a.qty, a.split from award a "
+                "select a.supplier_code, a.price, a.quote_no, ql.gst_rate, a.qty, a.split, a.conditional, "
+                "a.lapsed_at is not null, (select s.status from supplier s where s.code = a.supplier_code) from award a "
                 "join rfq_line l on l.rfq_no = a.rfq_no and l.line_no = a.rfq_line_no "
                 "join quote_line ql on ql.quote_no = a.quote_no and ql.rfq_line_no = a.rfq_line_no "
                 "where a.rfq_no = :r and l.request_no = :n and l.request_line_no = :l and not exists ("
@@ -154,6 +155,12 @@ def ready_lines(db: Session, request_no: str, as_of: date) -> tuple[list[ReadyLi
             ),
             {"r": r["rfq_no"], "n": request_no, "l": r["line_no"]},
         ):
+            if lapsed:
+                notes.append(f"line {r['line_no']} ({r['name']}): the conditional award to {supplier} lapsed")
+                continue
+            if conditional and status != "active":
+                notes.append(f"line {r['line_no']} ({r['name']}): waiting for the supplier's activation ({supplier})")
+                continue
             share: dict[str, Any] = {}
             if split:  # the part's quantity, and the same share of the quantity in the base unit
                 share = {

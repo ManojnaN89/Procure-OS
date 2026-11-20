@@ -23,12 +23,14 @@ from sqlalchemy.orm import Session
 from p2p.agents import autonomy
 from p2p.formulas import comparison as rules
 from p2p.formulas import selection as sel
+from p2p.formulas.calendar import business_today
 from p2p.formulas.money import format_inr, format_qty, round_money
 from p2p.formulas.orders import current_gst_rate, net_unit_price
 from p2p.formulas.scoring import NEUTRAL
 from p2p.formulas.words import count
+from p2p.masters import prospects, regions
 from p2p.orders import selection_rule
-from p2p.platform import audit, worker
+from p2p.platform import audit, proposals, worker
 from p2p.platform.sod import Actor
 from p2p.suppliers import scoring
 
@@ -38,6 +40,9 @@ SERVICE = Actor("service", "award")
 
 class QuoteError(Exception):
     pass
+
+
+PROSPECT_REFUSED = "a prospect needs its identity checked before an award"
 
 
 @dataclass
@@ -208,6 +213,9 @@ class Offer:
     payment_days: int = 0
     vendor_score: Decimal | None = None  # looked up only when needed (a weighted comparison or a tie)
     rank: int | None = None  # 1 for the best qualifying offer for the whole quantity
+    supplier_status: str = "active"
+    counts: bool = True  # toward the minimum: a prospect only once its identity is checked and no flag is open
+    why_not: str | None = None  # why it does not count (shown as a badge; it may be ranked but not selected)
 
     @property
     def compliant(self) -> bool:
@@ -259,6 +267,8 @@ class Comparison:
     suppliers: list[dict[str, Any]]
     rule: str = ""  # the selection rule version the comparison used
     basis: str = ""  # what is compared, in words
+    min_quotes_rule: str | None = None  # the rule the RFQ's minimum came from, kept from when it was made (R12)
+    counting: int = 0  # quotes that count toward the minimum (independent, eligible, valid)
 
 
 def _min_quotes(db: Session, category: str | None) -> int:
@@ -381,9 +391,14 @@ def _why(best: Offer, n: int, rule: sel.SelectionRule, basis: str, tie: str | No
 
 
 def comparison(db: Session, rfq_no: str, as_of: date) -> Comparison:
-    rfq = db.execute(text("select * from rfq where no = :n"), {"n": rfq_no}).mappings().first()
-    if rfq is None:
+    found = db.execute(text("select * from rfq where no = :n"), {"n": rfq_no}).mappings().first()
+    if found is None:
         raise QuoteError(f"{rfq_no} does not exist")
+    rfq = dict(found)
+    if rfq["delivery_location"] is None:  # an RFQ made before the location was kept: its request's place decides
+        rfq["delivery_location"] = db.execute(
+            text("select ship_to_location from request where no = :n"), {"n": rfq["request_no"]}
+        ).scalar()
     rule = selection_rule.rule_for(db, as_of)
     credit = _input_credit(db, rule, rfq["request_no"])
     basis = (
@@ -403,18 +418,19 @@ def comparison(db: Session, rfq_no: str, as_of: date) -> Comparison:
         dict(r)
         for r in db.execute(
             text(
-                "select q.*, coalesce(s.trade_name, s.legal_name) as supplier_name, s.status as supplier_status, "
+                "select q.*, coalesce(s.trade_name, s.legal_name) as supplier_name, s.status as supplier_status, "  # noqa: S608
                 "s.gst_reg_type, s.gstin, coalesce((select t.days from payment_terms t "
                 "where t.code = coalesce(q.payment_terms_code, s.payment_terms_code)), 0) as payment_days, "
                 "(cast(:cat as text) is null or exists (select 1 from supplier_category c where c.supplier_code = s.code "
-                "and c.category_code = :cat and (c.approved_from is null or c.approved_from <= :d))) as approved "
+                f"and c.category_code = :cat and (c.approved_from is null or c.approved_from <= :d) and {regions.approved_in_scope('c')})) as approved "
                 "from quote q join supplier s on s.code = q.supplier_code where q.rfq_no = :n and q.revision = "
                 "(select max(revision) from quote x where x.rfq_no = q.rfq_no and x.supplier_code = q.supplier_code) "
                 "order by q.supplier_code"
             ),
-            {"n": rfq_no, "cat": rfq["category_code"], "d": as_of},
+            {"n": rfq_no, "cat": rfq["category_code"], "d": as_of, "loc": rfq["delivery_location"]},
         ).mappings()
     ]
+    where = regions.names(db).get(rfq["delivery_location"]) if rfq["delivery_location"] else None
     qlines: dict[tuple[str, int], dict[str, Any]] = {
         (r["quote_no"], r["rfq_line_no"]): dict(r)
         for r in db.execute(
@@ -423,13 +439,18 @@ def comparison(db: Session, rfq_no: str, as_of: date) -> Comparison:
     }
     awards: dict[int, list[tuple[str, Decimal]]] = defaultdict(list)
     for line_no, supplier, qty in db.execute(
-        text("select rfq_line_no, supplier_code, qty from award where rfq_no = :n order by qty desc, supplier_code"),
+        text(
+            "select rfq_line_no, supplier_code, qty from award where rfq_no = :n and lapsed_at is null "
+            "order by qty desc, supplier_code"
+        ),
         {"n": rfq_no},
     ):
         awards[line_no].append((supplier, qty))
     threshold = Decimal(_org_setting(db, "low_price_flag_pct", "40"))
     last = last_prices(db, sorted({line["item_code"] for line in lines if line["item_code"]}))
     vendors = _VendorScores(db, as_of)
+    standing = {q["supplier_code"]: prospects.counts_as_checked(db, q["supplier_code"]) for q in quotes}
+    linked = _flag_links(db, list(standing))
     per_line: dict[int, list[Offer]] = {}
     of_quote: dict[str, list[Offer]] = defaultdict(list)  # a quote's offers, in line order
     for line in lines:
@@ -457,6 +478,9 @@ def comparison(db: Session, rfq_no: str, as_of: date) -> Comparison:
                 last_price=last.get(line["item_code"]),
                 qty_offered=offered,
                 payment_days=int(q["payment_days"]),
+                supplier_status=str(q["supplier_status"]),
+                counts=standing[q["supplier_code"]][0],
+                why_not=standing[q["supplier_code"]][1],
             )
             offer.flags = sel.must_haves(
                 sel.OfferFacts(
@@ -472,6 +496,7 @@ def comparison(db: Session, rfq_no: str, as_of: date) -> Comparison:
                     approved=bool(q["approved"]),
                     gst_reg_type=q["gst_reg_type"],
                     gstin=q["gstin"],
+                    location_name=where,
                 )
             )
             offers.append(offer)
@@ -493,8 +518,10 @@ def comparison(db: Session, rfq_no: str, as_of: date) -> Comparison:
             others = [x.net_price for x in offers if x is not o]
             o.questions = rules.price_questions(o.net_price, o.last_price, others, threshold)
         qualifying = [o for o in offers if o.compliant]
+        counting = [o for o in qualifying if o.counts]
         whole = [o for o in qualifying if not o.partial]
         ranked, tie = _rank_line(whole, rule, vendors)
+        selectable = [o for o in ranked if o.counts]
         in_ranking = {id(o) for o in ranked}
         rest = sorted(  # offers for part of the quantity, then those dropped
             (o for o in offers if id(o) not in in_ranking), key=lambda o: (not o.compliant, o.cost, o.supplier_code)
@@ -503,21 +530,25 @@ def comparison(db: Session, rfq_no: str, as_of: date) -> Comparison:
         plan = sel.plan_split(
             line["qty"],
             [_split_offer(o, qlines[(o.quote_no, line["line_no"])]["moq"], registration[o.quote_no], credit)
-             for o in qualifying],
+             for o in counting],
         )  # fmt: skip
         by_cost = sel.rank(  # the cheapest qualifying offer, equal totals settled by the rule's tie-break
-            [sel.Candidate(o.supplier_code, o.cost, o.delivery_days, o.vendor_score or Decimal(0)) for o in whole],
+            [sel.Candidate(o.supplier_code, o.cost, o.delivery_days, o.vendor_score or Decimal(0)) for o in selectable],
             replace(rule, method="total_cost"),
         )
         cheapest = by_cost[0].supplier_code if by_cost else None
         recommended: str | None = None
         if plan is not None and plan.worthwhile:
             why = plan.reason()
+        elif selectable:
+            recommended = selectable[0].supplier_code
+            why = _why(selectable[0], len(qualifying), rule, basis, tie)
+            if selectable[0].questions:
+                why += f"; ask the supplier first: price is {selectable[0].questions[0]}"
         elif ranked:
-            recommended = ranked[0].supplier_code
-            why = _why(ranked[0], len(qualifying), rule, basis, tie)
-            if ranked[0].questions:
-                why += f"; ask the supplier first: price is {ranked[0].questions[0]}"
+            why = "Only offers that do not count yet qualify: " + "; ".join(
+                f"{o.supplier_code} {o.why_not}" for o in ranked
+            )
         elif offers:
             why = "No offer qualifies; a buyer has to decide"
         else:
@@ -537,7 +568,7 @@ def comparison(db: Session, rfq_no: str, as_of: date) -> Comparison:
                 why=why,
                 awarded=", ".join(s for s, _ in parts) or None,
                 cheapest=cheapest,
-                qualifying=len(qualifying),
+                qualifying=_independent(counting, linked),
                 split=plan,
                 awarded_parts=parts,
             )
@@ -565,7 +596,7 @@ def comparison(db: Session, rfq_no: str, as_of: date) -> Comparison:
     ]
     return Comparison(
         rfq_no=rfq_no,
-        min_quotes=rfq["min_quotes"] or _min_quotes(db, rfq["category_code"]),  # the buying route's, when it set one
+        min_quotes=rfq["min_quotes"] or _min_quotes(db, rfq["category_code"]),  # kept on the RFQ when it was made
         quotes_received=len(quotes),
         invited=len(invited),
         waiting_for=sorted(i["supplier_code"] for i in invited if not i["responded_at"] and not i["declined"]),
@@ -573,7 +604,33 @@ def comparison(db: Session, rfq_no: str, as_of: date) -> Comparison:
         suppliers=suppliers,
         rule=rule.label,
         basis=basis,
+        min_quotes_rule=rfq["min_quotes_rule"],
+        counting=_independent([o for line in result_lines for o in line.offers if o.compliant and o.counts], linked),
     )
+
+
+def _flag_links(db: Session, suppliers: list[str]) -> set[frozenset[str]]:
+    """Pairs of the suppliers that an open flag names together (a possible related party)."""
+    return {
+        frozenset((str(a), str(b)))
+        for a, b in db.execute(
+            text(
+                "select supplier_code, other_ref from supplier_flag where cleared_at is null "
+                "and supplier_code = any(:s) and other_ref = any(:s)"
+            ),
+            {"s": suppliers},
+        )
+    }
+
+
+def _independent(offers: list[Offer], linked: set[frozenset[str]]) -> int:
+    """How many independent quotes: suppliers an open flag links together count as one until it is cleared."""
+    groups: list[set[str]] = []
+    for code in dict.fromkeys(o.supplier_code for o in offers):
+        joined = [g for g in groups if any(frozenset((code, other)) in linked for other in g)]
+        merged = {code}.union(*joined) if joined else {code}
+        groups = [g for g in groups if g not in joined] + [merged]
+    return len(groups)
 
 
 # ---- selecting --------------------------------------------------------------------------------
@@ -585,6 +642,7 @@ class AwardResult:
     awarded: dict[int, str]  # line to supplier(s), comma separated for a split
     overridden: list[int]
     complete: bool  # every line of the RFQ now has a selection
+    proposal_id: int | None = None  # too few counting quotes above the route's limit: waits for the purchase manager
 
 
 Parts = list[tuple[str, Decimal]]
@@ -636,6 +694,7 @@ def award(
     as_of: date,
     tenant: str | None = None,
     splits: dict[int, Parts] | None = None,
+    agreed: bool = False,
 ) -> AwardResult:
     """Select a supplier for RFQ lines (or share a line between suppliers, `splits`: line to supplier and quantity).
 
@@ -653,6 +712,12 @@ def award(
         raise QuoteError("choose a supplier for at least one line")
     comp = comparison(db, rfq_no, as_of)
     by_line = {line.rfq_line_no: line for line in comp.lines}
+    lapsed = {
+        int(r[0])
+        for r in db.execute(
+            text("select rfq_line_no from award where rfq_no = :n and lapsed_at is not null"), {"n": rfq_no}
+        )
+    }
     overridden: list[int] = []
     short: list[str] = []
     chosen: dict[int, list[tuple[Offer, Decimal]]] = {}
@@ -668,6 +733,13 @@ def award(
         else:
             parts = _parts_of_choice(line, asked[0][0])
         offers = {o.supplier_code: o for o in line.offers}
+        reaward = line_no in lapsed
+        for s, _ in parts:
+            if not offers[s].counts:
+                raise QuoteError(f"{PROSPECT_REFUSED}: {s} {offers[s].why_not}")
+            expired = next((f for f in offers[s].flags if f.startswith("expired")), None)
+            if expired and reaward:  # re-selecting after a lapsed conditional award (D-03 R10, T-Q1-5)
+                raise QuoteError(f"{s}'s quote {expired}: ask for a renewed price before selecting it")
         chosen[line_no] = [(offers[s], q) for s, q in parts]
         if not _is_recommended(line, parts) or not all(offers[s].compliant for s, _ in parts):
             overridden.append(line_no)
@@ -683,6 +755,18 @@ def award(
             why.append("a choice is not the recommended, cheapest qualifying offer")
         why.extend(short)
         raise QuoteError("a reason is required: " + " and ".join(why))
+    if short and not agreed and (above := _needs_agreement(db, rfq_no, chosen, as_of)):
+        pid = proposals.propose(
+            db, actor, action=SHORT_ACTION,
+            summary=f"Select on {rfq_no} with too few counting quotes ({above}). Reason: {reason}",
+            payload={
+                "rfq": rfq_no, "choices": {str(k): v for k, v in choices.items()},
+                "splits": {str(k): [[s, str(q)] for s, q in v] for k, v in (splits or {}).items()},
+                "reason": reason, "tenant": tenant,
+            },
+            required_permission="sourcing.route_approve",
+        )  # fmt: skip
+        return AwardResult(rfq_no, {}, overridden, False, proposal_id=pid)
 
     who = actor.id if actor.kind == "user" else f"{actor.kind}:{actor.id}"
     for line_no, picked in chosen.items():
@@ -690,7 +774,8 @@ def award(
             db.execute(
                 text(
                     "insert into award (rfq_no, rfq_line_no, supplier_code, quote_no, qty, price, reason, overridden, "
-                    "by_user, split, selection_rule) values (:r, :l, :s, :q, :qty, :p, :why, :o, :by, :split, :rule)"
+                    "by_user, split, selection_rule, conditional, awarded_on) "
+                    "values (:r, :l, :s, :q, :qty, :p, :why, :o, :by, :split, :rule, :cond, :on)"
                 ),
                 {
                     "r": rfq_no,
@@ -704,8 +789,16 @@ def award(
                     "by": who,
                     "split": len(picked) > 1,
                     "rule": comp.rule,
+                    "cond": offer.supplier_status == "prospect",
+                    "on": as_of,
                 },
             )
+            if offer.supplier_status == "prospect":  # a conditional award: no order until the supplier is active (R5)
+                audit.record(
+                    db, actor, "award.conditional", "rfq", rfq_no,
+                    after={"line": line_no, "supplier": offer.supplier_code, "quote": offer.quote_no},
+                    reason="a prospect is awarded on condition that it is qualified and activated before any order",
+                )  # fmt: skip
     awarded_all = db.execute(
         text("select count(distinct rfq_line_no) from award where rfq_no = :n"), {"n": rfq_no}
     ).scalar_one()
@@ -755,6 +848,35 @@ def award(
     )
 
 
+SHORT_ACTION = "rfq.award_short"
+
+
+def _needs_agreement(db: Session, rfq_no: str, chosen: dict[int, list[tuple[Offer, Decimal]]], as_of: date) -> str:
+    """Too few counting quotes (R9): above the buying route's agreement limit the purchase manager agrees as well."""
+    from p2p.sourcing import route  # noqa: PLC0415 - sourcing builds on orders
+
+    category = db.execute(text("select category_code from rfq where no = :n"), {"n": rfq_no}).scalar()
+    limit = route.rule_for(db, category, as_of).agree_above
+    value = sum(
+        (round_money(q * o.net_price) if q else o.value for picked in chosen.values() for o, q in picked), Decimal(0)
+    )
+    return f"{format_inr(value)} is above {format_inr(limit)}" if value > limit else ""
+
+
+@proposals.executor(SHORT_ACTION)
+def _award_agreed(db: Session, payload: dict[str, Any], actor: Actor) -> dict[str, Any]:
+    """The purchase manager agreed: the buyer's selection is made as it was asked, in the buyer's name."""
+    running = proposals.RUNNING.get()
+    buyer = running[1] if running else actor
+    result = award(
+        db, str(payload["rfq"]), {int(k): str(v) for k, v in dict(payload["choices"]).items()}, buyer,
+        reason=payload.get("reason"), as_of=business_today(), tenant=payload.get("tenant"),
+        splits={int(k): [(str(s), Decimal(q)) for s, q in v] for k, v in dict(payload.get("splits") or {}).items()},
+        agreed=True,
+    )  # fmt: skip
+    return {"awarded": {str(k): v for k, v in result.awarded.items()}, "complete": result.complete}
+
+
 def auto_award(db: Session, tenant: str, rfq_no: str, *, as_of: date) -> AwardResult | None:
     """Select the recommendations without a person, when the autonomy gate allows it and nothing is in doubt.
 
@@ -769,6 +891,8 @@ def auto_award(db: Session, tenant: str, rfq_no: str, *, as_of: date) -> AwardRe
             return None
         if line.recommended != line.cheapest or line.qualifying < comp.min_quotes:
             return None
+        if any(o.supplier_status != "active" for o in line.offers if o.supplier_code == line.recommended):
+            return None  # a conditional award to a prospect is always a person's decision
     value = sum(
         (o.value for line in comp.lines for o in line.offers if o.supplier_code == line.recommended), Decimal(0)
     )

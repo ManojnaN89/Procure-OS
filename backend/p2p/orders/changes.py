@@ -25,9 +25,11 @@ from sqlalchemy.orm import Session
 
 from p2p.approvals.workflow import name_of, notify_person
 from p2p.formulas import supplier_changes as judge
+from p2p.formulas.calendar import business_today
 from p2p.formulas.gst import Registration
 from p2p.formulas.money import format_qty
 from p2p.formulas.orders import LineAmounts, line_amounts, order_totals
+from p2p.invoices import tolerances
 from p2p.orders import document, supplier_links, workflow
 from p2p.platform import audit, emails, notifications, proposals, tasks
 from p2p.platform.sod import Actor, user
@@ -503,10 +505,8 @@ def revise(
 
 
 def _date_tolerance(db: Session) -> int:
-    value = db.execute(
-        text("select value from tolerance where key = 'supplier_date_days' and category_code = 'ANY' limit 1")
-    ).scalar()
-    return int(Decimal(str(value))) if value not in (None, "") else 3
+    """The date slip accepted on the day the change is decided, from the tolerance version in force then."""
+    return int(tolerances.in_force(db, business_today()).decimal("supplier_date_days", "3"))
 
 
 def history(db: Session, po_no: str) -> list[dict[str, Any]]:

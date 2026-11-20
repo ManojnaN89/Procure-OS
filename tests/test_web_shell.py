@@ -311,6 +311,7 @@ def test_company_setup_opens_every_tab_for_the_admin(company: Company, browser: 
             "Buying route",
             "Supplier selection",
             "Touchless orders",
+            "Price thresholds",
             "Single-source items",
             "Policies",
             "History",

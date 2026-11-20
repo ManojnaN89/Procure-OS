@@ -55,15 +55,13 @@ def _clean(data: dict[str, Any]) -> dict[str, Any]:
 
 
 def _duplicate_of(db: Session, data: dict[str, Any], own: str | None = None) -> str | None:
-    """A supplier that already has this GSTIN, or the same PAN under the same name, or this bank account."""
+    """A supplier that already has this GSTIN, this PAN (one PAN is one legal person, whatever the name: a blocked
+    supplier does not come back under another name, D-03 R7) or this bank account."""
     checks = []
     if data.get("gstin"):
         checks.append(("select code from supplier where gstin = :v and code <> :o", data["gstin"], "GSTIN"))
-    if data.get("pan") and data.get("legal_name"):
-        checks.append((
-            "select code from supplier where pan = :v and lower(legal_name) = lower(:n) and code <> :o",
-            data["pan"], "PAN and name",
-        ))  # fmt: skip
+    if data.get("pan"):
+        checks.append(("select code from supplier where pan = :v and code <> :o", data["pan"], "PAN"))
     if data.get("account_no"):
         checks.append((
             "select supplier_code from supplier_bank_account where account_no = :v and supplier_code <> :o",

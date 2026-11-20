@@ -31,6 +31,10 @@ Payment runs, releasing a blocked invoice, supplier changes, held orders and goo
 
 **Vendors** → open a vendor → **Verify** a document after you compare it with the original. **Contracts** → open a draft → **Activate this contract**.
 
+## Prospects, regions and market prices
+
+A prospect's identity is checked on its vendor page (**Identity check**: method, the PAN or GST certificate scan, a note) by someone other than the buyer who registered or invited it. A flag (a contact, address or mail domain shared with another supplier) is cleared with a reason only after you have looked into it. Checking identity does not activate the supplier: activation is still its own approval. **Approved for** on a vendor page shows where a supplier may supply each category; a change asked by someone else waits for you in **Approvals**. Under **Contracts** → **Market prices**, verify or reject the benchmarks others entered (never your own).
+
 ## What you cannot do
 
 You cannot decide what you asked for, entered or proposed. You cannot verify a document you added. The buttons are not shown, and the server refuses.

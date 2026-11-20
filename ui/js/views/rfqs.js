@@ -57,7 +57,9 @@ const RfqsView = {
   comparisonPanel(r) {
     const c = r.comparison;
     if (!c) return "";
-    const head = `<div class="panel-title">Quotes \u00b7 ${c.quotes_received} of ${c.invited} suppliers have replied${c.min_quotes > c.quotes_received ? ` (${c.min_quotes} are wanted)` : ""}</div>`;
+    const head = `<div class="panel-title">Quotes \u00b7 ${c.quotes_received} of ${c.invited} suppliers have replied${c.min_quotes > c.quotes_received ? ` (${c.min_quotes} are wanted)` : ""}</div>
+      ${c.quotes_received ? `<div style="font-size:12.5px;margin-bottom:8px;">${this.esc(c.counting)} of ${this.esc(c.quotes_received)} quotes count (${this.esc(c.min_quotes)} wanted)</div>` : ""}
+      ${this.invitePanel(r)}`;
     if (!c.quotes_received) {
       return `<div class="panel" style="margin-bottom:12px;">${head}<div class="empty-state">No quotes received yet.</div>
         ${c.can_quote ? `<div class="btn btn-primary btn-sm" id="addQuoteBtn" style="display:inline-flex;"><i class="ti ti-plus"></i>Enter a quote</div>` : ""}</div>`;
@@ -81,9 +83,9 @@ const RfqsView = {
           <tbody>
             ${l.offers.map((o) => `
               <tr style="${o.supplier_code === l.recommended ? "background:var(--success-bg);" : ""}">
-                ${open ? `<td><input type="radio" name="pick-${l.rfq_line_no}" value="${this.esc(o.supplier_code)}" ${o.supplier_code === l.recommended ? "checked" : ""}></td>` : ""}
+                ${open ? `<td><input type="radio" name="pick-${l.rfq_line_no}" value="${this.esc(o.supplier_code)}" ${o.supplier_code === l.recommended ? "checked" : ""}${o.counts === false ? " disabled" : ""}></td>` : ""}
                 <td class="cell-muted">${o.rank ?? (o.flags.length ? "dropped" : "part")}</td>
-                <td>${this.esc(o.supplier_name)}${o.supplier_code === l.recommended ? ' <span class="badge badge-approved" style="font-size:10px;">recommended</span>' : ""}${o.payment_days ? `<div class="cell-muted" style="font-size:11px;">pays in ${this.esc(o.payment_days)} days</div>` : ""}</td>
+                <td>${this.esc(o.supplier_name)}${o.supplier_code === l.recommended ? ' <span class="badge badge-approved" style="font-size:10px;">recommended</span>' : ""}${o.counts === false ? ` <span class="badge badge-pending" style="font-size:10px;">${this.esc(o.why_not || "does not count")}</span>` : ""}${o.payment_days ? `<div class="cell-muted" style="font-size:11px;">pays in ${this.esc(o.payment_days)} days</div>` : ""}</td>
                 <td>${formatCurrency(o.net_price)}${Number(o.discount_pct) > 0 ? `<div class="cell-muted" style="font-size:11px;">${formatCurrency(o.unit_price)} less ${this.esc(o.discount_pct)}%</div>` : ""}</td>
                 <td>${formatCurrency(o.cost)}<div class="cell-muted" style="font-size:11px;">${formatCurrency(o.value)}${Number(o.charges) > 0 ? ` + ${formatCurrency(o.charges)} freight and packing` : ""}; GST ${formatCurrency(o.tax)} (${this.esc(o.gst_rate)}%)${o.cost === o.landed ? " counted" : " shown, claimed back"}</div>${o.score !== null ? `<div class="cell-muted" style="font-size:11px;">score ${this.esc(o.score)} of 100</div>` : ""}</td>
                 <td class="cell-muted">${o.delivery_days ?? "\u2014"}</td>
@@ -104,6 +106,16 @@ const RfqsView = {
          ${c.can_quote ? `<div class="btn btn-sm" id="addQuoteBtn"><i class="ti ti-plus"></i>Enter another quote</div>` : ""}</div>`
       : (c.can_quote ? `<div class="btn btn-sm" id="addQuoteBtn" style="display:inline-flex;"><i class="ti ti-plus"></i>Enter another quote</div>` : "");
     return `<div class="panel" style="margin-bottom:12px;">${head}${waiting}${lines}${actions}<div id="awardNote" style="font-size:12px;color:var(--warning-text);margin-top:8px;"></div></div>`;
+  },
+
+  // D-03: a prospect of the RFQ's category may be invited; its quote counts once its identity is checked
+  invitePanel(r) {
+    const c = r.comparison;
+    const can = c && c.can_quote && (r.prospects_to_invite || []).length;
+    if (!can) return "";
+    return `<div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;font-size:12.5px;margin-bottom:10px;">Invite a prospect
+      <select id="prospectPick" style="padding:5px;">${r.prospects_to_invite.map((p) => `<option value="${this.esc(p.code)}">${this.esc(p.name)} (${this.esc(p.code)})${p.checked ? "" : ", identity not checked"}</option>`).join("")}</select>
+      <div class="btn btn-sm" id="prospectInvite">Invite</div><span id="prospectNote" style="font-size:12px;color:var(--warning-text);"></span></div>`;
   },
 
   draftsPanel(r) {
@@ -253,9 +265,22 @@ const RfqsView = {
         else choices[line] = el.value;
       });
       const res = await API.postJSON(`/api/rfqs/${encodeURIComponent(r.id)}/award`, { choices, splits, reason: document.getElementById("awardReason").value });
-      if (res.ok) return this.renderDetail(document.getElementById("appContent"), r.id);
       const note = document.getElementById("awardNote");
+      if (res.ok && res.data.status === "waiting") { if (note) note.textContent = `${res.data.message} (proposal ${res.data.proposal_id}).`; return; }
+      if (res.ok && (res.data.conditional || []).length) {
+        await this.renderDetail(document.getElementById("appContent"), r.id);
+        const after = document.getElementById("awardNote");
+        if (after) after.textContent = `Conditional award (${res.data.conditional.join(", ")}): no order until the supplier is activated.`;
+        return;
+      }
+      if (res.ok) return this.renderDetail(document.getElementById("appContent"), r.id);
       if (note) note.textContent = res.data.detail || "That did not work.";
+    });
+    on("prospectInvite", async () => {
+      const res = await API.postJSON(`/api/rfqs/${encodeURIComponent(r.id)}/prospects`, { supplier_code: document.getElementById("prospectPick").value });
+      if (res.ok) return this.renderDetail(document.getElementById("appContent"), r.id);
+      const note = document.getElementById("prospectNote");
+      if (note) note.textContent = res.data.detail || "Not invited.";
     });
   },
 
@@ -269,7 +294,8 @@ const RfqsView = {
           <a href="#/rfqs" style="color:var(--text-muted);font-size:12px;text-decoration:none;">← Quotations</a>
           <h1 style="margin-top:6px;">${this.esc(r.title)}</h1>
           <p>${this.esc(r.id)} · ${statusBadge(r.status)} · for <a href="#/requisitions/${this.esc(r.request_no)}" style="color:var(--accent-tint)">${this.esc(r.request_no)}</a>
-             · reply by ${formatDate(r.due_date)}${r.sent_at ? ` · sent ${formatDate(r.sent_at)}` : ""}</p>
+             · reply by ${formatDate(r.due_date)}${r.sent_at ? ` · sent ${formatDate(r.sent_at)}` : ""}
+             ${r.delivery_location_name ? ` · deliver to ${this.esc(r.delivery_location_name)}` : ""}${r.min_quotes ? ` · minimum quotes ${this.esc(r.min_quotes)}${r.min_quotes_rule ? ` (rule: ${this.esc(r.min_quotes_rule)})` : ""}` : ""}</p>
         </div>
         ${FlowStrip.forRfq(r)}
         ${r.status === "draft" && r.proposal_id ? `<div class="panel" style="margin-bottom:12px;font-size:12.5px;color:var(--text-secondary);">Not sent yet: a buyer has to approve sending (Admin → Approvals).</div>` : ""}

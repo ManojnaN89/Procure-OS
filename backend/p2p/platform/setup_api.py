@@ -25,6 +25,7 @@ from sqlalchemy.orm import Session
 from p2p.agents import autonomy
 from p2p.approvals.rules import chain_roles
 from p2p.formulas.calendar import business_today
+from p2p.invoices import tolerances as tolerance_versions
 from p2p.platform import audit, routing, setting_changes, tenants, users
 from p2p.platform.permissions import require
 from p2p.platform.rows import rows as _rows
@@ -66,6 +67,9 @@ PERMISSIONS: dict[str, str] = {
     "supplier.verify_bank": "Verify a supplier's bank account against its proof",
     "contract.manage": "Store contracts and their price lists",
     "contract.activate": "Activate a contract",
+    "benchmark.enter": "Enter or upload market benchmarks",
+    "benchmark.verify": "Verify or reject market benchmarks others entered",
+    "price.view": "See an item's prices side by side",
     "grn.create": "Receive and inspect goods",
     "grn.unordered_approve": "Approve goods received without an order",
     "stock.view": "See stock",
@@ -95,6 +99,36 @@ APPROVER_SOURCES = ("requester_manager", "department_head", "department_head_of"
 # Only settings that some code reads are offered here: a setting that nothing reads would be a control that does nothing.
 # key -> (where it is stored, kind, label, help, default, low, high, choices)
 POLICIES: dict[str, tuple[str, str, str, str, str, float | None, float | None, tuple[str, ...]]] = {
+    "identity_check_methods": (
+        "org",
+        "list",
+        "Identity check methods for a prospect",
+        "How a person other than the buyer checks a new supplier's identity before its quote counts (D-03)",
+        "pan_and_gstin_online,gst_certificate_seen,call_back_registered_number",
+        None,
+        None,
+        (),
+    ),
+    "prospect_qualification_days": (
+        "org",
+        "int",
+        "Days a prospect has to qualify (working days)",
+        "A conditional award lapses when the supplier is not activated within this many working days",
+        "10",
+        1,
+        90,
+        (),
+    ),
+    "public_mail_domains": (
+        "org",
+        "list",
+        "Public mail domains",
+        "Email domains anyone can use; two suppliers sharing one of these are not flagged as related",
+        "gmail.com,yahoo.com,yahoo.co.in,outlook.com,hotmail.com,rediffmail.com,icloud.com",
+        None,
+        None,
+        (),
+    ),
     "budget_policy": (
         "org",
         "choice",
@@ -443,6 +477,7 @@ TOLERANCES: dict[str, tuple[str, str, float | None, float | None]] = {
     "small_diff_abs": ("Small invoice difference accepted (rupees)", "decimal", 0, None),
     "supplier_change_pct": ("Supplier's quantity change noted by the agent (%)", "decimal", 0, 100),
     "supplier_price_pct": ("Supplier's price rise a buyer may accept (%)", "decimal", 0, 100),
+    "supplier_date_days": ("Supplier's later delivery date accepted (days)", "int", 0, 365),
 }
 
 # decision type -> (label, what it does, how its level is stored)
@@ -1308,7 +1343,10 @@ def list_policies(db: Db, ctx: SettingsAdmin) -> dict[str, Any]:
                 "min": low, "max": high, "choices": list(choices), "last_change": _last_change(db, "policy", key),
             }
         )  # fmt: skip
-    rows = _rows(db, "select key, value, category_code from tolerance order by key, category_code")
+    today = business_today()
+    current = tolerance_versions.in_force(db, today)
+    rows = current.rows
+    names = {f"user:{r[0]}": str(r[1]) for r in db.execute(text("select user_id, display_name from user_profile"))}
     tolerances = [
         {
             "key": key, "label": label, "min": low, "max": high,
@@ -1319,8 +1357,17 @@ def list_policies(db: Db, ctx: SettingsAdmin) -> dict[str, Any]:
     return {
         "settings": settings,
         "tolerances": tolerances,
+        "in_force": current.version,
+        "versions": [_tolerance_version(v, today, names) for v in tolerance_versions.versions(db)],
         "categories": ["ANY", *[r[0] for r in db.execute(text("select code from item_category order by code"))]],
     }
+
+
+@router.get("/tolerances")
+def list_tolerances(db: Db, ctx: SettingsAdmin) -> dict[str, Any]:
+    """The tolerance versions: the one in force, the history and the values of each (task 3.2)."""
+    full = list_policies(db, ctx)
+    return {k: full[k] for k in ("tolerances", "in_force", "versions", "categories")}
 
 
 class PolicyBody(BaseModel):
@@ -1376,10 +1423,26 @@ def _write_policy(
     return change
 
 
+def _tolerance_version(v: dict[str, Any], today: date, names: dict[str, str]) -> dict[str, Any]:
+    start, end, by = v["effective_from"], v["effective_to"], v["created_by"]
+    return {
+        "version": v["version"],
+        "effective_from": start.isoformat(),
+        "effective_to": end.isoformat() if end else None,
+        "in_force": start <= today and (end is None or end >= today),
+        "never_used": end is not None and end < start,
+        "note": v["note"],
+        "by": "Set up with the company" if by is None or str(by).startswith("system") else names.get(str(by), by),
+        "at": v["created_at"].isoformat() if v["created_at"] else None,
+        "values": v["values"],
+    }
+
+
 class ToleranceBody(BaseModel):
     category: str = "ANY"
     value: str
     reason: str | None = None
+    effective_from: date | None = None  # default: today
 
 
 @router.put("/tolerances/{key}", status_code=202)
@@ -1401,23 +1464,33 @@ def _tolerance(db: Session, actor: Actor, args: dict[str, Any], reason: str, app
         and db.execute(text("select 1 from item_category where code = :c"), {"c": body.category}).first() is None
     ):
         raise _422(f"there is no category {body.category}")
-    old = db.execute(
-        text("select value from tolerance where key = :k and category_code = :c"), {"k": key, "c": body.category}
-    ).scalar()
-    result = {"key": key, "category": body.category, "value": value}
-    change = Change("tolerance", f"{key}:{body.category}", {"value": old}, {"value": value}, result)
+    today = business_today()
+    start = body.effective_from or today
+    try:
+        current = tolerance_versions.in_force(db, max(start, today))
+        old = next((r["value"] for r in current.rows if r["key"] == key and r["category_code"] == body.category), None)
+        version = tolerance_versions.save_version(
+            db, actor, key=key, category=body.category, value=value, effective_from=start, today=today,
+            note=reason, apply=apply,
+        )  # fmt: skip
+    except tolerance_versions.ToleranceError as exc:
+        raise _422(str(exc)) from None
+    result = {
+        "key": key,
+        "category": body.category,
+        "value": value,
+        "version": version,
+        "effective_from": start.isoformat(),
+    }
+    change = Change(
+        "tolerance",
+        f"{key}:{body.category}",
+        {"value": old},
+        {"value": value},  # the start date is in the proposal and the result
+        result,
+    )
     if not apply:
         return change
-    if old is None:
-        db.execute(
-            text("insert into tolerance (key, value, category_code) values (:k, :v, :c)"),
-            {"k": key, "v": value, "c": body.category},
-        )
-    else:
-        db.execute(
-            text("update tolerance set value = :v where key = :k and category_code = :c"),
-            {"k": key, "v": value, "c": body.category},
-        )
     _log(db, actor, "tolerance", change.key, change.old, change.new, reason)
     db.commit()
     return change

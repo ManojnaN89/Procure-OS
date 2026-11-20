@@ -27,6 +27,7 @@ from p2p.approvals.workflow import name_of, org_code_of
 from p2p.formulas import supplier_changes as judge
 from p2p.formulas.calendar import business_today
 from p2p.formulas.money import format_inr, format_qty
+from p2p.invoices import tolerances
 from p2p.orders import changes, dispatch, supplier_links
 from p2p.orders import workflow as po_workflow
 from p2p.platform import audit, notifications, permissions, proposals, tasks
@@ -56,10 +57,8 @@ def supplier_actor(code: str) -> Actor:
 
 
 def _setting_tolerance(db: Session, key: str, default: str) -> Decimal:
-    value = db.execute(
-        text("select value from tolerance where key = :k and category_code = 'ANY' limit 1"), {"k": key}
-    ).scalar()
-    return Decimal(str(value)) if value not in (None, "") else Decimal(default)
+    """The company's limit on the day the buyer decides, from the tolerance version in force then."""
+    return tolerances.in_force(db, business_today()).decimal(key, default)
 
 
 def price_tolerance(db: Session) -> Decimal:

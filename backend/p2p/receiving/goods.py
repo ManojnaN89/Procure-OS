@@ -19,7 +19,9 @@ from sqlalchemy.orm import Session
 
 from p2p.approvals.workflow import org_code_of
 from p2p.formulas import receiving as rules
+from p2p.formulas.calendar import business_today
 from p2p.formulas.money import format_qty
+from p2p.invoices import tolerances
 from p2p.platform import audit, notifications, numbering
 from p2p.platform.sod import user
 from p2p.receiving.kinds import service_lines
@@ -68,17 +70,10 @@ class Decision:
     reason: str | None = None
 
 
-def over_pct(db: Session, category: str | None) -> Decimal:
-    """The over-delivery the company accepts for a category (its own row first, then the one for any category)."""
-    for cat in (category, "ANY"):
-        if cat is None:
-            continue
-        value = db.execute(
-            text("select value from tolerance where key = 'receipt_over_pct' and category_code = :c"), {"c": cat}
-        ).scalar()
-        if value not in (None, ""):
-            return Decimal(str(value))
-    return Decimal(0)
+def over_pct(db: Session, category: str | None, on: date | None = None) -> Decimal:
+    """The over-delivery the company accepts for a category on the date (its own row first, then the one for any
+    category), from the tolerance version in force that day."""
+    return tolerances.in_force(db, on or business_today()).decimal("receipt_over_pct", "0", category)
 
 
 def conflict_of(db: Session, po: dict[str, Any], user_id: int, *, requester_may: bool = False) -> str | None:
@@ -228,7 +223,7 @@ def post_receipt(db: Session, po_no: str, lines: list[LineIn], header: Header, u
         if item["serialised"]:
             serials[ln.po_line_no] = _serials(db, row["item_code"], ln)
         room = rules.room_left(
-            Decimal(row["qty"]), _counted(db, po_no, ln.po_line_no), over_pct(db, item["category_code"])
+            Decimal(row["qty"]), _counted(db, po_no, ln.po_line_no), over_pct(db, item["category_code"], as_of)
         )
         if ln.qty_received > room:
             raise ReceiptError(
@@ -255,10 +250,11 @@ def post_receipt(db: Session, po_no: str, lines: list[LineIn], header: Header, u
     db.execute(
         text(
             "insert into goods_receipt (no, po_no, location_code, received_by, delivery_challan_no, supplier_invoice_ref, "
-            "eway_bill_no, vehicle_no, inspection_status, accepted_on, remarks, posted_by) values "
-            "(:no, :po, :loc, :by, :dc, :inv, :ew, :veh, :ins, :acc, :rem, :u)"
+            "eway_bill_no, vehicle_no, inspection_status, accepted_on, remarks, posted_by, tolerance_version) values "
+            "(:no, :po, :loc, :by, :dc, :inv, :ew, :veh, :ins, :acc, :rem, :u, :tv)"
         ),
         {
+            "tv": tolerances.in_force(db, as_of).version,
             "no": gr_no,
             "po": po_no,
             "loc": po["ship_to_location"],

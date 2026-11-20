@@ -394,6 +394,12 @@ def _run(ctx: Any) -> Outcome:
             f"award of {rfq} by {by}: {r.status_code} {r.text[:150]}",
             "medium",
         )
+        # Block 0b (task 4.4, D-03 R9 and OP-6, approved by the owner on 20 Nov 2026): too few counting quotes on a line
+        # above the buying route's agree_above also needs an agreement under `sourcing.route_approve` before the
+        # selection is made. The plant head, who takes no part in these orders, agrees, so the makers stay the same.
+        answer = r.json() if r.status_code == 200 else {}
+        if answer.get("status") == "waiting" and answer.get("proposal_id"):
+            call(PLANT_HEAD, "POST", f"/api/admin/proposals/{answer['proposal_id']}/approve", {})
         work()
         return str(line_source(no).get("po_no") or "")
 

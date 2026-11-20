@@ -219,7 +219,12 @@ def test_apex_has_nothing_open_at_the_cutoff_for_the_materials_of_mo_1(datasets:
 def test_every_planted_problem_is_in_the_answer_key_as_often_as_planned(datasets: dict[str, Path], name: str) -> None:
     history = gen.CompanyProfile.named(name)["history"]
     cases = Counter(r["type"] for r in _rows(datasets[name] / "truth" / "truth_case.csv"))
-    blocked = Counter(r["reason_codes"] for r in _rows(datasets[name] / "truth" / "truth_match_expected.csv"))
+    # the planted mismatches only: the tolerance-edge invoices that block under a later tolerance version are apart
+    blocked = Counter(
+        r["reason_codes"]
+        for r in _rows(datasets[name] / "truth" / "truth_match_expected.csv")
+        if r["planted"] in ("price_mismatch", "qty_mismatch")
+    )
 
     assert {kind: cases[kind] for kind in history["planted"]} == history["planted"]
     assert cases["split_order"] == len(history["split_orders"])

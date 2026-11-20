@@ -16,11 +16,12 @@ from p2p.platform import audit, proposals
 from p2p.platform.sod import Actor
 from p2p.sourcing import documents
 
-STATUSES = ("draft", "active", "blocked")
+STATUSES = ("draft", "active", "blocked", "prospect")
 ALLOWED = {  # from -> to
     "draft": {"active"},
     "active": {"blocked", "draft"},  # blocked: stop using the supplier; draft: put it back under review
     "blocked": {"active"},
+    "prospect": {"active", "blocked"},  # a prospect is activated once its identity is checked (D-03 R5, R11)
 }
 WORDS = {"active": "Activate", "blocked": "Block", "draft": "Put under review"}
 
@@ -56,13 +57,19 @@ def pending_change(db: Session, code: str) -> dict[str, Any] | None:
 def _check_move(db: Session, code: str, current: str, to: str, today: date) -> None:
     if to not in ALLOWED.get(current, set()):
         raise SupplierStatusError(f"a supplier that is {current} cannot be made {to}")
+    if to == "active" and current == "prospect":
+        checked = db.execute(text("select identity_checked_at from supplier where code = :c"), {"c": code}).scalar()
+        if checked is None:
+            raise SupplierStatusError("cannot be activated: its identity has not been checked by an independent person")
     if to == "active":
         check = documents.check_supplier(db, code, today)
         if not check.ok:
             raise SupplierStatusError("cannot be activated: " + "; ".join(check.blocking))
 
 
-def request_change(db: Session, code: str, to: str, actor: Actor, reason: str, *, today: date) -> int:
+def request_change(
+    db: Session, code: str, to: str, actor: Actor, reason: str, *, today: date, tenant: str | None = None
+) -> int:
     """Make the proposal. Nothing changes until a person approves it."""
     reason = reason.strip()
     if not reason:
@@ -76,7 +83,7 @@ def request_change(db: Session, code: str, to: str, actor: Actor, reason: str, *
         actor,
         action="supplier.set_status",
         summary=f"{WORDS[to]}: {name} ({code}) is {current}. Reason: {reason}",
-        payload={"supplier": code, "to": to, "reason": reason},
+        payload={"supplier": code, "to": to, "reason": reason, **({"tenant": tenant} if tenant else {})},
         required_permission="supplier.activate",
         risk="medium",
         document="supplier_activation",
@@ -110,4 +117,20 @@ def _apply(db: Session, payload: dict[str, Any], actor: Actor) -> dict[str, Any]
         reason=reason,
     )
     db.commit()
+    if to == "active" and payload.get("tenant"):
+        _order_waiting_awards(db, str(payload["tenant"]), code)
     return {"supplier": code, "status": to}
+
+
+def _order_waiting_awards(db: Session, tenant: str, code: str) -> None:
+    """A prospect awarded on condition is now active: the order run makes the orders its awards were waiting for (R5)."""
+    from p2p.platform import worker  # noqa: PLC0415 - the worker loads the masters
+
+    for (request_no,) in db.execute(
+        text(
+            "select distinct r.request_no from award a join rfq r on r.no = a.rfq_no "
+            "where a.supplier_code = :c and a.conditional and a.lapsed_at is null"
+        ),
+        {"c": code},
+    ):
+        worker.enqueue(tenant, "order_request", {"request_no": request_no})

@@ -255,7 +255,10 @@ const RequisitionsView = {
     const route = this.routeNote(s);
     if (s.method === "contract") return `<span class="badge badge-approved" style="font-size:10px;">contract</span> <span class="cell-muted">${s.route ? "" : this.esc(s.reason)}</span>${order}${route}`;
     if (s.method === "direct") return `<span class="badge badge-approved" style="font-size:10px;">${this.esc(this.ROUTE_LABEL[s.route] || "direct buy")}</span>${order}${route}`;
-    if (s.method === "rfq") return `<span class="badge badge-pending" style="font-size:10px;">quotes</span> <a href="#/rfqs/${this.esc(s.rfq_no)}" style="color:var(--accent-tint)">${this.esc(s.rfq_no)}</a>${order}${route}`;
+    // a regional contract price skipped because the goods go elsewhere (D44) is said in words, not hidden in the details
+    const here = /No contract here: [^;]*/.exec(s.reason || "");
+    const scoped = here ? `<div class="cell-muted" style="font-size:11px;">${this.esc(here[0].replace("No contract here", "no contract here"))}</div>` : "";
+    if (s.method === "rfq") return `<span class="badge badge-pending" style="font-size:10px;">quotes</span> <a href="#/rfqs/${this.esc(s.rfq_no)}" style="color:var(--accent-tint)">${this.esc(s.rfq_no)}</a>${order}${scoped}${route}`;
     return `<span class="badge badge-waiting" style="font-size:10px;">buyer</span> <span class="cell-muted">${this.esc(s.reason)}</span>${route}`;
   },
 
@@ -408,7 +411,7 @@ const RequisitionsView = {
             <tbody>
               ${lines.map((l) => `
                 <tr>
-                  <td>${this.esc(l.name)}<div class="cell-muted" style="font-size:11px;">${this.esc(l.item_code || "")}${l.reason ? ` · ${this.esc(l.reason)}` : ""}</div>${this.boughtFor(l.bought_for)}</td>
+                  <td>${this.esc(l.name)}<div class="cell-muted" style="font-size:11px;">${this.esc(l.item_code || "")}${l.item_code ? ` · <a href="#" class="price-view" data-item="${this.esc(l.item_code)}" data-loc="${this.esc(l.delivery_location || r.ship_to || "")}" style="color:var(--accent-tint);">prices</a>` : ""}${l.reason ? ` · ${this.esc(l.reason)}` : ""}</div>${this.boughtFor(l.bought_for)}</td>
                   <td>${this.esc(l.qty)} <span class="cell-muted">${this.esc(l.uom)}</span></td>
                   <td class="cell-muted">${l.est_price === null ? "—" : formatCurrency(l.est_price)}${l.est_source ? `<div class="est-source" style="font-size:11px;">estimate from ${this.esc(l.est_source)}</div>` : ""}</td>
                   <td>${l.value === null ? "—" : formatCurrency(l.value)}</td>
@@ -418,7 +421,8 @@ const RequisitionsView = {
               `).join("")}
             </tbody>
           </table>
-        </div>` : ""}
+        </div>
+        <div id="priceViewBox"></div>` : ""}
         </div>
         <div class="doc-side">
         <div class="panel">
@@ -442,6 +446,7 @@ const RequisitionsView = {
         </div>
       `;
       this.wireApproval(r);
+      container.querySelectorAll(".price-view").forEach((a) => a.addEventListener("click", (ev) => { ev.preventDefault(); PriceView.open(document.getElementById("priceViewBox"), a.dataset.item, a.dataset.loc || null); }));
     } catch {
       container.innerHTML = `<div class="empty-state">Couldn't load this request. Go back to the list and try again.</div>`;
     }

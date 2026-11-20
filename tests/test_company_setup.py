@@ -538,12 +538,15 @@ def test_a_tolerance_is_set_for_a_category_and_the_goods_receipt_uses_it(s: Setu
     )
 
     assert put("PKG", "10").status_code == 200 and put("ANY", "5").status_code == 200
-    assert put("PKG", "12").status_code == 200  # an existing row is updated, not duplicated
+    assert put("PKG", "12").status_code == 200  # each change is a new version of the set (task 3.2)
     s.db.expire_all()
     assert goods.over_pct(s.db, "PKG") == D("12") and goods.over_pct(s.db, "C1") == D("5")
     assert (
         s.db.execute(
-            text("select count(*) from tolerance where key = 'receipt_over_pct' and category_code = 'PKG'")
+            text(
+                "select count(*) from tolerance where key = 'receipt_over_pct' and category_code = 'PKG' "
+                "and version = (select max(version) from tolerance_version)"
+            )
         ).scalar_one()
         == 1
     )

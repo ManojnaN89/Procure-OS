@@ -20,6 +20,7 @@ from p2p.formulas.gst import Registration
 from p2p.formulas.money import format_inr
 from p2p.formulas.orders import line_amounts
 from p2p.formulas.words import count
+from p2p.invoices import tolerances
 from p2p.platform import audit, numbering, proposals
 from p2p.platform.sod import Actor, user
 from p2p.receiving.kinds import service_lines
@@ -95,8 +96,12 @@ class Entered:
     duplicate_of: str | None = None
 
 
-def _tolerances(db: Session) -> list[dict[str, str]]:
-    return [dict(r) for r in db.execute(text("select key, value, category_code from tolerance")).mappings()]
+def _tolerances(db: Session, inv: Any) -> tolerances.ToleranceSet:
+    """The version the invoice is judged under: the one it was first matched under (a re-match gives the same result),
+    else the version in force on the day it was received."""
+    if inv["tolerance_version"] is not None:
+        return tolerances.of_version(db, int(inv["tolerance_version"]))
+    return tolerances.in_force(db, inv["received_on"])
 
 
 def _po_line(db: Session, supplier: str, po_no: str, line_no: int) -> dict[str, Any]:
@@ -308,7 +313,8 @@ def match_invoice(db: Session, no: str, actor: Actor) -> Entered:
         sup["gst_reg_type"], sup["e_invoice_applicable"] in (True, "true"), inv["type"], inv["irn"], tax,
         inv["supplier_gstin"], frozenset(valid_gstins), inv["buyer_gstin"], buyer_on_order,
     )  # fmt: skip
-    tol_rows = _tolerances(db)
+    tol_set = _tolerances(db, inv)
+    tol_rows = tol_set.rows
     problem = rules.header_problem(header)
     verdicts: list[rules.LineVerdict] = []
     running: dict[tuple[str, int], Decimal] = {}
@@ -345,16 +351,27 @@ def match_invoice(db: Session, no: str, actor: Actor) -> Entered:
     for ln, v in zip(lines, verdicts, strict=True):
         db.execute(
             text(
-                "insert into match_result (invoice_no, invoice_line_no, result, reason_codes, price_var, qty_var) "
-                "values (:n, :l, :r, :c, :p, :q)"
+                "insert into match_result (invoice_no, invoice_line_no, result, reason_codes, price_var, qty_var, "
+                "tolerance_version) values (:n, :l, :r, :c, :p, :q, :tv)"
             ),
-            {"n": no, "l": ln["line_no"], "r": v.result, "c": v.reason, "p": v.price_var, "q": v.qty_var},
+            {
+                "n": no,
+                "l": ln["line_no"],
+                "r": v.result,
+                "c": v.reason,
+                "p": v.price_var,
+                "q": v.qty_var,
+                "tv": tol_set.version,
+            },  # fmt: skip
         )
     if problem or arithmetic.problems:
         detail = problem and f"{problem}: see the invoice and the order" or "; ".join(arithmetic.problems)
         db.execute(
-            text("insert into match_result (invoice_no, result, reason_codes, detail) values (:n, 'blocked', :c, :d)"),
-            {"n": no, "c": problem or rules.ARITH, "d": detail},
+            text(
+                "insert into match_result (invoice_no, result, reason_codes, detail, tolerance_version) "
+                "values (:n, 'blocked', :c, :d, :tv)"
+            ),
+            {"n": no, "c": problem or rules.ARITH, "d": detail, "tv": tol_set.version},
         )
     if result == rules.BLOCKED:
         kind = rules.BLOCK_KIND[reason or rules.PRICE]
@@ -373,8 +390,15 @@ def match_invoice(db: Session, no: str, actor: Actor) -> Entered:
 
         payment.book_invoice(db, no)
         status = "approved"
+    db.execute(text("update invoice set tolerance_version = :v where no = :n"), {"v": tol_set.version, "n": no})
     audit.record(
-        db, actor, "invoice.match", "invoice", no, after={"result": result, "reason": reason, "status": status}
+        db,
+        actor,
+        "invoice.match",
+        "invoice",
+        no,
+        after={"result": result, "reason": reason, "status": status, "tolerance_version": tol_set.version},
+        rule_version=tol_set.label,
     )
     _refresh_invoiced(db, [(x["po_no"], x["po_line_no"]) for x in lines])
     db.commit()

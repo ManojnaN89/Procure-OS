@@ -60,11 +60,12 @@ def run(ctx: lib.Ctx) -> Outcome:
 
 def _run(ctx: lib.Ctx) -> Outcome:  # noqa: C901 - one scenario, step by step
     from fastapi.testclient import TestClient
+    from sqlalchemy.orm import Session
+
     from p2p.agents import autonomy
     from p2p.main import app
     from p2p.platform import demo, routing, users
     from p2p.platform.tokens import create_access_token
-    from sqlalchemy.orm import Session
 
     out = Outcome(True)
     lib.capture_mail()
@@ -98,7 +99,27 @@ def _run(ctx: lib.Ctx) -> Outcome:  # noqa: C901 - one scenario, step by step
         return r.status_code == 200
 
     def setting(name: str, key: str) -> str:
-        return next(r["value"] for r in rows("master", name) if r["key"] == key)
+        found = [r for r in rows("master", name) if r["key"] == key]
+        if name == "tolerance":  # versioned as a set (task 3.2): the version in force on the evals' day
+            found = [
+                r
+                for r in found
+                if r.get("category_code", "ANY") == "ANY"
+                and (r.get("effective_from") or "2000-01-01") <= lib.TODAY.isoformat()
+            ]
+            found.sort(key=lambda r: int(r.get("version") or 1))
+            return found[-1]["value"]
+        return found[0]["value"]
+
+    def tolerance(key: str) -> Any:
+        """The company value of a tolerance in the version in force on the evals' day (tolerances are versioned)."""
+        return one(
+            "select t.value from tolerance t join tolerance_version v on v.version = t.version "
+            "where t.key = :k and t.category_code = 'ANY' and v.effective_from <= :d "
+            "and (v.effective_to is null or v.effective_to >= :d) order by v.version desc limit 1",
+            k=key,
+            d=lib.TODAY,
+        )
 
     def count(table: str) -> int:
         return int(one(f"select count(*) from {table}"))  # noqa: S608 - fixed names
@@ -126,7 +147,7 @@ def _run(ctx: lib.Ctx) -> Outcome:  # noqa: C901 - one scenario, step by step
              lambda: policy("budget_policy"),
              setting("setting", "budget_policy"), "warn"),
         Case("tolerance (price_pct)", "put", "/api/setup/tolerances/price_pct", {"value": "3.00"},
-             lambda: D(one("select value from tolerance where key = 'price_pct' and category_code = 'ANY'")),
+             lambda: D(tolerance("price_pct")),
              D(setting("tolerance", "price_pct")), D("3.00")),
         Case("approval rule version (REQ-02 to the purchase manager)", "post", "/api/setup/approval-rules",
              {"rule_code": "REQ-02", "document": "request", "min_value": req02["min_value"],
@@ -252,7 +273,7 @@ def _run(ctx: lib.Ctx) -> Outcome:  # noqa: C901 - one scenario, step by step
         out.find("high", f"the kill switch on in the history: {on_rows[:1]}")
 
     # 3. a rejection keeps the old value and can never run later
-    qty = lambda: one("select value from tolerance where key = 'qty_pct' and category_code = 'ANY'")  # noqa: E731
+    qty = lambda: tolerance("qty_pct")  # noqa: E731
     r = call("put", "/api/setup/tolerances/qty_pct", {"value": "9", "reason": "E51 looser"}, "admin")
     pid = proposed(r)
     rejected = client.post(f"/api/admin/proposals/{pid}/reject", json={"reason": "too loose"}, headers=h["admin2"])

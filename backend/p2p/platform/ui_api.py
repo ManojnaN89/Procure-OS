@@ -28,10 +28,12 @@ from p2p.approvals import workflow as approvals
 from p2p.formulas.calendar import business_today
 from p2p.formulas.contracts import ContractUse
 from p2p.formulas.money import format_qty, round_money
+from p2p.formulas.scope import label as scope_label
 from p2p.formulas.scoring import risk_level
 from p2p.formulas.suppliers import LABELS
 from p2p.formulas.words import count
-from p2p.masters import supplier_status
+from p2p.masters import categories, regions, supplier_status
+from p2p.masters import prospects as prospect_rules
 from p2p.orders import contracts as contract_usage
 from p2p.orders import dispatch, dispatch_notes, quotes
 from p2p.orders import service as orders  # noqa: F401 - registers the price-variance proposal executor
@@ -45,6 +47,7 @@ from p2p.receiving.kinds import service_lines
 from p2p.receiving.stock import StockError, post_count, post_issue, stock_levels
 from p2p.requests import combining, duplicates, jobs, lifecycle, replenishment, reservation
 from p2p.sourcing import documents as supplier_documents
+from p2p.sourcing import prospects as rfq_prospects
 from p2p.sourcing import replies, rfq_document
 from p2p.sourcing import service as sourcing
 from p2p.suppliers import scoring
@@ -343,7 +346,9 @@ _VENDOR = """
              where sc.supplier_code = s.code) as category,
            (select count(*) from supplier_document d where d.supplier_code = s.code and not coalesce(d.verified, false)) as unverified_docs,
            (select coalesce(sum(p.total), 0) from po p where p.supplier_code = s.code
-             and p.status not in ('draft', 'cancelled', 'rejected')) as ordered
+             and p.status not in ('draft', 'cancelled', 'rejected')) as ordered,
+           s.identity_checked_at,
+           (select count(*) from supplier_flag f where f.supplier_code = s.code and f.cleared_at is null) as open_flags
     from supplier s
 """
 
@@ -360,11 +365,18 @@ def _vendor(r: dict[str, Any]) -> dict[str, Any]:
         "under_review": r["status"] == "draft",
         "active": r["status"] == "active",
         "verified": r["status"] == "active" and r["unverified_docs"] == 0,
+        "status": r["status"],
+        "prospect": r["status"] == "prospect",
+        "identity_checked": r["identity_checked_at"] is not None,
+        "open_flags": int(r["open_flags"]),
     }
 
 
 @router.get("/vendors")
-def list_vendors(db: Db, ctx: Ctx) -> list[dict[str, Any]]:
+def list_vendors(db: Db, ctx: Ctx, status: str | None = None) -> list[dict[str, Any]]:
+    """Every supplier, or those of one status (`?status=prospect`)."""
+    if status:
+        return [_vendor(r) for r in _rows(db, _VENDOR + " where s.status = :s order by 2", s=status)]
     return [_vendor(r) for r in _rows(db, _VENDOR + " order by 2")]
 
 
@@ -407,6 +419,9 @@ def get_vendor(vendor_id: str, db: Db, ctx: Ctx) -> dict[str, Any]:
         },
         "verification_note": note,
         "status": r["status"],
+        "identity": prospect_rules.identity(db, vendor_id),
+        "can_check_identity": can_anywhere(db, ctx.user_id, "supplier.verify_docs"),
+        "approved_for": categories.categories_of(db, vendor_id),
         "pending_change": supplier_status.pending_change(db, vendor_id),
         "can_propose": can_anywhere(db, ctx.user_id, "supplier.propose"),
         "rfq_count": 0,
@@ -448,6 +463,7 @@ def propose_vendor_status(
             sod.user(ctx.user_id),
             str(payload.get("reason") or ""),
             today=business_today(),
+            tenant=ctx.slug,
         )
     except supplier_status.SupplierStatusError as exc:
         db.rollback()
@@ -1057,6 +1073,12 @@ def get_rfq(no: str, db: Db, ctx: Ctx) -> dict[str, Any]:
         "id": r["no"],
         "title": f"{r['category'] or 'Quotation request'}: {count(len(lines), 'item')} for {r['request_no']}",
         "status": r["status"],
+        "category_code": r["category_code"],
+        "delivery_location": r["delivery_location"],
+        "delivery_location_name": regions.names(db).get(r["delivery_location"]) if r["delivery_location"] else None,
+        "min_quotes": r["min_quotes"],
+        "min_quotes_rule": r["min_quotes_rule"],
+        "prospects_to_invite": rfq_prospects.prospects_for(db, no) if r["status"] in ("draft", "sent") else [],
         "request_no": r["request_no"],
         "due_date": r["due_date"].isoformat(),
         "created_at": _iso(r["created_at"]),
@@ -1124,6 +1146,8 @@ def _comparison_json(db: Session, rfq_no: str, user_id: int) -> dict[str, Any]:
     status = db.execute(text("select status from rfq where no = :n"), {"n": rfq_no}).scalar_one()
     return {
         "min_quotes": comp.min_quotes,
+        "min_quotes_rule": comp.min_quotes_rule,
+        "counting": comp.counting,
         "quotes_received": comp.quotes_received,
         "invited": comp.invited,
         "waiting_for": comp.waiting_for,
@@ -1190,6 +1214,9 @@ def _comparison_json(db: Session, rfq_no: str, user_id: int) -> dict[str, Any]:
                         "last_price": _money(o.last_price),
                         "questions": o.questions,
                         "score": _money(o.score),
+                        "counts": o.counts,
+                        "why_not": o.why_not,
+                        "supplier_status": o.supplier_status,
                     }
                     for o in line.offers
                 ],
@@ -1349,10 +1376,30 @@ def award_rfq(
         raise HTTPException(422, f"the selection could not be read: {exc}") from None
     except quotes.QuoteError as exc:
         raise HTTPException(409, str(exc)) from None
+    if done.proposal_id is not None:
+        return {
+            "status": "waiting",
+            "proposal_id": done.proposal_id,
+            "message": "Too few counting quotes on a line above the buying route's limit: the purchase manager agrees first",
+            "awarded": {},
+            "overridden": done.overridden,
+            "complete": False,
+            "conditional": [],
+        }
+    conditional = [
+        f"{line}: {s}"
+        for line, s in db.execute(
+            text(
+                "select rfq_line_no, supplier_code from award where rfq_no = :n and conditional and lapsed_at is null"
+            ),
+            {"n": no},
+        )
+    ]
     return {
         "awarded": {str(k): v for k, v in done.awarded.items()},
         "overridden": done.overridden,
         "complete": done.complete,
+        **({"conditional": conditional} if conditional else {}),
     }
 
 
@@ -1829,7 +1876,7 @@ def get_contract(code: str, db: Db, ctx: Ctx) -> dict[str, Any]:
     prices = _rows(
         db,
         "select p.id, p.item_code, i.name, p.uom, p.price, p.min_qty, p.valid_from, p.valid_to, p.lead_days, p.version, "
-        "p.status from price_record p left join item i on i.code = p.item_code "
+        "p.status, p.location_code, p.region_code from price_record p left join item i on i.code = p.item_code "
         "where p.contract_code = :c and p.status <> 'withdrawn' order by p.item_code, p.min_qty, p.version",
         c=code,
     )
@@ -1839,6 +1886,7 @@ def get_contract(code: str, db: Db, ctx: Ctx) -> dict[str, Any]:
         {"a": "contract.price_version", "c": code},
     ).scalar()
     may_activate = can_anywhere(db, ctx.user_id, "contract.activate")
+    words = regions.names(db)
     return {
         **_contract_json(c, contract_usage.usage(db, code)),
         # an active contract takes new prices as a draft version that someone else activates (D48)
@@ -1861,9 +1909,13 @@ def get_contract(code: str, db: Db, ctx: Ctx) -> dict[str, Any]:
                 "lead_days": p["lead_days"],
                 "version": p["version"],
                 "status": p["status"],
+                "location_code": p["location_code"],
+                "region_code": p["region_code"],
+                "where": scope_label(regions.price_scope(p), words),
             }
             for p in prices
         ],
+        "regions": regions.regions(db),
         "terms": "\n".join(terms),
         "orders": [
             {

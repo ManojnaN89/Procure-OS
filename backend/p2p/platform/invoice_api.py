@@ -133,7 +133,12 @@ def get_invoice(no: str, db: Db, ctx: Ctx) -> dict[str, Any]:
     i = rows[0]
     lines = _rows(db, "select * from invoice_line where invoice_no = :n order by line_no", n=no)
     charges = _rows(db, "select * from invoice_charge where invoice_no = :n order by id", n=no)
-    results = _rows(db, "select * from match_result where invoice_no = :n order by id", n=no)
+    results = _rows(
+        db,
+        "select m.*, v.effective_from as tolerance_from from match_result m "
+        "left join tolerance_version v on v.version = m.tolerance_version where m.invoice_no = :n order by m.id",
+        n=no,
+    )
     pending = _rows(
         db,
         "select id, summary from proposal where action = 'invoice.release_block' and status = 'pending' "
@@ -193,9 +198,13 @@ def get_invoice(no: str, db: Db, ctx: Ctx) -> dict[str, Any]:
                 "qty_var": None if r["qty_var"] is None else format_qty(r["qty_var"]),
                 "detail": r["detail"],
                 "resolution": r["resolution"],
+                "tolerance": None
+                if r["tolerance_version"] is None
+                else {"version": r["tolerance_version"], "effective_from": r["tolerance_from"].isoformat()},
             }
             for r in results
         ],
+        "tolerance_version": i["tolerance_version"],
         "pending_release": pending[0] if pending else None,
         "can_enter": can_anywhere(db, ctx.user_id, "invoice.book"),
         "can_act": can_work and i["status"] == "blocked" and i["payment_block"] != "duplicate" and not pending,

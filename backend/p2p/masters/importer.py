@@ -92,6 +92,8 @@ def _check_supplier(r: dict[str, Any]) -> str | None:
         return f"state_code {r['state_code']} does not match the GSTIN state {state_of_gstin(r['gstin'])}"
     if r.get("pan") and not is_valid_pan(r["pan"]):
         return f"pan '{r['pan']}' is not a valid PAN"
+    if r.get("status") and r["status"] not in SUPPLIER_STATUSES:
+        return f"status '{r['status']}' must be one of {', '.join(SUPPLIER_STATUSES)}"
     return None
 
 
@@ -128,8 +130,51 @@ def _check_pincode(r: dict[str, Any]) -> str | None:
     return None
 
 
-# columns a file may leave out: a price list without versions loads as version 1, in force
-OPTIONAL: dict[str, frozenset[str]] = {"price_record": frozenset({"version", "status"})}
+def _check_tolerance(r: dict[str, Any]) -> str | None:
+    r["version"] = r.get("version") or 1  # a file without versions: the company's tolerances are version 1
+    return None
+
+
+def _check_scope(r: dict[str, Any]) -> str | None:
+    if (r.get("location_code") is None) == (r.get("region_code") is None):
+        return "a scope row names one location or one region, not both and not neither"
+    return None
+
+
+def _check_benchmark(r: dict[str, Any]) -> str | None:
+    if r.get("price") is not None and r["price"] <= 0:
+        return f"price {r['price']} must be above zero"
+    r["status"] = r.get("status") or "unverified"
+    r["basis"] = r.get("basis") or "delivered"
+    if r["status"] not in ("unverified", "verified", "rejected"):
+        return f"status '{r['status']}' must be unverified, verified or rejected"
+    if r["status"] == "verified" and not r.get("verified_by"):
+        return "a verified benchmark names who verified it"
+    if r.get("verified_by") and r["verified_by"] == r.get("entered_by"):
+        return "a benchmark is verified by someone other than who entered it"
+    return None
+
+
+# columns a file may leave out: a price list without versions loads as version 1, in force, for everywhere
+OPTIONAL: dict[str, frozenset[str]] = {
+    "price_record": frozenset({"version", "status", "location_code", "region_code"}),
+    "tolerance": frozenset({"version"}),
+    "location": frozenset({"region_code"}),
+    "supplier": frozenset({"registered_by"}),
+}
+# files a dataset may leave out: the table then keeps what it has (tolerance version 1 and the price threshold rule
+# from setting up the company; no regions, scopes, flags or benchmarks)
+OPTIONAL_FILES = frozenset(
+    {
+        "tolerance_version",
+        "region",
+        "supplier_category_scope",
+        "supplier_flag",
+        "price_threshold_rule",
+        "market_benchmark",
+    }
+)
+SUPPLIER_STATUSES = ("draft", "active", "blocked", "prospect")
 
 CHECKS: dict[str, Callable[[dict[str, Any]], str | None]] = {
     "supplier": _check_supplier,
@@ -137,6 +182,10 @@ CHECKS: dict[str, Callable[[dict[str, Any]], str | None]] = {
     "supplier_address": lambda r: _check_gstin(r.get("gstin"), "gstin") or _check_pincode(r),
     "gst_registration": lambda r: _check_gstin(r.get("gstin"), "gstin"),
     "price_record": _check_price_record,
+    "tolerance": _check_tolerance,
+    "supplier_category_scope": _check_scope,
+    "market_benchmark": _check_benchmark,
+    "price_threshold_rule": lambda r: _check_dates(r, "effective_from", "effective_to"),
     "contract": lambda r: _check_dates(r, "valid_from", "valid_to"),
     "item_location": _check_item_location,
     "budget": lambda r: (
@@ -248,7 +297,11 @@ def import_masters(db: Session, dataset: Path, *, actor: Actor = audit.SYSTEM, d
 
     # the tables that others point at must be known before their children are checked, including self-references
     parsed: dict[str, list[tuple[int, dict[str, Any]]]] = {}
+    kept_as_is = {s.name for s in TABLES if s.name in OPTIONAL_FILES and not _present(master_dir, s.csv)}
     for spec in TABLES:
+        if spec.name in kept_as_is:  # a table the dataset leaves out keeps its rows; its keys come from the database
+            parsed[spec.name] = [(0, dict(r)) for r in db.execute(text(f"select * from {spec.name}")).mappings()]  # noqa: S608
+            continue
         parsed[spec.name] = read_table(
             master_dir / f"{spec.csv}.csv", spec, report, optional=OPTIONAL.get(spec.name, frozenset())
         )
@@ -257,6 +310,8 @@ def import_masters(db: Session, dataset: Path, *, actor: Actor = audit.SYSTEM, d
             keys.setdefault(spec.name, {})[col] = {r[col] for _, r in parsed[spec.name] if r.get(col) is not None}
 
     for spec in TABLES:
+        if spec.name in kept_as_is:
+            continue
         seen: dict[tuple[Any, ...], int] = {}
         rows: list[dict[str, Any]] = []
         for line, row in parsed[spec.name]:
@@ -303,14 +358,18 @@ def import_masters(db: Session, dataset: Path, *, actor: Actor = audit.SYSTEM, d
             keys[spec.name][col] = {r[col] for r in rows if r.get(col) is not None}
         report.loaded[spec.name] = len(rows)
 
+    _check_scope_approvals(accepted, report)
     _warn_unknown_hsn(db, accepted.get("item", []), report)
     _warn_gst_rate_differs(db, accepted.get("item", []), report)
     kept = _supplier_controls(db, accepted, report)
 
     if not dry_run:
         for spec in reversed(TABLES):
-            db.execute(text(f"delete from {spec.name}"))  # noqa: S608 - table names come from the schema file
+            if spec.name not in kept_as_is:
+                db.execute(text(f"delete from {spec.name}"))  # noqa: S608 - table names come from the schema file
         for spec in TABLES:
+            if spec.name in kept_as_is:
+                continue
             rows = accepted[spec.name]
             if rows:
                 cols = [c for c, _ in spec.columns]
@@ -319,6 +378,7 @@ def import_masters(db: Session, dataset: Path, *, actor: Actor = audit.SYSTEM, d
                     rows,
                 )
         _restore_supplier_controls(db, kept)
+        _close_tolerance_versions(db)
         audit.record(
             db,
             actor,
@@ -334,6 +394,36 @@ def import_masters(db: Session, dataset: Path, *, actor: Actor = audit.SYSTEM, d
         db.commit()
     report.seconds = round(time.monotonic() - started, 2)
     return report
+
+
+def _present(master_dir: Path, name: str) -> bool:
+    return (master_dir / f"{name}.csv").is_file() or (master_dir / f"{name}.xlsx").is_file()
+
+
+def _check_scope_approvals(accepted: dict[str, list[dict[str, Any]]], report: ImportReport) -> None:
+    """A scope limits an approval: it needs the supplier's approval for that category."""
+    if "supplier_category_scope" not in accepted:
+        return
+    approved = {(r["supplier_code"], r["category_code"]) for r in accepted.get("supplier_category", [])}
+    rows = []
+    for n, r in enumerate(accepted["supplier_category_scope"], start=2):
+        if (r["supplier_code"], r["category_code"]) in approved:
+            rows.append(r)
+            continue
+        why = f"{r['supplier_code']} is not approved for {r['category_code']}: a scope limits an approval"
+        report.rejected.append(Problem("supplier_category_scope", n, why))
+    accepted["supplier_category_scope"] = rows
+    report.loaded["supplier_category_scope"] = len(rows)
+
+
+def _close_tolerance_versions(db: Session) -> None:
+    """Each tolerance version ends the day before the next one starts."""
+    db.execute(
+        text(
+            "update tolerance_version v set effective_to = n.effective_from - 1 from tolerance_version n "
+            "where n.version = (select min(x.version) from tolerance_version x where x.version > v.version)"
+        )
+    )
 
 
 @dataclass

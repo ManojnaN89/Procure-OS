@@ -18,8 +18,11 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from p2p.formulas.contracts import periods_overlap
+from p2p.formulas.scope import Scope, intersects
+from p2p.formulas.scope import label as scope_label
 from p2p.formulas.suppliers import LABELS
 from p2p.formulas.words import count
+from p2p.masters import regions
 from p2p.platform import audit, proposals
 from p2p.platform.sod import Actor, user
 from p2p.sourcing import documents
@@ -152,9 +155,18 @@ def _in_force_before(db: Session, contract: str, key: dict[str, Any], start: dat
         text(
             "select id from price_record where contract_code = :c and item_code = :i and uom is not distinct from :u "
             "and coalesce(min_qty, 1) = :m and status = 'active' and valid_from < :f "
-            "and (valid_to is null or valid_to >= :f)"
+            "and (valid_to is null or valid_to >= :f) and location_code is not distinct from :loc "
+            "and region_code is not distinct from :reg"
         ),
-        {"c": contract, "i": key["item"], "u": key["uom"], "m": key["min_qty"], "f": start},
+        {
+            "c": contract,
+            "i": key["item"],
+            "u": key["uom"],
+            "m": key["min_qty"],
+            "f": start,
+            "loc": key.get("location"),
+            "reg": key.get("region"),
+        },  # fmt: skip
     ).scalar()
     return None if found is None else int(found)
 
@@ -162,21 +174,26 @@ def _in_force_before(db: Session, contract: str, key: dict[str, Any], start: dat
 def _overlap(
     db: Session, supplier: str, key: dict[str, Any], start: date, end: date | None, ignore: set[int]
 ) -> str | None:
-    """A contract price of the supplier for the same item, unit and break, draft or active, valid on a day of the period."""
+    """A contract price of the supplier for the same item, unit and break, draft or active, valid on a day of the period
+    in a place both prices cover (everywhere covers every place; a region covers its locations, D44)."""
+    mine = Scope.of([key.get("location")], [key.get("region")])
+    region_of = regions.region_of(db)
     rows = db.execute(
         text(
-            "select id, contract_code, version, status, valid_from, valid_to from price_record "
+            "select id, contract_code, version, status, valid_from, valid_to, location_code, region_code from price_record "
             "where supplier_code = :s and item_code = :i and uom is not distinct from :u and coalesce(min_qty, 1) = :m "
             "and contract_code is not null and status in ('draft', 'active') order by valid_from, id"
         ),
         {"s": supplier, "i": key["item"], "u": key["uom"], "m": key["min_qty"]},
     ).all()
     for r in rows:
-        if r[0] not in ignore and periods_overlap(start, end, r[4], r[5]):
+        theirs = Scope.of([r[6]], [r[7]])
+        if r[0] not in ignore and periods_overlap(start, end, r[4], r[5]) and intersects(mine, theirs, region_of):
             until = f"{r[5]:%d %b %Y}" if r[5] else "no end"
             return (
                 f"the price would overlap the {r[3]} price of {key['item']} on {r[1]} (version {r[2]}, "
-                f"{r[4]:%d %b %Y} to {until}); prices of one supplier for an item may not apply on the same day"
+                f"{r[4]:%d %b %Y} to {until}, {scope_label(theirs, regions.names(db))}); prices of one supplier for an "
+                "item may not apply on the same day in the same place"
             )
     return None
 
@@ -207,7 +224,16 @@ def add_price(db: Session, contract: str, data: dict[str, Any], user_id: int) ->
         raise MasterError("a price cannot end before it starts")
     if start < c[2] or (c[3] is not None and (end is None or end > c[3])):
         raise MasterError("a price must fall within the contract's dates")
-    key = {"item": item, "uom": data.get("uom"), "min_qty": int(data.get("min_qty") or 1)}
+    key = {
+        "item": item,
+        "uom": data.get("uom"),
+        "min_qty": int(data.get("min_qty") or 1),
+        "location": data.get("location_code") or None,
+        "region": data.get("region_code") or None,
+    }
+    if not key["location"] and not key["region"]:  # a new version of a price keeps the place of the one it replaces
+        key["location"], key["region"] = _scope_in_force(db, contract, key, start)
+    _check_price_scope(db, key)
     replaced = _in_force_before(db, contract, key, start) if c[1] == "active" else None
     clash = _overlap(db, c[0], key, start, end, {replaced} if replaced else set())
     if clash:
@@ -225,21 +251,52 @@ def add_price(db: Session, contract: str, data: dict[str, Any], user_id: int) ->
         db.execute(
             text(
                 "insert into price_record (supplier_code, item_code, contract_code, uom, price, min_qty, valid_from, valid_to, "
-                "lead_days, version, status, created_by) values (:s, :i, :c, :u, :p, :m, :f, :e, :l, :v, 'draft', :by) "
-                "returning id"
+                "lead_days, version, status, created_by, location_code, region_code) "
+                "values (:s, :i, :c, :u, :p, :m, :f, :e, :l, :v, 'draft', :by, :loc, :reg) returning id"
             ),
             {
                 "s": c[0], "i": item, "c": contract, "u": key["uom"], "p": price, "m": key["min_qty"],
                 "f": start, "e": end, "l": data.get("lead_days"), "v": version, "by": str(user_id),
+                "loc": key["location"], "reg": key["region"],
             },
         ).scalar_one()
     )  # fmt: skip
     audit.record(
         db, user(user_id), "contract.price_add", "contract", contract,
-        after={"item": item, "price": price, "id": rid, "version": version, "status": "draft"},
+        after={
+            "item": item, "price": price, "id": rid, "version": version, "status": "draft",
+            "location": key["location"], "region": key["region"],
+        },
     )  # fmt: skip
     db.commit()
     return rid
+
+
+def _scope_in_force(db: Session, contract: str, key: dict[str, Any], start: date) -> tuple[str | None, str | None]:
+    """The place of the contract's active price for the same item, unit and break on the start date, when there is one
+    (one place only); else everywhere."""
+    rows = db.execute(
+        text(
+            "select distinct location_code, region_code from price_record where contract_code = :c and item_code = :i "
+            "and uom is not distinct from :u and coalesce(min_qty, 1) = :m and status = 'active' and valid_from <= :f "
+            "and (valid_to is null or valid_to >= :f)"
+        ),
+        {"c": contract, "i": key["item"], "u": key["uom"], "m": key["min_qty"], "f": start},
+    ).all()
+    return (rows[0][0], rows[0][1]) if len(rows) == 1 else (None, None)
+
+
+def _check_price_scope(db: Session, key: dict[str, Any]) -> None:
+    """A price applies everywhere, at one location or in one region (D44)."""
+    if key["location"] and key["region"]:
+        raise MasterError("a price applies at one location or in one region, not both")
+    if (
+        key["location"]
+        and db.execute(text("select 1 from location where code = :c"), {"c": key["location"]}).first() is None
+    ):
+        raise MasterError(f"there is no location {key['location']}")
+    if key["region"] and db.execute(text("select 1 from region where code = :c"), {"c": key["region"]}).first() is None:
+        raise MasterError(f"there is no region {key['region']}")
 
 
 def _refuse_maker(db: Session, contract: str, version: int, user_id: int) -> None:
@@ -265,16 +322,16 @@ def _activate_rows(db: Session, contract: str, supplier: str, version: int, user
     """Make the draft prices of a version active. A price it replaces ends the day before the new one starts."""
     rows = db.execute(
         text(
-            "select id, item_code, uom, coalesce(min_qty, 1), valid_from, valid_to from price_record "
-            "where contract_code = :c and version = :v and status = 'draft' order by id for update"
+            "select id, item_code, uom, coalesce(min_qty, 1), valid_from, valid_to, location_code, region_code "
+            "from price_record where contract_code = :c and version = :v and status = 'draft' order by id for update"
         ),
         {"c": contract, "v": version},
     ).all()
     if not rows:
         raise MasterError(f"version {version} of {contract} has no draft prices")
     ended: list[int] = []
-    for rid, item, uom, min_qty, start, end in rows:
-        key = {"item": item, "uom": uom, "min_qty": min_qty}
+    for rid, item, uom, min_qty, start, end, loc, reg in rows:
+        key = {"item": item, "uom": uom, "min_qty": min_qty, "location": loc, "region": reg}
         replaced = _in_force_before(db, contract, key, start)
         clash = _overlap(db, supplier, key, start, end, {rid} | ({replaced} if replaced else set()))
         if clash:

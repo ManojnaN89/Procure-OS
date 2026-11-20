@@ -55,6 +55,16 @@ TABLES: tuple[Table, ...] = (
         (),
     ),
     Table(
+        "region",
+        "region",
+        (
+            ("code", "text"),
+            ("name", "text"),
+        ),
+        ("code",),
+        (),
+    ),
+    Table(
         "location",
         "location",
         (
@@ -72,9 +82,10 @@ TABLES: tuple[Table, ...] = (
             ("holiday_scope", "text"),
             ("loc_short", "text"),
             ("head_user", "text"),
+            ("region_code", "text"),
         ),
         ("code",),
-        (("head_user", "org_user", "code"),),
+        (("head_user", "org_user", "code"), ("region_code", "region", "code")),
     ),
     Table(
         "payment_terms",
@@ -279,6 +290,17 @@ TABLES: tuple[Table, ...] = (
         (),
     ),
     Table(
+        "tolerance_version",
+        "tolerance_version",
+        (
+            ("version", "integer"),
+            ("effective_from", "date"),
+            ("note", "text"),
+        ),
+        ("version",),
+        (),
+    ),
+    Table(
         "tolerance",
         "tolerance",
         (
@@ -286,9 +308,10 @@ TABLES: tuple[Table, ...] = (
             ("value", "text"),
             ("category_code", "text"),
             ("note", "text"),
+            ("version", "integer"),
         ),
         None,
-        (),
+        (("version", "tolerance_version", "version"),),
     ),
     Table(
         "approval_rule",
@@ -429,6 +452,7 @@ TABLES: tuple[Table, ...] = (
             ("reverse_charge", "text"),
             ("status", "text"),
             ("turnover_band", "text"),
+            ("registered_by", "text"),
         ),
         ("code",),
         (("payment_terms_code", "payment_terms", "code"),),
@@ -474,6 +498,23 @@ TABLES: tuple[Table, ...] = (
         (("supplier_code", "supplier", "code"), ("category_code", "item_category", "code")),
     ),
     Table(
+        "supplier_category_scope",
+        "supplier_category_scope",
+        (
+            ("supplier_code", "text"),
+            ("category_code", "text"),
+            ("location_code", "text"),
+            ("region_code", "text"),
+        ),
+        None,
+        (
+            ("supplier_code", "supplier", "code"),
+            ("category_code", "item_category", "code"),
+            ("location_code", "location", "code"),
+            ("region_code", "region", "code"),
+        ),
+    ),
+    Table(
         "supplier_contact",
         "supplier_contact",
         (
@@ -516,6 +557,19 @@ TABLES: tuple[Table, ...] = (
         (("supplier_code", "supplier", "code"),),
     ),
     Table(
+        "supplier_flag",
+        "supplier_flag",
+        (
+            ("supplier_code", "text"),
+            ("kind", "text"),
+            ("other_ref", "text"),
+            ("detail", "text"),
+            ("raised_at", "timestamptz"),
+        ),
+        None,
+        (("supplier_code", "supplier", "code"),),
+    ),
+    Table(
         "contract",
         "contract",
         (
@@ -552,9 +606,17 @@ TABLES: tuple[Table, ...] = (
             ("lead_days", "integer"),
             ("version", "integer"),
             ("status", "text"),
+            ("location_code", "text"),
+            ("region_code", "text"),
         ),
         None,
-        (("supplier_code", "supplier", "code"), ("item_code", "item", "code"), ("contract_code", "contract", "code")),
+        (
+            ("supplier_code", "supplier", "code"),
+            ("item_code", "item", "code"),
+            ("contract_code", "contract", "code"),
+            ("location_code", "location", "code"),
+            ("region_code", "region", "code"),
+        ),
     ),
     Table(
         "sanction_entry",
@@ -568,6 +630,50 @@ TABLES: tuple[Table, ...] = (
         ),
         None,
         (),
+    ),
+    Table(
+        "price_threshold_rule",
+        "price_threshold_rule",
+        (
+            ("category_code", "text"),
+            ("version", "integer"),
+            ("effective_from", "date"),
+            ("effective_to", "date"),
+            ("gap_pct", "numeric(7,4)"),
+            ("gap_inr_per_unit", "numeric(18,2)"),
+            ("min_saving_inr", "numeric(18,2)"),
+            ("evidence_max_age_days", "integer"),
+            ("min_sources", "integer"),
+            ("expiry_review_days", "integer"),
+            ("note", "text"),
+        ),
+        None,
+        (("category_code", "item_category", "code"),),
+    ),
+    Table(
+        "market_benchmark",
+        "market_benchmark",
+        (
+            ("item_code", "text"),
+            ("price", "numeric(18,4)"),
+            ("uom", "text"),
+            ("basis", "text"),
+            ("effective_date", "date"),
+            ("region_code", "text"),
+            ("source_kind", "text"),
+            ("source_name", "text"),
+            ("source_ref", "text"),
+            ("note", "text"),
+            ("status", "text"),
+            ("entered_by", "text"),
+            ("entered_at", "timestamptz"),
+            ("verified_by", "text"),
+            ("verified_at", "timestamptz"),
+            ("verify_note", "text"),
+            ("rejected_reason", "text"),
+        ),
+        None,
+        (("item_code", "item", "code"), ("region_code", "region", "code")),
     ),
 )
 

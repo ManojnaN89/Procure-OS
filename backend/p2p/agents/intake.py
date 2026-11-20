@@ -458,9 +458,12 @@ def create_from_form(
                 None,
             )
         )
-    stock = {r[0] for r in db.execute(text("select code from location where is_stock_location"))}
+    # a place chosen on the form may be any location of the company (a plant not yet a store, such as one opening);
+    # a place taken by default is a stock location
+    allowed = "true" if location else "is_stock_location"
+    places = {r[0] for r in db.execute(text(f"select code from location where {allowed}"))}  # noqa: S608 - fixed
     place = location if location else _location(db, None, person)[0]
-    if place not in stock:
+    if place not in places:
         raise FormError("Choose where it is to be delivered.")
     reading = RequestReading(
         intent="request",
@@ -570,7 +573,9 @@ def _create(
         for _, cand, li in entries:
             row_info = info.get(cand.code) if cand else None
             estimate = (
-                estimates.for_item(db, str(li.item_code), row_info["uom"], li.qty, today, row_info["standard_price"])
+                estimates.for_item(
+                    db, str(li.item_code), row_info["uom"], li.qty, today, row_info["standard_price"], location
+                )
                 if row_info and li.item_code
                 else None
             )
@@ -704,7 +709,9 @@ def _possible_split(
     if row is None:
         return None
     estimate = (
-        estimates.for_item(db, item_code, info["uom"], qty, business_today(), info["standard_price"]) if info else None
+        estimates.for_item(db, item_code, info["uom"], qty, business_today(), info["standard_price"], location)
+        if info
+        else None
     )
     est = estimate.price if estimate else Decimal(0)
     earlier = round_money(Decimal(row[2]) * Decimal(row[3]))

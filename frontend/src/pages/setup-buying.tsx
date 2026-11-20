@@ -12,7 +12,7 @@ import { type Shared, select, useChange } from "./setup-shared";
 // The buying rules: each is versioned. A change is a new version from a date; an old version is never edited, so a
 // decision made under it can still be explained by it.
 
-type Version = {
+export type Version = {
 	version: number;
 	effective_from: string;
 	effective_to: string | null;
@@ -76,11 +76,11 @@ const WEIGHT_NAMES: [keyof Weights, string][] = [
 	["payment_terms", "Payment terms"],
 ];
 
-function today(): string {
+export function today(): string {
 	return new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Kolkata" });
 }
 
-function day(iso: string | null): string {
+export function day(iso: string | null): string {
 	if (!iso) return "open";
 	return new Date(`${iso}T00:00:00`).toLocaleDateString("en-IN", {
 		day: "2-digit",
@@ -89,19 +89,20 @@ function day(iso: string | null): string {
 	});
 }
 
-function shown(kind: string, value: string | null | undefined): string {
+export function shown(kind: string, value: string | null | undefined): string {
 	if (value === null || value === undefined || value === "") return "-";
 	if (kind === "inr") return formatInr(value);
 	if (kind === "pct") return `${value}%`;
+	if (kind === "count") return value;
 	return `${value} day${value === "1" ? "" : "s"}`;
 }
 
-function isNumber(v: string): boolean {
+export function isNumber(v: string): boolean {
 	return v.trim() !== "" && Number.isFinite(Number(v));
 }
 
 /** The version in force, the history of versions and the form for the next one: the same frame for every rule. */
-function RuleFrame({
+export function RuleFrame({
 	title,
 	current,
 	versions,
@@ -170,7 +171,7 @@ function RuleFrame({
 	);
 }
 
-function StartsOn({
+export function StartsOn({
 	value,
 	onChange,
 }: {
@@ -763,6 +764,182 @@ export function SingleSource(shared: Shared) {
 					</div>
 				</CardBody>
 			</Card>
+		</>
+	);
+}
+
+// ---- the price threshold rule (12.5) ----------------------------------------------------------------
+
+type ThresholdField = {
+	key: string;
+	label: string;
+	kind: "inr" | "pct" | "days" | "count";
+};
+type ThresholdData = {
+	categories: { code: string; name: string | null }[];
+	fields: ThresholdField[];
+	versions: (Version & {
+		category: string | null;
+		values: Record<string, string | null>;
+	})[];
+	banner: string;
+};
+
+function unit(kind: string): string {
+	if (kind === "inr") return "₹";
+	if (kind === "pct") return "%";
+	if (kind === "days") return "days";
+	return "number";
+}
+
+export function PriceThresholds(shared: Shared) {
+	const data = useQuery({
+		queryKey: ["setup-price-thresholds"],
+		queryFn: () => api<ThresholdData>("/api/setup/price-thresholds"),
+	});
+	const [values, setValues] = useState<Record<string, string>>({});
+	const [category, setCategory] = useState(""); // empty: the company-wide rule
+	const [from, setFrom] = useState(today());
+	const d = data.data;
+	const inForce = (cat: string | null) => {
+		const rows = d?.versions.filter((v) => v.category === cat) ?? [];
+		return rows.find((v) => v.in_force) ?? (cat ? undefined : rows[0]);
+	};
+	const now = inForce(null);
+	const own = category ? inForce(category) : now;
+	const merged: Record<string, string> = { ...values };
+	for (const [k, x] of Object.entries(own?.values ?? {}))
+		if (merged[k] === undefined && x !== null) merged[k] = x;
+	const save = useChange(
+		shared,
+		"setup-price-thresholds",
+		(reason) => {
+			const given = (d?.fields ?? []).filter(
+				(f) => !category || (merged[f.key] ?? "").trim() !== "",
+			);
+			if (given.some((f) => !isNumber(merged[f.key] ?? "")))
+				throw new Error("Every threshold needs a number.");
+			if (given.some((f) => Number(merged[f.key]) < 0))
+				throw new Error("A threshold cannot be negative.");
+			if (merged.gap_pct && Number(merged.gap_pct) > 100)
+				throw new Error("The percentage gap cannot be above 100.");
+			return api("/api/setup/price-thresholds", {
+				method: "PUT",
+				json: {
+					values: Object.fromEntries(given.map((f) => [f.key, merged[f.key]])),
+					category: category || null,
+					effective_from: from,
+					reason,
+				},
+			});
+		},
+		() => setValues({}),
+	);
+	if (!d || !now) return null;
+	const kind = Object.fromEntries(d.fields.map((f) => [f.key, f.kind]));
+	const v = now.values;
+
+	return (
+		<>
+			<p
+				role="note"
+				className="mb-4 rounded-md border border-border bg-muted p-3 text-sm font-medium"
+				data-testid="threshold-banner"
+			>
+				{d.banner}
+			</p>
+			<RuleFrame
+				title="Price thresholds"
+				current={
+					<ul
+						className="list-disc space-y-1 pl-5"
+						data-testid="thresholds-in-force"
+					>
+						<li>
+							Version {now.version}, in force since {day(now.effective_from)}.
+						</li>
+						<li>
+							A contract price above the market opens a strategic review only
+							when it is above it by more than {shown("pct", v.gap_pct)}, by
+							more than {shown("inr", v.gap_inr_per_unit)} per unit, and the
+							saving at the relevant quantity is above{" "}
+							{shown("inr", v.min_saving_inr)}.
+						</li>
+						<li>
+							A benchmark counts only when verified, no older than{" "}
+							{shown("days", v.evidence_max_age_days)}, for the region and in a
+							unit that converts, from at least {v.min_sources}{" "}
+							{v.min_sources === "1" ? "source" : "sources"}.
+						</li>
+						<li>
+							A contract within {shown("days", v.expiry_review_days)} of its end
+							always opens a review, as do a plan and a buyer's request. The
+							contract stays valid in every case.
+						</li>
+					</ul>
+				}
+				versions={d.versions}
+				history={(x) => {
+					const row = x as ThresholdData["versions"][number];
+					const set = d.fields.filter((f) => row.values[f.key] !== null);
+					return (
+						<div className="text-xs">
+							{row.category ? (
+								<div className="font-medium">
+									Category {row.category} (only where stricter)
+								</div>
+							) : null}
+							{set.map((f) => (
+								<div key={f.key}>
+									{f.label}: {shown(f.kind, row.values[f.key])}
+								</div>
+							))}
+						</div>
+					);
+				}}
+				form={
+					<div className="grid gap-3 md:grid-cols-3">
+						<Field label="Applies to">
+							<select
+								className={select}
+								value={category}
+								onChange={(e) => {
+									setCategory(e.target.value);
+									setValues({});
+								}}
+							>
+								<option value="">The whole company</option>
+								{d.categories.map((c) => (
+									<option key={c.code} value={c.code}>
+										Category {c.name ?? c.code} (only where stricter)
+									</option>
+								))}
+							</select>
+						</Field>
+						{d.fields.map((f) => (
+							<Field key={f.key} label={`${f.label} (${unit(f.kind)})`}>
+								<Input
+									name={f.key}
+									inputMode="decimal"
+									value={merged[f.key] ?? ""}
+									onChange={(e) =>
+										setValues({ ...values, [f.key]: e.target.value })
+									}
+								/>
+								<span className="text-xs text-muted-foreground">
+									Company now {shown(kind[f.key], v[f.key])}
+								</span>
+							</Field>
+						))}
+						<StartsOn value={from} onChange={setFrom} />
+						<div className="flex items-end">
+							<Button onClick={() => save.mutate()}>
+								Save new price threshold version
+							</Button>
+						</div>
+					</div>
+				}
+			/>
 		</>
 	);
 }

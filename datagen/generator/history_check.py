@@ -12,7 +12,7 @@ from typing import Any
 
 from common import Calendar
 from history_close import HISTORY, PLANNING, TRUTH
-from master_files import read
+from master_files import read, tolerance_on
 
 REFERENCE = Path(__file__).resolve().parents[2] / "data" / "reference"
 CENT = Decimal("0.01")
@@ -43,7 +43,7 @@ class HistoryCheck:
 
     def run(self) -> list[str]:
         for check in (self.files, self.references, self.money, self.tds, self.stock, self.dates, self.duties,
-                      self.planted, self.closed_items):  # fmt: skip
+                      self.planted, self.closed_items, self.not_trading):  # fmt: skip
             if not self.problems:
                 check()
         return self.problems
@@ -60,6 +60,14 @@ class HistoryCheck:
             with (self.out / "inputs" / "history" / f"{name}.csv").open(encoding="utf-8") as f:
                 if name not in PLANNING or f.readline().strip() != PLANNING[name]:
                     self.bad(f"inputs/history/{name}.csv is not a planning file of the standard shape")
+
+    def not_trading(self) -> None:
+        """A prospect or a blocked supplier never quotes, receives an order or sends an invoice in the history."""
+        idle = {code for code, s in self.sup.items() if s["status"] != "active"}
+        for table in ("rfq_supplier", "quote", "po", "invoice"):
+            for r in self.t[table]:
+                if r["supplier_code"] in idle:
+                    self.bad(f"{table} names {r['supplier_code']}, which is {self.sup[r['supplier_code']]['status']}")
 
     def references(self) -> None:
         t, k = self.t, self.k
@@ -332,8 +340,12 @@ class HistoryCheck:
             "failed_inspection": sum(1 for r in t["gr_line"] if Decimal(r["qty_rejected"]) > 0),
             "supplier_date_change": len({e["po_no"] for e in t["po_event"] if e["type"] == "date_change"}),
             "receipt_without_po": sum(1 for g in t["goods_receipt"] if g["gate_entry_at"] < po_at[g["po_no"]]),
-            "price_mismatch": sum(1 for r in self.k["truth_match_expected"] if r["reason_codes"] == "price_variance"),
-            "qty_mismatch": sum(1 for r in self.k["truth_match_expected"] if r["reason_codes"] == "qty_over_received"),
+            "price_mismatch": sum(1 for r in self.k["truth_match_expected"]
+                                  if r["reason_codes"] == "price_variance" and r["planted"] == "price_mismatch"),
+            "qty_mismatch": sum(1 for r in self.k["truth_match_expected"]
+                                if r["reason_codes"] == "qty_over_received" and r["planted"] == "qty_mismatch"),
+            "tolerance_edge_qty": sum(1 for r in self.k["truth_match_expected"] if r["planted"] == "tolerance_edge_qty"),
+            "tolerance_edge_price": sum(1 for r in self.k["truth_match_expected"] if r["planted"] == "tolerance_edge_price"),
             "part_delivery": self.part_deliveries(),
         }  # fmt: skip
         for kind, count in seen.items():
@@ -353,18 +365,23 @@ class HistoryCheck:
     def mismatches(self) -> None:
         """Price and quantity problems judged again from the order, the receipt and the tolerances: the first line
         that is out decides, as in truth_match_expected."""
-        tol = {r["key"]: Decimal(r["value"]) for r in self.m["tolerance"] if r["category_code"] == "ANY"}
         price = {(r["po_no"], r["line_no"]): Decimal(r["unit_price"]) for r in self.t["po_line"]}
         grn_ref = {g["no"]: g["supplier_invoice_ref"].removesuffix("-R") for g in self.t["goods_receipt"]}
         accepted: dict[tuple[str, str, str], Decimal] = defaultdict(Decimal)
         for ln in self.t["gr_line"]:
             accepted[(grn_ref[ln["gr_no"]], ln["po_no"], ln["po_line_no"])] += Decimal(ln["qty_accepted"])
         found: dict[str, str] = {}
+        judged: dict[str, str] = {}  # the tolerance version in force on the day each invoice was received
         number = {r["no"]: r for r in self.t["invoice"]}
         for ln in self.t["invoice_line"]:
             inv = number[ln["invoice_no"]]
             if inv["payment_block"] == "duplicate" or inv["no"] in found:
                 continue
+            item = self.items[self.line_item[(ln["po_no"], ln["po_line_no"])]]
+            version, tol = tolerance_on(
+                self.m["tolerance"], self.m["tolerance_version"], inv["received_on"], item["category_code"]
+            )
+            judged[inv["no"]] = str(version)
             ordered, qty = price[(ln["po_no"], ln["po_line_no"])], Decimal(ln["qty"])
             diff = Decimal(ln["unit_price"]) - ordered
             got = accepted.get((inv["supplier_invoice_no"].removesuffix("-R"), ln["po_no"], ln["po_line_no"]))
@@ -373,6 +390,11 @@ class HistoryCheck:
             elif got is not None and qty > got + got * tol["qty_pct"] / 100:
                 found[inv["no"]] = "qty_over_received"
         for r in self.k["truth_match_expected"]:
+            if judged.get(r["invoice_no"]) != r["tolerance_version"]:
+                self.bad(
+                    f"invoice {r['invoice_no']}: truth says tolerance version {r['tolerance_version']}, "
+                    f"it was received under {judged.get(r['invoice_no'])}"
+                )
             if found.get(r["invoice_no"], "") != r["reason_codes"]:
                 self.bad(
                     f"invoice {r['invoice_no']}: the data says '{found.get(r['invoice_no'], '')}', truth says '{r['reason_codes']}'"

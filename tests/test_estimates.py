@@ -20,7 +20,8 @@ D = Decimal
 
 def _estimate(apex: Apex, item: str, qty: str = "10") -> tuple[Decimal, str] | None:
     standard = apex.db.execute(text("select standard_price from item where code = :c"), {"c": item}).scalar_one()
-    got = estimates.for_item(apex.db, item, "NOS", D(qty), business_today(), standard)
+    # delivered to Chakan: CNT-0001's prices are for the Maharashtra plants only (D44)
+    got = estimates.for_item(apex.db, item, "NOS", D(qty), business_today(), standard, "PLT-CKN")
     return (got.price, got.source) if got else None
 
 

@@ -55,7 +55,7 @@ def mrp_results(
                     "qty": f"{(Decimal(b['qty']) * Decimal(plan['qty'])).quantize(QTY)}",
                     "unit": b["unit"],
                     "need_by": run["need_by"],
-                    "location_code": "",
+                    "location_code": run.get("location_code", ""),
                 }
             )
     return rows

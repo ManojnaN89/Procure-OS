@@ -94,6 +94,12 @@ def send_po(db: Session, po_no: str, actor: Actor = SERVICE, *, tenant: str | No
         {"c": po["supplier_code"]},
     ).one()
     if supplier[0] != "active":
+        db.rollback()
+        audit.record(
+            db, actor, "po.issue_refused", "po", po_no, after={"supplier": po["supplier_code"], "status": supplier[0]},
+            reason="the order is not sent to a supplier that is not active",
+        )  # fmt: skip
+        db.commit()
         raise DispatchError(f"the supplier {po['supplier_code']} is {supplier[0]}, so the order cannot be sent")
     check = documents.check_supplier(db, po["supplier_code"], business_today())
     if not check.ok:

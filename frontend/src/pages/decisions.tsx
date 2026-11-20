@@ -19,6 +19,17 @@ type Evaluation = {
 	case_ref: string | null;
 };
 
+/** A decision's inputs and outputs in words ("key: value; ..."), not raw JSON. */
+function plain(value: unknown): string {
+	if (value === null || value === undefined) return "-";
+	if (Array.isArray(value)) return value.map(plain).join(", ") || "none";
+	if (typeof value === "object")
+		return Object.entries(value as Record<string, unknown>)
+			.map(([k, v]) => `${k.replaceAll("_", " ")}: ${plain(v)}`)
+			.join("; ");
+	return String(value);
+}
+
 function Trace({ id }: { id: number }) {
 	const { data } = useQuery({
 		queryKey: ["rule-evaluation", id],
@@ -26,7 +37,7 @@ function Trace({ id }: { id: number }) {
 	});
 	return (
 		<pre className="max-w-full overflow-x-auto rounded-md bg-muted p-2 text-xs">
-			{data ? JSON.stringify(data.trace, null, 2) : "Loading…"}
+			{data ? plain(data.trace) : "Loading…"}
 		</pre>
 	);
 }
@@ -78,12 +89,8 @@ export function DecisionsPage() {
 									<Td className="whitespace-nowrap">
 										{e.key} <Badge tone="info">{`v${e.version}`}</Badge>
 									</Td>
-									<Td className="font-mono text-xs">
-										{JSON.stringify(e.input)}
-									</Td>
-									<Td className="font-mono text-xs">
-										{JSON.stringify(e.output)}
-									</Td>
+									<Td className="font-mono text-xs">{plain(e.input)}</Td>
+									<Td className="font-mono text-xs">{plain(e.output)}</Td>
 									<Td>{e.actor}</Td>
 									<Td>{e.case_ref}</Td>
 									<Td>

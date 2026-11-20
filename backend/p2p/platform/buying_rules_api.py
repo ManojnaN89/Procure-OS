@@ -28,7 +28,7 @@ from p2p.platform.setting_changes import Change
 from p2p.platform.setup_api import need_reason, record_history
 from p2p.platform.sod import Actor
 from p2p.platform.sod import user as user_actor
-from p2p.sourcing import route
+from p2p.sourcing import price_review, route
 
 router = APIRouter(prefix="/api/setup", tags=["setup"])
 Db = Annotated[Session, Depends(routing.tenant_session)]
@@ -292,6 +292,72 @@ def _touchless(db: Session, actor: Actor, args: dict[str, Any], reason: str, app
     except touchless.TouchlessRuleError as exc:
         raise _422(str(exc)) from None
     return Change("touchless_rule", "company", before, after, {"version": version})
+
+
+# ---- the price threshold rule (12.5) -----------------------------------------------------------------
+
+THRESHOLD_FIELDS: dict[str, tuple[str, str]] = {
+    "gap_pct": ("Contract above the market by more than", "pct"),
+    "gap_inr_per_unit": ("... and by more than this per unit", "inr"),
+    "min_saving_inr": ("... and a saving at the relevant quantity above", "inr"),
+    "evidence_max_age_days": ("A benchmark counts when no older than", "days"),
+    "min_sources": ("... from at least this many sources", "count"),
+    "expiry_review_days": ("A contract this near its end opens a review", "days"),
+}
+THRESHOLD_BANNER = "Default values need validation with the company (O2)"
+
+
+@router.get("/price-thresholds")
+def get_price_thresholds(db: Db, ctx: RulesAdmin) -> dict[str, Any]:
+    today, names = business_today(), _names(db)
+    versions = []
+    for r in _rows(db, "select * from price_threshold_rule order by category_code nulls first, version desc"):
+        v = _version(r, today, names)
+        v["category"] = r["category_code"]
+        v["values"] = _plain({k: r[k] for k in THRESHOLD_FIELDS})
+        versions.append(v)
+    return {
+        "fields": [{"key": k, "label": label, "kind": kind} for k, (label, kind) in THRESHOLD_FIELDS.items()],
+        "versions": versions,
+        "categories": _rows(db, "select code, name from item_category order by code"),
+        "banner": THRESHOLD_BANNER,
+    }
+
+
+class ThresholdVersion(BaseModel):
+    values: dict[str, Decimal]
+    category: str | None = None
+    effective_from: date
+    reason: str | None = None
+
+
+@router.put("/price-thresholds", status_code=202)
+def new_price_thresholds(body: ThresholdVersion, db: Db, ctx: RulesAdmin) -> dict[str, Any]:
+    reason = need_reason(body.reason)
+    return _submit(db, ctx, "price_threshold", body.model_dump(mode="json", exclude={"reason"}), reason)
+
+
+@setting_changes.handler("price_threshold", "admin.rules")
+def _price_threshold(db: Session, actor: Actor, args: dict[str, Any], reason: str, apply: bool) -> Change:
+    body = ThresholdVersion.model_validate(args)
+    category = body.category or None
+    if category and db.execute(text("select 1 from item_category where code = :c"), {"c": category}).first() is None:
+        raise _422(f"there is no item category {category}")
+    _check_start(db, "price_threshold_rule", body.effective_from, "category_code is not distinct from :c", c=category)
+    old = price_review.in_force_row(db, category, body.effective_from)
+    before = _plain({k: old[k] for k in THRESHOLD_FIELDS}) if old else None
+    after = _plain(dict(body.values))
+    key = category or "company"
+    try:
+        if apply:
+            record_history(db, actor, "price_threshold_rule", key, before, after, reason)
+        version = price_review.save_rule(
+            db, actor, dict(body.values), category=category, effective_from=body.effective_from, note=reason,
+            apply=apply,
+        )  # fmt: skip
+    except price_review.ReviewError as exc:
+        raise _422(str(exc)) from None
+    return Change("price_threshold_rule", key, before, after, {"version": version})
 
 
 # ---- items bought from one supplier only ---------------------------------------------------------

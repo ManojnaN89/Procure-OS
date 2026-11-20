@@ -1,10 +1,11 @@
 import { useQuery } from "@tanstack/react-query";
 import { useState } from "react";
 import { Button } from "../components/ui/button";
-import { Card, CardBody, CardHeader } from "../components/ui/card";
+import { Card, CardHeader } from "../components/ui/card";
 import { Field, Input, Textarea } from "../components/ui/input";
 import { Table, Td, Th } from "../components/ui/table";
 import { api } from "../lib/api";
+import { day, RuleFrame, StartsOn, today, type Version } from "./setup-buying";
 import { type Shared, select, useChange } from "./setup-shared";
 
 type LastChange = { at: string; by: string; reason: string } | null;
@@ -26,10 +27,15 @@ type ToleranceRow = {
 	label: string;
 	values: { category: string; value: string; last_change: LastChange }[];
 };
+type ToleranceVersion = Version & {
+	values: { key: string; category: string; value: string }[];
+};
 type PoliciesData = {
 	settings: PolicyRow[];
 	tolerances: ToleranceRow[];
 	categories: string[];
+	in_force: number;
+	versions: ToleranceVersion[];
 };
 
 function since(c: LastChange): string {
@@ -47,14 +53,21 @@ export function Policies(shared: Shared) {
 		category: "ANY",
 		value: "",
 	});
+	const [from, setFrom] = useState(today());
 	const save = useChange(shared, "setup-policies", (reason) =>
 		api(`/api/setup/tolerances/${tol.key}`, {
 			method: "PUT",
-			json: { category: tol.category, value: tol.value, reason },
+			json: {
+				category: tol.category,
+				value: tol.value,
+				effective_from: from,
+				reason,
+			},
 		}),
 	);
 	const d = data.data;
 	if (!d) return null;
+	const inForce = d.versions.find((v) => v.version === d.in_force);
 
 	async function saveSetting(key: string) {
 		if (!shared.reason.trim()) {
@@ -158,87 +171,106 @@ export function Policies(shared: Shared) {
 					</tbody>
 				</Table>
 			</Card>
-			<Card className="mb-4">
-				<CardHeader className="font-medium">
-					Tolerances (by item category; ANY applies where a category has none of
-					its own)
-				</CardHeader>
-				<Table>
-					<thead>
-						<tr>
-							<Th>Tolerance</Th>
-							<Th>Category: value</Th>
-						</tr>
-					</thead>
-					<tbody>
-						{d.tolerances.map((t) => (
-							<tr key={t.key}>
-								<Td>{t.label}</Td>
-								<Td>
-									{t.values.length
-										? t.values.map((v) => (
-												<button
-													type="button"
-													key={v.category}
-													className="mr-3 underline"
-													title={since(v.last_change)}
-													onClick={() =>
-														setTol({
-															key: t.key,
-															category: v.category,
-															value: v.value,
-														})
-													}
-												>
-													{v.category}: {v.value}
-												</button>
-											))
-										: "not set"}
-								</Td>
-							</tr>
-						))}
-					</tbody>
-				</Table>
-			</Card>
-			<Card>
-				<CardHeader className="font-medium">Set a tolerance</CardHeader>
-				<CardBody className="grid gap-3 md:grid-cols-4">
-					<Field label="Tolerance">
-						<select
-							className={select}
-							value={tol.key}
-							onChange={(e) => setTol({ ...tol, key: e.target.value })}
-						>
-							{d.tolerances.map((t) => (
-								<option key={t.key} value={t.key}>
-									{t.label}
-								</option>
+			<RuleFrame
+				title="Tolerances"
+				current={
+					<>
+						<p className="mb-2" data-testid="tolerance-in-force">
+							Version in force: {d.in_force}
+							{inForce ? ` (from ${day(inForce.effective_from)})` : ""}. By item
+							category; ANY applies where a category has none of its own.
+						</p>
+						<Table>
+							<thead>
+								<tr>
+									<Th>Tolerance</Th>
+									<Th>Category: value</Th>
+								</tr>
+							</thead>
+							<tbody>
+								{d.tolerances.map((t) => (
+									<tr key={t.key}>
+										<Td>{t.label}</Td>
+										<Td>
+											{t.values.length
+												? t.values.map((v) => (
+														<button
+															type="button"
+															key={v.category}
+															className="mr-3 underline"
+															title={since(v.last_change)}
+															onClick={() =>
+																setTol({
+																	key: t.key,
+																	category: v.category,
+																	value: v.value,
+																})
+															}
+														>
+															{v.category}: {v.value}
+														</button>
+													))
+												: "not set"}
+										</Td>
+									</tr>
+								))}
+							</tbody>
+						</Table>
+					</>
+				}
+				versions={d.versions}
+				history={(x) => {
+					const row = x as ToleranceVersion;
+					return (
+						<div className="text-xs">
+							{row.values.map((v) => (
+								<div key={`${v.key}-${v.category}`}>
+									{v.key} ({v.category}): {v.value}
+								</div>
 							))}
-						</select>
-					</Field>
-					<Field label="Category">
-						<select
-							className={select}
-							value={tol.category}
-							onChange={(e) => setTol({ ...tol, category: e.target.value })}
-						>
-							{d.categories.map((c) => (
-								<option key={c}>{c}</option>
-							))}
-						</select>
-					</Field>
-					<Field label="Value">
-						<Input
-							inputMode="decimal"
-							value={tol.value}
-							onChange={(e) => setTol({ ...tol, value: e.target.value })}
-						/>
-					</Field>
-					<div className="flex items-end">
-						<Button onClick={() => save.mutate()}>Save tolerance</Button>
+						</div>
+					);
+				}}
+				form={
+					<div className="grid gap-3 md:grid-cols-4">
+						<Field label="Tolerance">
+							<select
+								className={select}
+								value={tol.key}
+								onChange={(e) => setTol({ ...tol, key: e.target.value })}
+							>
+								{d.tolerances.map((t) => (
+									<option key={t.key} value={t.key}>
+										{t.label}
+									</option>
+								))}
+							</select>
+						</Field>
+						<Field label="Category">
+							<select
+								className={select}
+								value={tol.category}
+								onChange={(e) => setTol({ ...tol, category: e.target.value })}
+							>
+								{d.categories.map((c) => (
+									<option key={c}>{c}</option>
+								))}
+							</select>
+						</Field>
+						<Field label="Value">
+							<Input
+								inputMode="decimal"
+								value={tol.value}
+								onChange={(e) => setTol({ ...tol, value: e.target.value })}
+							/>
+						</Field>
+						<StartsOn value={from} onChange={setFrom} />
+						<div className="flex items-end">
+							<Button onClick={() => save.mutate()}>Save tolerance</Button>
+						</div>
 					</div>
-				</CardBody>
-			</Card>
+				}
+			/>
 		</>
 	);
 }

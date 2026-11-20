@@ -298,11 +298,16 @@ def run(ctx) -> Outcome:
                 findings.append(f"tolerance {t['key']}={value} answered {r.status_code}")
         db.rollback()
         rows = db.execute(
-            text("select count(*) from tolerance where key = :k and category_code = 'ANY'"), {"k": t["key"]}
+            # one row per tolerance in each version (task 3.2 keeps every version)
+            text(
+                "select coalesce(max(n), 0) from (select count(*) n from tolerance"
+                " where key = :k and category_code = 'ANY' group by version) v"
+            ),
+            {"k": t["key"]},
         ).scalar_one()
         if rows != 1:
             tol_problems += 1
-            findings.append(f"tolerance {t['key']} has {rows} rows for ANY after updates")
+            findings.append(f"tolerance {t['key']} has {rows} rows for ANY in one version after updates")
     out.metrics["tolerance problems"] = tol_problems
 
     # 5. automation: the lock holds against every route there is
