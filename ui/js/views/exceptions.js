@@ -46,8 +46,33 @@ const ExceptionsView = {
           <td>${escapeHtml(r.owner)}${r.mine ? ` <span class="badge badge-pending">You</span>` : ""}</td>
           <td>${escapeHtml(r.next_step)}</td>
           <td>${escapeHtml(r.age_days)} days<div class="cell-muted" style="font-size:11px;">since ${formatDate(r.since)}</div></td>
-          <td>${r.amount === null ? '<span class="cell-muted">—</span>' : formatCurrency(r.amount)}</td></tr>`).join("")}
+          <td>${r.amount === null ? '<span class="cell-muted">—</span>' : formatCurrency(r.amount)}${r.case && r.mine ? `<div><span class="btn btn-sm" data-close="${escapeHtml(r.case.task_id)}" style="margin-top:4px;">Close</span></div>` : ""}</td></tr>`).join("")}
         </tbody></table>`
       : `<div class="empty-next"><strong>Nothing is stuck${this.mine ? " on you" : ""}.</strong><br>Blocked invoices, goods without an order, services not confirmed and decisions that wait appear here.</div>`;
+    box.querySelectorAll("[data-close]").forEach((b) => {
+      b.addEventListener("click", () => this.closeForm(b, data.rows.find((r) => r.case && String(r.case.task_id) === b.dataset.close)));
+    });
+  },
+
+  // A case a change in the ERP's demand left: say what was done, then it is closed.
+  closeForm(button, row) {
+    const words = { reduced: "Order reduced", cancelled: "Order cancelled", kept_for_stock: "Kept for stock", expedited: "Supplier asked to deliver earlier", not_possible: "Not possible", returned_to_stock: "Returned to stock", kept_for_production: "Kept for production" };
+    const tr = button.closest("tr");
+    const panel = document.createElement("tr");
+    panel.innerHTML = `<td colspan="6"><div class="panel" style="margin:4px 0;">
+      <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
+        <select id="excOutcome" aria-label="What was done" style="padding:6px;">${row.case.outcomes.map((o) => `<option value="${escapeHtml(o)}">${escapeHtml(words[o] || o)}</option>`).join("")}</select>
+        <input id="excNote" placeholder="Note (needed for kept for stock or not possible)" style="min-width:260px;padding:6px;">
+        <span class="btn btn-primary btn-sm" id="excSave">Close the case</span>
+      </div><div id="excErr" style="font-size:12.5px;color:var(--warning-text);margin-top:8px;"></div></div></td>`;
+    tr.after(panel);
+    button.remove();
+    document.getElementById("excSave").addEventListener("click", async () => {
+      const res = await API.postJSON(`/api/demand/cases/${encodeURIComponent(row.case.task_id)}/close`, {
+        outcome: document.getElementById("excOutcome").value, note: document.getElementById("excNote").value,
+      });
+      if (!res.ok) { document.getElementById("excErr").textContent = res.data.detail || "That did not work."; return; }
+      await this.load();
+    });
   },
 };

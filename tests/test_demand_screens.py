@@ -201,6 +201,25 @@ def test_the_store_checks_a_production_order_buys_the_shortfall_and_issues_the_r
         store.locator("#mrSave").click()
         expect(store.locator("#mrNote")).to_contain_text("Issued: A 5")
         expect(store.locator("#mrList tbody tr").first.locator("td").nth(3)).to_have_text("5")
+
+        # the ERP cuts MO-1 to 4 after 5 were issued: the request is cut, the store gets a case and closes it
+        (tmp_path / "cut.csv").write_text("order_no,item_code,qty\nMO-1,A,4\n")
+        store.locator("#mrLoad").click()
+        store.locator("#mrKind").select_option("production_order_line")
+        store.set_input_files("#mrFile", str(tmp_path / "cut.csv"))
+        store.locator("#mrLoadGo").click()
+        expect(store.locator("#mrNote")).to_contain_text("Changed: 1")
+        expect(store.locator("#mrNote")).to_contain_text("MO-1 A: 8 -> 4")
+        expect(store.locator("#mrList")).to_contain_text("Changed on")
+        store.goto(f"{URL}/#/exceptions")
+        row = store.locator(".exc-row[data-kind='demand']")
+        expect(row).to_contain_text("issued too many")
+        row.get_by_text("Close", exact=True).click()
+        store.locator("#excOutcome").select_option("returned_to_stock")
+        store.locator("#excSave").click()
+        expect(store.locator(".exc-row[data-kind='demand']")).to_have_count(0)
+        company.db.rollback()
+        assert company.db.execute(text("select outcome from demand_change_case")).scalar_one() == "returned_to_stock"
         assert store.problems == []  # type: ignore[attr-defined]
 
         # a requester has no material requests in the menu
@@ -209,6 +228,9 @@ def test_the_store_checks_a_production_order_buys_the_shortfall_and_issues_the_r
         expect(requester.locator('.nav-item[data-route="material-requests"]')).to_be_hidden()
     finally:
         company.db.rollback()
+        company.db.execute(text("delete from demand_change_case"))
+        company.db.execute(text("delete from task where kind = 'demand_change'"))
+        company.db.execute(text("delete from demand_change"))
         for table in ("material_request_buy", "material_request_line", "material_request", "material_requirement"):
             company.db.execute(text(f"delete from {table}"))  # noqa: S608
         for table in ("production_order", "demand_import", "stock_movement"):

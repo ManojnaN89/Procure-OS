@@ -10,6 +10,9 @@ takes no stock. So for every line, set aside plus still coming on requests and o
 
 Stock that arrives on an order bought for a line stops counting as coming (`material_request_cover`), so the line can
 take it here. Running again sets nothing more aside: it only ever takes free stock.
+
+A net MRP line (the ERP already counted the stock) takes no free stock in place of buying and its requests are never cut
+for stock: it is set aside only what arrived on what was bought for it.
 """
 
 from dataclasses import dataclass
@@ -31,8 +34,9 @@ Place = tuple[str, str]  # (item, location)
 
 _OPEN_LINES = """
     select l.id, l.mr_no, l.line_no, l.item_code, l.location_code, l.uom, l.need_qty, l.reserved_qty, l.issued_qty,
-           l.need_by, l.requested_qty, m.order_no, m.department_code
+           l.need_by, l.requested_qty, m.order_no, m.department_code, q.basis
     from material_request_cover l join material_request m on m.no = l.mr_no
+    join material_request_line ml on ml.id = l.id join material_requirement q on q.id = ml.requirement_id
     where l.status = 'open' and m.status = 'open' {where}
     order by l.need_by, m.created_at, m.no, l.line_no
 """
@@ -43,6 +47,15 @@ _OPEN_COVER = """
     join request_line rl on rl.request_no = b.request_no and rl.line_no = b.request_line_no
     join request r on r.no = b.request_no
     where b.mr_line_id = any(:ids) and rl.status = 'open' and r.status = any(:live) group by b.mr_line_id
+"""
+
+# what live requests bought for each net line, arrived or not
+_BOUGHT = """
+    select b.mr_line_id, sum(b.qty) from material_request_buy b
+    join request_line rl on rl.request_no = b.request_no and rl.line_no = b.request_line_no
+    join request r on r.no = b.request_no
+    where b.mr_line_id = any(:ids) and rl.status <> 'cancelled' and r.status not in ('cancelled', 'rejected')
+    group by b.mr_line_id
 """
 
 
@@ -101,7 +114,7 @@ def lock(db: Session, rows: list[dict[str, Any]]) -> dict[Place, Decimal]:
     return {p: on_hand.get(p, Decimal(0)) - held.get(p, Decimal(0)) for p in places}
 
 
-def _cut_cover(db: Session, actor: Actor, row: dict[str, Any], qty: Decimal) -> list[Cut]:
+def _cut_cover(db: Session, actor: Actor, row: dict[str, Any], qty: Decimal, why: str | None = None) -> list[Cut]:
     """Take `qty` (stock unit) off what open request lines buy for a material request line, newest first, and work each
     request line out again. The caller commits."""
     links = db.execute(
@@ -120,8 +133,8 @@ def _cut_cover(db: Session, actor: Actor, row: dict[str, Any], qty: Decimal) -> 
         take = min(Decimal(link_qty), left)
         left -= take
         db.execute(text("update material_request_buy set qty = qty - :q where id = :i"), {"q": take, "i": link_id})
-        why = f"stock set aside for {row['order_no']} ({row['mr_no']}) covers {format_qty(take)} {row['uom']}"
-        before, after = combining.reduce(db, actor, request_no, line_no, why)
+        reason = why or f"stock set aside for {row['order_no']} ({row['mr_no']}) covers {format_qty(take)} {row['uom']}"
+        before, after = combining.reduce(db, actor, request_no, line_no, reason)
         cuts.append(Cut(request_no, line_no, row["mr_no"], row["item_code"], take, before, after))
     return cuts
 
@@ -132,10 +145,12 @@ def reserve(
     """Set free stock aside for the lines (from `open_lines`, locked with `lock`), as the module says. The rows are
     updated in place (set aside, still coming). The caller commits, then calls `settle`. Returns what each line took
     now, and the request lines cut."""
+    ids = [r["id"] for r in rows]
     open_cover: dict[int, Decimal] = {
-        int(r[0]): Decimal(r[1])
-        for r in db.execute(text(_OPEN_COVER), {"ids": [r["id"] for r in rows], "live": list(LIVE_REQUEST)})
+        int(r[0]): Decimal(r[1]) for r in db.execute(text(_OPEN_COVER), {"ids": ids, "live": list(LIVE_REQUEST)})
     }
+    net = [r["id"] for r in rows if r.get("basis") == "net"]
+    bought = {int(r[0]): Decimal(r[1]) for r in db.execute(text(_BOUGHT), {"ids": net})} if net else {}
     by_place: dict[Place, list[dict[str, Any]]] = {}
     for r in rows:
         by_place.setdefault((r["item_code"], r["location_code"]), []).append(r)
@@ -144,6 +159,17 @@ def reserve(
     for place, lines in by_place.items():
         wants = [
             (
+                rules.net_want(
+                    r["need_qty"],
+                    r["issued_qty"],
+                    r["reserved_qty"],
+                    r["requested_qty"],
+                    bought.get(r["id"], Decimal(0)),
+                ),
+                Decimal(0),
+            )
+            if r.get("basis") == "net"
+            else (
                 rules.still_short(r["need_qty"], r["issued_qty"], r["reserved_qty"], r["requested_qty"]),
                 rules.releasable(
                     r["need_qty"],
@@ -170,20 +196,26 @@ def reserve(
     return taken, cuts
 
 
-def settle(db: Session, tenant: str | None, cuts: list[Cut]) -> None:
-    """After the cut is committed: a request with nothing left to buy is cancelled, and each requester hears of the cut."""
+def settle(
+    db: Session, tenant: str | None, cuts: list[Cut], *, why: str = "Stock now covers what it was raised for"
+) -> list[str]:
+    """After the cut is committed: a request with nothing left to buy is cancelled, and each requester hears of the cut.
+    Returns the requests cancelled."""
+    cancelled: list[str] = []
     for no in sorted({c.request_no for c in cuts}):
-        why = "Stock now covers what it was raised for: " + "; ".join(
+        reason = f"{why}: " + "; ".join(
             f"{c.item_code} {format_qty(c.qty_before)} -> {format_qty(c.qty_after)} ({c.mr_no})"
             for c in cuts
             if c.request_no == no
         )
-        if lifecycle.cancel_emptied(db, tenant, no, why):
+        if lifecycle.cancel_emptied(db, tenant, no, reason):
+            cancelled.append(no)
             continue
         requester = db.execute(text("select requester from request where no = :n"), {"n": no}).scalar()
         workflow.notify_person(
-            db, tenant, requester, "request", f"Request {no} was made smaller", why, link=f"#/requisitions/{no}"
+            db, tenant, requester, "request", f"Request {no} was made smaller", reason, link=f"#/requisitions/{no}"
         )
+    return cancelled
 
 
 def _tell_store(

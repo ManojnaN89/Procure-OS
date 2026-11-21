@@ -32,6 +32,7 @@ from history_check import history_problems  # noqa: E402
 from history_close import Closing  # noqa: E402
 from history_close import write as write_tables  # noqa: E402
 from history_money import Money  # noqa: E402
+from demand_scenarios import write_scenarios  # noqa: E402
 from history_plan import mrp_results, production_lines  # noqa: E402
 from master_files import (  # noqa: E402
     EMPTY_TABLES,
@@ -623,6 +624,7 @@ def build(profile: CompanyProfile, out: Path) -> dict[str, dict[str, int]]:
     master = MasterWriter(profile, out).write()
     inputs = write_inputs(profile, out)
     history = write_history(profile, out) if "history" in profile.data else {}
+    changes = write_scenarios(profile.data, out) if history else {}  # the oracle replays the stock history
     manifest = {
         "dataset": profile.dataset,
         "profile": profile.name,
@@ -632,6 +634,7 @@ def build(profile: CompanyProfile, out: Path) -> dict[str, dict[str, int]]:
         "rows": master,
         "inputs": inputs,
         "history_rows": history,
+        "demand_changes": changes,
     }
     (out / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
     held = {"hold_out_suppliers": list(profile.data.get("hold_out_suppliers", []))}
@@ -968,6 +971,34 @@ def _input_problems(out: Path, t: dict[str, list[dict[str, str]]]) -> list[str]:
         wanted = production_lines(files.get("bom", []), files["production_order"])
         if wanted != files.get("production_order_line"):
             problems.append("inputs/production_order_line is not the bill of materials times the order quantities")
+    return problems + _change_problems(out, files)
+
+
+def _change_problems(out: Path, files: dict[str, list[dict[str, str]]]) -> list[str]:
+    """Each change row names a key loaded in inputs/ (or a new line of a loaded plan), and lines are BOM x quantity; only
+    the planted R1 may name what was never loaded."""
+    problems: list[str] = []
+    orders = {r["order_no"] for r in files.get("production_order", [])}
+    plans = {r["plan_no"] for r in files.get("mrp_result", [])}
+    joiners = {(r["plan_no"], r["department"]) for r in files.get("joiner_plan", [])}
+    for folder in sorted((out / "changes").glob("*")) if (out / "changes").is_dir() else []:
+        got = {p.stem: read(p) for p in folder.glob("*.csv")}
+        if folder.name.startswith("R1"):
+            continue
+        for r in got.get("production_order", []):
+            if r["order_no"] not in orders:
+                problems.append(f"changes/{folder.name}: production order {r['order_no']} was never loaded")
+        for r in got.get("mrp_result", []):
+            if r["plan_no"] not in plans:
+                problems.append(f"changes/{folder.name}: MRP plan {r['plan_no']} was never loaded")
+        for r in got.get("joiner_plan", []):
+            if (r["plan_no"], r["department"]) not in joiners:
+                problems.append(f"changes/{folder.name}: joiner plan {r['plan_no']}/{r['department']} was never loaded")
+        if "production_order_line" in got:
+            sent = [o for o in got.get("production_order", []) if o["order_no"] in {ln["order_no"] for ln in got["production_order_line"]}]
+            wanted = [{**ln, "status": ""} for ln in production_lines(files.get("bom", []), sent)]
+            if wanted != got["production_order_line"]:
+                problems.append(f"changes/{folder.name}: the lines are not the bill of materials times the order quantities")
     return problems
 
 

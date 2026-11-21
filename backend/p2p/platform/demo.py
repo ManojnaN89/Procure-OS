@@ -27,6 +27,7 @@ from p2p.masters.importer import ImportReport, import_masters
 from p2p.platform import audit, routing, tenants, users
 from p2p.receiving import stock
 from p2p.requests.demand import DemandReport, import_demand
+from p2p.requests.demand_files import KINDS as DEMAND_KINDS
 
 # A throwaway DEVELOPMENT password for the synthetic demo company only (fake people, fake suppliers, fake data). It is
 # the same for every login so a walk-through is quick. The platform needs at least 10 characters, which is why it
@@ -225,8 +226,8 @@ def reset_company(
                 raise DemoError(
                     f"{count(len(result.stock.rejected), 'stock movement')} left out; first: line {first.line}: {first.reason}"
                 )
-        if (folder / "inputs" / "production_order.csv").is_file():
-            result.demand = import_demand(db, folder)
+        if any((folder / "inputs" / f"{kind}.csv").is_file() for kind in DEMAND_KINDS):
+            result.demand = import_demand(db, folder, tenant=slug)
             if result.demand.rejected:
                 first = result.demand.rejected[0]
                 raise DemoError(

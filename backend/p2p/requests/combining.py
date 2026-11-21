@@ -166,41 +166,6 @@ def join(
     return new
 
 
-def release(db: Session, actor: Actor, mr_no: str, reason: str) -> tuple[list[str], list[str]]:
-    """A material request was cancelled: each line still buying for it together with other sources is made smaller by
-    its part (never below what the others need). Lines that bought only for it, or that are already with the buyer, are
-    left for the buyer. Call after its lines are marked cancelled; the caller commits. Returns (requests made smaller,
-    requests left for the buyer)."""
-    lines = db.execute(
-        text(
-            "select distinct b.request_no, b.request_line_no, r.status as request_status, rl.status as line_status, "
-            "coalesce(rl.stock_qty, 0) > 0 or exists (select 1 from material_request_buy o "
-            "join material_request_line m on m.id = o.mr_line_id where o.request_no = b.request_no "
-            "and o.request_line_no = b.request_line_no and m.status <> 'cancelled') as shared "
-            "from material_request_buy b join material_request_line l on l.id = b.mr_line_id "
-            "join request r on r.no = b.request_no "
-            "join request_line rl on rl.request_no = b.request_no and rl.line_no = b.request_line_no "
-            "where l.mr_no = :m order by 1, 2"
-        ),
-        {"m": mr_no},
-    ).mappings()
-    reduced: set[str] = set()
-    left: set[str] = set()
-    for ln in list(lines):
-        no, line_no = ln["request_no"], ln["request_line_no"]
-        if ln["request_status"] not in LIVE_REQUEST or ln["line_status"] == "cancelled":
-            continue
-        if not ln["shared"] or ln["line_status"] != "open":
-            left.add(no)
-            continue
-        old, new = reduce(
-            db, actor, no, line_no, f"{mr_no} cancelled: {reason}", may_grow=ln["request_status"] == "draft"
-        )
-        if new != old:
-            reduced.add(no)
-    return sorted(reduced), sorted(left - reduced)
-
-
 def reduce(
     db: Session, actor: Actor, request_no: str, line_no: int, reason: str, *, may_grow: bool = False
 ) -> tuple[Decimal, Decimal]:

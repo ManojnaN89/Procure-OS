@@ -2,7 +2,8 @@
 
 Each row says what is stuck, why in plain words, who must act, what they do next, and for how many working days it has
 waited. The rows come from the services that already know each case (invoice blocks, goods received without an order,
-services to confirm, proposals, approvals past their reminder, and the buyer's supplier alerts); nothing is written here.
+services to confirm, proposals, approvals past their reminder, the buyer's supplier alerts, and the cases a change in
+the ERP's demand left for the buyer or the store); nothing is written here.
 A person sees the rows their roles may see, and the ones where they are the person named; the administrator sees them all,
 read only.
 """
@@ -26,6 +27,7 @@ from p2p.orders.workflow import NO_APPROVER
 from p2p.platform import alerts, permissions
 from p2p.platform.rows import rows as _rows
 from p2p.receiving import goods, services, unordered
+from p2p.requests import demand_cases
 
 KINDS: dict[str, str] = {
     "invoice": "Invoices blocked",
@@ -35,6 +37,7 @@ KINDS: dict[str, str] = {
     "proposal": "Decisions waiting",
     "supplier": "Suppliers to chase",
     "order": "Orders nobody may approve",
+    "demand": "Demand changes to act on",
 }
 
 AP = ("AP", "invoice.match", "Ask the supplier for a corrected invoice")
@@ -82,6 +85,7 @@ class Stuck:
     see: tuple[str, ...] = ()  # permissions that let someone see the row (besides the people named)
     not_by: frozenset[str] = frozenset()  # logins that may not act on it (segregation of duties)
     check: Callable[[int], bool] | None = None  # a further test of whether a login may act
+    case: dict[str, Any] | None = None  # a case the row's screen closes (a demand change): its task and outcomes
 
 
 def _day(ts: Any) -> date:
@@ -246,6 +250,24 @@ def _suppliers(db: Session, today: date, calendar: BusinessCalendar) -> Iterator
             )  # fmt: skip
 
 
+def _demand(db: Session) -> Iterator[Stuck]:
+    """Cases a change in the ERP's demand left: the buyer revises an order, the store returns what was issued too many."""
+    for c in demand_cases.open_cases(db):
+        kind = c["owner_kind"]
+        code = org_code_of(db, int(c["assignee"]))
+        act = demand_cases.ACTS[kind]
+        yield Stuck(
+            "demand", c["doc_no"], demand_cases.link(c["doc_type"], c["doc_no"]), str(c["title"]),
+            f"{'Buyer' if kind == 'buyer' else 'Store'}: {name_of(db, code)}", str((c["payload"] or {}).get("next_step", "")),
+            demand_cases.since(c["created_at"]), amount=None if c["amount"] is None else Decimal(c["amount"]),
+            act=act, people=frozenset({code}) if code else frozenset(), see=(act,),
+            case={
+                "task_id": c["task_id"], "owner_kind": kind, "outcomes": list(demand_cases.OUTCOMES[kind]),
+                "note_needed": list(demand_cases.NOTE_NEEDED),
+            },
+        )  # fmt: skip
+
+
 def collect(db: Session, today: date, calendar: BusinessCalendar) -> list[Stuck]:
     """Every stuck case in the company, whoever must act."""
     return [
@@ -256,6 +278,7 @@ def collect(db: Session, today: date, calendar: BusinessCalendar) -> list[Stuck]
         *_proposals(db),
         *_suppliers(db, today, calendar),
         *_orders(db),
+        *_demand(db),
     ]
 
 
@@ -297,7 +320,7 @@ def for_user(
                 "kind": s.kind, "kind_title": KINDS[s.kind], "ref": s.ref, "link": s.link, "reason": s.reason,
                 "owner": s.owner, "next_step": s.next_step, "since": s.since.isoformat(),
                 "age_days": working_days_between(s.since, today, calendar),
-                "amount": None if s.amount is None else str(s.amount), "mine": acts,
+                "amount": None if s.amount is None else str(s.amount), "mine": acts, "case": s.case,
             }
         )  # fmt: skip
     out.sort(key=lambda r: (-r["age_days"], r["since"], r["kind"], r["ref"]))

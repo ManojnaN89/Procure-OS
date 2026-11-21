@@ -28,7 +28,8 @@ REQUIREMENT = (
     "store; once); the freed stock is set aside at once for the open orders earliest need-by first, each up to what it "
     "still lacks, never more than is on the shelf; a purchase request still open for that shortfall is cut by as much "
     "(set aside plus requested never exceeds the need) and the next check buys nothing; purchase requests made only for "
-    "the cancelled order stay and are named; issue never moves more than is set aside; the cancel is audited"
+    "the cancelled order and not yet with the buyer are cut and cancelled (Q21, 20 Nov); issue never moves more than is set "
+    "aside; the cancel is audited"
 )
 PLANTED = ("MO-3", "FG-01", "60", "2026-12-28")  # 60 pumps: impellers left after MO-1 (10) plus MO-1's 50 = exactly 60
 
@@ -193,7 +194,8 @@ def run(ctx) -> Outcome:  # noqa: C901 - one scenario, step by step
     if held().get(first_order) != want_first[first_order]:
         out.find("high", "a refused cancel changed what is set aside")
 
-    # 3. the cancel: everything it held goes back; its purchase request stays and is named
+    # 3. the cancel: everything it held goes back; its purchase request, not yet with the buyer, is cut to nothing and
+    # cancelled (Q21, decided 20 Nov; before, it stayed for the buyer)
     resp = client.post(
         f"/api/material-requests/{mr}/cancel", json={"reason": "The customer called the order off"}, headers=store
     )
@@ -201,12 +203,13 @@ def run(ctx) -> Outcome:  # noqa: C901 - one scenario, step by step
         out.find("high", f"cancelling {mr} answered {resp.status_code}: {resp.text[:200]}")
         return out
     left = resp.json()["purchase_requests_left"]
-    if made.get(first_order) and left != [made[first_order]]:
-        out.find("high", f"the cancel named purchase requests {left}, expected [{made[first_order]}]")
+    if left or resp.json().get("cases"):
+        out.find("high", f"the cancel left purchase requests {left} for the buyer; none was with the buyer")
     if made.get(first_order):
+        db.rollback()
         status = db.execute(text("select status from request where no = :n"), {"n": made[first_order]}).scalar()
-        if status == "cancelled":
-            out.find("high", f"the cancel cancelled {made[first_order]}; it should stay for the buyer")
+        if status != "cancelled" or resp.json().get("requests_cancelled") != [made[first_order]]:
+            out.find("high", f"{made[first_order]} is {status} after the cancel; not yet with the buyer, it must be cancelled")
     still = {i: q for i, q in held().get(first_order, {}).items() if q}
     if still:
         out.find("high", f"{first_order} still holds {still} after its cancel")

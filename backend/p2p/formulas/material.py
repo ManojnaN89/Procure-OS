@@ -53,3 +53,10 @@ def allocate(wants: list[tuple[Decimal, Decimal]], free: Decimal) -> list[tuple[
         left -= over
         out.append((take, over))
     return out
+
+
+def net_want(need: Decimal, issued: Decimal, reserved: Decimal, requested: Decimal, bought: Decimal) -> Decimal:
+    """What a net line (the ERP already counted the stock) may set aside: only what arrived on what was bought for it
+    and is not yet set aside or issued, never more than it still lacks."""
+    arrived = max(bought - requested, ZERO)
+    return max(min(arrived - reserved - issued, still_short(need, issued, reserved, requested)), ZERO)

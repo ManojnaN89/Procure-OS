@@ -37,9 +37,11 @@ def create_task(
     now: datetime | None = None,
     email_note: str = "",
     email: bool = True,
+    calendar: BusinessCalendar | None = None,
 ) -> int:
+    """Open a task; its due time is counted on `calendar` (a place's own working days), else the default calendar."""
     now = now or datetime.now(UTC)
-    due = sla_due(now, sla_hours, _calendar(db))
+    due = sla_due(now, sla_hours, calendar or _calendar(db))
     task_id = int(
         db.execute(
             text(
@@ -111,15 +113,15 @@ def _escalate(ctx: worker.JobContext) -> None:
     with Session(routing.engine_for(ctx.tenant)) as db:
         row = db.execute(
             text(
-                "select status, due_at, assignee, escalation_chain, escalation_level, sla_hours, title, case_id, kind "
-                "from task where id = :i for update"
+                "select status, due_at, assignee, escalation_chain, escalation_level, sla_hours, title, case_id, kind, "
+                "payload from task where id = :i for update"
             ),
             {"i": task_id},
         ).first()
         if row is None or row[0] != "open" or row[1] > ctx.now:
             db.rollback()
             return
-        _status, _due, assignee, chain, level, sla_hours, title, case_id, kind = row
+        _status, _due, assignee, chain, level, sla_hours, title, case_id, kind, payload = row
         system = Actor("service", "escalation")
         if level >= len(chain):
             db.execute(text("update task set status = 'overdue' where id = :i"), {"i": task_id})
@@ -130,7 +132,8 @@ def _escalate(ctx: worker.JobContext) -> None:
             )
             return
         new_assignee = int(chain[level])
-        due = sla_due(ctx.now, sla_hours, _calendar(db))
+        place = (payload or {}).get("calendar_location")  # a task counted on a place's own working days stays on them
+        due = sla_due(ctx.now, sla_hours, reference.calendar_for_location(db, place) if place else _calendar(db))
         db.execute(
             text("update task set assignee = :a, escalation_level = :l, due_at = :d where id = :i"),
             {"a": new_assignee, "l": level + 1, "d": due, "i": task_id},

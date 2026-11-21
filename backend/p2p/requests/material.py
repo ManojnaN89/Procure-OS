@@ -1,12 +1,15 @@
 """Material requests: what a production order needs from the store, the stock set aside for it, the issue at production
 start, and the shortfall that becomes a purchase request.
 
-A material request is made for each imported production order (and each joiner plan of a department), one line per
-component. The store check sets stock aside for the open lines (requests/reservation.py: earliest need-by first, only
-free stock, never both stocked and bought for), as happens by itself whenever stock goes up. What a line still lacks,
-and no live purchase request already asks for, becomes one draft purchase request per material request, priced at the
-estimate (requests/estimates.py) and sent into approval. At production start the store issues what is set aside;
-cancelling a material request releases its stock, which is set aside at once for the next lines that need it.
+A material request is made for each imported production order (each joiner plan of a department, and each MRP plan per
+location), one line per component. Lines loaded later join its open material request, or start a new one when it is
+already issued or cancelled. The store check sets stock aside for the open lines (requests/reservation.py: earliest
+need-by first, only free stock, never both stocked and bought for), as happens by itself whenever stock goes up. What a
+line still lacks, and no live purchase request already asks for, becomes one draft purchase request per material
+request, priced at the estimate (requests/estimates.py) and sent into approval. At production start the store issues
+what is set aside. Cancelling a material request follows the ERP's cancel (requests/demand_changes.py): purchase
+requests not yet with the buyer are cut, the buyer gets a case for what is already ordered or out for quotation, and the
+stock released is set aside at once for the next lines that need it.
 
 The store check and issues hold the same per item-location lock as every stock posting, and the store check runs one at
 a time per company, so two people pressing at once cannot set aside the same stock twice.
@@ -25,10 +28,10 @@ from p2p.formulas.calendar import business_today
 from p2p.formulas.money import format_qty, round_money
 from p2p.formulas.replenishment import purchase_quantity
 from p2p.formulas.words import count
-from p2p.platform import audit, numbering
+from p2p.platform import audit, numbering, tenants
 from p2p.platform.sod import Actor, user
 from p2p.receiving import stock
-from p2p.requests import combining, drafts, estimates, reservation
+from p2p.requests import combining, demand_changes, drafts, estimates, reservation
 
 QTY = Decimal("0.0001")
 
@@ -41,21 +44,24 @@ class MaterialError(Exception):
 
 
 def make_requests(db: Session, actor: Actor = audit.SYSTEM, *, today: date | None = None) -> list[str]:
-    """A material request for every open production order (and joiner plan of a department) whose components have none
-    yet; components loaded later are added to its open material request. Returns the numbers made or added to. Commits."""
+    """A material request for every open production order (joiner plan of a department, MRP plan at a location) whose
+    lines have none yet; lines loaded later are added to its open material request, or make a new one when it is issued
+    or cancelled. An MRP plan's request is numbered `<plan>/<location>` and has no product. Returns the numbers made or
+    added to. Commits."""
     today = today or business_today()
     rows = db.execute(
         text(
-            "select r.id, r.item_code, r.unit, r.base_qty, r.need_by, r.location_code, r.source_kind, "
-            "r.department_code, p.id as order_id, r.source_doc_no as order_no, "
-            "coalesce(p.product_code, split_part(r.line_key, '/', 1)) as product_code, "
-            "coalesce(p.need_by, r.need_by) as order_need_by, i.base_uom "
+            "select r.id, r.item_code, r.unit, r.base_qty, r.need_by, r.location_code, r.source_kind, r.basis, "
+            "r.department_code, p.id as order_id, "
+            "case when r.source_kind = 'mrp' then r.source_doc_no || '/' || r.location_code else r.source_doc_no end "
+            "as order_no, "
+            "case when r.source_kind = 'mrp' then null else coalesce(p.product_code, split_part(r.line_key, '/', 1)) end "
+            "as product_code, coalesce(p.need_by, r.need_by) as order_need_by, i.base_uom "
             "from material_requirement r left join production_order p on p.id = r.production_order_id "
             "join item i on i.code = r.item_code "
-            "where r.source_kind in ('production_order', 'joiner') and r.status = 'open' "
-            "and coalesce(p.status, 'open') = 'open' "
+            "where r.status = 'open' and coalesce(p.status, 'open') = 'open' "
             "and not exists (select 1 from material_request_line l where l.requirement_id = r.id) "
-            "order by coalesce(p.need_by, r.need_by), r.source_doc_no, r.id"
+            "order by coalesce(p.need_by, r.need_by), order_no, r.id"
         )
     ).mappings()
     by_order: dict[tuple[str, str], list[dict[str, Any]]] = {}
@@ -72,7 +78,7 @@ def make_requests(db: Session, actor: Actor = audit.SYSTEM, *, today: date | Non
             {"k": kind, "o": order_no},
         ).first()
         if existing is not None and existing.status != "open":
-            continue  # issued or cancelled: new lines for it are the ERP's business, not a new request
+            existing = None  # issued or cancelled: the new lines get a request of their own
         if existing is None:
             no = numbering.next_number(db, "material_request", today, location_code=head["location_code"])
             db.execute(
@@ -123,7 +129,15 @@ def make_requests(db: Session, actor: Actor = audit.SYSTEM, *, today: date | Non
             no,
             after={
                 "order": head["order_no"],
-                "lines": [f"{ln['item_code']} {format_qty(ln['base_qty'])}" for ln in lines],
+                "lines": [
+                    f"{ln['item_code']} {format_qty(ln['base_qty'])}" + (" net" if ln["basis"] == "net" else "")
+                    for ln in lines
+                ],
+                **(
+                    {"basis": {ln["item_code"]: "net" for ln in lines if ln["basis"] == "net"}}
+                    if any(ln["basis"] == "net" for ln in lines)
+                    else {}
+                ),
             },
         )
         touched.append(no)
@@ -263,12 +277,19 @@ def store_check(
     location: str | None = None,
     today: date | None = None,
     submit: bool = True,
+    places: list[reservation.Place] | None = None,
 ) -> CheckResult:
     """Set free stock aside for every open material request line, earliest need-by first, and ask to buy what is still
-    short. With submit (and the company), each new purchase request is sent into approval."""
+    short. With submit (and the company), each new purchase request is sent into approval. With `places`, only the open
+    lines of those item-locations are checked (after a change in the ERP's demand)."""
     as_of = today or business_today()
     db.execute(text("select pg_advisory_xact_lock(hashtext('store_check'))"))  # one check at a time per company
-    rows = reservation.open_lines(db, location=location)
+    wanted = set(places) if places is not None else None
+    rows = [
+        r
+        for r in reservation.open_lines(db, location=location, items=sorted({i for i, _ in wanted}) if wanted else None)
+        if wanted is None or (r["item_code"], r["location_code"]) in wanted
+    ]
     result = CheckResult(as_of)
     if not rows:
         db.commit()
@@ -446,52 +467,67 @@ def issue(
     return issued
 
 
-def cancel(db: Session, user_id: int, mr_no: str, reason: str, *, tenant: str | None = None) -> list[str]:
-    """The production order is called off: its open lines release their stock and the order stops being demand. A
-    combined request line that also buys for other orders or for stock is made smaller by this order's part. Purchase
-    requests made only for it stay for the buyer to cancel or keep; their numbers are returned. The stock released is
-    set aside at once for the open lines that need it."""
-    if not (reason or "").strip():
+def cancel(db: Session, user_id: int, mr_no: str, reason: str, *, tenant: str | None = None) -> dict[str, Any]:
+    """The order is called off here rather than in the ERP: the same rules as the ERP's cancel (rule Q21). Its lines
+    release their stock, purchase requests not yet with the buyer are cut (one left with nothing is cancelled), the buyer
+    gets a case for what is already ordered or out for quotation, and the store one for what was already issued. The
+    stock released is set aside at once for the open lines that need it. Returns what it did."""
+    why = (reason or "").strip()
+    if not why:
         raise MaterialError("say why the material request is cancelled")
     head = _head(db, mr_no)
-    lines = _open_lines(db, mr_no)
-    released = {ln["item_code"]: str(ln["reserved_qty"]) for ln in lines if ln["reserved_qty"]}
-    db.execute(
-        text("update material_request_line set reserved_qty = 0, status = 'cancelled' where id = any(:i)"),
-        {"i": [ln["id"] for ln in lines]},
-    )
-    db.execute(
-        text("update material_requirement set status = 'cancelled' where id = any(:r)"),
-        {"r": [ln["requirement_id"] for ln in lines]},
-    )
+    actor = user(user_id)
+    tenant = tenant or tenants.slug_of(str(db.get_bind().engine.url.database or ""))
+    reqs = [
+        dict(r)
+        for r in db.execute(
+            text(
+                "select q.* from material_requirement q join material_request_line l on l.requirement_id = q.id "
+                "where l.mr_no = :n and l.status <> 'cancelled' order by l.line_no"
+            ),
+            {"n": mr_no},
+        ).mappings()
+    ]
+    import_id = db.execute(
+        text(
+            "insert into demand_import (source, files, loaded, already_loaded, rejected, changed, imported_by) "
+            "values (:s, '{}', 0, 0, 0, 1, :by) returning id"
+        ),
+        {"s": f"{mr_no} cancelled on Material requests", "by": actor.identity},
+    ).scalar_one()
+    applier = demand_changes.Applier(db, tenant, actor, import_id)
+    change = demand_changes.Change(
+        kind="manual", doc_no=head["order_no"], line_key=None, item_code=None, location_code=None, what=["cancelled"],
+        before={"status": "open"}, after={"status": "cancelled", "reason": why}, label=mr_no,
+        pairs=[(r, {**r, "status": "cancelled"}) for r in reqs],
+    )  # fmt: skip
+    applier.apply(change)
     db.execute(
         text("update material_request set status = 'cancelled', cancel_reason = :why where no = :n"),
-        {"why": reason.strip(), "n": mr_no},
+        {"why": why, "n": mr_no},
     )
     db.execute(
         text("update production_order set status = 'cancelled' where id = :o"), {"o": head["production_order_id"]}
     )
-    actor = user(user_id)
-    reduced, still = combining.release(db, actor, mr_no, reason.strip())
-    audit.record(
-        db,
-        actor,
-        "material_request.cancel",
-        "material_request",
-        mr_no,
-        before={"status": "open"},
-        after={
-            "status": "cancelled",
-            "released": released,
-            "purchase_requests_reduced": reduced,
-            "purchase_requests_left": still,
-        },
-        reason=reason.strip(),
-    )
     db.commit()
-    places = [(ln["item_code"], ln["location_code"]) for ln in lines if ln["reserved_qty"]]
-    reservation.stock_rose(db, tenant, places, why=f"{head['order_no']} ({mr_no}) was cancelled")
-    return still
+    applier.finish()
+    left = sorted({ln["request_no"] for c in change.cases for ln in c.get("lines", []) if ln.get("request_no")})
+    audit.record(
+        db, actor, "material_request.cancel", "material_request", mr_no, before={"status": "open"},
+        after={
+            "status": "cancelled", "released": {k: format_qty(v) for k, v in change.released.items()},
+            "purchase_requests_reduced": sorted({c["request_no"] for c in change.requests_cut}),
+            "purchase_requests_cancelled": change.requests_cancelled, "purchase_requests_left": left,
+            "cases": [c["task_id"] for c in change.cases],
+        },
+        reason=why,
+    )  # fmt: skip
+    db.commit()
+    reservation.stock_rose(db, tenant, sorted(applier.released), why=f"{head['order_no']} ({mr_no}) was cancelled")
+    return {
+        "requests_cut": change.requests_cut, "requests_cancelled": change.requests_cancelled, "cases": change.cases,
+        "purchase_requests_left": left,
+    }  # fmt: skip
 
 
 # ---- for the screen -------------------------------------------------------------------------------
@@ -503,8 +539,8 @@ def listing(db: Session, *, status: str | None = None) -> list[dict[str, Any]]:
         dict(h)
         for h in db.execute(
             text(
-                "select no, order_no, product_code, location_code, need_by, status, created_at, cancel_reason "
-                "from material_request where (cast(:s as text) is null or status = :s) order by need_by, no"
+                "select no, order_no, product_code, location_code, need_by, status, created_at, cancel_reason, "
+                "source_kind from material_request where (cast(:s as text) is null or status = :s) order by need_by, no"
             ),
             {"s": status},
         ).mappings()
@@ -525,8 +561,9 @@ def listing(db: Session, *, status: str | None = None) -> list[dict[str, Any]]:
     for ln in db.execute(
         text(
             "select c.id, c.mr_no, c.line_no, c.item_code, i.name as item_name, c.uom, c.need_qty, c.reserved_qty, "
-            "c.issued_qty, c.requested_qty, c.need_by, c.status from material_request_cover c "
-            "join item i on i.code = c.item_code where c.mr_no = any(:n) order by c.mr_no, c.line_no"
+            "c.issued_qty, c.requested_qty, c.need_by, c.status, q.basis from material_request_cover c "
+            "join item i on i.code = c.item_code join material_request_line l on l.id = c.id "
+            "join material_requirement q on q.id = l.requirement_id where c.mr_no = any(:n) order by c.mr_no, c.line_no"
         ),
         {"n": nos},
     ).mappings():
@@ -534,6 +571,16 @@ def listing(db: Session, *, status: str | None = None) -> list[dict[str, Any]]:
         row["short"] = max(row["need_qty"] - row["issued_qty"] - row["reserved_qty"], Decimal(0))
         row["requests"] = sorted(set(buys.get(row.pop("id"), [])))
         by_no.setdefault(row.pop("mr_no"), []).append(row)
+    changes: dict[str, list[dict[str, Any]]] = {}
+    for c in db.execute(
+        text("select id, mr_no, applied_at, what, before, after from demand_change where mr_no = any(:n) order by id"),
+        {"n": nos},
+    ).mappings():
+        changes.setdefault(c["mr_no"], []).append(
+            {"id": c["id"], "at": c["applied_at"].isoformat(), "what": list(c["what"]), "before": c["before"],
+             "after": c["after"]}
+        )  # fmt: skip
     for h in heads:
         h["lines"] = by_no.get(h["no"], [])
+        h["changes"] = changes.get(h["no"], [])
     return heads

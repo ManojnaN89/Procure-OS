@@ -311,6 +311,26 @@ inputs:
       - [JP-2026-12, ENG, developer, "4", "2026-12-01", OFF-BLR]
       - [JP-2026-12, ADM, standard, "2", "2026-12-01", OFF-BLR]
 
+# Changes the ERP sends after the base demand (Q21); see datagen/catalog/apex/company.yaml. The base: demo reset (the
+# joiner files are loaded) and one store check.
+demand_changes:
+  - name: B1-cut
+    title: One admin offer withdrawn
+    joiner_plan: [[JP-2026-12, ADM, standard, "1", "2026-12-01", OFF-BLR, ""]]
+  - name: B2-cancel
+    title: December engineering intake on hold
+    setup: [approve JP-2026-12/ENG, source]  # the ENG request approved through its chain and sourced
+    joiner_plan: [[JP-2026-12, ENG, developer, "4", "2026-12-01", OFF-BLR, cancelled]]
+  - name: B3-up
+    title: A fifth developer joins
+    joiner_plan: [[JP-2026-12, ENG, developer, "5", "2026-12-01", OFF-BLR, ""]]
+  - name: B4-moved
+    title: Admin joiners start on 30 Nov
+    joiner_plan:
+      - [JP-2026-12, ADM, standard, "2", "2026-12-01", OFF-BLR, cancelled]
+      - [JP-2026-12, ADM, standard, "2", "2026-11-30", OFF-BLR, ""]
+    after: [store_check]
+
 # Twelve months of history before the cutoff (decision D37), read by datagen/generator/history.py. It ends at the
 # opening stock above. The settings mean what they mean in datagen/catalog/apex/company.yaml.
 history:

@@ -304,7 +304,7 @@ benchmarks:
 # the ERP's material planning run for the January plan: gross requirements from the bill of materials, needed ten days
 # into January, ahead of the production week (step 1 input; MRP results become requirements, task 6.4)
 mrp_runs:
-  - {plan_no: MRP-2027-01, demand_plan: DP-2027-01, need_by: "2027-01-10", location_code: PLT-CKN}
+  - {plan_no: MRP-2027-01, demand_plan: DP-2027-01, need_by: "2027-01-10", location_code: PLT-CKN, basis: gross}
 
 # ERP input files (decision D36), written to inputs/ as they are. production_order_line is worked out from the bill of
 # materials: one line per material, quantity per pump times pumps to make.
@@ -347,10 +347,54 @@ inputs:
       - [DP-2026-12, FG-02, "100", "2026-12", approved]
       - [DP-2027-01, FG-01, "120", "2027-01", approved]  # the pre-summer build-up of 1 HP pumps
   production_order:
-    columns: [order_no, product_code, qty, need_by, reason, location_code]  # the plant: Apex has two (Chakan, Sanand)
+    columns: [order_no, product_code, qty, need_by, reason, location_code, status]  # the plant: Apex has two (Chakan, Sanand)
     rows:
-      - [MO-1, FG-01, "50", "2026-12-05", SO-1001, PLT-CKN]
-      - [MO-2, FG-02, "100", "2026-12-15", DP-2026-12, PLT-CKN]
+      - [MO-1, FG-01, "50", "2026-12-05", SO-1001, PLT-CKN, ""]
+      - [MO-2, FG-02, "100", "2026-12-15", DP-2026-12, PLT-CKN, ""]
+
+# Changes the ERP sends after the base demand (Q21), written to changes/<name>/ (never loaded by a demo reset) with their
+# truth in truth/truth_demand_change.csv (datagen/generator/demand_scenarios.py). Each starts from the base: demo reset and
+# one store check. lines_for: the components of these orders as sent (bill of materials x the order quantity).
+demand_changes:
+  - name: A1-cut
+    title: Sahyadri moved 40 of the 0.5 HP pumps to February
+    production_order: [[MO-2, FG-02, "60", "2026-12-15", DP-2026-12, PLT-CKN, ""]]
+    lines_for: [MO-2]
+  - name: A2-cancel
+    title: SO-1001 cancelled by Sahyadri Pump Distributors
+    setup: [approve MO-1, source]  # the plant head approves MO-1's request and sourcing runs: the buyer has it all
+    production_order: [[MO-1, FG-01, "50", "2026-12-05", SO-1001, PLT-CKN, cancelled]]
+  - name: A3-earlier
+    title: "Dealer meet moved up: MO-2 needed by 3 Dec"
+    production_order: [[MO-2, FG-02, "100", "2026-12-03", DP-2026-12, PLT-CKN, ""]]
+    lines_for: [MO-2]
+  - name: A4-up
+    title: MO-1 raised to 60 to cover all of SO-1001
+    production_order: [[MO-1, FG-01, "60", "2026-12-05", SO-1001, PLT-CKN, ""]]
+    lines_for: [MO-1]
+  - name: A5-cut-after-issue
+    title: 30 impellers already fitted; MO-1 cut to 20
+    setup: [issue MO-1 RM-03 30]
+    production_order: [[MO-1, FG-01, "20", "2026-12-05", SO-1001, PLT-CKN, ""]]
+    lines_for: [MO-1]
+  - name: A5b-cancel-after-issue
+    title: 30 impellers already fitted, then SO-1001 cancelled
+    setup: [issue MO-1 RM-03 30]
+    production_order: [[MO-1, FG-01, "50", "2026-12-05", SO-1001, PLT-CKN, cancelled]]
+  - name: M2-mrp-split
+    title: "Plan split: 100 pumps at Chakan, 20 trial pumps at Sanand"
+    mrp:
+      - {plan_no: MRP-2027-01, product: FG-01, qty: "100", need_by: "2027-01-10", location_code: PLT-CKN, basis: gross, first_line: 1}
+      - {plan_no: MRP-2027-01, product: FG-01, qty: "20", need_by: "2027-01-15", location_code: PLT-SND, basis: net, first_line: 11}
+    after: [open_store PLT-SND, count PLT-SND RM-10 50, store_check]  # Sanand's store opens and counts 50 water seals
+  - name: R1-refused
+    title: Four rows, three of them refused
+    refused: true  # planted: a moved plant, a new product, a cancel of an order never sent; the last row is valid (later)
+    production_order:
+      - [MO-1, FG-01, "50", "2026-12-05", SO-1001, PLT-SND, ""]
+      - [MO-2, FG-01, "100", "2026-12-15", DP-2026-12, PLT-CKN, ""]
+      - [MO-9, FG-01, "10", "2026-12-20", "", PLT-CKN, cancelled]
+      - [MO-2, FG-02, "100", "2026-12-18", DP-2026-12, PLT-CKN, ""]
 
 # Twelve months of history before the cutoff (decisions D36 and D37), read by datagen/generator/history.py. It ends at
 # the opening stock above, with nothing open for the materials of MO-1.

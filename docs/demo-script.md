@@ -16,7 +16,7 @@ Apex Pumps is the main demo company: one pump plant at Chakan, nine people, sixt
 | finance@ | Finance (Finance Manager) | Plans and pays |
 | admin@ | Admin | Setup only |
 
-**What is in the company.** The V-belts (SP-01) are below their reorder point. Suppliers include Deccan Castings (rate contract for castings, impellers and shafts), Gujarat Bearings and Seals (micro enterprise in another state: IGST, 45 days by agreement), Shree Wires (issues e-invoices), Pune Copper and Western Industrial Supplies (the only spares supplier). Rules: up to Rs 10,000 a request approves itself, then the plant head (the head of the plant the goods go to), above Rs 1,00,000 the director; capital purchases above Rs 1,00,000 also go to the purchase manager. Orders up to Rs 1,00,000 go out touchless when they qualify (a contract order, sent with no buyer); every other order goes to the purchase manager, never the buyer. Payment runs go to the director. The ERP's production orders are loaded too: MO-1 (50 pumps of 1 HP by 5 December) and MO-2 (100 pumps of 0.5 HP by 15 December), each with its material request waiting for the store check (see [Production orders](#production-orders-the-store-check) below; the journey does not need it).
+**What is in the company.** The V-belts (SP-01) are below their reorder point. Suppliers include Deccan Castings (rate contract for castings, impellers and shafts), Gujarat Bearings and Seals (micro enterprise in another state: IGST, 45 days by agreement), Shree Wires (issues e-invoices), Pune Copper and Western Industrial Supplies (the only spares supplier). Rules: up to Rs 10,000 a request approves itself, then the plant head (the head of the plant the goods go to), above Rs 1,00,000 the director; capital purchases above Rs 1,00,000 also go to the purchase manager. Orders up to Rs 1,00,000 go out touchless when they qualify (a contract order, sent with no buyer); every other order goes to the purchase manager, never the buyer. Payment runs go to the director. The ERP's production orders are loaded too: MO-1 (50 pumps of 1 HP by 5 December) and MO-2 (100 pumps of 0.5 HP by 15 December), each with its material request waiting for the store check, and the ERP's MRP results for January (MRP-2027-01, 120 pumps of 1 HP at Chakan by 10 January) with a third material request, "MRP plan" (see [Production orders](#production-orders-the-store-check) below; the journey does not need it).
 
 ## The journey
 
@@ -73,14 +73,27 @@ Two working days before a promised date the supplier is reminded, and while noth
 
 ## Production orders: the store check
 
-Steps 1 to 3 of the flow, on their own (after `demo reset apex`; they add two requests, so do them after the journey or on a fresh reset):
+Steps 1 to 3 of the flow, on their own (after `demo reset apex`; they add three requests, so do them after the journey or on a fresh reset):
 
 | # | Who | Where and what | You should see |
 |---|---|---|---|
-| 1 | store@ | **Material requests** | MO-1 and MO-2, each with its materials and nothing set aside yet |
-| 2 | store@ | **Run store check** | MO-1 (needed first) gets its stock first: all 50 impellers, shafts, seals, capacitors, terminal boxes and paint, 40 of 100 bearings, 50 of 90 kg copper wire, 20 of 50 cartons. One request for what is short goes to Vikram Joshi (plant head): castings 50 (contract ₹650), bearings 60, copper wire 40 kg, cartons 30, ₹72,930 in all, as in the plan. MO-2 gets what is left; its request (₹2,09,700) goes to Meera Iyer (director) |
+| 1 | store@ | **Material requests** | MO-1, MO-2 and MRP-2027-01/PLT-CKN · MRP plan, each with its materials and nothing set aside yet |
+| 2 | store@ | **Run store check** | MO-1 (needed first) gets its stock first: all 50 impellers, shafts, seals, capacitors, terminal boxes and paint, 40 of 100 bearings, 50 of 90 kg copper wire, 20 of 50 cartons. One request for what is short goes to Vikram Joshi (plant head): castings 50 (contract ₹650), bearings 60, copper wire 40 kg, cartons 30, ₹72,930 in all, as in the plan. MO-2 gets what is left; its request (₹2,09,700) goes to Meera Iyer (director); the MRP plan (needed 10 January) gets the rest (10 impellers, 50 seals, 5 L paint) and its request (₹3,69,490) goes to the director too |
 | 3 | store@ | **Inventory** | The impellers show 50 of 60 set aside for production; the free 10 are all that can be issued |
 | 4 | store@ | **Material requests** → MO-1 → **Issue for production** | Everything set aside is issued; what is short stays on the request until it arrives, and is set aside for MO-1 by itself when it does (the store gets a notice), then issue it |
+
+## Demand changes from the ERP
+
+On a fresh reset, after the store check above. The files are in `data/datasets/apex-v1/changes/` (load them with **Material requests → Load from the ERP**, one kind at a time, headers first, or `python -m p2p.cli import demand apex data/datasets/apex-v1/changes/A1-cut`).
+
+| # | Who | Where and what | You should see |
+|---|---|---|---|
+| 1 | store@ | A1: **Production orders** `A1-cut/production_order.csv`, then **Production order components** `A1-cut/production_order_line.csv` (Sahyadri moved 40 of the 0.5 HP pumps to February: MO-2 to 60) | "Changed: 10" with each line: MO-2's request (with the director, not yet with the buyer) is cut first (bearings 200 -> 120 and so on, ₹1,24,380 left); the 40 seals and 6 L of paint MO-2 no longer needs go at once to the MRP plan, whose request is cut by as much (₹3,64,990). MO-2's card says "Changed on ...: 100 -> 60". No case |
+| 2 | planthead@, then buyer@ | On another fresh reset: approve MO-1's request (₹72,930), then `python -m p2p.cli source apex` | MO-1's castings go on the contract order, the rest to quotation |
+| 3 | store@ | A2: **Production orders** `A2-cancel/production_order.csv` (SO-1001 cancelled: MO-1 `cancelled`) | MO-1's material request is cancelled; its stock goes to MO-2 and the MRP plan (their requests cut). The buyer has a case per order or RFQ holding the castings 50, bearings 60, wire 40 kg and cartons 30 |
+| 4 | buyer@ | **Exceptions** → kind **Demand changes to act on** | One row per document, owner "Buyer: Neha Kulkarni", due in two working days, with the amount; **Close** → "Order reduced" closes it. ap@ cannot close it |
+
+Brightwave (`demo reset brightwave` now loads the joiner plan: two material requests, ADM and ENG, on 1 December) has B1-B4 in `brightwave-v1/changes/`: one admin offer withdrawn, the engineering intake on hold (after approval and sourcing: cases for Arjun Reddy), a fifth developer, admin joiners moved to 30 November.
 
 ## Services and goods with no order (Brightwave)
 

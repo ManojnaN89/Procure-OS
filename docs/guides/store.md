@@ -29,22 +29,18 @@ After counting the shelf click **Count**: enter what you counted and why it diff
 
 ## Material requests for production orders
 
-Each production order (or each department's new joiners, with their kits) imported from the ERP gets a material request: one line per material, with the quantity needed.
+Each production order (or each department's new joiners, with their kits, or each MRP plan per plant, shown as "MRP plan") imported from the ERP gets a material request: one line per material, with the quantity needed. An MRP line marked "net" was already netted by the ERP: no free stock is set aside for it, it is bought in full.
 
 1. Open **Material requests** and click **Run store check**. Free stock is set aside for the orders needed soonest first; stock already set aside for another order is never taken. What is still short goes for approval as one purchase request per order, priced at the contract price, else the last price paid, else the standard price. Stock that comes in later (a receipt, a count that finds more, a cancelled order) is set aside by itself, soonest first, and you get a notice; a purchase request not yet with the buyer is made smaller by as much.
 2. When production starts, click **Issue for production** on the order. Everything set aside is issued. What is short stays on the request: when it arrives it is set aside for the order, then issue it.
-3. If the order is called off, click **Cancel** and say why. Its stock goes at once to the next orders that need it. Tell the buyer about any purchase request made only for it.
+3. If the order is called off, click **Cancel** and say why. Its stock goes at once to the next orders that need it. Purchase requests not yet with the buyer are cut (one left with nothing is cancelled); the buyer gets a case for anything already ordered or asked for.
 
-**Inventory** shows how much of each item is set aside. Stock set aside cannot be issued for anything else.
+Changes from the ERP: when the ERP sends an order again with a smaller quantity, a later or earlier date, or cancelled, **Load from the ERP** applies it and lists each change with what it did ("Changed: 3"); the card shows "Changed on 23 Nov: 100 -> 60". Less needed: requests not yet with the buyer are cut first, then stock set aside is released to the next orders. More needed or needed earlier: the store check runs again for those items (stock set aside for another order is never taken). If more was already issued than is now needed, you get a case on **Exceptions** ("issued too many"): return the extra to stock or keep it for production, then **Close** it there with what you did. **Inventory** shows how much of each item is set aside. Stock set aside cannot be issued for anything else.
 
 ## Goods with no order
 
 Open **Receive without order**: enter the supplier, item, quantity, place and why, then **Record and ask the purchase manager**. Nothing goes into stock yet. Once the buyer has raised the order and it is sent, click **Post the receipt**. If it is rejected, send the goods back and click **Mark returned**. Services are not received here: the person who asked confirms them. **Exceptions** lists everything stuck that needs a person, oldest first, with the reason, who must act, the next step and the age in working days; tick **Only mine** for what waits on you.
 
-## What you cannot do
+## What you cannot do, and if you are stuck
 
-You cannot enter the invoice or approve the order for the same goods. Someone else does those steps.
-
-## If you are stuck
-
-If something is wrong with a receipt you have already posted, tell the buyer and the AP clerk before the invoice is matched.
+You cannot enter the invoice or approve the order for the same goods. Someone else does those steps. If something is wrong with a receipt you have already posted, tell the buyer and the AP clerk before the invoice is matched.

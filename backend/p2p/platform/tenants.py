@@ -205,3 +205,9 @@ def drop_tenant(slug: str) -> bool:
         with _admin_connection() as conn:
             conn.execute(text(f'drop database if exists "{db_name}" with (force)'))  # type: ignore[attr-defined]
     return True
+
+
+def slug_of(db_name: str) -> str | None:
+    """The company whose database this is (the reverse of `tenant_db_name`), or None for another database."""
+    prefix = os.environ.get("P2P_TENANT_DB_PREFIX", "p2p_t_")
+    return db_name[len(prefix) :] if db_name.startswith(prefix) else None

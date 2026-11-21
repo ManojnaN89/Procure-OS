@@ -1565,6 +1565,13 @@ def production_orders(
         for r in lib.rows("inputs", "production_order", dataset)
     ]
     orders.append((MO3[0], MO3[1], Decimal(MO3[2]), MO3[3]))
+    # the ERP's MRP results come with the company too: one material request per plan and location (block 1, task 6.4),
+    # its materials as the MRP rows give them
+    for r in lib.rows("inputs", "mrp_result", dataset):
+        no = f"{r['plan_no']}/{r['location_code']}"
+        if no not in bom:
+            orders.append((no, no, Decimal(1), date.fromisoformat(r["need_by"])))
+        bom.setdefault(no, []).append({"item_code": r["item_code"], "qty": r["qty"], "unit": r["unit"]})
     contract = {
         p["item_code"]: Decimal(p["price"])
         for p in lib.rows("master", "price_record", dataset)

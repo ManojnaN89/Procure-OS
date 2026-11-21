@@ -56,6 +56,8 @@ def mrp_results(
                     "unit": b["unit"],
                     "need_by": run["need_by"],
                     "location_code": run.get("location_code", ""),
+                    "basis": run.get("basis", "gross"),
+                    "status": "",
                 }
             )
     return rows

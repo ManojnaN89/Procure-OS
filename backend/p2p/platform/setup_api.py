@@ -210,6 +210,16 @@ POLICIES: dict[str, tuple[str, str, str, str, str, float | None, float | None, t
         10,
         (),
     ),
+    "demand_change_case_days": (
+        "app",
+        "int",
+        "Days to act on a demand change",
+        "Working days the buyer or the store has to act on a case a change in the ERP's demand left (then it escalates)",
+        "2",
+        1,
+        30,
+        (),
+    ),
     "rfq_supplier_count": (
         "app",
         "int",

@@ -67,6 +67,8 @@ def apex(company: Apex) -> Apex:
     db = company.db
     db.rollback()
     for sql in (
+        "delete from demand_change_case",  # what a cancel or an ERP change did (block 1)
+        "delete from demand_change",
         "delete from material_request_buy",
         "delete from material_request_line",
         "delete from material_request",
@@ -390,7 +392,7 @@ def test_a_cancelled_order_releases_its_stock_for_the_next_one(apex: Apex) -> No
     left = material.cancel(apex.db, apex.uid("store"), first, "customer cancelled SO-1001")
 
     # then its 50 are free again, the order is no longer demand, and a new order can have them
-    assert left == []
+    assert left["purchase_requests_left"] == [] and left["cases"] == []
     assert _lines(apex, first)["RM-03"][1] == D(0)
     assert stock_levels(apex.db, item="RM-03")[0].free == D(50)
     statuses = apex.db.execute(
@@ -409,11 +411,23 @@ def test_a_cancelled_order_releases_its_stock_for_the_next_one(apex: Apex) -> No
         material.cancel(apex.db, apex.uid("store"), third, " ")
 
 
-def test_cancelling_names_the_purchase_requests_left_for_the_buyer(apex: Apex) -> None:
+def test_a_cancel_cuts_a_request_not_with_the_buyer_and_opens_a_case_for_one_that_is(apex: Apex) -> None:
+    # Q21 (decided 20 Nov): a cancel cuts purchase requests not yet with the buyer; before, they stayed for the buyer
     mr = _orders(apex, {"MO-1": ("2026-12-05", MO1)}).material_requests[0]
     no = _check(apex).purchase_requests[0].no
 
-    assert material.cancel(apex.db, apex.uid("store"), mr, "order called off") == [no]
+    done = material.cancel(apex.db, apex.uid("store"), mr, "order called off")
+    assert done["requests_cancelled"] == [no] and done["purchase_requests_left"] == [] and done["cases"] == []
+    assert apex.db.execute(text("select status from request where no = :n"), {"n": no}).scalar_one() == "cancelled"
+
+    # when the buyer already has the request, it stays and the buyer gets one case for it
+    mr = _orders(apex, {"MO-2": ("2026-12-05", MO1)}).material_requests[0]
+    no = _check(apex).purchase_requests[0].no
+    apex.db.execute(text("update request_line set status = 'sourcing' where request_no = :n"), {"n": no})
+    apex.db.commit()
+    done = material.cancel(apex.db, apex.uid("store"), mr, "order called off", tenant=apex.slug)
+    assert done["purchase_requests_left"] == [no] and done["requests_cut"] == []
+    assert [(c["doc_type"], c["doc_no"], c["owner_kind"]) for c in done["cases"]] == [("request", no, "buyer")]
 
 
 # ---- replenishment and the repeat check ----------------------------------------------------------

@@ -27,7 +27,7 @@ Reading a line: `name*` is part of the primary key, `name?` may be empty, then t
 
 ## Tenant database (one per company)
 
-136 tables.
+138 tables.
 
 **advance** · payment_no* text, po_no text, gross num, taxable num, used_gross num, used_taxable num, paid_on? date
 
@@ -81,7 +81,11 @@ Reading a line: `name*` is part of the primary key, `name?` may be empty, then t
 
 **delivery_reminder** · id* bigint, po_no text, kind text, promised_date date, number int, sent_to? text, sent_at timestamptz
 
-**demand_import** · id* bigint, source text, files jsonb, loaded int, already_loaded int, rejected int, imported_by? text, imported_at timestamptz
+**demand_change** · id* bigint, import_id bigint, kind text, doc_no text, line_key? text, requirement_id? bigint, mr_no? text, what ARRAY, before jsonb, after jsonb, effects jsonb, applied_at timestamptz
+
+**demand_change_case** · task_id* int, change_id bigint, owner_kind text, doc_type text, doc_no text, lines jsonb, excess jsonb, amount? num, outcome? text, note? text, closed_by? text, closed_at? timestamptz
+
+**demand_import** · id* bigint, source text, files jsonb, loaded int, already_loaded int, rejected int, imported_by? text, imported_at timestamptz, changed int
 
 **department** · code* text, name? text, head_user? text
 
@@ -133,13 +137,13 @@ Reading a line: `name*` is part of the primary key, `name?` may be empty, then t
 
 **match_result** · id* bigint, invoice_no text, invoice_line_no? int, result text, reason_codes? text, price_var? num, qty_var? num, detail? text, created_at timestamptz, resolved_by? text, resolved_at? timestamptz, resolution? text, tolerance_version? int
 
-**material_request** · no* text, production_order_id? bigint, order_no text, product_code text, location_code text, need_by date, status text, cancel_reason? text, created_by? text, created_at timestamptz, source_kind text, department_code? text
+**material_request** · no* text, production_order_id? bigint, order_no text, product_code? text, location_code text, need_by date, status text, cancel_reason? text, created_by? text, created_at timestamptz, source_kind text, department_code? text
 
 **material_request_buy** · id* bigint, mr_line_id bigint, request_no text, request_line_no int, qty num, created_at timestamptz
 
 **material_request_line** · id* bigint, mr_no text, line_no int, requirement_id bigint, item_code text, location_code text, uom text, need_qty num, reserved_qty num, issued_qty num, need_by date, status text
 
-**material_requirement** · id* bigint, source_kind text, source_doc_no text, line_key text, production_order_id? bigint, item_code text, qty num, unit text, base_qty num, need_by date, location_code text, status text, import_id bigint, created_at timestamptz, department_code? text
+**material_requirement** · id* bigint, source_kind text, source_doc_no text, line_key text, production_order_id? bigint, item_code text, qty num, unit text, base_qty num, need_by date, location_code text, status text, import_id bigint, created_at timestamptz, department_code? text, basis text
 
 **model_cache** · request_hash* text, response jsonb, created_at timestamptz
 

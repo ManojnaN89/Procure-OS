@@ -7,6 +7,31 @@ const MaterialRequestsView = {
   BADGE: { open: "badge-waiting", issued: "badge-approved", cancelled: "badge-draft" },
   STATUS: { open: "Open", issued: "Issued", cancelled: "Cancelled" },
 
+  WHAT: { qty_down: "less", qty_up: "more", earlier: "earlier", later: "later", cancelled: "cancelled", unit: "unit", basis: "basis", header_qty: "order quantity", reference: "reference" },
+
+  // One change from the ERP in words: "100 -> 60" or "need-by 2026-12-15 -> 2026-12-03" or "cancelled".
+  changeWords(c) {
+    if (c.what.includes("cancelled")) return "cancelled";
+    const parts = [];
+    if (c.before.qty !== c.after.qty) parts.push(`${this.esc(c.before.qty)} -> ${this.esc(c.after.qty)}`);
+    if (c.before.need_by !== c.after.need_by && c.after.need_by) parts.push(`need-by ${formatDate(c.before.need_by)} -> ${formatDate(c.after.need_by)}`);
+    return parts.join(", ") || c.what.map((w) => this.WHAT[w] || w).join(", ");
+  },
+
+  // What a change did: requests cut, cancelled, dates moved, cases for the buyer or the store.
+  changeEffects(c) {
+    const req = (n) => `<a href="#/requisitions/${encodeURIComponent(n)}">${this.esc(n)}</a>`;
+    const out = [];
+    const released = Object.entries(c.released || {});
+    if (released.length) out.push(`released ${released.map(([k, v]) => `${this.esc(v)} ${this.esc(k)}`).join(", ")}`);
+    (c.requests_cut || []).forEach((x) => out.push(`${req(x.request_no)} line ${this.esc(x.line_no)} ${this.esc(x.qty_before)} -> ${this.esc(x.qty_after)}`));
+    (c.requests_cancelled || []).forEach((n) => out.push(`${req(n)} cancelled`));
+    (c.need_by_moved || []).forEach((x) => out.push(`${req(x.request_no)} line ${this.esc(x.line_no)} need-by ${formatDate(x.to)}`));
+    (c.cases || []).forEach((x) => out.push(`<a href="#/exceptions">case for ${this.esc(x.assignee)}</a> (${this.esc(x.doc_no)}), due ${formatDate(x.due_at.slice(0, 10))}`));
+    if (c.store_check) out.push("store check run again");
+    return out.join("; ");
+  },
+
   esc(value) {
     return String(value ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
   },
@@ -68,10 +93,11 @@ const MaterialRequestsView = {
     return `
       <div class="panel" style="margin-bottom:12px;">
         <div style="display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap;align-items:center;">
-          <div class="panel-title" style="margin:0;">${this.esc(r.no)} · ${this.esc(r.order_no)} (${this.esc(r.product_code)}) · need by ${formatDate(r.need_by)}
+          <div class="panel-title" style="margin:0;">${this.esc(r.no)} · ${this.esc(r.order_no)}${r.source_kind === "mrp" ? " · MRP plan" : ` (${this.esc(r.product_code)})`} · need by ${formatDate(r.need_by)}
             <span class="badge ${this.BADGE[r.status] || ""}">${this.esc(this.STATUS[r.status] || r.status)}</span></div>
           <div style="white-space:nowrap;">${buttons}</div>
         </div>
+        ${(r.changes || []).map((c) => `<p class="cell-muted" style="font-size:12.5px;margin:4px 0 0;">Changed on ${formatDate(c.at.slice(0, 10))}: ${this.changeWords(c)}</p>`).join("")}
         ${r.cancel_reason ? `<p class="cell-muted" style="font-size:12.5px;">Cancelled: ${this.esc(r.cancel_reason)}</p>` : ""}
         <div class="table-wrap" style="margin-top:8px;">
           <table class="data-table">
@@ -80,7 +106,7 @@ const MaterialRequestsView = {
               ${r.lines.map((l) => `
                 <tr>
                   <td>${this.esc(l.item_name)}<div class="cell-muted" style="font-size:11px;">${this.esc(l.item_code)}</div></td>
-                  <td>${this.esc(l.need_qty)} <span class="cell-muted">${this.esc(l.uom)}</span></td>
+                  <td>${this.esc(l.need_qty)} <span class="cell-muted">${this.esc(l.uom)}${l.basis === "net" ? " net" : ""}</span></td>
                   <td>${this.esc(l.reserved_qty)}</td>
                   <td>${this.esc(l.issued_qty)}</td>
                   <td>${l.short === "0" ? `<span class="cell-muted">0</span>` : `<strong>${this.esc(l.short)}</strong>`}</td>
@@ -152,7 +178,11 @@ const MaterialRequestsView = {
       const body = await res.json().catch(() => ({}));
       if (!res.ok) { document.getElementById("mrErr").textContent = body.detail || "The file was not loaded."; return; }
       const left = (body.rejected || []).map((p) => `line ${this.esc(p.line)}: ${this.esc(p.reason)}`);
-      this.note(`${this.esc(body.summary.charAt(0).toUpperCase() + body.summary.slice(1))}.${body.material_requests.length ? `<br>New material requests: ${body.material_requests.map((n) => this.esc(n)).join(", ")}.` : ""}${left.length ? `<br>Left out: ${left.join("; ")}` : ""}`);
+      const changes = (body.changes || []).map((c) => {
+        const effects = this.changeEffects(c);
+        return `${this.esc(c.doc_no)}${c.item_code ? ` ${this.esc(c.item_code)}` : ""}: ${this.changeWords(c)}${effects ? `; ${effects}` : ""}`;
+      });
+      this.note(`${this.esc(body.summary.charAt(0).toUpperCase() + body.summary.slice(1))}.${body.material_requests.length ? `<br>New material requests: ${body.material_requests.map((n) => this.esc(n)).join(", ")}.` : ""}${changes.length ? `<br>Changed: ${changes.length}<br>${changes.join("<br>")}` : ""}${(body.warnings || []).length ? `<br>${body.warnings.map((w) => this.esc(w)).join("<br>")}` : ""}${left.length ? `<br>Left out: ${left.join("; ")}` : ""}`);
       await this.load();
     });
   },
@@ -167,7 +197,7 @@ const MaterialRequestsView = {
         <div class="panel-title">${issue ? "Issue for production" : "Cancel"}: ${this.esc(r.no)} (${this.esc(r.order_no)})</div>
         <p class="cell-muted" style="margin:0 0 10px;font-size:12.5px;">${issue
           ? "Everything set aside for this order is issued. What is still short stays on the request until it arrives."
-          : "The stock set aside goes back to the shelf. Purchase requests already made stay for the buyer."}</p>
+          : "The stock set aside goes back to the shelf. Purchase requests not yet with the buyer are cut; the buyer gets a case for anything already ordered or asked for."}</p>
         <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
           ${issue ? "" : `<input id="mrWhy" placeholder="Why it is cancelled (required)" style="min-width:260px;" ${field}>`}
           <span class="btn btn-primary btn-sm" id="mrSave">${issue ? "Issue what is set aside" : "Cancel the request"}</span>
@@ -186,7 +216,7 @@ const MaterialRequestsView = {
       }
       this.note(issue
         ? `Issued: ${Object.entries(res.data.issued).map(([k, v]) => `${this.esc(k)} ${this.esc(v)}`).join(", ")}.`
-        : `${this.esc(r.no)} cancelled; its stock is free again.${res.data.purchase_requests_left.length ? ` Tell the buyer about ${this.esc(res.data.purchase_requests_left.join(", "))}.` : ""}`);
+        : `${this.esc(r.no)} cancelled; its stock is free again.${res.data.requests_cancelled.length ? ` Cancelled ${this.esc(res.data.requests_cancelled.join(", "))}.` : ""}${res.data.cases.length ? ` The buyer has ${plural(res.data.cases.length, "case")} for ${this.esc(res.data.purchase_requests_left.join(", "))}.` : ""}`);
       await this.load();
     });
   },

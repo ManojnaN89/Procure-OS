@@ -20,7 +20,8 @@ TITLE = "ERP demand files load exactly once, with every bad row explained"
 REQUIREMENT = (
     "Plan P1-29: production orders with their component lines, MRP results, sales orders and the demand plan are "
     "imported from the client's ERP files; every rejected row is listed with its reason; the same ERP order is never "
-    "loaded twice; a changed order is reported, not overwritten; one company never sees another's imports. For an IT "
+    "loaded twice; a changed order is applied and listed with what changed (Q21, 20 Nov: the change propagates); one "
+    "company never sees another's imports. For an IT "
     "services company the joiner kits and the joiner plan load the same way: each joiner row becomes its kit's items "
     "times the joiners, by the start date, for the joiner's department, and one material request per plan and department"
 )
@@ -248,14 +249,14 @@ def run(ctx) -> Outcome:
             [["MO-1", mo1["product_code"], "75", mo1["need_by"]]],
         ),
     )
-    if [p["reason"] for p in changed["rejected"]] != [
-        f"already loaded; changed: qty {mo1['qty']} -> 75"
-    ]:
-        out.find("high", f"a changed order was not reported as changed: {changed}")
+    # Q21 (decided 20 Nov): a changed row is applied and listed, not refused
+    got_change = changed.get("changes") or [{}]
+    if changed["rejected"] or changed.get("changed") != 1 or got_change[0].get("what") != ["header_qty"]:
+        out.find("high", f"a changed order was not applied and listed as changed: {changed}")
     if a.db.execute(
         text("select qty from production_order where order_no = 'MO-1'")
-    ).scalar_one() != lib.D(mo1["qty"]):
-        out.find("high", "a changed order overwrote the loaded one")
+    ).scalar_one() != lib.D(75):
+        out.find("high", "a changed order was not applied")
 
     # 7. every real import is audited; the other company sees none of it
     imports = a.db.execute(text("select count(*) from demand_import")).scalar_one()
@@ -416,8 +417,8 @@ def brightwave(out: Outcome) -> None:  # noqa: C901 - one scenario, step by step
             [[plan["plan_no"], plan["department"], plan["kit"], str(int(plan["count"]) + 1), plan["start_date"]]],
         ),
     )
-    if changed["loaded"] or len(changed["rejected"]) != 1 or "already loaded; changed: qty" not in changed["rejected"][0]["reason"]:
-        out.find("high", f"Brightwave: a changed joiner count was not reported as changed: {changed}")
+    if changed["loaded"] or changed["rejected"] or changed.get("changed") != 1 or changed["changes"][0]["what"] != ["qty_up"]:
+        out.find("high", f"Brightwave: a changed joiner count was not applied and listed: {changed}")
     out.metrics.update(
         {
             "Brightwave joiner rows (kits / plan)": f"{rows_in['joiner_kit']} / {rows_in['joiner_plan']}",

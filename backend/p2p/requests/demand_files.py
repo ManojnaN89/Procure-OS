@@ -15,6 +15,8 @@ from p2p.masters.schema import Table
 
 QTY_PLACES = Decimal("0.0001")  # quantities are kept to four decimals
 _PERIOD = re.compile(r"\d{4}-(0[1-9]|1[0-2])")
+STATUSES = ("open", "cancelled")  # a row's `status`: blank is open
+BASES = ("gross", "net")  # an MRP row's `basis`: blank is gross
 
 
 @dataclass
@@ -24,6 +26,7 @@ class OrderHead:
     id: int | None
     need_by: date
     location_code: str
+    status: str = "open"
 
 
 @dataclass
@@ -33,7 +36,7 @@ class Reference:
     items: dict[str, tuple[bool, str]]  # code -> (active, base unit)
     factors: dict[tuple[str, str], Decimal]  # (item, unit) -> how many base units one of that unit is
     locations: set[str]
-    default_location: str | None  # the company's only stock location, used when a file names none
+    default_location: str | None  # the company's main stock location, used when a file names none
     orders: dict[str, OrderHead] = field(default_factory=dict)
     departments: set[str] = field(default_factory=set)
     kits: dict[str, list[tuple[str, Decimal]]] = field(default_factory=dict)  # kit -> (item, base quantity per joiner)
@@ -46,20 +49,23 @@ class Reference:
             for r in db.execute(text("select item_code, from_uom, to_uom, factor from uom_conversion"))
             if r[0] in items and r[2] == items[r[0]][1] and r[3]
         }
-        locations = {r[0]: bool(r[1]) for r in db.execute(text("select code, is_stock_location from location"))}
-        stock = [c for c, is_stock in locations.items() if is_stock]
+        locations = {
+            r[0]: bool(r[1]) for r in db.execute(text("select code, is_stock_location from location order by code"))
+        }
+        stock = [c for c, is_stock in locations.items() if is_stock] or list(locations)
         orders = {
-            r[0]: OrderHead(r[1], r[2], r[3])
-            for r in db.execute(text("select order_no, id, need_by, location_code from production_order"))
+            r[0]: OrderHead(r[1], r[2], r[3], r[4])
+            for r in db.execute(text("select order_no, id, need_by, location_code, status from production_order"))
         }
         departments = {r[0] for r in db.execute(text("select code from department"))}
         kits: dict[str, list[tuple[str, Decimal]]] = {}
         for kit, item, base in db.execute(text("select kit, item_code, base_qty from joiner_kit order by kit, id")):
             kits.setdefault(kit, []).append((item, Decimal(base)))
-        return cls(items, factors, set(locations), stock[0] if len(stock) == 1 else None, orders, departments, kits)
+        # a row that names no location goes to the main one: the first stock location
+        return cls(items, factors, set(locations), stock[0] if stock else None, orders, departments, kits)
 
     def location(self, row: dict[str, Any]) -> str | None:
-        """The row's location: the one it names, or the company's only stock location."""
+        """The row's location: the one it names, or the company's main stock location."""
         return row.get("location_code") or self.default_location
 
     def check_location(self, row: dict[str, Any]) -> str | None:
@@ -67,7 +73,7 @@ class Reference:
         if code and code not in self.locations:
             return f"location_code '{code}' is not a location of the company"
         if not code and self.default_location is None:
-            return "location_code is required: the company has more than one stock location"
+            return "location_code is required: the company has no location yet"
         return None
 
     def check_material(self, row: dict[str, Any]) -> str | None:
@@ -86,6 +92,19 @@ class Reference:
     def base_qty(self, item: str, unit: str, qty: Decimal) -> Decimal:
         base = self.items[item][1]
         return qty if unit == base else (qty * self.factors[(item, unit)]).quantize(QTY_PLACES)
+
+
+def status_of(row: dict[str, Any]) -> str:
+    return str(row.get("status") or "open")
+
+
+def check_status(row: dict[str, Any]) -> str | None:
+    """A row's optional `status` (and an MRP row's `basis`) must be one we know."""
+    if status_of(row) not in STATUSES:
+        return f"status '{row['status']}' must be open or cancelled"
+    if row.get("basis") and row["basis"] not in BASES:
+        return f"basis '{row['basis']}' must be gross or net"
+    return None
 
 
 def check_qty(qty: Decimal, column: str = "qty") -> str | None:
@@ -107,7 +126,9 @@ class DemandFile:
     optional: ClassVar[frozenset[str]] = frozenset()  # columns the file may leave out altogether
     key: ClassVar[tuple[str, ...]]  # columns of `table` that identify the row in the ERP
     qty_column: ClassVar[str] = "qty"  # the quantity every row must have above zero
-    compared: ClassVar[tuple[str, ...]]  # columns of `table` whose change on a second import is reported
+    compared: ClassVar[tuple[str, ...]]  # columns of `table` whose change on a second import is a change
+    fixed: ClassVar[tuple[str, ...]] = ()  # of those, the ones a change may not touch (the row is left out)
+    changeable: ClassVar[bool] = True  # False: a changed row is left out, as "already loaded; changed"
     example: ClassVar[tuple[str, ...]]  # an example row for the template
 
     @classmethod
@@ -129,6 +150,21 @@ class DemandFile:
     def accepted(self, rec: dict[str, Any], ref: Reference) -> None:
         """Remember an accepted record for the kinds read after this one."""
 
+    def doc(self, row: dict[str, Any]) -> tuple[str, str | None]:
+        """The ERP document a row belongs to and its line there (None for a document's header)."""
+        raise NotImplementedError
+
+    def label(self, row: dict[str, Any]) -> str:
+        """The row in words, for a reason: "MO-1", "MO-1 RM-08", "MRP-2027-01 line 3"."""
+        doc, line = self.doc(row)
+        return doc if line is None else f"{doc} {line}"
+
+    def fixed_reason(self, row: dict[str, Any], changed: list[str]) -> str:
+        return f"{', '.join(changed)} cannot change: cancel {self.label(row)} and send a new line"
+
+    def reopen_reason(self, row: dict[str, Any]) -> str:
+        return f"{self.label(row)} is cancelled and is not reopened; send a new line number"
+
 
 class ProductionOrders(DemandFile):
     kind = "production_order"
@@ -141,15 +177,26 @@ class ProductionOrders(DemandFile):
         ("need_by", "date"),
         ("reason", "text"),
         ("location_code", "text"),
+        ("status", "text"),
     )
     required = ("order_no", "product_code", "qty", "need_by")
-    optional = frozenset({"reason", "location_code"})
+    optional = frozenset({"reason", "location_code", "status"})
     key = ("order_no",)
-    compared = ("product_code", "qty", "need_by", "location_code")
-    example = ("MO-1", "FG-01", "50", "2026-12-05", "SO-1001", "")
+    compared = ("product_code", "qty", "need_by", "location_code", "status")
+    fixed = ("product_code", "location_code")
+    example = ("MO-1", "FG-01", "50", "2026-12-05", "SO-1001", "", "")
 
     def check(self, row: dict[str, Any], ref: Reference) -> str | None:
-        return ref.check_location(row)
+        return check_status(row) or ref.check_location(row)
+
+    def doc(self, row: dict[str, Any]) -> tuple[str, str | None]:
+        return row["order_no"], None
+
+    def fixed_reason(self, row: dict[str, Any], changed: list[str]) -> str:
+        return f"{', '.join(changed)} cannot change: cancel {row['order_no']} and send a new order"
+
+    def reopen_reason(self, row: dict[str, Any]) -> str:
+        return "a cancelled order is not reopened; send a new order number"
 
     def record(self, row: dict[str, Any], ref: Reference) -> dict[str, Any]:
         return {
@@ -159,10 +206,11 @@ class ProductionOrders(DemandFile):
             "need_by": row["need_by"],
             "reason": row.get("reason"),
             "location_code": ref.location(row),
+            "status": status_of(row),
         }
 
     def accepted(self, rec: dict[str, Any], ref: Reference) -> None:
-        ref.orders[rec["order_no"]] = OrderHead(rec.get("id"), rec["need_by"], rec["location_code"])
+        ref.orders[rec["order_no"]] = OrderHead(rec.get("id"), rec["need_by"], rec["location_code"], rec["status"])
 
 
 class ProductionOrderLines(DemandFile):
@@ -177,17 +225,24 @@ class ProductionOrderLines(DemandFile):
         ("qty", "numeric"),
         ("unit", "text"),
         ("need_by", "date"),
+        ("status", "text"),
     )
     required = ("order_no", "item_code", "qty")
-    optional = frozenset({"unit", "need_by"})
+    optional = frozenset({"unit", "need_by", "status"})
     key = ("source_kind", "source_doc_no", "line_key")
-    compared = ("item_code", "qty", "unit", "need_by")
-    example = ("MO-1", "RM-08", "90", "KGS", "2026-12-05")
+    compared = ("item_code", "qty", "unit", "need_by", "status")
+    example = ("MO-1", "RM-08", "90", "KGS", "2026-12-05", "")
 
     def check(self, row: dict[str, Any], ref: Reference) -> str | None:
-        if row["order_no"] not in ref.orders:
+        head = ref.orders.get(row["order_no"])
+        if head is None:
             return f"production order {row['order_no']} has no header: it is not loaded and not in production_order"
-        return ref.check_material(row)
+        if head.status == "cancelled":
+            return f"{row['order_no']} is cancelled"
+        return check_status(row) or ref.check_material(row)
+
+    def doc(self, row: dict[str, Any]) -> tuple[str, str | None]:
+        return row["order_no"], row["item_code"]
 
     def record(self, row: dict[str, Any], ref: Reference) -> dict[str, Any]:
         head = ref.orders[row["order_no"]]
@@ -203,6 +258,7 @@ class ProductionOrderLines(DemandFile):
             "base_qty": ref.base_qty(row["item_code"], unit, row["qty"]),
             "need_by": row.get("need_by") or head.need_by,
             "location_code": head.location_code,
+            "status": status_of(row),
         }
 
 
@@ -220,15 +276,27 @@ class MrpResults(DemandFile):
         ("unit", "text"),
         ("need_by", "date"),
         ("location_code", "text"),
+        ("basis", "text"),
+        ("status", "text"),
     )
     required = ("plan_no", "line_no", "item_code", "qty", "need_by")
-    optional = frozenset({"unit", "location_code"})
+    optional = frozenset({"unit", "location_code", "basis", "status"})
     key = ("source_kind", "source_doc_no", "line_key")
-    compared = ("item_code", "qty", "unit", "need_by", "location_code")
-    example = ("MRP-2026-12", "1", "RM-06", "200", "NOS", "2026-12-10", "")
+    compared = ("item_code", "qty", "unit", "need_by", "location_code", "basis", "status")
+    fixed = ("item_code", "location_code")
+    example = ("MRP-2026-12", "1", "RM-06", "200", "NOS", "2026-12-10", "", "gross", "")
 
     def check(self, row: dict[str, Any], ref: Reference) -> str | None:
-        return ref.check_location(row) or ref.check_material(row)
+        return check_status(row) or ref.check_location(row) or ref.check_material(row)
+
+    def doc(self, row: dict[str, Any]) -> tuple[str, str | None]:
+        return row["plan_no"], row["line_no"]
+
+    def label(self, row: dict[str, Any]) -> str:
+        return f"{row['plan_no']} line {row['line_no']}"
+
+    def fixed_reason(self, row: dict[str, Any], changed: list[str]) -> str:
+        return f"{', '.join(changed)} cannot change: cancel the line and send a new line number"
 
     def record(self, row: dict[str, Any], ref: Reference) -> dict[str, Any]:
         unit = row.get("unit") or ref.items[row["item_code"]][1]
@@ -243,6 +311,8 @@ class MrpResults(DemandFile):
             "base_qty": ref.base_qty(row["item_code"], unit, row["qty"]),
             "need_by": row["need_by"],
             "location_code": ref.location(row),
+            "basis": row.get("basis") or "gross",
+            "status": status_of(row),
         }
 
 
@@ -264,6 +334,9 @@ class SalesOrders(DemandFile):
     key = ("kind", "doc_no", "product_code")
     compared = ("customer", "qty", "need_by")
     example = ("SO-1001", "Sahyadri Pump Distributors", "FG-01", "60", "2026-12-10")
+
+    def doc(self, row: dict[str, Any]) -> tuple[str, str | None]:
+        return row["order_no"], row["product_code"]
 
     def record(self, row: dict[str, Any], ref: Reference) -> dict[str, Any]:
         return {
@@ -297,6 +370,9 @@ class DemandPlans(DemandFile):
     compared = ("qty", "period", "status")
     example = ("DP-2026-12", "FG-02", "100", "2026-12", "approved")
 
+    def doc(self, row: dict[str, Any]) -> tuple[str, str | None]:
+        return row["plan_no"], row["product_code"]
+
     def check(self, row: dict[str, Any], ref: Reference) -> str | None:
         if not _PERIOD.fullmatch(row["period"]):
             return f"period '{row['period']}' is not a month like 2026-12"
@@ -326,7 +402,11 @@ class JoinerKits(DemandFile):
     optional = frozenset({"unit"})
     key = ("kit", "item_code")
     compared = ("qty", "unit")
+    changeable = False  # a kit already used by joiner plans is not changed under them
     example = ("machinist", "SP-02", "10", "")
+
+    def doc(self, row: dict[str, Any]) -> tuple[str, str | None]:
+        return row["kit"], row["item_code"]
 
     def check(self, row: dict[str, Any], ref: Reference) -> str | None:
         return ref.check_material(row)
@@ -360,13 +440,27 @@ class JoinerPlans(DemandFile):
         ("count", "numeric"),
         ("start_date", "date"),
         ("location_code", "text"),
+        ("status", "text"),
     )
     required = ("plan_no", "department", "kit", "count", "start_date")
-    optional = frozenset({"location_code"})
+    optional = frozenset({"location_code", "status"})
     key = ("source_kind", "source_doc_no", "line_key")
-    compared = ("item_code", "qty", "need_by", "location_code", "department_code")
+    compared = ("item_code", "qty", "need_by", "location_code", "department_code", "status")
+    fixed = ("location_code",)
     qty_column = "count"
-    example = ("JP-2026-12", "PRD", "machinist", "2", "2026-12-01", "")
+    example = ("JP-2026-12", "PRD", "machinist", "2", "2026-12-01", "", "")
+
+    def doc(self, row: dict[str, Any]) -> tuple[str, str | None]:
+        return f"{row['plan_no']}/{row['department']}", f"{row['kit']}/{row['start_date'].isoformat()}"
+
+    def label(self, row: dict[str, Any]) -> str:
+        return f"{row['plan_no']} {row['department']} {row['kit']} from {row['start_date'].isoformat()}"
+
+    def fixed_reason(self, row: dict[str, Any], changed: list[str]) -> str:
+        return f"{', '.join(changed)} cannot change: cancel the row and send a new one"
+
+    def reopen_reason(self, row: dict[str, Any]) -> str:
+        return f"{self.label(row)} is cancelled and is not reopened; send a new row"
 
     def check(self, row: dict[str, Any], ref: Reference) -> str | None:
         if row["count"] != row["count"].to_integral_value():
@@ -375,7 +469,7 @@ class JoinerPlans(DemandFile):
             return f"department '{row['department']}' is not a department of the company"
         if row["kit"] not in ref.kits:
             return f"kit '{row['kit']}' is not in joiner_kit: load the kits first"
-        return ref.check_location(row)
+        return check_status(row) or ref.check_location(row)
 
     def records(self, row: dict[str, Any], ref: Reference) -> list[dict[str, Any]]:
         return [
@@ -391,6 +485,7 @@ class JoinerPlans(DemandFile):
                 "need_by": row["start_date"],
                 "location_code": ref.location(row),
                 "department_code": row["department"],
+                "status": status_of(row),
             }
             for item, per_joiner in ref.kits[row["kit"]]
         ]

@@ -12,7 +12,8 @@ python -m p2p.cli import stock <tenant> <dataset folder> [--dry-run]
 python -m p2p.cli import demand <tenant> <dataset folder or file> [--dry-run] [--kind KIND]
         reads the ERP's demand (production orders and their materials, MRP results, sales orders, demand plan,
         joiner kits and the joiner plan);
-        rows loaded before are skipped, changed ones are listed
+        rows loaded before are skipped; a changed or cancelled row is applied (requests cut, stock released, cases for
+        the buyer or the store) and listed with what it did
 python -m p2p.cli material make <tenant>
         makes material requests for imported production orders that have none (the import does this by itself)
 python -m p2p.cli material check <tenant> [--no-submit]
@@ -300,14 +301,18 @@ def main(argv: list[str] | None = None) -> int:
         report: ImportReport
         with Session(routing.engine_for(args.tenant)) as db:
             if args.cmd == "demand":
-                report = demand.import_demand(db, Path(args.dataset), dry_run=args.dry_run, kind=args.kind)
+                report = demand.import_demand(
+                    db, Path(args.dataset), dry_run=args.dry_run, kind=args.kind, tenant=args.tenant
+                )
             else:
                 load = import_masters if args.cmd == "masters" else import_movements
                 report = load(db, Path(args.dataset), dry_run=args.dry_run)
         if isinstance(report, demand.DemandReport):
             print(f"{demand.summary(report)} ({report.seconds} s)")
             for kind, n in report.loaded.items():
-                print(f"  {kind}: {n} new, {report.already[kind]} loaded before")
+                print(f"  {kind}: {n} new, {report.changed.get(kind, 0)} changed, {report.already[kind]} loaded before")
+            for change in report.changes:
+                print(f"  change    {demand.change_line(change.view())}")
         else:
             verb = "would load" if args.dry_run else "loaded"
             print(

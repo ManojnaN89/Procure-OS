@@ -1,5 +1,5 @@
 """ERP demand import: Apex's input files load, bad rows are listed with their reasons, the same order never loads twice, a
-changed order is reported and not overwritten, a dry run writes nothing, a client's column names map to ours, every
+changed order is applied and listed (rule Q21; the scenarios are in test_demand_changes.py), a dry run writes nothing, a client's column names map to ours, every
 import is audited, and one company never sees another's imports."""
 
 import csv
@@ -28,6 +28,7 @@ ROOT = Path(__file__).resolve().parents[1]
 APEX = ROOT / "data" / "datasets" / "apex-v1"
 BRIGHTWAVE = ROOT / "data" / "datasets" / "brightwave-v1"
 DEMAND_TABLES = (
+    *("demand_change_case", "demand_change"),  # what changes the ERP sent did
     *("material_request_buy", "material_request_line", "material_request"),  # made from the demand
     *("material_requirement", "production_order", "product_demand", "joiner_kit", "demand_import", "erp_column_map"),
 )
@@ -191,22 +192,31 @@ def test_a_second_import_of_the_same_files_loads_nothing_and_says_so(db: Session
     assert _count(db, "demand_import") == 2  # both runs are on record
 
 
-def test_a_changed_order_is_listed_as_changed_and_not_overwritten(db: Session, dataset: Path, tmp_path: Path) -> None:
+def test_a_changed_order_is_applied_and_listed_with_what_changed(db: Session, dataset: Path, tmp_path: Path) -> None:
     # given MO-1 loaded for 50 pumps
     demand.import_demand(db, dataset)
     rows = _rows(dataset / "inputs" / "production_order.csv")
     rows[0]["qty"], rows[0]["need_by"] = "60", "2026-12-08"
     path = _write(tmp_path / "production_order.csv", list(rows[0]), [list(r.values()) for r in rows])
 
-    # when the ERP sends MO-1 again for 60 pumps three days later
+    # when the ERP sends MO-1 again for 60 pumps three days later (Q21, decided 20 Nov: the change propagates)
     report = demand.import_demand(db, path)
 
-    # then it is listed as changed with what changed, and the loaded order stays as it was
-    assert report.rows_loaded == 0 and report.already_loaded == 1
-    assert _reasons(report) == {
-        ("production_order", 2): "already loaded; changed: qty 50 -> 60; need_by 2026-12-05 -> 2026-12-08"
-    }
-    assert db.execute(text("select qty from production_order where order_no = 'MO-1'")).scalar_one() == 50
+    # then it is applied and listed with what changed; its lines (not in this file) keep their quantities
+    assert report.rows_loaded == 0 and report.rows_changed == 1 and report.already_loaded == 1 and report.rejected == []
+    change = report.changes[0]
+    assert (change.doc_no, change.what) == ("MO-1", ["header_qty", "later"])
+    assert (change.before["qty"], change.after["qty"], change.after["need_by"]) == ("50", "60", "2026-12-08")
+    assert [p.reason for p in report.warnings] == [
+        "MO-1: quantity 50 -> 60; its components were not in this import, so its material request is unchanged"
+    ]
+    order = db.execute(text("select qty, need_by from production_order where order_no = 'MO-1'")).one()
+    assert (order.qty, order.need_by.isoformat()) == (60, "2026-12-08")
+    line = db.execute(
+        text("select base_qty, need_by from material_requirement where source_doc_no = 'MO-1' and item_code = 'RM-01'")
+    ).one()
+    assert (line.base_qty, line.need_by.isoformat()) == (50, "2026-12-08")  # the date moved with the order
+    assert demand.summary(report) == "loaded 0 rows; 1 changed; 1 loaded before and unchanged; 0 left out"
 
 
 def test_a_new_line_of_a_loaded_order_attaches_to_it(db: Session, dataset: Path, tmp_path: Path) -> None:
@@ -363,7 +373,9 @@ def test_only_the_store_may_import(company: tuple[str, Session], db: Session) ->
         resp = client.get("/api/demand/templates/production_order", headers=_headers(slug, role))
         assert (resp.status_code == 200) == allowed, role
     resp = client.get("/api/demand/templates/production_order", headers=_headers(slug, "Store"))
-    assert resp.text.lstrip("﻿").splitlines()[0] == "order_no,product_code,qty,need_by,reason,location_code"
+    assert (
+        resp.text.lstrip("﻿").splitlines()[0] == "order_no,product_code,qty,need_by,reason,location_code,status"
+    )  # status added in block 1 (cancel)
 
 
 # ---- an IT services company: joiner kits and the joiner plan --------------------------------------

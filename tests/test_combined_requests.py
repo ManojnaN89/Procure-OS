@@ -50,6 +50,8 @@ def apex(company: Apex) -> Apex:
     db = company.db
     db.rollback()
     for sql in (
+        "delete from demand_change_case",  # what a cancel or an ERP change did (block 1)
+        "delete from demand_change",
         "delete from material_request_buy",
         "delete from material_request_line",
         "delete from material_request",
@@ -275,7 +277,7 @@ def test_cancelling_one_order_takes_its_part_off_the_combined_line(apex: Apex) -
     left = material.cancel(apex.db, apex.uid("store"), mrs["MO-B"], "customer cancelled")
 
     # then the line buys MO-A's 60 only, the request's value follows, and nothing is left for the buyer to sort out
-    assert left == []
+    assert left["purchase_requests_left"] == []
     assert _request_lines(apex, "RM-06") == [(no, D(60), "open")]
     assert apex.db.execute(text("select total_value from request where no = :n"), {"n": no}).scalar_one() == D(
         "2280.00"
@@ -290,8 +292,8 @@ def test_cancelling_one_order_takes_its_part_off_the_combined_line(apex: Apex) -
     assert (D(reduced[0]), D(reduced[1])) == (D(110), D(60))
     assert reduced[2].startswith(f"{mrs['MO-B']} cancelled")
 
-    # and cancelling MO-A too leaves the request for the buyer (it buys for nobody else)
-    assert material.cancel(apex.db, apex.uid("store"), mrs["MO-A"], "plant shut") == [no]
+    # and cancelling MO-A too cuts the request, not yet with the buyer, to nothing (Q21, 20 Nov: before, it stayed)
+    assert material.cancel(apex.db, apex.uid("store"), mrs["MO-A"], "plant shut")["requests_cancelled"] == [no]
 
 
 def test_a_restock_joins_a_draft_shortfall_and_replenishment_counts_only_the_stock_part(apex: Apex) -> None:

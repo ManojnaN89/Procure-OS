@@ -312,3 +312,14 @@ def holidays_for(db: Session, state_code: str | None = None) -> set[date]:
 
 def calendar_for(db: Session, state_code: str | None = None, *, saturday_working: bool = False) -> BusinessCalendar:
     return BusinessCalendar.of(holidays_for(db, state_code), saturday_working=saturday_working)
+
+
+def calendar_for_location(db: Session, location_code: str | None) -> BusinessCalendar:
+    """The business calendar of one of the company's places: its working week (Mon-Sat or Mon-Fri) and the central and
+    its state's holidays. A place not on record falls back to the default calendar."""
+    row = db.execute(
+        text("select state_code, working_days from location where code = :c"), {"c": location_code}
+    ).first()
+    if row is None:
+        return calendar_for(db)
+    return calendar_for(db, row[0], saturday_working="sat" in str(row[1] or "").lower())
