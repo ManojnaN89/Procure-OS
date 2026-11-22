@@ -70,13 +70,20 @@ def tenant_libpq_url(slug: str) -> str:
         engine.dispose()
 
 
+def setup_checkpoints(owner_url: str) -> None:
+    """Make or bring up to date LangGraph's checkpoint tables in a company's database. Only the owner may create tables,
+    so this runs when the company is migrated (`tenants.migrate_tenant`), never while an agent runs."""
+    with psycopg.connect(
+        owner_url.replace("postgresql+psycopg://", "postgresql://"), autocommit=True, row_factory=dict_row
+    ) as conn:
+        PostgresSaver(conn).setup()
+
+
 @contextmanager
 def checkpointer(slug: str) -> Iterator[PostgresSaver]:
     conn = psycopg.connect(tenant_libpq_url(slug), autocommit=True, row_factory=dict_row)
     try:
-        saver = PostgresSaver(conn)
-        saver.setup()
-        yield saver
+        yield PostgresSaver(conn)  # its tables are made at migration (setup_checkpoints)
     finally:
         conn.close()
 

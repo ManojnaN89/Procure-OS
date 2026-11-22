@@ -565,15 +565,8 @@ def _run(ctx: lib.Ctx) -> Outcome:  # noqa: C901 - one scenario, step by step
         )
         mutations["an order made from a conditional award"] = conditional_po_seen == 0
         # activation: documents verified by a person other than who uploaded them, then the director's approval
-        # SPEC GAP (owner): R6 says bank verification is not needed before an order, and 4.6 plants SUP-008 with only a
-        # PAN card and a GST certificate; but the activation document set as built (before this block) asks every
-        # supplier for a bank proof (cancelled cheque). Whether that document leaves the activation set is the
-        # owner's call; here the buyer files a cancelled-cheque record (no bank account is added, so R6's "the order
-        # needs no bank account" is still checked below).
-        if not any(
-            d.get("doc_type") in ("cancelled_cheque", "bank proof (cancelled cheque)") for d in documents("SUP-008")
-        ):
-            c.call(BUYER, "POST", "/api/vendors/SUP-008/documents", {"type": "cancelled_cheque", "number": "E56"})
+        # the bank proof is not part of the activation set (owner decision 9, 22 Nov 2026): SUP-008 activates with
+        # its PAN card and GST certificate, and R6's "the order needs no bank account" is checked below
         for d in documents("SUP-008"):
             if not d.get("verified"):
                 c.call(PLANT_HEAD, "POST", f"/api/vendors/SUP-008/documents/{d['id']}/verify", {})

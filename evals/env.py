@@ -5,6 +5,7 @@ Nothing here touches the development data. The evals import the p2p package from
 
 import contextlib
 import os
+import secrets
 import sys
 import uuid
 from collections.abc import Iterator
@@ -23,6 +24,9 @@ os.environ.setdefault("TENANT_SECRET_KEY", Fernet.generate_key().decode())
 from sqlalchemy import text
 
 CONTROL_DB = os.environ.get("P2P_EVAL_CONTROL_DB", "p2p_control_eval")
+# the run's own app login, named after its control database (never the dev login)
+os.environ["APP_DATABASE_USER"] = f"{CONTROL_DB}_app"
+os.environ.setdefault("APP_DATABASE_PASSWORD", secrets.token_urlsafe(24))
 
 
 @contextlib.contextmanager

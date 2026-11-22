@@ -10,6 +10,8 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=REPO_ROOT / ".env", extra="ignore")
 
     control_database_url: str = "postgresql+psycopg://p2p:change-me@127.0.0.1:5440/p2p_control"
+    app_database_user: str = ""  # empty means <control database name>_app: the app's own restricted login
+    app_database_password: str = ""  # required: in .env only
     tenant_secret_key: str = ""
     jwt_secret: str = ""
     smtp_host: str = "127.0.0.1"  # not "localhost": on some machines that name adds 0.2 s to every new connection

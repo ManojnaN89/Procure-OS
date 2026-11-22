@@ -1,12 +1,13 @@
 """Shared pieces of the evals: results, a company built from the generated dataset, a fake mail server, readers for the
 raw dataset (so the oracles never touch the platform's own code), and a few small helpers."""
 
+import contextlib
 import csv
 import json
 import os
 import time
 import uuid
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
 from datetime import date
 from decimal import Decimal
@@ -182,6 +183,18 @@ def build_world(prefix: str = "ev", *, with_stock: bool = True, dataset: Path = 
 
     demo.configure(db, demo_company(dataset), name)  # who the chain roles are, and who approves planned requests
     return World(name, db, logins, emails, org_logins, round(time.monotonic() - started, 2))
+
+
+@contextlib.contextmanager
+def owner_session(slug: str) -> Iterator[Session]:
+    """A session on a company's database as its owner (the app never signs in as the owner): for an eval that does what
+    only the owner can, such as back-dating the insert-only setup history, or an oracle that reads."""
+    engine = tenants.owner_engine(slug)
+    try:
+        with Session(engine) as session:
+            yield session
+    finally:
+        engine.dispose()
 
 
 def timed(fn: Callable[[], Any]) -> tuple[Any, float]:

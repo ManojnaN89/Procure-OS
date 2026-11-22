@@ -3,8 +3,10 @@
 Two runs on one Postgres must use different names (`P2P_TEST_CONTROL_DB`, `P2P_EVAL_CONTROL_DB`). A run that starts on a
 name another run is still connected to stops with a message instead of dropping that database under it, and a run drops
 at the end only the database it made itself (marked with a comment), never one a later run made again under that name.
+The run's own app login (`<name>_app`, made by `tenants.migrate_control`) goes with it.
 """
 
+import contextlib
 import os
 import uuid
 
@@ -70,3 +72,5 @@ class ScratchControlDb:
         for n in names:
             c.execute(text(f'drop database if exists "{n}" with (force)'))
         c.execute(text(f'drop database if exists "{self.name}" with (force)'))
+        with contextlib.suppress(Exception):  # a company database nobody listed still holds its grants: the login stays
+            c.execute(text(f'drop role if exists "{self.name}_app"'))

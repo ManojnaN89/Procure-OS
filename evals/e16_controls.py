@@ -27,7 +27,7 @@ TODAY = lib.TODAY  # Friday 6 November 2026
 
 
 def required_types(sup: dict) -> list[str]:
-    need = ["pan", "cancelled_cheque"]
+    need = ["pan"]  # no bank proof before payment (owner decision 9, 22 Nov 2026)
     if sup["gst_reg_type"] == "regular":
         need.append("gst_cert")
     if sup["msme_category"] in ("micro", "small", "medium"):

@@ -101,20 +101,24 @@ def submit(
     }
 
 
+WHOLE_SET = {"tolerance": "the tolerances"}  # one waiting change for the whole set (owner decision 10, 22 Nov 2026)
+
+
 def _none_waiting(db: Session, change: Change) -> None:
-    """One change at a time to a setting: a second one while the first waits would be decided against a stale value."""
+    """One change at a time to a setting: a second one while the first waits would be decided against a stale value.
+    The tolerances are one setting: they are versioned as a set."""
+    whole = change.area in WHOLE_SET
     waiting = db.execute(
         text(
             "select id from proposal where action = :a and status = 'pending' and (expires_at is null or expires_at > now()) "
-            "and payload->>'area' = :area and payload->>'key' = :key limit 1"
+            "and payload->>'area' = :area and (:whole or payload->>'key' = :key) limit 1"
         ),
-        {"a": ACTION, "area": change.area, "key": change.key},
+        {"a": ACTION, "area": change.area, "key": change.key, "whole": whole},
     ).scalar()
     if waiting is not None:
+        what = WHOLE_SET[change.area] if whole else f"{change.area.replace('_', ' ')} {change.key}"
         raise HTTPException(
-            409,
-            f"a change to {change.area.replace('_', ' ')} {change.key} is already waiting for approval "
-            f"(proposal {waiting}); approve or reject it first",
+            409, f"a change to {what} is already waiting for approval (proposal {waiting}); approve or reject it first"
         )
 
 

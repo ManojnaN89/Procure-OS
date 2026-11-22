@@ -473,9 +473,12 @@ def _run(ctx: lib.Ctx) -> Outcome:  # noqa: C901 - one scenario, step by step
     check(len(versions(h["admin"])) == len(before), "a version was added before the second administrator approved")
     second = put("qty_pct", {"value": "1.00", "effective_from": TOMORROW.isoformat()}, "admin2")
     out.metrics["a second tolerance change while one waits"] = second.status_code
-    # SPEC GAP (owner): "one waiting change per setting" - the spec does not say whether the tolerance *set* (versioned
-    # as a whole, 3.3.1) is one setting, or each key is. A change to another key while one waits is only recorded here;
-    # a second change to the same key must still be refused (below).
+    # owner decision 10 (22 Nov 2026): the tolerance set is one setting, so a change to any other key while one waits
+    # is refused too; a second change to the same key is checked below.
+    check(
+        second.status_code == 409,
+        f"a qty_pct change while a price_pct change waits answered {second.status_code}, expected 409 (decision 10)",
+    )
     if second.status_code == 202:
         late = js(second).get("proposal_id")
         if late:

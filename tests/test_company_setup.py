@@ -499,7 +499,7 @@ def test_a_policy_change_is_stored_logged_and_read_back_by_the_code_that_uses_it
     assert changes[0]["by_name"] == "An Admin" and changes[0]["reason"] == "Tighter control"
 
 
-def test_what_a_policy_was_on_any_day_can_be_read_back(s: Setup) -> None:
+def test_what_a_policy_was_on_any_day_can_be_read_back(s: Setup, owner_session: Any) -> None:
     put = lambda value: s.put(  # noqa: E731
         "/api/setup/policies/price_band_pct", json={"value": value, "reason": "Review"}
     )  # noqa: E731
@@ -507,16 +507,19 @@ def test_what_a_policy_was_on_any_day_can_be_read_back(s: Setup) -> None:
     put("20")
     put("25")
     # the history is insert only (migration 0059): back-dating it needs the database owner to switch the triggers off
-    s.db.execute(text("set local session_replication_role = replica"))
-    for n, day in enumerate(
-        (datetime(2026, 1, 1, tzinfo=UTC), datetime(2026, 6, 1, tzinfo=UTC), datetime(2026, 9, 1, tzinfo=UTC))
-    ):
-        s.db.execute(
-            text(
-                "update setup_change set at = :t where id = (select id from setup_change order by id offset :n limit 1)"
-            ),
-            {"t": day, "n": n},
-        )
+    with owner_session(s.slug) as owner:
+        owner.execute(text("set local session_replication_role = replica"))
+        for n, day in enumerate(
+            (datetime(2026, 1, 1, tzinfo=UTC), datetime(2026, 6, 1, tzinfo=UTC), datetime(2026, 9, 1, tzinfo=UTC))
+        ):
+            owner.execute(
+                text(
+                    "update setup_change set at = :t where id = "
+                    "(select id from setup_change order by id offset :n limit 1)"
+                ),
+                {"t": day, "n": n},
+            )
+        owner.commit()
     s.db.commit()
 
     at = lambda y, m, d: policy_value_on(s.db, "price_band_pct", datetime(y, m, d, tzinfo=UTC))  # noqa: E731

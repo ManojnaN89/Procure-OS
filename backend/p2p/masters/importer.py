@@ -3,14 +3,16 @@
 Every row is read, converted to its column type and checked: keys present and unique, references to other tables
 resolve, GSTIN and PAN are well formed, dates run forward, amounts make sense. A row that fails is left out and reported
 with the file, the line and the reason; a row that loads but deserves a look (an HSN code the directory does not know) is
-reported as a warning. Nothing is written when a dry run is asked for. A real import replaces the company's masters in
-one transaction, so a failure leaves the old data untouched.
+reported as a warning. Nothing is written when a dry run is asked for.
+
+The first import of a company (no import before, no supplier and no item yet: the company being set up) replaces its
+masters in one transaction. Every later import matches rows by key and changes only what `import_rules` allows
+(`upsert`): it never deletes, and what a second person decides stays as it is (task 0.6, DF-16, D-22).
 """
 
 import csv
 import time
 from collections.abc import Callable
-from dataclasses import dataclass, field
 from datetime import date, datetime
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
@@ -20,29 +22,13 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from p2p.formulas.gstin import is_valid_gstin, is_valid_pan, state_of_gstin
+from p2p.masters import upsert
+from p2p.masters.report import ImportReport, Problem, RowChange
 from p2p.masters.schema import TABLES, Table
 from p2p.platform import audit
 from p2p.platform.sod import Actor
 
-
-@dataclass
-class Problem:
-    table: str
-    line: int  # line number in the csv file (the header is line 1)
-    reason: str
-
-
-@dataclass
-class ImportReport:
-    loaded: dict[str, int] = field(default_factory=dict)
-    rejected: list[Problem] = field(default_factory=list)
-    warnings: list[Problem] = field(default_factory=list)
-    seconds: float = 0.0
-    dry_run: bool = False
-
-    @property
-    def rows_loaded(self) -> int:
-        return sum(self.loaded.values())
+__all__ = ["ImportReport", "Problem", "RowChange", "import_masters", "read_table"]
 
 
 def _cast(value: str, sql_type: str) -> Any:
@@ -251,9 +237,11 @@ def read_table(
     *,
     rename: dict[str, str] | None = None,
     optional: frozenset[str] = frozenset(),
+    absent: set[str] | None = None,
 ) -> list[tuple[int, dict[str, Any]]]:
     """Read one table into typed rows: the csv file, or an Excel file of the same name. Unreadable rows go to the report.
-    `rename` maps a client's own column names to ours (a saved column mapping); `optional` columns may be left out."""
+    `rename` maps a client's own column names to ours (a saved column mapping); `optional` columns may be left out, and
+    those the file leaves out are added to `absent`."""
     excel = path.with_suffix(".xlsx")
     if not path.is_file() and excel.is_file():
         path = excel
@@ -274,6 +262,8 @@ def read_table(
             )
         )
         return []
+    if absent is not None:
+        absent.update(c for c in optional if c not in fieldnames)
     out: list[tuple[int, dict[str, Any]]] = []
     for line, raw in enumerate(raw_rows, start=2):
         row: dict[str, Any] = {}
@@ -288,32 +278,90 @@ def read_table(
 
 
 def import_masters(db: Session, dataset: Path, *, actor: Actor = audit.SYSTEM, dry_run: bool = False) -> ImportReport:
-    """Replace the company's masters with the files in `dataset`/master. Returns what loaded and what did not."""
+    """Load the company's masters from the files in `dataset`/master: the first import replaces them, a later one updates
+    by key. Returns what loaded, what did not and why."""
     started = time.monotonic()
-    report = ImportReport(dry_run=dry_run)
+    report = ImportReport(dry_run=dry_run, mode="first" if _first_import(db) else "update")
     master_dir = dataset / "master"
-    accepted: dict[str, list[dict[str, Any]]] = {}
-    keys: dict[str, dict[str, set[Any]]] = {}  # table -> column -> values present (for reference checks)
 
     # the tables that others point at must be known before their children are checked, including self-references
     parsed: dict[str, list[tuple[int, dict[str, Any]]]] = {}
+    absent: dict[str, set[str]] = {}
     kept_as_is = {s.name for s in TABLES if s.name in OPTIONAL_FILES and not _present(master_dir, s.csv)}
     for spec in TABLES:
         if spec.name in kept_as_is:  # a table the dataset leaves out keeps its rows; its keys come from the database
             parsed[spec.name] = [(0, dict(r)) for r in db.execute(text(f"select * from {spec.name}")).mappings()]  # noqa: S608
             continue
         parsed[spec.name] = read_table(
-            master_dir / f"{spec.csv}.csv", spec, report, optional=OPTIONAL.get(spec.name, frozenset())
+            master_dir / f"{spec.csv}.csv",
+            spec,
+            report,
+            optional=OPTIONAL.get(spec.name, frozenset()),
+            absent=absent.setdefault(spec.name, set()),
         )
+    company = upsert.load(db, kept_as_is) if report.mode == "update" else None
+    accepted = _accept(db, parsed, kept_as_is, company, report)
+    _check_scope_approvals(accepted, report, company)
+    items = [r for _, r in accepted.get("item", [])]
+    _warn_unknown_hsn(db, items, report)
+    _warn_gst_rate_differs(db, items, report)
+    report.loaded = {name: len(rows) for name, rows in accepted.items()}
+
+    if company is not None:
+        upsert.apply(db, accepted, parsed, company, absent, report, actor=actor, dry_run=dry_run, dataset=dataset.name)
+    else:
+        report.added = dict(report.loaded)
+        if not dry_run:
+            _replace(db, accepted)
+            audit.record(
+                db,
+                actor,
+                "masters.import",
+                "dataset",
+                dataset.name,
+                after={
+                    "mode": "first",
+                    "rows_loaded": report.rows_loaded,
+                    "rejected": len(report.rejected),
+                    "warnings": len(report.warnings),
+                },
+            )
+            db.commit()
+    report.seconds = round(time.monotonic() - started, 2)
+    return report
+
+
+def _first_import(db: Session) -> bool:
+    """The company is being set up: never imported, and no supplier or item made on the screens either. The audit log
+    is insert only to the app (D-25), so an earlier import cannot be made to disappear."""
+    done = db.execute(text("select 1 from audit_event where action = 'masters.import' limit 1")).first()
+    used = db.execute(text("select exists (select 1 from supplier) or exists (select 1 from item)")).scalar()
+    return done is None and not used
+
+
+Lines = list[tuple[int, dict[str, Any]]]
+
+
+def _accept(
+    db: Session, parsed: dict[str, Lines], kept_as_is: set[str], company: upsert.Company | None, report: ImportReport
+) -> dict[str, Lines]:
+    """Check every row; return the rows that pass, with their lines. In update mode a reference may also point at a row
+    the company has and the file leaves out."""
+    keys: dict[str, dict[str, set[Any]]] = {}  # table -> column -> values present (for reference checks)
+    outside = {
+        s.name: company.outside(s, parsed[s.name]) if company and s.name not in kept_as_is else [] for s in TABLES
+    }
     for spec in TABLES:
         for col in {c for _, t, c in (fk for s in TABLES for fk in s.foreign_keys) if t == spec.name}:
-            keys.setdefault(spec.name, {})[col] = {r[col] for _, r in parsed[spec.name] if r.get(col) is not None}
+            values = [r for _, r in parsed[spec.name]] + outside[spec.name]
+            keys.setdefault(spec.name, {})[col] = {r[col] for r in values if r.get(col) is not None}
 
+    accepted: dict[str, Lines] = {}
     for spec in TABLES:
         if spec.name in kept_as_is:
             continue
         seen: dict[tuple[Any, ...], int] = {}
-        rows: list[dict[str, Any]] = []
+        rows: Lines = []
         for line, row in parsed[spec.name]:
             natural = spec.pk or tuple(c for c, _ in spec.columns)
             key = tuple(row[c] for c in natural)
@@ -350,70 +398,60 @@ def import_masters(db: Session, dataset: Path, *, actor: Actor = audit.SYSTEM, d
             if bad_ref:
                 report.rejected.append(Problem(spec.name, line, bad_ref))
                 continue
+            if company and (reason := upsert.refusal(db, spec, row, company, parsed)):
+                report.rejected.append(Problem(spec.name, line, reason))
+                continue
             seen[key] = line
-            rows.append(row)
+            rows.append((line, row))
         accepted[spec.name] = rows
         # a parent row that was rejected must not stay known to its children
         for col in keys.get(spec.name, {}):
-            keys[spec.name][col] = {r[col] for r in rows if r.get(col) is not None}
-        report.loaded[spec.name] = len(rows)
+            values = [r for _, r in rows] + outside[spec.name]
+            keys[spec.name][col] = {r[col] for r in values if r.get(col) is not None}
+    return accepted
 
-    _check_scope_approvals(accepted, report)
-    _warn_unknown_hsn(db, accepted.get("item", []), report)
-    _warn_gst_rate_differs(db, accepted.get("item", []), report)
-    kept = _supplier_controls(db, accepted, report)
 
-    if not dry_run:
-        for spec in reversed(TABLES):
-            if spec.name not in kept_as_is:
-                db.execute(text(f"delete from {spec.name}"))  # noqa: S608 - table names come from the schema file
-        for spec in TABLES:
-            if spec.name in kept_as_is:
-                continue
-            rows = accepted[spec.name]
-            if rows:
-                cols = [c for c, _ in spec.columns]
-                db.execute(
-                    text(f"insert into {spec.name} ({', '.join(cols)}) values ({', '.join(':' + c for c in cols)})"),  # noqa: S608
-                    rows,
-                )
-        _restore_supplier_controls(db, kept)
-        _close_tolerance_versions(db)
-        audit.record(
-            db,
-            actor,
-            "masters.import",
-            "dataset",
-            dataset.name,
-            after={
-                "rows_loaded": report.rows_loaded,
-                "rejected": len(report.rejected),
-                "warnings": len(report.warnings),
-            },
-        )
-        db.commit()
-    report.seconds = round(time.monotonic() - started, 2)
-    return report
+def _replace(db: Session, accepted: dict[str, Lines]) -> None:
+    """The first import: every table the files carry is emptied and loaded again."""
+    for spec in reversed(TABLES):
+        if spec.name in accepted:
+            db.execute(text(f"delete from {spec.name}"))  # noqa: S608 - table names come from the schema file
+    for spec in TABLES:
+        rows = [r for _, r in accepted.get(spec.name, [])]
+        if rows:
+            cols = [c for c, _ in spec.columns]
+            db.execute(
+                text(f"insert into {spec.name} ({', '.join(cols)}) values ({', '.join(':' + c for c in cols)})"),  # noqa: S608
+                rows,
+            )
+    _close_tolerance_versions(db)
 
 
 def _present(master_dir: Path, name: str) -> bool:
     return (master_dir / f"{name}.csv").is_file() or (master_dir / f"{name}.xlsx").is_file()
 
 
-def _check_scope_approvals(accepted: dict[str, list[dict[str, Any]]], report: ImportReport) -> None:
-    """A scope limits an approval: it needs the supplier's approval for that category."""
+def _check_scope_approvals(accepted: dict[str, Lines], report: ImportReport, company: upsert.Company | None) -> None:
+    """A scope limits an approval: it needs the supplier's approval for that category (in the file, or one the company
+    has and the file leaves out)."""
     if "supplier_category_scope" not in accepted:
         return
-    approved = {(r["supplier_code"], r["category_code"]) for r in accepted.get("supplier_category", [])}
+    approvals = [r for _, r in accepted.get("supplier_category", [])]
+    if company:
+        approvals += company.outside(_spec("supplier_category"), accepted.get("supplier_category", []))
+    approved = {(r["supplier_code"], r["category_code"]) for r in approvals}
     rows = []
-    for n, r in enumerate(accepted["supplier_category_scope"], start=2):
+    for line, r in accepted["supplier_category_scope"]:
         if (r["supplier_code"], r["category_code"]) in approved:
-            rows.append(r)
+            rows.append((line, r))
             continue
         why = f"{r['supplier_code']} is not approved for {r['category_code']}: a scope limits an approval"
-        report.rejected.append(Problem("supplier_category_scope", n, why))
+        report.rejected.append(Problem("supplier_category_scope", line, why))
     accepted["supplier_category_scope"] = rows
-    report.loaded["supplier_category_scope"] = len(rows)
+
+
+def _spec(name: str) -> Table:
+    return next(s for s in TABLES if s.name == name)
 
 
 def _close_tolerance_versions(db: Session) -> None:
@@ -424,54 +462,6 @@ def _close_tolerance_versions(db: Session) -> None:
             "where n.version = (select min(x.version) from tolerance_version x where x.version > v.version)"
         )
     )
-
-
-@dataclass
-class _Controls:
-    status: dict[str, str]  # the supplier's status before the import, for suppliers the import keeps
-    banks: list[dict[str, Any]]  # their bank accounts as they were, every column
-
-
-def _supplier_controls(db: Session, accepted: dict[str, list[dict[str, Any]]], report: ImportReport) -> _Controls:
-    """An import never changes the status or the bank details of a supplier the company already has (DF-16): those
-    change only through their proposals, with a second person. Whatever the file says for them is set aside, and the
-    report says so."""
-    incoming = {str(r["code"]) for r in accepted.get("supplier", [])}
-    status = {
-        str(r[0]): str(r[1]) for r in db.execute(text("select code, status from supplier")) if str(r[0]) in incoming
-    }
-    for n, row in enumerate(accepted.get("supplier", []), start=2):
-        old = status.get(str(row["code"]))
-        if old is not None and row.get("status") not in (None, old):
-            report.warnings.append(
-                Problem("supplier", n, f"{row['code']}: status stays {old}; an import does not change it")
-            )
-    banks = [dict(r) for r in db.execute(text("select * from supplier_bank_account")).mappings()]
-    banks = [b for b in banks if str(b["supplier_code"]) in status]
-    before = {(str(b["supplier_code"]), str(b["account_no"]), str(b["ifsc"])) for b in banks}
-    for n, row in enumerate(accepted.get("supplier_bank_account", []), start=2):
-        code = str(row["supplier_code"])
-        if code in status and (code, str(row["account_no"]), str(row["ifsc"])) not in before:
-            report.warnings.append(
-                Problem("supplier_bank_account", n, f"{code}: bank details kept; change them through a bank change")
-            )
-    accepted["supplier_bank_account"] = [
-        r for r in accepted.get("supplier_bank_account", []) if str(r["supplier_code"]) not in status
-    ]
-    return _Controls(status, banks)
-
-
-def _restore_supplier_controls(db: Session, kept: _Controls) -> None:
-    for code, status in kept.status.items():
-        db.execute(text("update supplier set status = :s where code = :c"), {"s": status, "c": code})
-    for row in kept.banks:
-        cols = list(row)
-        db.execute(
-            text(
-                f"insert into supplier_bank_account ({', '.join(cols)}) values ({', '.join(':' + c for c in cols)})"  # noqa: S608 - column names from the table itself
-            ),
-            row,
-        )
 
 
 def _warn_unknown_hsn(db: Session, items: list[dict[str, Any]], report: ImportReport) -> None:

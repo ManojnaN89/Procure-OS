@@ -12,11 +12,11 @@ _COLUMNS = text(
     "and t.table_type = 'BASE TABLE' "
     "where c.table_schema = 'public' and c.table_name <> 'alembic_version' order by c.table_name, c.ordinal_position"
 )
+# from the catalogue: information_schema hides the keys of a table the reader may only select from (the app login)
 _KEYS = text(
-    "select kcu.table_name, kcu.column_name from information_schema.table_constraints tc "
-    "join information_schema.key_column_usage kcu on kcu.constraint_name = tc.constraint_name "
-    "and kcu.table_schema = tc.table_schema and kcu.table_name = tc.table_name "
-    "where tc.constraint_type = 'PRIMARY KEY' and tc.table_schema = 'public'"
+    "select c.relname, a.attname from pg_index i join pg_class c on c.oid = i.indrelid "
+    "join pg_namespace n on n.oid = c.relnamespace join pg_attribute a on a.attrelid = c.oid and a.attnum = any(i.indkey) "
+    "where i.indisprimary and n.nspname = 'public'"
 )
 _TYPES = {
     "character varying": "text",

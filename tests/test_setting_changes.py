@@ -96,6 +96,38 @@ def test_a_rejected_change_keeps_the_old_value(s: Setup) -> None:  # noqa: F811
     assert _approve(s, pid, s.a2).status_code == 409  # decided: it can never run later  # type: ignore[attr-defined]
 
 
+def test_one_waiting_tolerance_change_holds_the_whole_set(s: Setup) -> None:  # noqa: F811
+    # owner decision 10 (22 Nov 2026): the tolerances are one setting
+    first = client.put("/api/setup/tolerances/price_pct", json={"value": "9", "reason": "Looser"}, headers=s.a)
+
+    other = client.put("/api/setup/tolerances/qty_pct", json={"value": "4", "reason": "Looser"}, headers=s.a2)
+
+    assert first.status_code == 202 and other.status_code == 409
+    assert "a change to the tolerances is already waiting" in other.json()["detail"]
+
+
+def test_several_tolerance_values_apply_together_when_another_admin_approves(s: Setup) -> None:  # noqa: F811
+    values = [{"key": "price_pct", "value": "9"}, {"key": "qty_pct", "value": "4"}]
+    r = client.put("/api/setup/tolerances", json={"values": values, "reason": "Season"}, headers=s.a)
+    assert r.status_code == 202
+    s.db.expire_all()
+    versions = s.db.execute(text("select count(*) from tolerance_version")).scalar_one()
+
+    assert _approve(s, r.json()["proposal_id"], s.a2).status_code == 200  # type: ignore[attr-defined]
+
+    s.db.expire_all()
+    latest = s.db.execute(text("select max(version) from tolerance_version")).scalar_one()
+    got = dict(
+        s.db.execute(
+            text("select key, value from tolerance where version = :v and key in ('price_pct', 'qty_pct')"),
+            {"v": latest},
+        ).all()
+    )
+    assert s.db.execute(text("select count(*) from tolerance_version")).scalar_one() == versions + 1
+    assert {k: float(v) for k, v in got.items()} == {"price_pct": 9.0, "qty_pct": 4.0}
+    assert {c["key"] for c in s.changes("tolerance")} == {"price_pct:ANY", "qty_pct:ANY"}
+
+
 def test_stopping_automation_is_immediate_and_starting_it_again_waits_for_a_second_admin(s: Setup) -> None:  # noqa: F811
     on = client.put("/api/setup/automation-kill-switch", json={"on": True, "reason": "Wrong emails"}, headers=s.a)
 

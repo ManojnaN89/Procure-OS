@@ -4,7 +4,7 @@
     "title": "Replenishment orders the right items in the right quantities",
     "requirement": "Plan: read stock levels, create requests for items at their reorder point (quantity from the planning data, whole packs, supplier minimum)",
     "status": "PASS",
-    "seconds": 9.8,
+    "seconds": 3.9,
     "metrics": {
       "lines expected": 1,
       "lines planned": 1,
@@ -24,7 +24,7 @@
     "title": "Approval routing follows the rule table and the organisation",
     "requirement": "Rule 8, the plan and D36: a rule is chosen by value band, spend type, category, department, location and the date it is in force, rows starting '+' add approvers; its chain becomes real people",
     "status": "PASS",
-    "seconds": 74.0,
+    "seconds": 15.8,
     "metrics": {
       "cases": 2334,
       "rule agreement %": 100.0,
@@ -41,7 +41,7 @@
     "title": "Sourcing picks the right contract price, or sends the line to quotation",
     "requirement": "Plan: contract vs RFQ per line; only an active contract in force, for an active supplier, in the right unit, with the quantity break",
     "status": "PASS",
-    "seconds": 9.6,
+    "seconds": 3.3,
     "metrics": {
       "items": 15,
       "cases": 360,
@@ -57,7 +57,7 @@
     "title": "GST and order arithmetic is exact, to the paisa",
     "requirement": "Rule 1: money is Decimal to paise; GST splits into CGST+SGST within the state and IGST across states; composition and unregistered suppliers charge none",
     "status": "PASS",
-    "seconds": 0.9,
+    "seconds": 0.2,
     "metrics": {
       "random lines": 5000,
       "net price errors": 0,
@@ -73,7 +73,7 @@
     "title": "Quote comparison recommends the right supplier and the award rules hold",
     "requirement": "Plan: collect quotes, compare, select; the recommendation is the lowest qualifying offer; an override or too few qualifying quotes needs a reason",
     "status": "PASS",
-    "seconds": 68.8,
+    "seconds": 20.4,
     "metrics": {
       "scenarios": 160,
       "lines compared": 306,
@@ -90,7 +90,7 @@
     "title": "The whole flow, stock level to approved purchase order, keeps its promises",
     "requirement": "Plan: nothing is lost, money reconciles, every change is audited, only eligible suppliers are asked, stock on the way is counted once",
     "status": "PASS",
-    "seconds": 19.4,
+    "seconds": 3.8,
     "metrics": {
       "requests": 1,
       "lines": 1,
@@ -103,14 +103,14 @@
         "ordered": 1
       },
       "stage seconds": {
-        "replenishment and submission": 0.56,
+        "replenishment and submission": 0.09,
         "request approvals": 0.0,
-        "sourcing and RFQ emails": 0.53,
-        "quotes and awards": 0.59,
-        "purchase orders and their approval": 0.84
+        "sourcing and RFQ emails": 0.12,
+        "quotes and awards": 0.09,
+        "purchase orders and their approval": 0.2
       },
-      "total seconds": 2.5,
-      "company build seconds": 16.59,
+      "total seconds": 0.5,
+      "company build seconds": 3.19,
       "orders lines checked": 1
     },
     "findings": [],
@@ -121,11 +121,11 @@
     "title": "Repeating or racing any stage makes no duplicates",
     "requirement": "Plan: no duplicate requests, RFQs, emails or orders; document numbers have no gaps and no repeats",
     "status": "PASS",
-    "seconds": 1.8,
+    "seconds": 0.3,
     "metrics": {
       "serial repeats": 3,
       "concurrent callers": 6,
-      "seconds for the race": 1.0,
+      "seconds for the race": 0.2,
       "tables that grew": "none",
       "extra emails": 0
     },
@@ -137,7 +137,7 @@
     "title": "Decisions stay reproducible when the rules change",
     "requirement": "Rule 8: rules and rates are versioned data; a decision stays reproducible against the version it used",
     "status": "PASS",
-    "seconds": 1.2,
+    "seconds": 0.4,
     "metrics": {
       "decisions": 1,
       "band holds before / after the change": "1/0 and 1/0",
@@ -157,7 +157,7 @@
     "title": "Every write action is open to exactly the roles the plan names",
     "requirement": "Rule 7 and the plan: requester, buyer, approver and administrator duties are separate; nobody else can do them; nobody can without logging in",
     "status": "PASS",
-    "seconds": 74.2,
+    "seconds": 15.5,
     "metrics": {
       "actions": 66,
       "roles tried": 8,
@@ -174,7 +174,7 @@
     "title": "One company cannot see another company's data",
     "requirement": "Rule 6: one database per tenant; a request without tenant context is refused; tenant A cannot read tenant B",
     "status": "PASS",
-    "seconds": 24.0,
+    "seconds": 7.2,
     "metrics": {
       "probes": 73,
       "leaks": 0,
@@ -187,15 +187,19 @@
     "id": "E11",
     "title": "Hostile text is shown as text and never run",
     "requirement": "Security: names from imported data and typed identifiers cannot inject script into the screens or SQL into the database",
-    "status": "FAIL",
-    "seconds": 57.0,
-    "metrics": {},
-    "findings": [
-      {
-        "severity": "high",
-        "text": "the eval itself crashed:\nTraceback (most recent call last):\n  File \"C:\\CBC\\PR to PO\\.claude\\worktrees\\c1-po-sod\\evals\\run.py\", line 81, in main\n    outcome: Outcome = mod.run(ctx)\n                       ^^^^^^^^^^^^\n  File \"C:\\CBC\\PR to PO\\.claude\\worktrees\\c1-po-sod\\evals\\e11_injection.py\", line 89, in run\n    proc = serve()\n           ^^^^^^^\n  File \"C:\\CBC\\PR to PO\\.claude\\worktrees\\c1-po-sod\\evals\\e11_injection.py\", line 54, in serve\n    raise RuntimeError(\"the API did not start\")\nRuntimeError: the API did not start\n"
-      }
-    ],
+    "status": "PASS",
+    "seconds": 27.0,
+    "metrics": {
+      "screens opened": 18,
+      "hostile payloads": 6,
+      "script ran or markup injected": 0,
+      "SQL probes": 12,
+      "server errors": 0,
+      "slow (sleep ran)": 0,
+      "orders on screen": 1,
+      "pipeline note": 0
+    },
+    "findings": [],
     "notes": []
   },
   {
@@ -203,13 +207,13 @@
     "title": "No floats in money, exact amounts on the wire, India's calendar, no secrets, synthetic data stays synthetic",
     "requirement": "Rules 1, 9, 10 and the generated-data safety rule",
     "status": "PASS",
-    "seconds": 17.1,
+    "seconds": 1.1,
     "metrics": {
       "money modules scanned": 6,
       "float uses": 0,
       "money fields as JSON numbers": 0,
       "UTC dates in business logic": 0,
-      "tracked files scanned for secrets": 684,
+      "tracked files scanned for secrets": 695,
       "secret hits": 0,
       "unsafe generated values": 0
     },
@@ -223,7 +227,7 @@
     "title": "Supplier emails are read into the right quotes, and when unsure the system asks a person",
     "requirement": "Plan step 8 and rule 2: the model reads, code checks; a wrong reading must never look clean (silent errors = 0)",
     "status": "PASS",
-    "seconds": 45.1,
+    "seconds": 11.0,
     "metrics": {
       "email cases": 39,
       "perfect reader: exact %": 100.0,
@@ -245,7 +249,7 @@
     "title": "Hostile emails, even obeyed by the model, change nothing they should not",
     "requirement": "Security and rule 5: untrusted text cannot award, decline others, set a nonsense price, or reach a model from a stranger",
     "status": "PASS",
-    "seconds": 19.6,
+    "seconds": 4.7,
     "metrics": {
       "attacks": 13,
       "runs": 26,
@@ -274,7 +278,7 @@
     "title": "Documents, budget, contract ceilings and reminders do what the plan says",
     "requirement": "Plan, phase 1 controls: a supplier needs good documents, a request must fit its budget, a contract has a ceiling, and a silent supplier is reminded a limited number of times",
     "status": "PASS",
-    "seconds": 22.3,
+    "seconds": 7.0,
     "metrics": {
       "documents: suppliers checked": 6,
       "documents: spoiled cases": "6 (6 right)",
@@ -297,7 +301,7 @@
     "title": "Orders are sent to the right supplier with the right amounts, only when approved, and acknowledged on time",
     "requirement": "Plan: an approved order goes to the supplier by email; nothing else does; the supplier's promised date is checked against the date the goods are needed; an order with no acknowledgement in two working days is overdue",
     "status": "PASS",
-    "seconds": 13.6,
+    "seconds": 3.5,
     "metrics": {
       "orders by status before sending": {
         "approved": 1
@@ -315,7 +319,7 @@
     "title": "Goods receipt: tolerance, rejections, inspection, stock and order progress are right",
     "requirement": "Plan: goods are received against a sent order; over-delivery is accepted up to the category's tolerance; rejected goods stay out of stock; items needing inspection wait; the order line and the stock follow what was accepted",
     "status": "PASS",
-    "seconds": 20.8,
+    "seconds": 3.5,
     "metrics": {
       "order lines to receive": 1,
       "scenarios": {
@@ -332,7 +336,7 @@
     "title": "Invoices are matched to orders and receipts the way the dataset's answers say",
     "requirement": "Plan P1-16/17: three-way match per line (quantity against accepted receipt, price within tolerance), tax and identity checks, duplicates caught, credit notes taken in; nothing is paid that the match blocks",
     "status": "PASS",
-    "seconds": 167.2,
+    "seconds": 40.2,
     "metrics": {
       "invoices entered": 479,
       "judged against the dataset": 476,
@@ -360,7 +364,7 @@
     "title": "Due dates and tax at source are worked out the way the dataset's answers say",
     "requirement": "Plan P1-19 (FR23, FR26): due date from the payment terms with the 45-day rule for micro and small suppliers; tax on goods (194Q) at booking on the part of a supplier's year above 50 lakh",
     "status": "PASS",
-    "seconds": 161.9,
+    "seconds": 41.8,
     "metrics": {
       "invoices booked": 470,
       "invoices left out (advance paid on the order)": 0,
@@ -379,7 +383,7 @@
     "title": "Payments are for the right amounts, in the right order, once, and only for invoices that may be paid",
     "requirement": "Plan P1-19/20: due date and tax at booking, credit notes netted, MSME first, MSME interest, the run approved by a person, the file equal to the approved run, invoices paid once, the case closed on payment",
     "status": "PASS",
-    "seconds": 154.8,
+    "seconds": 54.2,
     "metrics": {
       "payments compared": 421,
       "amounts agree %": 100.0,
@@ -399,7 +403,7 @@
     "title": "Company setup is admin-only, logged, validated, and its locks cannot be undone",
     "requirement": "Plan P1-24 and rule 5/8: who approves, tolerances and automation are data an Admin changes with a reason; payment runs, vendor activation and releasing a payment block are never automatic; past decisions stay reproducible",
     "status": "PASS",
-    "seconds": 76.1,
+    "seconds": 23.3,
     "metrics": {
       "permission cells checked": 112,
       "permission cells wrong": 0,
@@ -422,7 +426,7 @@
     "title": "Vendor scores follow how suppliers really behave, and planted repeat requests are caught",
     "requirement": "Plan P1-05 and the vendor choice: a supplier's score reflects its delivery, quality and price; the best-vendor mode is no worse than the cheapest; a request that repeats another is flagged and an ordinary one is not",
     "status": "PASS",
-    "seconds": 32.4,
+    "seconds": 14.5,
     "metrics": {
       "suppliers scored": 6,
       "rank agreement: delivery score vs true on-time rate": 0.81,
@@ -449,7 +453,7 @@
     "title": "Plain-words requests become the right drafts or one right question, and never a wrong draft",
     "requirement": "Plan P1-08 (AG01): at least 90% of lines mapped to the right item and quantity; every value traces to the message; an instruction hidden in a message is ignored; only drafts are made",
     "status": "PASS",
-    "seconds": 44.4,
+    "seconds": 19.9,
     "metrics": {
       "cases": 72,
       "careful reader: right action %": 100.0,
@@ -473,7 +477,7 @@
     "title": "Blocked invoices are explained with the right cause, and a block is never changed by the agent",
     "requirement": "Plan P1-18 (AG03): at least 80% of mismatch cases diagnosed correctly (proposed target); the payment block stays until a person releases it; numbers in the answer come from the data",
     "status": "PASS",
-    "seconds": 122.4,
+    "seconds": 48.4,
     "metrics": {
       "invoices entered": 479,
       "blocked by the match": 12,
@@ -499,7 +503,7 @@
     "title": "Advances, early-payment discounts and the closing notice are right",
     "requirement": "Plan P1-19/20: 30% advance on an order and its adjustment against invoices (tax at source on the advance), a cash discount for paying inside the window, the requester told when the order is paid and closed",
     "status": "PASS",
-    "seconds": 371.9,
+    "seconds": 119.8,
     "metrics": {
       "supplier-years checked (limit lowered)": 12,
       "of which cross the limit": 6,
@@ -523,7 +527,7 @@
     "title": "Invoices are read from documents correctly, e-invoices without a model, and a wrong reading never looks clean",
     "requirement": "Plan P1-16 (second half): >=95% of fields right on 30 invoices; QR invoices read with 0 model calls; silent errors 0; strangers' mail never reaches a model; automatic entry only when nothing is in doubt",
     "status": "PASS",
-    "seconds": 158.2,
+    "seconds": 54.1,
     "metrics": {
       "invoices: e-invoices / plain / sloppy-reader": "12 / 18 / 12",
       "e-invoices read with a model call": 0,
@@ -557,7 +561,7 @@
     "title": "Supplier emails are classified, small changes applied, the rest handed to a person, nothing wrong applied",
     "requirement": "Plan P1-14 (AG02): at least 90% of replies handled the right way; a change within the tolerance is applied, outside it goes to a buyer; a price change, a substitution or a bank change never changes anything; mail from outside the supplier is never read by a model; part deliveries and unacknowledged orders are chased",
     "status": "PASS",
-    "seconds": 112.6,
+    "seconds": 33.5,
     "metrics": {
       "orders sent and acknowledged / RFQs to answer": "1 / 1",
       "replies": 84,
@@ -607,7 +611,7 @@
     "title": "The control tower, the key figures and the alerts agree with an independent recount",
     "requirement": "Plan P1-21/P1-23: every role sees what needs it and nothing else; the control tower shows every case by stage, location and age in working days; the key figures reconcile with the raw data; alerts are raised once, routed by role, and resolved when their cause goes away",
     "status": "PASS",
-    "seconds": 179.0,
+    "seconds": 50.6,
     "metrics": {
       "control tower: cases by stage": {
         "request_approval": 7,
@@ -728,26 +732,21 @@
     "id": "E30",
     "title": "Demo runs through the real screens: a normal run, a part delivery and a price mismatch on the invoice, each typed in and with documents, and a held order",
     "requirement": "Plan P1-25: the flow from stock level to a paid and closed order works for real people at real screens: the right person sees the right work, every money figure equals an independent calculation from the dataset, a document (an emailed quotation, an uploaded invoice) leaves the same figures as typing them in, and the separation of duties holds at every step",
-    "status": "FAIL",
-    "seconds": 398.7,
+    "status": "PASS",
+    "seconds": 189.9,
     "metrics": {
       "straight: steps / checks passed / failed": "26 / 66 / 0",
       "blocked: steps / checks passed / failed": "22 / 68 / 0",
       "held: steps / checks passed / failed": "18 / 39 / 0",
       "part: steps / checks passed / failed": "31 / 85 / 0",
-      "straight_docs: steps / checks passed / failed": "29 / 71 / 1",
+      "straight_docs: steps / checks passed / failed": "29 / 72 / 0",
       "part_docs: steps / checks passed / failed": "35 / 94 / 0",
       "blocked_docs: steps / checks passed / failed": "23 / 72 / 0",
       "steps taken at screens": 184,
       "checks against the dataset": 496,
       "transcripts and screenshots": "evals/results/demo_runs/"
     },
-    "findings": [
-      {
-        "severity": "high",
-        "text": "straight_docs: no reply was left unread: every draft is entered: the platform says 1, the dataset's answer is 0"
-      }
-    ],
+    "findings": [],
     "notes": []
   },
   {
@@ -755,7 +754,7 @@
     "title": "Synthetic invoices and replies read back correctly by the code readers, and what still needs a model is counted",
     "requirement": "Plan P1-03: documents generated from the dataset with an answer key; QR >=95% (100% on clean), rows by arithmetic >=95% on text-layer invoices, silent errors 0, perfect readings pass the evidence check, deterministic, nothing real",
     "status": "PASS",
-    "seconds": 638.9,
+    "seconds": 293.2,
     "metrics": {
       "documents: invoices / replies": "479 / 497",
       "looks": "low_contrast_pdf 48, multipage_pdf 72, photo_png 48, scan_pdf 72, skewed_jpg 48, text_pdf 191",
@@ -812,7 +811,7 @@
     "title": "Hostile text, even obeyed by the model, changes nothing it must not; limits, secrets and dependencies hold",
     "requirement": "Plan P1-26: injected instructions cause no action; each agent has its own short tool list; secrets only in the environment; rate limits; no open high-severity dependency finding",
     "status": "PASS",
-    "seconds": 127.3,
+    "seconds": 49.9,
     "metrics": {
       "company B: invoices entered / blocked": "120 / 2",
       "agent tool lists as written down": "7 + 6 (all read-only)",
@@ -821,7 +820,7 @@
       "quotation replies (defended)": 26,
       "quotation replies (failed)": 0,
       "failed logins / uploads / assistant questions allowed before 429": "4 / 3 / 3 (settings)",
-      "files scanned for secrets / values looked for": "683 / 5 from .env",
+      "files scanned for secrets / values looked for": "694 / 5 from .env",
       "dependency audit": "2 finding(s), 0 open",
       "hostile inputs run (a model that obeys each one)": 25,
       "inputs that changed something they must not": 0,
@@ -839,7 +838,7 @@
     "title": "The main demo company completes the whole flow, from low stock to a paid invoice, with separate people for each job",
     "requirement": "Phase 1: request, approval, price or quotation, order with GST, receipt, invoice match, payment run, closing; requester, approver, receiver, invoice enterer and payer differ for the same case; Rs 10,000 approves itself, up to Rs 1,00,000 the plant head, above that the director; orders above Rs 1,00,000 the purchase manager; payment runs the director",
     "status": "PASS",
-    "seconds": 49.0,
+    "seconds": 16.0,
     "metrics": {
       "people / master rows loaded": "10 / 567",
       "items at or below reorder point": [
@@ -870,7 +869,7 @@
     "title": "The whole application for a real user: the demo script from low stock to a paid invoice in a browser, every role guide followed as a new user, and every screen swept for errors, overflow and raw codes",
     "requirement": "Phase 1 acceptance: the flow works end to end for real people at real screens; a new user completes their first task from the guide; no screen shows an error, a blank panel, a raw code or sideways scrolling",
     "status": "PASS",
-    "seconds": 352.0,
+    "seconds": 257.6,
     "metrics": {
       "people / master rows loaded": "10 / 567",
       "people per step (audit log)": {
@@ -898,7 +897,7 @@
     "title": "ERP demand files load exactly once, with every bad row explained",
     "requirement": "Plan P1-29: production orders with their component lines, MRP results, sales orders and the demand plan are imported from the client's ERP files; every rejected row is listed with its reason; the same ERP order is never loaded twice; a changed order is applied and listed with what changed (Q21, 20 Nov: the change propagates); one company never sees another's imports. For an IT services company the joiner kits and the joiner plan load the same way: each joiner row becomes its kit's items times the joiners, by the start date, for the joiner's department, and one material request per plan and department",
     "status": "PASS",
-    "seconds": 17.6,
+    "seconds": 9.5,
     "metrics": {
       "Brightwave joiner rows (kits / plan)": "12 / 2",
       "Brightwave requirements checked against kit x joiners": 12,
@@ -916,7 +915,7 @@
     "title": "The buying route: contract, single source, emergency, safe reorder, else quotation with the right quotes",
     "requirement": "Plan D37 / P1-33: first yes wins; Rs 25,000 agreement and reorder limit; 90 days; 80% on time; 2% price; 2 quotes from Rs 25,000 to Rs 2,00,000 and 3 above; value counted per item over 30 days; categories only stricter",
     "status": "PASS",
-    "seconds": 18.7,
+    "seconds": 7.8,
     "metrics": {
       "cases": 68,
       "agreement %": 100.0,
@@ -937,7 +936,7 @@
     "title": "Stock is set aside earliest need-by first and only the shortfall is bought",
     "requirement": "Plan P1-30 and step 2 of the flow: each imported production order gets a material request; the store check sets free stock aside earliest need-by first and never more than is on the shelf; only the shortfall becomes a purchase request, priced at the contract price else the last price paid else the standard price, sent to the approver the rule table names; the plan's MO-1 example (Rs 72,930 for four items short) holds; issue at production start takes exactly what was set aside; nothing is set aside or bought twice; only the store may do it",
     "status": "PASS",
-    "seconds": 8.3,
+    "seconds": 3.4,
     "metrics": {
       "production orders": 2,
       "lines checked against the oracle": 20,
@@ -960,7 +959,7 @@
     "title": "Shortfalls of several orders combine into one line, and the budget is checked per location",
     "requirement": "Plan P1-31 and step 3 of the flow: shortfall lines for the same item and delivery location needed within the combining window (setting, default 7 days) become one requisition line that keeps each order's own quantity; lines further apart stay separate; cancelling one order takes its part off the combined line (and the stock it held covers, earliest need-by first, the parts of the others, which are cut by as much); the budget is checked per department and per location (decision D36: warn at 90% used, over above 100%), naming the location, the department and the months of the financial year it counted; every combination and reduction is audited",
     "status": "PASS",
-    "seconds": 11.6,
+    "seconds": 4.2,
     "metrics": {
       "orders": 4,
       "requisition lines (oracle)": 15,
@@ -978,7 +977,7 @@
     "title": "Supplier selection: must-haves, total cost, tie-break, split only when it saves, reasons, orders per supplier",
     "requirement": "Plan step 6 / P1-34: drop quotes failing a must-have; compare total cost (GST not counted with input credit); ties by earlier delivery; split only when the saving beats the extra freight; a reason for other than the cheapest qualifying quote or too few quotes; one PO per supplier; printable RFQ per supplier",
     "status": "PASS",
-    "seconds": 50.8,
+    "seconds": 20.9,
     "metrics": {
       "quote sets compared": 126,
       "must-haves correct %": 100.0,
@@ -998,7 +997,7 @@
     "title": "PO tiers by value, delivery location, touchless orders only within every limit",
     "requirement": "Plan step 7 / P1-35, D35, D36, v1.1: up to Rs 1,00,000 only a touchless order is approved, by the rule, else the purchase manager, who approves to Rs 5,00,000; director above; never the buyer who made the order; touchless for contract and safe-reorder lines within the limit, active supplier, contract room, price within 2%, budget and the autonomy gate, recorded with the facts and the rule version; delivery place on the PO",
     "status": "PASS",
-    "seconds": 33.3,
+    "seconds": 18.5,
     "metrics": {
       "worked example: casting order": "38350.00 (touchless)",
       "worked example: the four orders at the dataset's GST rates": "84937.90",
@@ -1021,7 +1020,7 @@
     "title": "Approval by email: the right person, a full email, one reminder, escalation on time, a code above the limit",
     "requirement": "Plan step 4 and D36: who approves follows the rule table by value, category, department and location (rows that add an approver too); each step keeps its rule row; the email carries the lines, the estimated total, the budget, why it came to this person and approve / reject / return links that work once; one reminder after a working day and escalation after two, counted on the business calendar with holidays; a one-time code above Rs 5,00,000 that is hashed, expires in 10 minutes, allows 5 tries and works once; a deputy; the requester never approves",
     "status": "PASS",
-    "seconds": 30.5,
+    "seconds": 16.3,
     "metrics": {
       "requests routed / agree with the oracle": "120 / 120",
       "approval emails checked": 93,
@@ -1037,7 +1036,7 @@
     "title": "Supplier confirmation: the link works once, every change is the buyer's, a new version tells the requester",
     "requirement": "Plan step 8, P1-36: accept, decline or ask for a change from a signed link that works once (or by email); each change goes to the buyer old value to new; an accepted date, quantity or price makes a new version and tells the requester; a price above tolerance needs the purchase manager; a decline goes back to the buyer to source again; dispatch notes for the store; reminders before the promised date and after it while nothing has arrived, on the business calendar, each once. Done when a date change makes PO version 2 and tells the requester",
     "status": "PASS",
-    "seconds": 12.6,
+    "seconds": 6.9,
     "metrics": {
       "orders the pipeline made, by status": {
         "approved": 1
@@ -1072,7 +1071,7 @@
     "title": "Service entry, the two-way match of services, receipts without an order and serial numbers are right",
     "requirement": "Plan step 9, P1-37: the requester confirms a service (quantity, percent or amount), a service invoice is matched against the order and the confirmation, an unconfirmed service cannot be invoiced, a receipt without an order needs the purchase manager's approval and an after-the-fact order, serialised items need a unique serial per unit",
     "status": "PASS",
-    "seconds": 17.9,
+    "seconds": 10.8,
     "metrics": {
       "service order lines": 79,
       "invoices held before confirmation": 3,
@@ -1088,7 +1087,7 @@
     "title": "The exceptions screen lists every stuck case with the right reason, owner and age, by role",
     "requirement": "Plan step 11/12, P1-38: one list of everything stuck that needs a person (blocked invoices, goods without an order, services not confirmed, approvals past their reminder, proposals, suppliers to chase) with what, reason, owner, next step, age in working days and amount, oldest first, filtered by kind and mine, by permission",
     "status": "PASS",
-    "seconds": 58.2,
+    "seconds": 44.7,
     "metrics": {
       "invoices replayed": 479,
       "rows the oracle expects": 20,
@@ -1115,7 +1114,7 @@
     "title": "Received not invoiced, supplier statements, small-supplier deadlines and the order trace reconcile",
     "requirement": "Plan step 13, P1-39: received not invoiced (and the reverse) exact to the paisa with its age; a supplier's statement matched line by line with the reason for each difference; MSME invoices listed against the MSMED Act deadline (Q16); the whole chain of a document traced end to end",
     "status": "PASS",
-    "seconds": 85.1,
+    "seconds": 58.7,
     "metrics": {
       "received not invoiced today (Rs)": "0",
       "invoiced not received today (Rs)": "16938.81",
@@ -1137,7 +1136,7 @@
     "title": "The IT services company (Brightwave) through all 13 steps in a browser: services, a serialised laptop, two-way match",
     "requirement": "Phase 1 done-when: both demo companies run through all 13 steps in the browser; services are confirmed by the requester and matched two ways; a serialised item is received with its serial; each step by its own person",
     "status": "PASS",
-    "seconds": 94.3,
+    "seconds": 64.0,
     "metrics": {
       "approvers per request": {
         "REQ-BLR-2627-00001": [
@@ -1165,7 +1164,7 @@
     "title": "Cancelling a production order releases its stock to the next order at once, never stocked and bought twice",
     "requirement": "Plan P1-30 and step 2 of the flow: cancelling an order releases its reservation (a reason is needed; only the store; once); the freed stock is set aside at once for the open orders earliest need-by first, each up to what it still lacks, never more than is on the shelf; a purchase request still open for that shortfall is cut by as much (set aside plus requested never exceeds the need) and the next check buys nothing; purchase requests made only for the cancelled order and not yet with the buyer are cut and cancelled (Q21, 20 Nov); issue never moves more than is set aside; the cancel is audited",
     "status": "PASS",
-    "seconds": 12.4,
+    "seconds": 4.2,
     "metrics": {
       "production orders (one planted)": 3,
       "lines checked against the oracle, before and after": "30 / 20",
@@ -1209,7 +1208,7 @@
     "title": "Shortfall requests are estimated at the contract price, else the last price paid, else the standard price",
     "requirement": "Plan step 3 (estimated price): the contract price if one is valid, else the last price paid (the latest order that is not a draft and not cancelled), else the item's standard price; the estimate sets the request's value and so its approver",
     "status": "PASS",
-    "seconds": 28.7,
+    "seconds": 11.7,
     "metrics": {
       "orders planted (one cancelled)": 5,
       "last price paid per item (from the order rows)": {
@@ -1242,7 +1241,7 @@
     "title": "Supplier selection by weighted score, and the answer key's cheapest supplier, match an independent oracle",
     "requirement": "Plan step 6 / P1-34: quotes failing a must-have are dropped; the rest are compared on total cost or, when the company's versioned rule says so, on a weighted score of price, delivery, quality and payment terms; ties by earlier delivery; the rule version is recorded with each selection; the dataset's RFQs select the supplier its answer key names",
     "status": "PASS",
-    "seconds": 74.8,
+    "seconds": 27.0,
     "metrics": {
       "weighted quote sets compared": 88,
       "scores correct %": 100.0,
@@ -1261,7 +1260,7 @@
     "title": "Contract price versions: a draft is never used, a second person activates it, the old one ends the day before",
     "requirement": "D48: a contract price is a version; a draft is used for nothing until someone other than who stored the contract, entered a price of the version or sent it activates it; the version it replaces ends the day before it starts; prices of one supplier for an item never apply on the same day; an order keeps the version it was bought at",
     "status": "PASS",
-    "seconds": 28.6,
+    "seconds": 12.9,
     "metrics": {
       "dataset draft version": "RM-01 672.00 from 2027-01-01, RM-02 496.00 from 2027-01-01",
       "before activation: prices and estimates off the oracle": 0,
@@ -1303,7 +1302,7 @@
     "title": "Control changes wait for a second administrator; nobody approves their own change or their own access",
     "requirement": "D-22 (second administrator): a change to rules, rule versions, policies, tolerances, automation, roles, limits, logins and managers applies only when a different administrator approves it; the proposer never approves; a rejection keeps the old value; stopping automation is immediate; an unapproved change expires after seven days; one change at a time per setting; the history shows maker and approver; nobody widens or approves their own access",
     "status": "PASS",
-    "seconds": 29.1,
+    "seconds": 12.5,
     "metrics": {
       "kinds of change checked / correct": "11 / 11",
       "per kind": {
@@ -1350,7 +1349,7 @@
     "title": "Bank accounts: verified by a second person against a proof before anything is paid into them",
     "requirement": "DF-03 / F1: a new or changed supplier bank account is unverified; it is never planned into a payment run, advanced or written to a bank file until a person other than the one who entered or asked for it verifies it (Finance, an allowed method from `bank_verification_methods`, a proof file); a bank change after a run is approved takes that supplier out, recomputes the total and voids a file already made; lists show the last four digits; the audit never holds the whole number; another company sees nothing",
     "status": "PASS",
-    "seconds": 17.0,
+    "seconds": 6.4,
     "metrics": {
       "approved bank changes left unverified": 2,
       "advances due (unverified supplier / verified supplier)": "False / True",
@@ -1383,7 +1382,7 @@
     "title": "PO makers never approve: not the order, its price, a supplier's price rise, nor as a deputy",
     "requirement": "C1 (v1.1): the people who made a purchase order (its buyer, submitter, reviser, the awarder of its quotation, who changed its buying route) never approve it, accept its price or a supplier's price rise (even within tolerance), nor stand in as a deputy; the chain skips them and goes up a tier; in the band with no approver only a touchless order is approved by the rule, any other goes to a person; accepting a price is not making the order; a refused person changes nothing",
     "status": "PASS",
-    "seconds": 43.1,
+    "seconds": 19.7,
     "metrics": {
       "oracle: band people (PO-02 / PO-03 / price rise)": "['U08'] / ['U09'] / U08",
       "maker refused on every path (kinds x paths)": "20 of 20",
@@ -1405,7 +1404,7 @@
     "title": "A maker of a purchase order never approves it, by any route (C1), written without the implementation",
     "requirement": "C1, D43, AT-03: the buyer, submitter, reviser, awarder and route changer of an order never approve it, accept its price above the estimate or accept a supplier's price rise on it (screen, proposal, link, deputy); all makers named means the next band; no band left means refused with a reason; only the touchless policy approves with no person; a checker is not a maker; a refused attempt leaves it waiting for the right person",
     "status": "PASS",
-    "seconds": 79.2,
+    "seconds": 31.8,
     "metrics": {
       "deputy routing observed for orders (control)": true,
       "order approval emails checked / with a signed approval link": "27 / 0",
@@ -1463,7 +1462,7 @@
     "title": "Tolerance versions: each match records the version in force on the day received, and past decisions reproduce",
     "requirement": "Task 3.2, D-17, X1 rules 6-7: tolerances are versioned as a set from a date; an invoice is judged under the version in force on its received_on and the match stores that version (match row, invoice, audit 'tolerance vN'); a re-match after a later version gives the same result and version; a change waits for a second administrator and starts today or later, never before the latest start; one company never sees another's versions",
     "status": "PASS",
-    "seconds": 129.9,
+    "seconds": 49.3,
     "metrics": {
       "dataset versions": [
         "v1 2000-01-01..2026-06-30",
@@ -1483,7 +1482,7 @@
         "start in the past": 422,
         "unknown key": 404
       },
-      "a second tolerance change while one waits": 202,
+      "a second tolerance change while one waits": 409,
       "a second change to the same tolerance while one waits": 409,
       "re-matched after version 3": {
         "PI-2526-000160": "409: matched v1 (before matched); shown [1]",
@@ -1510,7 +1509,7 @@
         "the version not stored": true
       },
       "invoices that tell the latest-version reader apart": 305,
-      "checks": "62 of 62 passed"
+      "checks": "63 of 63 passed"
     },
     "findings": [],
     "notes": [
@@ -1523,7 +1522,7 @@
     "title": "Prospects quote, count only when their identity is checked by someone else, and never reach an order early",
     "requirement": "Task 4.4, D-03 R1-R12, T-Q1-1..9: duplicates (GSTIN, PAN, bank, sanctions) refused, shared contacts or addresses flagged; the identity check by neither registerer nor inviter; only valid, independent, eligible quotes count; an award to a checked prospect is conditional and makes no order until activation; a lapsed award opens a buyer task and awards nobody else; an expired quote cannot be re-selected; an inactive supplier never gets an order; an open RFQ keeps its quotation-count rule; another company sees none of it",
     "status": "PASS",
-    "seconds": 69.0,
+    "seconds": 31.1,
     "metrics": {
       "SUP-009 flags shown": [
         [
@@ -1568,7 +1567,7 @@
       },
       "SUP-008: orders after activation, bank accounts": "1, 0",
       "award day, day before the deadline, deadline": "2026-11-25, 2026-12-08, 2026-12-09",
-      "deadline: awards, buyer tasks": "[('SUP-014', True, datetime.datetime(2026, 11, 21, 3, 41, 48, 224046, tzinfo=zoneinfo.ZoneInfo(key='Etc/UTC')))], [647]",
+      "deadline: awards, buyer tasks": "[('SUP-014', True, datetime.datetime(2026, 11, 22, 18, 17, 29, 453686, tzinfo=zoneinfo.ZoneInfo(key='Etc/UTC')))], [647]",
       "open RFQ min_quotes before / after a route change": "(2, 'category RAW') / (2, 'category RAW')",
       "an RFQ made after the change": "(3, 'buying_route v2')",
       "SUP-001 orders waiting when it is blocked": [
@@ -1594,7 +1593,7 @@
     "title": "A regional supplier approval or contract price is never used outside its scope; the delivery location decides",
     "requirement": "Task 12.4, D44, D40, D48: approvals and contract prices may carry a location or region; contract lookup, estimate, buying route, RFQ invitees and the quote must-have use the line's delivery location; RFQs are per category and location; prices of one supplier and item may not overlap where their scopes intersect; a scoped price is activated by someone other than its maker; a category scope change is a second person's decision; audited",
     "status": "PASS",
-    "seconds": 85.8,
+    "seconds": 32.1,
     "metrics": {
       "Apex grid: price view cells off the oracle": 0,
       "estimates / routes off the oracle": "0 / 0",
@@ -1629,7 +1628,7 @@
     "title": "Strategic reviews open on their triggers; price triggers only above every threshold, on verified fresh evidence",
     "requirement": "Task 12.5, D40, D41, D52, O2: the price-gap test (gap %, Rs a unit, saving at the relevant quantity, sources) holds only when every part is strictly above the versioned threshold; only verified, fresh, in-region, convertible benchmarks count; plan, expiry and buyer triggers always open; one open review per business key; every evaluation is written with its rule version; the contract stays valid; a threshold change waits for a second administrator",
     "status": "PASS",
-    "seconds": 57.1,
+    "seconds": 21.3,
     "metrics": {
       "LP-01: contract, market, gap": "62000.00, 58900.0000, (Decimal('3100'), Decimal('5.0000'))",
       "LP-01 relevant quantity (orders on the platform)": "10.0000",
@@ -1666,7 +1665,7 @@
     "title": "Price types are kept apart; only verified, fresh, in-region, convertible benchmarks count, and never as a price",
     "requirement": "Task 13.1, D41, D52: contract price, quote, last price paid, price history, standard price and benchmark shown in their own sections; a benchmark carries source, date, region, unit and status, counts only when verified, fresh, in region and convertible, is verified by someone other than who entered it, is never edited once verified, and is never read by an estimate, route, order or touchless check; uploads list bad rows and skip repeats",
     "status": "PASS",
-    "seconds": 59.2,
+    "seconds": 23.1,
     "metrics": {
       "RM-01 at PLT-CKN: benchmark reasons off the oracle": "0 of 13",
       "RM-01 at PLT-SND: benchmark reasons off the oracle": "0 of 13",
@@ -1707,7 +1706,7 @@
     "title": "MRP results become material requests; net lines buy in full; reservation earliest need-by first",
     "requirement": "Task 6.4 (block 1 spec section 3): every open MRP requirement gets a material request line; one request per MRP plan and location ('<plan>/<location>', source mrp, no product, need-by the earliest line, never moved off a Sunday); gross lines net stock like production orders, earliest need-by first across orders and plans; net lines never take free stock in place of buying; the same file again loads nothing; a re-sent plan is a change (open purchase requests cut); tenant isolation",
     "status": "PASS",
-    "seconds": 43.3,
+    "seconds": 17.8,
     "metrics": {
       "mutations caught": [
         "MRP results skipped by the material requests",
@@ -1729,7 +1728,7 @@
     "title": "ERP cuts take open purchase requests first, earlier dates take nothing held, bad changes are refused",
     "requirement": "Task 6.3, Q21 (block 1 spec 4.1-4.5): a known row with new values is applied; a cut takes open purchase request cover first (not yet with the buyer), then the reservation, released stock handed on earliest need-by first; an earlier date moves open request lines and takes no stock held for another order; a later date moves only the material request; refused rows carry the spec's reasons and the valid rows of the same file apply; dry run writes nothing; every change audited; a second import changes nothing; tenant isolation",
     "status": "PASS",
-    "seconds": 93.2,
+    "seconds": 38.7,
     "metrics": {
       "A1 dry-run changes listed": 11,
       "mutations caught": [
@@ -1751,7 +1750,7 @@
     "title": "A cancel after the buyer has it raises one case per document, owned, escalated and due on the company calendar",
     "requirement": "Task 6.3, Q21 (block 1 spec 4.2, 4.4, 5.2): a cancelled ERP order releases its reservations (handed on earliest need-by first) and cuts purchase requests not yet with the buyer; with the buyer or on a PO, one demand_change case per document for the excess (owner the document's buyer, escalation the owner's manager, due in demand_change_case_days working days on the company calendar), on Exceptions with its amount; closing by the assignee only, once, audited; the manual cancel follows the same rules; tenant isolation",
     "status": "PASS",
-    "seconds": 58.0,
+    "seconds": 21.6,
     "metrics": {
       "mutations caught": [
         "a case raised for a line not yet with the buyer",
@@ -1777,7 +1776,7 @@
     "title": "An increase buys on a new request, never takes stock held for another order, checks only the changed items",
     "requirement": "Task 6.3, Q21 'up re-runs the store check' (block 1 spec 4.2, 4.3): need raised; the store check runs at the end of the import for the changed item-locations only (all open lines there, earliest need-by first) with submit; stock set aside for another order is never taken; a submitted request never grows, so the increase is a new request; other orders' reservations unchanged; a second import changes nothing; tenant isolation",
     "status": "PASS",
-    "seconds": 74.9,
+    "seconds": 28.5,
     "metrics": {
       "mutations caught": [
         "an increase takes stock set aside for a later order (A4)",
@@ -1818,7 +1817,7 @@
     "title": "Changes after issue: a store case for what was issued too many, issued lines reopen when the need goes up",
     "requirement": "Task 6.3, Q21, OP-14, OP-15 (block 1 spec 4.2, 4.4, 4.5): a cut below what was issued closes the line as issued with the new need and raises one store case (owner the first store person, escalating to their manager, due in working days) for issued minus need, never a negative reservation; a cancel after part issue keeps the issued quantity, cancels the material request and raises a store case; a request line cut exactly to its cover is cancelled and the reservation untouched; an increase after issue reopens the line with need minus issued short",
     "status": "PASS",
-    "seconds": 87.6,
+    "seconds": 38.9,
     "metrics": {
       "mutations caught": [
         "no store case for issued too many",
@@ -1839,7 +1838,7 @@
     "title": "A moved start date cancels the old request and makes a new one that takes the released stock first",
     "requirement": "Task 6.3, OP-11, DF-19 (block 1 spec 3.1 rule 8, 4.1-4.3, 5.3, 6.4 B4): a joiner row cancelled and re-sent with a new start date cancels the old material request and cuts its open purchase request (emptied: cancelled); the new row's lines get a new material request (listed in the import's report), which takes the released stock at once, earliest need-by first; the next store check buys what is still short by the new date; a folder import and file-by-file uploads end the same; a second import changes nothing; tenant isolation",
     "status": "PASS",
-    "seconds": 65.8,
+    "seconds": 24.0,
     "metrics": {
       "mutations caught": [
         "new lines for a cancelled material request skipped (DF-19)",
@@ -1853,5 +1852,84 @@
       "Spec gap: whether the CLI's 'loaded N rows' counts a row that only cancels (and the new row that replaces it) is not said; the new row is accepted as loaded 0 or 1 there, the changed and left-out counts exactly.",
       "Not exercised: new lines for an issued material request (the same DF-19 rule; no spec scenario issues a whole request before a new line arrives)."
     ]
+  },
+  {
+    "id": "E66",
+    "title": "A later masters import keeps second-person controls: status, bank, policies, versions, history, nothing deleted",
+    "requirement": "Task 0.6, DF-16, D-22, rule 8 (block 0c spec 3.1-3.5): the first import loads everything; any later import matches rows by key, never deletes, never changes a supplier's status or an existing supplier's bank details, adds new suppliers as drafts with unverified accounts, leaves out possible duplicates, never applies policies, approval rules or opening stock, adds price versions and contracts as drafts, keeps approvers; every added or changed row audited; a dry run writes nothing; a repeat changes nothing; tenant isolation. Decisions of 22 Nov: the admin API makes no Admin login and gives no role or limit without a second administrator",
+    "status": "PASS",
+    "seconds": 14.1,
+    "metrics": {
+      "first import: audit rows / mode": "1 / ['first']",
+      "first import: tables whose rows differ from the file": "none",
+      "order bound to a contract price (po, price_record id)": "PO-CKN-2627-00001, 1",
+      "rows the company holds differently from the file, untouched by the scenario": {
+        "supplier_document": 1
+      },
+      "dry run: exit code / first line": "1 / update by key (dry run, nothing written): would add 6, would change 4, unchanged 554, not in the file 13 (kept), in 0.59 s; 4 left out, 14 warnings",
+      "import: exit code / first line": "1 / update by key: added 6, changed 4, unchanged 554, not in the file 13 (kept), in 0.17 s; 4 left out, 14 warnings",
+      "oracle delta: added / changed / removed": "{'supplier': 1, 'supplier_address': 1, 'supplier_bank_account': 1, 'supplier_contact': 1, 'contract': 1, 'price_record': 1} / {'department': 1, 'item': 1, 'supplier': 1, 'supplier_contact': 1} / none",
+      "warnings expected / printed / missing": "13 / 14 / 0",
+      "controls after the import (spec 3.5)": "kept",
+      "audit: imports / row_add / row_change": "1 / 6 / 4",
+      "the same copy again: first line": "update by key: added 0, changed 0, unchanged 564, not in the file 13 (kept), in 0.14 s; 4 left out, 14 warnings",
+      "admin API (decisions of 22 Nov)": {
+        "Admin login": "refused (403)",
+        "role": "proposed; maker approves 403, other admin 200; 0 -> 1",
+        "limit": "proposed; maker approves 403, other admin 200; None -> 50000.00",
+        "own role": "403",
+        "own limit": "403"
+      },
+      "mutation checks (rule broken on purpose: caught?)": {
+        "the import applies supplier.status from the file": "caught in the database",
+        "a new supplier's bank account keeps verified=true": "caught in the database",
+        "the later import deletes and re-inserts": "caught in the database"
+      }
+    },
+    "findings": [],
+    "notes": [
+      "rows the company held differently from the file before the import: {'supplier_document': [('SUP-002', 'cancelled_cheque', 'CHQ-0002')]}"
+    ]
+  },
+  {
+    "id": "E67",
+    "title": "The app runs without owner rights: its own login, insert-only audit by grant, nothing it could switch off",
+    "requirement": "Task 1.7, D-25, DF-37 (block 0c spec 4.1-4.5, 5): every runtime path (API, worker, CLI, engines) signs in as the app login, which is no superuser, makes no database or role, bypasses no row security and owns nothing; it may select, insert, update and delete business tables, only select and insert audit_event and setup_change, only select alembic_version and the control tenant tables; every forbidden statement fails with 42501 and changes nothing; stored tenant URLs hold no password; health says restricted; the owner still migrates, and tables it makes later reach the app by default privileges",
+    "status": "PASS",
+    "seconds": 20.9,
+    "metrics": {
+      "app login / control database": "p2p_eval_c0c_control_app / p2p_eval_c0c_control",
+      "flow: request / approved by / jobs taken / orders": "REQ-CKN-2627-00001 / ['planthead 200'] / 7 / ['PO-CKN-2627-00001']",
+      "jobs: total / refused by the database / failed otherwise": "13 / 0 / 0",
+      "runtime engines sign in as": {
+        "tenants.control_engine()": "p2p_eval_c0c_control_app",
+        "routing.engine_for(slug)": "p2p_eval_c0c_control_app",
+        "tenants.tenant_engine(slug)": "p2p_eval_c0c_control_app"
+      },
+      "/api/health": {
+        "status": "ok",
+        "database": "ok",
+        "database_login": "restricted"
+      },
+      "as the app: refused statements (42501 with the spec's text)": "10 of 10 (company), 2 of 2 (control)",
+      "as the app: tables checked for the spec's grants": 145,
+      "stored company connections / with a password or user": "57 / 0",
+      "tenant migrate-all as the owner: exit code": 0,
+      "a table the owner makes after migrating: the app may": [
+        "DELETE",
+        "INSERT",
+        "SELECT",
+        "UPDATE"
+      ],
+      "no APP_DATABASE_PASSWORD": "MissingAppLogin: APP_DATABASE_PASSWORD is not set: the app signs in to the database with its own restricted login. Add it to .env (see .env.example), then run p",
+      "modules using the owner's login outside tenants, demo and cli": "none",
+      "mutation checks (rule broken on purpose: caught?)": {
+        "the runtime engines use the owner URL": "caught (162 findings)",
+        "the grant on audit_event includes update or delete": "caught (1 findings)",
+        "default privileges missing": "caught (1 findings)"
+      }
+    },
+    "findings": [],
+    "notes": []
   }
 ]

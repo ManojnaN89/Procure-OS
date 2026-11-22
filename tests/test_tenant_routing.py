@@ -23,9 +23,12 @@ def notes(db: Annotated[Session, Depends(tenant_session)]) -> list[str]:
 def _tenant_with_note(body: str) -> str:
     slug = "t" + uuid.uuid4().hex[:8]
     tenants.create_tenant(slug, load_reference=False)
+    owner = tenants.owner_engine(slug)  # only the owner creates a table; the app reads it by its default privileges
+    with owner.begin() as c:
+        c.execute(text("create table note (id serial primary key, body text)"))
+    owner.dispose()
     engine = tenants.tenant_engine(slug)
     with engine.begin() as c:
-        c.execute(text("create table note (id serial primary key, body text)"))
         c.execute(text("insert into note (body) values (:b)"), {"b": body})
     engine.dispose()
     return slug

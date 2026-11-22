@@ -1,5 +1,6 @@
 import uuid
 from decimal import Decimal
+from typing import Any
 
 import pytest
 from sqlalchemy import text
@@ -74,12 +75,18 @@ def test_audit_rows_roll_back_with_the_write_they_describe(control_db: str) -> N
     "statement",
     ["update audit_event set reason = 'changed'", "delete from audit_event", "truncate audit_event"],
 )
-def test_update_delete_and_truncate_are_refused(control_db: str, statement: str) -> None:
+def test_update_delete_and_truncate_are_refused(control_db: str, owner_session: Any, statement: str) -> None:
     slug = _tenant()
     with Session(routing.engine_for(slug)) as db:
         audit.record(db, audit.SYSTEM, "x.create", "x", "1")
         db.commit()
-        with pytest.raises(DBAPIError, match="insert only"):
+        # the app's login has no right to it (D-25)
+        with pytest.raises(DBAPIError, match="permission denied for table audit_event"):
             db.execute(text(statement))
         db.rollback()
+    # and the owner meets the insert-only trigger
+    with owner_session(slug) as owner:
+        with pytest.raises(DBAPIError, match="insert only"):
+            owner.execute(text(statement))
+        owner.rollback()
     assert len(_rows(slug, "x")) == 1

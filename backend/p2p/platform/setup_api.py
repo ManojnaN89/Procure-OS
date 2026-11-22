@@ -642,13 +642,14 @@ class NewPerson(BaseModel):
     reason: str = "New starter"
 
 
+ADMIN_NEEDS_A_SECOND = "add the person with another role, then give the Admin role: another administrator approves it"
+
+
 @router.post("/people", status_code=201)
 def add_person(body: NewPerson, db: Db, ctx: PeopleAdmin) -> dict[str, int]:
     reason = need_reason(body.reason)
     if body.role == "Admin":
-        raise HTTPException(
-            403, "add the person with another role, then give the Admin role: another administrator approves it"
-        )
+        raise HTTPException(403, ADMIN_NEEDS_A_SECOND)
     try:
         uid = users.create_user(
             ctx.slug, body.email, body.password, body.display_name, body.role, actor=user_actor(ctx.user_id)
@@ -1455,53 +1456,90 @@ class ToleranceBody(BaseModel):
     effective_from: date | None = None  # default: today
 
 
+class ToleranceValue(BaseModel):
+    key: str
+    category: str = "ANY"
+    value: str
+
+
+class ToleranceSet(BaseModel):
+    """Several tolerance values that apply together, in one version, when another administrator approves (owner
+    decision 10, 22 Nov 2026)."""
+
+    values: list[ToleranceValue]
+    reason: str | None = None
+    effective_from: date | None = None  # default: today
+
+
+@router.put("/tolerances", status_code=202)
+def put_tolerances(body: ToleranceSet, db: Db, ctx: SettingsAdmin) -> dict[str, Any]:
+    reason = need_reason(body.reason)
+    return _submit(db, ctx, "tolerance", _args(body), reason)
+
+
 @router.put("/tolerances/{key}", status_code=202)
 def put_tolerance(key: str, body: ToleranceBody, db: Db, ctx: SettingsAdmin) -> dict[str, Any]:
     reason = need_reason(body.reason)
-    return _submit(db, ctx, "tolerance", {"key": key, **_args(body)}, reason)
+    one = ToleranceSet(
+        values=[ToleranceValue(key=key, category=body.category, value=body.value)], effective_from=body.effective_from
+    )
+    return _submit(db, ctx, "tolerance", _args(one), reason)
+
+
+def _tolerance_changes(db: Session, values: list[ToleranceValue]) -> dict[tuple[str, str], str]:
+    if not values:
+        raise _422("give at least one tolerance value")
+    changes: dict[tuple[str, str], str] = {}
+    for v in values:
+        spec = TOLERANCES.get(v.key)
+        if spec is None:
+            raise HTTPException(404, f"there is no tolerance '{v.key}'")
+        label, kind, low, high = spec
+        if (
+            v.category != "ANY"
+            and db.execute(text("select 1 from item_category where code = :c"), {"c": v.category}).first() is None
+        ):
+            raise _422(f"there is no category {v.category}")
+        if (v.key, v.category) in changes:
+            raise _422(f"{label} for {v.category} is given twice")
+        changes[(v.key, v.category)] = _validate(kind, v.value, low, high, (), label)
+    return changes
 
 
 @setting_changes.handler("tolerance", "admin.settings")
 def _tolerance(db: Session, actor: Actor, args: dict[str, Any], reason: str, apply: bool) -> Change:
-    body, key = ToleranceBody.model_validate(args), str(args["key"])
-    spec = TOLERANCES.get(key)
-    if spec is None:
-        raise HTTPException(404, f"there is no tolerance '{key}'")
-    label, kind, low, high = spec
-    value = _validate(kind, body.value, low, high, (), label)
-    if (
-        body.category != "ANY"
-        and db.execute(text("select 1 from item_category where code = :c"), {"c": body.category}).first() is None
-    ):
-        raise _422(f"there is no category {body.category}")
+    if "values" not in args:  # a proposal made before tolerance changes were proposed as a set
+        args = {"values": [{k: args[k] for k in ("key", "category", "value") if k in args}], **args}
+    body = ToleranceSet.model_validate(args)
+    changes = _tolerance_changes(db, body.values)
     today = business_today()
     start = body.effective_from or today
     try:
         current = tolerance_versions.in_force(db, max(start, today))
-        old = next((r["value"] for r in current.rows if r["key"] == key and r["category_code"] == body.category), None)
-        version = tolerance_versions.save_version(
-            db, actor, key=key, category=body.category, value=value, effective_from=start, today=today,
-            note=reason, apply=apply,
-        )  # fmt: skip
+        was = {(r["key"], r["category_code"]): r["value"] for r in current.rows}
+        version = tolerance_versions.save_changes(
+            db, actor, changes, effective_from=start, today=today, note=reason, apply=apply
+        )
     except tolerance_versions.ToleranceError as exc:
         raise _422(str(exc)) from None
-    result = {
-        "key": key,
-        "category": body.category,
-        "value": value,
-        "version": version,
-        "effective_from": start.isoformat(),
-    }
-    change = Change(
-        "tolerance",
-        f"{key}:{body.category}",
-        {"value": old},
-        {"value": value},  # the start date is in the proposal and the result
-        result,
-    )
+    names = {f"{k}:{c}": (was.get((k, c)), value) for (k, c), value in changes.items()}
+    common = {"version": version, "effective_from": start.isoformat()}
+    if len(changes) == 1:
+        ((key, category), value), (name, (old, _)) = next(iter(changes.items())), next(iter(names.items()))
+        change = Change("tolerance", name, {"value": old}, {"value": value},
+                        {"key": key, "category": category, "value": value, **common})  # fmt: skip
+    else:
+        change = Change(
+            "tolerance",
+            ", ".join(names),
+            {n: {"value": o} for n, (o, _) in names.items()},
+            {n: {"value": v} for n, (_, v) in names.items()},
+            {"values": [{"key": k, "category": c, "value": v} for (k, c), v in changes.items()], **common},
+        )
     if not apply:
         return change
-    _log(db, actor, "tolerance", change.key, change.old, change.new, reason)
+    for name, (old, value) in names.items():  # one history row per value, so each tolerance shows its last change
+        _log(db, actor, "tolerance", name, {"value": old}, {"value": value}, reason)
     db.commit()
     return change
 

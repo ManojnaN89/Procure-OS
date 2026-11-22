@@ -35,8 +35,10 @@ class DocumentCheck:
 
 
 def required_documents(gst_reg_type: str | None, msme_category: str | None) -> tuple[str, ...]:
-    """PAN and bank proof for everyone, the GST certificate if registered for GST, the Udyam certificate for an MSME."""
-    required = ["pan", "cancelled_cheque"]
+    """PAN for everyone, the GST certificate if registered for GST, the Udyam certificate for an MSME. The bank proof
+    (cancelled cheque) is not needed to activate, invite or send an order (owner decision 9, 22 Nov 2026): the bank
+    account is verified before any payment instead."""
+    required = ["pan"]
     if gst_reg_type == "regular":
         required.append("gst_cert")
     if msme_category in ("micro", "small", "medium"):

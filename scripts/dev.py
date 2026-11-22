@@ -1,10 +1,12 @@
-"""Start everything for development: Docker services, backend (port 8000), frontend (port 5173) and the job worker.
+"""Start everything for development: Docker services, migrations (the app's own database login, its grants), backend
+(port 8000), frontend (port 5173) and the job worker.
 
     python scripts/dev.py
 
 Stop with Ctrl-C.
 """
 
+import os
 import shutil
 import socket
 import subprocess
@@ -34,6 +36,14 @@ def _stop(p: "subprocess.Popen[bytes]") -> None:
         p.terminate()
 
 
+def _app_password_set() -> bool:
+    if os.environ.get("APP_DATABASE_PASSWORD"):
+        return True
+    env = ROOT / ".env"
+    lines = env.read_text(encoding="utf-8").splitlines() if env.is_file() else []
+    return any(line.strip().startswith("APP_DATABASE_PASSWORD=") and line.split("=", 1)[1].strip() for line in lines)
+
+
 def main() -> int:
     busy = [f"port {port} ({what})" for port, what in PORTS.items() if _in_use(port)]
     if busy:
@@ -43,7 +53,15 @@ def main() -> int:
             "Stop it first (close its terminal, or end the python and node processes that listen on those ports), then run this again."
         )
         return 1
+    if not _app_password_set():
+        print(
+            "Add APP_DATABASE_PASSWORD=<a password you choose> to .env: the app signs in to the database with its own "
+            "restricted login (see .env.example)."
+        )
+        return 1
     subprocess.run(["docker", "compose", "up", "-d", "--wait"], cwd=ROOT, check=True)  # noqa: S607
+    for step in (["control", "migrate"], ["tenant", "migrate-all"]):  # the app login, its grants, stored addresses
+        subprocess.run([str(PY), "-m", "p2p.cli", *step], cwd=BACKEND, check=True)  # noqa: S603
     npm = shutil.which("npm") or "npm"
     procs = [
         subprocess.Popen(  # noqa: S603

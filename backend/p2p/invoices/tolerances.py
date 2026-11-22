@@ -127,14 +127,58 @@ def save_version(
     note: str | None = None,
     apply: bool = True,
 ) -> int:
-    """Make the next version from a date: the set in force then, with one value changed (or added for a category).
-    The version in force until then ends the day before (a version starting that same day is so replaced before its
-    start and never used). Returns the new version; with apply False only checks."""
+    """Make the next version from a date with one value changed (see `save_changes`)."""
+    return save_changes(
+        db, actor, {(key, category): value}, effective_from=effective_from, today=today, note=note, apply=apply
+    )
+
+
+def save_changes(
+    db: Session,
+    actor: Actor,
+    changes: dict[tuple[str, str], str],
+    *,
+    effective_from: date,
+    today: date,
+    note: str | None = None,
+    apply: bool = True,
+) -> int:
+    """Make the next version from a date: the set in force then, with the given values (key, category) changed or added
+    together. The version in force until then ends the day before (a version starting that same day is so replaced
+    before its start and never used). Returns the new version; with apply False only checks."""
     check_start(db, effective_from, today)
     current = in_force(db, effective_from)
     version = int(db.execute(text("select coalesce(max(version), 0) + 1 from tolerance_version")).scalar_one())
     if not apply:
         return version
+    db.execute(
+        text("update tolerance_version set effective_to = :t where version = :v"),
+        {"t": effective_from - timedelta(days=1), "v": current.version},
+    )
+    db.execute(
+        text("insert into tolerance_version (version, effective_from, note, created_by) values (:v, :f, :n, :by)"),
+        {"v": version, "f": effective_from, "n": note, "by": f"{actor.kind}:{actor.id}"},
+    )
+    rows = {(r["key"], r["category_code"]): r["value"] for r in current.rows}
+    before = dict(rows)
+    rows.update(changes)
+    db.execute(
+        text("insert into tolerance (version, key, value, category_code) values (:v, :k, :val, :c)"),
+        [{"v": version, "k": k, "val": v, "c": c} for (k, c), v in sorted(rows.items())],
+    )
+    for (key, category), value in sorted(changes.items()):
+        audit.record(
+            db,
+            actor,
+            "tolerance.change",
+            "tolerance",
+            f"{key}:{category}",
+            before={"value": before.get((key, category)), "version": current.version},
+            after={"value": value, "version": version, "effective_from": effective_from},
+            reason=note,
+            rule_version=f"tolerance v{version}",
+        )
+    return version
     db.execute(
         text("update tolerance_version set effective_to = :t where version = :v"),
         {"t": effective_from - timedelta(days=1), "v": current.version},

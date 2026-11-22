@@ -212,26 +212,54 @@ def test_an_admin_manages_users_roles_and_limits(env: Env) -> None:
     uid = client.post("/api/admin/users", json=new, headers=env.as_admin).json()["user_id"]
     assert client.post("/api/admin/users", json={**new, "password": "short"}, headers=env.as_admin).status_code == 422
 
-    assert (
-        client.post(
-            f"/api/admin/users/{uid}/roles", json={"role": "Store", "location": "PLT-VAD"}, headers=env.as_admin
-        ).status_code
-        == 201
+    # a role and a limit wait for another administrator (D-22), as on the setup screen
+    role = client.post(
+        f"/api/admin/users/{uid}/roles", json={"role": "Store", "location": "PLT-VAD"}, headers=env.as_admin
     )
-    assert (
-        client.post(
-            f"/api/admin/users/{uid}/limits", json={"document": "po", "max_value": "250000"}, headers=env.as_admin
-        ).status_code
-        == 201
+    limit = client.post(
+        f"/api/admin/users/{uid}/limits", json={"document": "po", "max_value": "250000"}, headers=env.as_admin
     )
+    assert (role.status_code, limit.status_code) == (202, 202)
+    assert role.json()["status"] == limit.json()["status"] == "waiting"
+    row = next(u for u in client.get("/api/admin/users", headers=env.as_admin).json() if u["user_id"] == uid)
+    assert {r["role"] for r in row["roles"]} == {"Buyer"}  # nothing applied yet
+
+    second = env.auth(env.user("Admin"), "Admin")
+    for pid in (role.json()["proposal_id"], limit.json()["proposal_id"]):
+        assert client.post(f"/api/admin/proposals/{pid}/approve", json={}, headers=second).status_code == 200
 
     row = next(u for u in client.get("/api/admin/users", headers=env.as_admin).json() if u["user_id"] == uid)
     assert row["display_name"] == "New Buyer" and {r["role"] for r in row["roles"]} == {"Buyer", "Store"}
-    audited = client.get(
-        "/api/admin/audit", params={"entity": "user", "entity_id": str(uid)}, headers=env.as_admin
-    ).json()
-    assert {a["action"] for a in audited} == {"user.create", "role.grant", "limit.set"}
+    assert env.db.execute(text("select max_value from user_limit where user_id = :u"), {"u": uid}).scalar() == 250000
+    audited = [
+        a
+        for a in client.get("/api/admin/audit", params={"entity_id": str(uid)}, headers=env.as_admin).json()
+        if a["entity"] in ("user", "role_grant")
+    ]
+    assert {a["action"] for a in audited} == {"user.create", "setup.role_grant"}
     assert all(a["actor_id"] == str(env.admin) for a in audited)  # the admin's name is on every change
+
+
+def test_an_admin_login_is_never_made_in_one_step(env: Env) -> None:
+    new = {
+        "email": f"adm{uuid.uuid4().hex[:6]}@example.com",
+        "password": PASSWORD,
+        "display_name": "A",
+        "role": "Admin",
+    }
+
+    refused = client.post("/api/admin/users", json=new, headers=env.as_admin)
+
+    assert refused.status_code == 403 and "another administrator" in refused.json()["detail"]
+    assert not any(u["display_name"] == "A" for u in client.get("/api/admin/users", headers=env.as_admin).json())
+
+
+def test_nobody_gives_themselves_a_role_or_a_limit_through_the_admin_api(env: Env) -> None:
+    own_role = client.post(f"/api/admin/users/{env.admin}/roles", json={"role": "Finance"}, headers=env.as_admin)
+    own_limit = client.post(
+        f"/api/admin/users/{env.admin}/limits", json={"document": "po", "max_value": "1"}, headers=env.as_admin
+    )
+    assert own_role.status_code == own_limit.status_code == 403
 
 
 def test_every_request_gets_an_id_and_one_json_log_line() -> None:

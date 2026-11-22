@@ -936,11 +936,12 @@ def _doc(kind: str, expires: str | None = None, verified: bool = True) -> Suppli
 @pytest.mark.parametrize(
     ("gst", "msme", "expected"),
     [
-        (None, None, ("pan", "cancelled_cheque")),
-        ("composition", "none", ("pan", "cancelled_cheque")),
-        ("regular", "none", ("pan", "cancelled_cheque", "gst_cert")),
-        ("regular", "small", ("pan", "cancelled_cheque", "gst_cert", "udyam")),
-        ("unregistered", "micro", ("pan", "cancelled_cheque", "udyam")),
+        # the bank proof is not needed before payment (owner decision 9, 22 Nov 2026)
+        (None, None, ("pan",)),
+        ("composition", "none", ("pan",)),
+        ("regular", "none", ("pan", "gst_cert")),
+        ("regular", "small", ("pan", "gst_cert", "udyam")),
+        ("unregistered", "micro", ("pan", "udyam")),
     ],
 )
 def test_the_documents_a_supplier_must_have_follow_its_gst_and_msme_status(
@@ -985,7 +986,7 @@ def test_other_documents_only_warn_when_they_expire_or_are_about_to() -> None:
 
 
 def test_a_supplier_with_a_document_missing_or_expired_is_not_asked_to_quote(db: Session) -> None:
-    db.execute(text("delete from supplier_document where supplier_code = 'S2' and doc_type = 'cancelled_cheque'"))
+    db.execute(text("delete from supplier_document where supplier_code = 'S2' and doc_type = 'pan'"))
     db.execute(text("update supplier set gst_reg_type = 'regular' where code = 'S3'"))
     db.execute(
         text(
@@ -998,7 +999,7 @@ def test_a_supplier_with_a_document_missing_or_expired_is_not_asked_to_quote(db:
     chosen, notes = service.eligible_suppliers(db, "C1", ["A"], TODAY)
 
     assert [c.code for c in chosen] == ["S1", "S4"]
-    assert "S2 left out: bank proof (cancelled cheque) is missing" in notes
+    assert "S2 left out: PAN card is missing" in notes
     assert "S3 left out: GST certificate has expired" in notes
 
 

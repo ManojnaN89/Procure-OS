@@ -27,7 +27,7 @@ Reading a line: `name*` is part of the primary key, `name?` may be empty, then t
 
 ## Tenant database (one per company)
 
-138 tables.
+142 tables.
 
 **advance** · payment_no* text, po_no text, gross num, taxable num, used_gross num, used_taxable num, paid_on? date
 
@@ -68,6 +68,14 @@ Reading a line: `name*` is part of the primary key, `name?` may be empty, then t
 **buying_route_rule** · id* bigint, category_code? text, version int, effective_from date, effective_to? date, agree_above? num, reorder_within_days? int, reorder_on_time_pct? num, reorder_below? num, reorder_price_pct? num, two_quotes_from? num, three_quotes_above? num, window_days? int, note? text, created_by? text, created_at timestamptz
 
 **case_event** · id* bigint, case_id int, at timestamptz, event text, from_state? text, to_state? text, actor_type text, actor_id text, detail? jsonb
+
+**checkpoint_blobs** · thread_id* text, checkpoint_ns* text, channel* text, version* text, type text, blob? bytea
+
+**checkpoint_migrations** · v* int
+
+**checkpoint_writes** · thread_id* text, checkpoint_ns* text, checkpoint_id* text, task_id* text, idx* int, channel text, type? text, blob bytea, task_path text
+
+**checkpoints** · thread_id* text, checkpoint_ns* text, checkpoint_id* text, parent_checkpoint_id? text, type? text, checkpoint jsonb, metadata jsonb
 
 **company** · code* text, legal_name? text, short_name? text, pan? text, cin? text, registered_address? text, turnover_band? text, fy_start_month? int, currency? text, email_domain? text, letterhead_text? text
 

@@ -1,7 +1,8 @@
 """Admin API: run viewer, model calls, rule evaluations, audit search, proposals, rules and users.
 
 Every route needs a login and a permission. Read-only views need audit.view; rules need admin.rules; users need
-admin.users. Proposals are decided by anyone who has the permission the proposal asks for.
+admin.users. Proposals are decided by anyone who has the permission the proposal asks for. A new login is never an
+Admin, and a role or a limit waits for another administrator (D-22), as on the setup screen.
 """
 
 from datetime import datetime
@@ -14,7 +15,7 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from p2p.masters import suppliers
-from p2p.platform import permissions, proposals, routing, users
+from p2p.platform import permissions, proposals, routing, setup_api, users
 from p2p.platform.permissions import require
 from p2p.platform.rows import rows as _rows
 from p2p.platform.sod import Actor
@@ -233,6 +234,7 @@ class NewRole(BaseModel):
     role: str
     location: str | None = None
     department: str | None = None
+    reason: str | None = None
 
 
 class NewLimit(BaseModel):
@@ -240,6 +242,10 @@ class NewLimit(BaseModel):
     max_value: Decimal
     category: str | None = None
     location: str | None = None
+    reason: str | None = None
+
+
+REASON = "Users and roles page"  # what a change from that page says when no reason is given
 
 
 @router.get("/users", dependencies=[Depends(require("admin.users"))])
@@ -261,6 +267,8 @@ def _admin_actor(ctx: routing.TenantContext) -> Actor:
 def create_user(
     body: NewUser, ctx: Annotated[routing.TenantContext, Depends(require("admin.users"))]
 ) -> dict[str, int]:
+    if body.role == "Admin":
+        raise HTTPException(403, setup_api.ADMIN_NEEDS_A_SECOND)
     try:
         uid = users.create_user(
             ctx.slug, body.email, body.password, body.display_name, body.role, actor=_admin_actor(ctx)
@@ -270,30 +278,19 @@ def create_user(
     return {"user_id": uid}
 
 
-@router.post("/users/{user_id}/roles", status_code=201)
+@router.post("/users/{user_id}/roles", status_code=202)
 def grant_role(
-    user_id: int, body: NewRole, ctx: Annotated[routing.TenantContext, Depends(require("admin.users"))]
-) -> dict[str, str]:
-    try:
-        users.grant_role(
-            ctx.slug, user_id, body.role, location=body.location, department=body.department, actor=_admin_actor(ctx)
-        )
-    except ValueError as exc:
-        raise HTTPException(422, str(exc)) from None
-    return {"status": "granted"}
+    user_id: int, body: NewRole, db: Db, ctx: Annotated[routing.TenantContext, Depends(require("admin.users"))]
+) -> dict[str, Any]:
+    """Saved for another administrator to approve, as on the setup screen."""
+    grant = setup_api.RoleGrant(**{**body.model_dump(), "reason": body.reason or REASON})
+    return setup_api.give_role(user_id, grant, db, ctx)
 
 
-@router.post("/users/{user_id}/limits", status_code=201)
+@router.post("/users/{user_id}/limits", status_code=202)
 def set_limit(
-    user_id: int, body: NewLimit, ctx: Annotated[routing.TenantContext, Depends(require("admin.users"))]
-) -> dict[str, str]:
-    users.set_limit(
-        ctx.slug,
-        user_id,
-        body.document,
-        body.max_value,
-        category=body.category,
-        location=body.location,
-        actor=_admin_actor(ctx),
-    )
-    return {"status": "set"}
+    user_id: int, body: NewLimit, db: Db, ctx: Annotated[routing.TenantContext, Depends(require("admin.users"))]
+) -> dict[str, Any]:
+    """Saved for another administrator to approve, as on the setup screen."""
+    limit = setup_api.LimitBody(**{**body.model_dump(), "reason": body.reason or REASON})
+    return setup_api.put_limit(user_id, limit, db, ctx)

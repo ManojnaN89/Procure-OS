@@ -4,11 +4,10 @@ from pathlib import Path
 from fastapi import FastAPI
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
-from sqlalchemy import text
 from sqlalchemy.exc import SQLAlchemyError
 
 from p2p.config import REPO_ROOT, get_settings
-from p2p.platform import logs, tenants
+from p2p.platform import db_logins, logs, tenants
 from p2p.platform.admin_api import router as admin_router
 from p2p.platform.agent_api import router as agent_router
 from p2p.platform.approval_link_api import router as approval_link_router
@@ -68,14 +67,14 @@ app.include_router(ui_sockets)
 
 @app.get("/api/health")
 def health() -> dict[str, str]:
-    """Liveness plus a check that the control database answers."""
-    db = "ok"
+    """Liveness plus a check that the control database answers, and whether the app signs in without owner rights."""
+    db, login = "ok", "unknown"
     try:
         with tenants.control_engine().connect() as conn:
-            conn.execute(text("select 1"))
-    except SQLAlchemyError:
+            login = db_logins.login_kind(conn)
+    except (SQLAlchemyError, db_logins.MissingAppLogin):
         db = "unreachable"
-    return {"status": "ok", "database": db}
+    return {"status": "ok", "database": db, "database_login": login}
 
 
 def mount_frontend(admin_dist: Path | None = None, ui_dir: Path | None = None) -> None:

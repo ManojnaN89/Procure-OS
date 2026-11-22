@@ -47,7 +47,7 @@ from pathlib import Path
 from p2p.formulas.calendar import business_today
 from p2p.formulas.money import format_inr
 from p2p.formulas.words import count
-from p2p.platform import routing, tenants, users, worker
+from p2p.platform import db_logins, routing, tenants, users, worker
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -295,6 +295,7 @@ def main(argv: list[str] | None = None) -> int:
         from sqlalchemy.orm import Session
 
         from p2p.masters.importer import ImportReport, import_masters
+        from p2p.masters.report import update_lines
         from p2p.receiving.stock import import_movements
         from p2p.requests import demand
 
@@ -313,6 +314,10 @@ def main(argv: list[str] | None = None) -> int:
                 print(f"  {kind}: {n} new, {report.changed.get(kind, 0)} changed, {report.already[kind]} loaded before")
             for change in report.changes:
                 print(f"  change    {demand.change_line(change.view())}")
+        elif report.mode == "update":  # a later masters import: matched by key
+            for line in update_lines(report):
+                print(line)
+            return 1 if report.rejected else 0
         else:
             verb = "would load" if args.dry_run else "loaded"
             print(
@@ -325,7 +330,7 @@ def main(argv: list[str] | None = None) -> int:
         return 1 if report.rejected else 0
     if args.group == "control":
         tenants.migrate_control()
-        print("control database is up to date")
+        print(f"control database is up to date; app login {db_logins.app_role_name()} is ready")
         return 0
     if args.group == "user":
         password = os.environ.get("P2P_NEW_PASSWORD") or getpass.getpass("Password: ")

@@ -1,4 +1,7 @@
-"""Tenant provisioning: one database per tenant, tracked in the control database."""
+"""Tenant provisioning: one database per tenant, tracked in the control database.
+
+Two database logins (`db_logins`): the owner creates, migrates and drops; every runtime engine here signs in as the app.
+"""
 
 import os
 import re
@@ -12,12 +15,12 @@ from alembic import command
 from alembic.config import Config
 from alembic.runtime.migration import MigrationContext
 from alembic.script import ScriptDirectory
-from sqlalchemy import create_engine, select, text
+from sqlalchemy import Connection, create_engine, select, text
 from sqlalchemy.engine import URL, Engine, make_url
 from sqlalchemy.orm import Session
 
 from p2p.config import get_settings
-from p2p.platform import crypto
+from p2p.platform import crypto, db_logins
 from p2p.platform.control_models import Tenant, TenantDatabase
 
 MIGRATIONS = Path(__file__).parent / "migrations"
@@ -40,8 +43,9 @@ _control_engines: dict[str, Engine] = {}
 
 
 def control_engine() -> Engine:
-    """The one shared engine (with its connection pool) for the control database. Do not dispose it per call."""
-    url = _render(control_url())
+    """The one shared engine (with its connection pool) for the control database, as the app login. Do not dispose it per
+    call."""
+    url = _render(db_logins.app_url(control_url()))
     if url not in _control_engines:
         _control_engines[url] = create_engine(url, pool_size=4, max_overflow=16, pool_pre_ping=True)
     return _control_engines[url]
@@ -61,10 +65,22 @@ def control_session() -> Iterator[Session]:
         yield session
 
 
+@contextmanager
+def _owner_control_session() -> Iterator[Session]:
+    """A session on the control database as the owner: only for creating, migrating and dropping companies."""
+    engine = create_engine(control_url())
+    try:
+        with Session(engine) as session:
+            yield session
+    finally:
+        engine.dispose()
+
+
 def _config(kind: str, url: str, script_dir: Path | None = None) -> Config:
     cfg = Config()
     cfg.set_main_option("script_location", str(script_dir or MIGRATIONS / kind))
     cfg.attributes["url"] = url
+    cfg.attributes["app_role"] = db_logins.app_role_name()  # the grants name the app's login
     return cfg
 
 
@@ -73,11 +89,16 @@ def _render(url: URL) -> str:
 
 
 def migrate_control() -> None:
+    """The app login (made or its password set again), the control tables and their grants, as the owner; then no stored
+    company address keeps a user or a password."""
+    with _admin_connection() as conn:
+        db_logins.ensure_app_role(conn)
     command.upgrade(_config("control", _render(control_url())), "head")
+    forget_stored_credentials()
 
 
 @contextmanager
-def _admin_connection() -> Iterator["object"]:
+def _admin_connection() -> Iterator[Connection]:
     """Autocommit connection to the server's maintenance database (needed for CREATE DATABASE)."""
     engine = create_engine(control_url().set(database="postgres"), isolation_level="AUTOCOMMIT")
     try:
@@ -98,14 +119,13 @@ def create_tenant(
     if not SLUG.match(slug):
         raise ValueError("slug must be lower case letters, digits or underscore, starting with a letter (2-31 chars)")
     db_name = tenant_db_name(slug)
-    engine = control_engine()
-    with Session(engine) as s:
+    with _owner_control_session() as s:
         if s.scalar(select(Tenant).where(Tenant.slug == slug)):
             raise ValueError(f"tenant '{slug}' already exists")
     with _admin_connection() as conn:
-        conn.execute(text(f'create database "{db_name}"'))  # type: ignore[attr-defined]
-    url = control_url().set(database=db_name)
-    with Session(engine) as s:
+        conn.execute(text(f'create database "{db_name}"'))
+    url = _address(control_url().set(database=db_name))
+    with _owner_control_session() as s:
         tenant = Tenant(slug=slug, name=name or slug)
         s.add(tenant)
         s.flush()
@@ -113,7 +133,7 @@ def create_tenant(
             TenantDatabase(
                 tenant_id=tenant.id,
                 database_name=db_name,
-                connection_encrypted=crypto.encrypt(_render(url)),
+                connection_encrypted=crypto.encrypt(url),
             )
         )
         s.commit()
@@ -132,14 +152,16 @@ def create_tenant(
 
 def migrate_tenant(slug: str, *, script_dir: Path | None = None) -> MigrateResult:
     """Bring one tenant database to the latest revision. Never raises: failures come back in the result."""
-    engine = control_engine()
-    with Session(engine) as s:
+    with _owner_control_session() as s:
         row = s.execute(
             select(TenantDatabase).join(Tenant, Tenant.id == TenantDatabase.tenant_id).where(Tenant.slug == slug)
         ).scalar_one()
-        url = crypto.decrypt(row.connection_encrypted)
+        url = _render(db_logins.owner_url(make_url(crypto.decrypt(row.connection_encrypted))))
         try:
             command.upgrade(_config("tenant", url, script_dir), "head")
+            from p2p.agents.runtime import setup_checkpoints
+
+            setup_checkpoints(url)  # the agents' checkpoint tables: made by the owner, used by the app
             tenant_engine = create_engine(url)
             try:
                 with tenant_engine.connect() as c:
@@ -155,8 +177,7 @@ def migrate_tenant(slug: str, *, script_dir: Path | None = None) -> MigrateResul
 
 
 def migrate_all(*, script_dir: Path | None = None) -> list[MigrateResult]:
-    engine = control_engine()
-    with Session(engine) as s:
+    with _owner_control_session() as s:
         slugs = list(s.scalars(select(Tenant.slug).where(Tenant.active).order_by(Tenant.slug)))
     return [migrate_tenant(slug, script_dir=script_dir) for slug in slugs]
 
@@ -165,15 +186,43 @@ def head_revision(script_dir: Path | None = None) -> str | None:
     return ScriptDirectory.from_config(_config("tenant", "", script_dir)).get_current_head()
 
 
-def tenant_engine(slug: str) -> Engine:
-    """Engine for one tenant's database (the caller disposes it or caches it)."""
-    engine = control_engine()
-    with Session(engine) as s:
+def _stored_url(slug: str) -> URL:
+    with Session(control_engine()) as s:
         row = s.execute(
             select(TenantDatabase).join(Tenant, Tenant.id == TenantDatabase.tenant_id).where(Tenant.slug == slug)
         ).scalar_one()
-        # Postgres allows 100 connections in all: an engine keeps only two open while idle (a cache holds up to 20)
-        return create_engine(crypto.decrypt(row.connection_encrypted), pool_size=2, max_overflow=8, pool_pre_ping=True)
+        return make_url(crypto.decrypt(row.connection_encrypted))
+
+
+def tenant_engine(slug: str) -> Engine:
+    """Engine for one tenant's database, as the app login (the caller disposes it or caches it)."""
+    # Postgres allows 100 connections in all: an engine keeps only two open while idle (a cache holds up to 20)
+    return create_engine(db_logins.app_url(_stored_url(slug)), pool_size=2, max_overflow=8, pool_pre_ping=True)
+
+
+def owner_engine(slug: str) -> Engine:
+    """Engine for one tenant's database as the owner: for migrations, and for tests and evals that act as the owner.
+    Never for the API, the worker or a service (the caller disposes it)."""
+    return create_engine(db_logins.owner_url(_stored_url(slug)))
+
+
+def _address(url: URL) -> str:
+    """What a company's database row keeps: host, port and database, never a user or a password."""
+    return _render(URL.create(url.drivername, host=url.host, port=url.port, database=url.database, query=url.query))
+
+
+def forget_stored_credentials() -> int:
+    """Rewrite any stored company address that still carries a user or a password (made before the app login). Returns
+    how many were rewritten; running it again rewrites none."""
+    done = 0
+    with _owner_control_session() as s:
+        for row in s.scalars(select(TenantDatabase)):
+            url = make_url(crypto.decrypt(row.connection_encrypted))
+            if url.username or url.password:
+                row.connection_encrypted = crypto.encrypt(_address(url))
+                done += 1
+        s.commit()
+    return done
 
 
 def drop_tenant(slug: str) -> bool:
@@ -182,8 +231,7 @@ def drop_tenant(slug: str) -> bool:
     Returns False when there was no such tenant. Only for a company that is made again from its data (the demo
     company); there is no undo.
     """
-    engine = control_engine()
-    with Session(engine) as s:
+    with _owner_control_session() as s:
         tenant = s.scalar(select(Tenant).where(Tenant.slug == slug))
         if tenant is None:
             return False
@@ -203,7 +251,7 @@ def drop_tenant(slug: str) -> bool:
     routing.clear_engine_cache()
     if db_name:
         with _admin_connection() as conn:
-            conn.execute(text(f'drop database if exists "{db_name}" with (force)'))  # type: ignore[attr-defined]
+            conn.execute(text(f'drop database if exists "{db_name}" with (force)'))
     return True
 
 

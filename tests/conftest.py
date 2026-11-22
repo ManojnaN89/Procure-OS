@@ -1,10 +1,13 @@
 import os
-from collections.abc import Iterator
+import secrets
+from collections.abc import Callable, Iterator
+from contextlib import AbstractContextManager, contextmanager
 
 import pytest
 from cryptography.fernet import Fernet
 from sqlalchemy import text
 from sqlalchemy.exc import OperationalError
+from sqlalchemy.orm import Session
 
 from p2p.config import get_settings
 from p2p.platform import tenants
@@ -22,6 +25,9 @@ os.environ.setdefault("HF_HUB_ETAG_TIMEOUT", "10")
 os.environ.setdefault("HF_HUB_DOWNLOAD_TIMEOUT", "30")
 os.environ.setdefault("JWT_SECRET", "test-secret-for-unit-tests-only-0123456789")
 os.environ.setdefault("TENANT_SECRET_KEY", Fernet.generate_key().decode())
+# The run's own app login, named after its control database: a .env value never makes a test run change the dev login.
+os.environ["APP_DATABASE_USER"] = f"{TEST_CONTROL_DB}_app"
+os.environ.setdefault("APP_DATABASE_PASSWORD", secrets.token_urlsafe(24))
 
 
 _scratch: ScratchControlDb | None = None
@@ -55,6 +61,23 @@ def control_db() -> Iterator[str]:
         else:
             os.environ["CONTROL_DATABASE_URL"] = previous
         get_settings.cache_clear()
+
+
+@contextmanager
+def _owner_session(slug: str) -> Iterator[Session]:
+    engine = tenants.owner_engine(slug)
+    try:
+        with Session(engine) as session:
+            yield session
+    finally:
+        engine.dispose()
+
+
+@pytest.fixture
+def owner_session(control_db: str) -> Callable[[str], AbstractContextManager[Session]]:
+    """A session on a company's database as its owner: for the few tests that do what only the owner can (switch the
+    insert-only triggers off, create a table). The app itself never signs in as the owner."""
+    return _owner_session
 
 
 @pytest.fixture(autouse=True)

@@ -33,6 +33,12 @@ export function UsersPage() {
 	});
 	const refresh = () => queryClient.invalidateQueries({ queryKey: ["users"] });
 	const [error, setError] = useState("");
+	const [notice, setNotice] = useState("");
+	// a role or a limit waits for another administrator (D-22)
+	const waiting = (r: unknown) => {
+		setNotice((r as { message?: string }).message ?? "");
+		refresh();
+	};
 	const [form, setForm] = useState({
 		email: "",
 		password: "",
@@ -64,7 +70,7 @@ export function UsersPage() {
 				method: "POST",
 				json: { role: roleFor.role, location: roleFor.location || null },
 			}),
-		onSuccess: refresh,
+		onSuccess: waiting,
 		onError: (e: Error) => setError(e.message),
 	});
 	const limit = useMutation({
@@ -73,13 +79,14 @@ export function UsersPage() {
 				method: "POST",
 				json: { document: limitFor.document, max_value: limitFor.max_value },
 			}),
-		onSuccess: refresh,
+		onSuccess: waiting,
 		onError: (e: Error) => setError(e.message),
 	});
 
 	function run(e: FormEvent, mutation: { mutate: () => void }) {
 		e.preventDefault();
 		setError("");
+		setNotice("");
 		mutation.mutate();
 	}
 
@@ -91,6 +98,11 @@ export function UsersPage() {
 			{error ? (
 				<p role="alert" className="mb-3 text-sm text-danger">
 					{error}
+				</p>
+			) : null}
+			{notice ? (
+				<p role="status" className="mb-3 text-sm">
+					{notice}
 				</p>
 			) : null}
 			<Card className="mb-4">

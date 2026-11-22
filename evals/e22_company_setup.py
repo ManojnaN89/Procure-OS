@@ -543,9 +543,11 @@ def run(ctx) -> Outcome:
         for r in db.execute(text("select id from setup_change where key = 'price_band_pct' order by id desc limit 2"))
     ][::-1]
     # the history is insert only (migration 0059): back-dating it needs the database owner to switch the triggers off
-    db.execute(text("set local session_replication_role = replica"))
-    for stamp, i in zip((datetime(2025, 1, 1, tzinfo=UTC), datetime(2025, 6, 1, tzinfo=UTC)), ids, strict=True):
-        db.execute(text("update setup_change set at = :t where id = :i"), {"t": stamp, "i": i})
+    with lib.owner_session(world.slug) as owner:
+        owner.execute(text("set local session_replication_role = replica"))
+        for stamp, i in zip((datetime(2025, 1, 1, tzinfo=UTC), datetime(2025, 6, 1, tzinfo=UTC)), ids, strict=True):
+            owner.execute(text("update setup_change set at = :t where id = :i"), {"t": stamp, "i": i})
+        owner.commit()
     db.commit()
     replay_ok = [policy_value_on(db, "price_band_pct", datetime(2025, m, 15, tzinfo=UTC)) for m in (2, 8)] == ["7", "9"]
     if not replay_ok:
