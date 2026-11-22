@@ -910,9 +910,12 @@ def pay_many(
             "paid",
         )
     c.same("order status", one(db, "select status from po where no = :n", n=po), "closed")
+    import budget_oracle
+
     for no, _, taxable, _ in invoices:
+        # D-10 (block 3): at payment only lines that are not stocked items, and the charges; stock was spent at receipt
         c.same(
-            f"budget actual booked{' for ' + no if several else ''}: the price before tax",
+            f"budget actual booked at payment{' for ' + no if several else ''}: non-stock lines before tax and charges",
             D(
                 one(
                     db,
@@ -920,7 +923,7 @@ def pay_many(
                     n=no,
                 )
             ),
-            taxable,
+            budget_oracle.at_payment(db, no),
         )
     contact = next(
         r["email"]
@@ -2097,9 +2100,15 @@ def run_held_order(d: Demo, c: Checks, co: Company, pick: Pick) -> None:
     sign_in_all(d, co, ("buyer", "proc_head"))
     replenish(d, c, pick, request_route(pick.value))
     d.work()
-    c.true("no contract price is in force for the item, so quotations are asked for", not contract_prices(pick.item, pick.qty))
+    c.true(
+        "no contract price is in force for the item, so quotations are asked for",
+        not contract_prices(pick.item, pick.qty),
+    )
     rfq = str(one(db, "select no from rfq"))
-    invited = [r[0] for r in db.execute(text("select supplier_code from rfq_supplier where rfq_no = :n order by 1"), {"n": rfq})]
+    invited = [
+        r[0]
+        for r in db.execute(text("select supplier_code from rfq_supplier where rfq_no = :n order by 1"), {"n": rfq})
+    ]
     decide_in_approvals(d, "buyer", "RFQs waiting to be sent", rfq, what="approves sending the quotation request")
     supplier, price = invited[0], D(DEAR[1])
     # two quotes, as in the quotation runs: the cheapest, 25% above the estimate, and a dearer one

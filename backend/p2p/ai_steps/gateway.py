@@ -72,6 +72,7 @@ DEFAULT_ROUTES: dict[str, list[tuple[Any, ...]]] = {
     "item_mapping.strong": [(*_G120, _MEDIUM), _ULTRA],
     "supplier_message": [(*_G20, _LOW), (*_G120, _LOW), _LAGUNA],
     "supplier_message.strong": [(*_G120, _MEDIUM), _ULTRA],
+    "forward_buy_note": [(*_G20, _LOW), (*_G120, _LOW), _LAGUNA],
     "certificate_reading": [(*_G20, _LOW), (*_G120, _LOW), _LAGUNA],
     "certificate_reading.strong": [(*_G120, _MEDIUM), _ULTRA],
     # AG01, AG02, AG04: tool choice each turn.

@@ -158,6 +158,8 @@ OPTIONAL_FILES = frozenset(
         "supplier_flag",
         "price_threshold_rule",
         "market_benchmark",
+        "budget_period_lock",
+        "forward_buy_rule",
     }
 )
 SUPPLIER_STATUSES = ("draft", "active", "blocked", "prospect")
@@ -372,6 +374,7 @@ def _accept(
             keys.setdefault(spec.name, {})[col] = {r[col] for r in values if r.get(col) is not None}
 
     accepted: dict[str, Lines] = {}
+    locked = {str(r[0]) for r in db.execute(text("select period from budget_period_lock"))}  # before this import
     for spec in TABLES:
         if spec.name in kept_as_is:
             continue
@@ -416,6 +419,9 @@ def _accept(
             if company and (reason := upsert.refusal(db, spec, row, company, parsed)):
                 report.rejected.append(Problem(spec.name, line, reason))
                 continue
+            if spec.name == "budget" and row.get("period") in locked and not _known(company, spec, row):
+                report.rejected.append(Problem(spec.name, line, f"period {row['period']} is locked"))
+                continue
             seen[key] = line
             rows.append((line, row))
         accepted[spec.name] = rows
@@ -424,6 +430,15 @@ def _accept(
             values = [r for _, r in rows] + outside[spec.name]
             keys[spec.name][col] = {r[col] for r in values if r.get(col) is not None}
     return accepted
+
+
+def _known(company: upsert.Company | None, spec: Table, row: dict[str, Any]) -> bool:
+    """The company already has this very row (same key, same values): nothing would be added or changed."""
+    if company is None:
+        return False
+    found = company.index.get(spec.name, {}).get(upsert.key_of(spec, row)) or []
+    columns = [c for c, _ in spec.columns]
+    return any(all(old.get(c) == row.get(c) for c in columns) for old in found)
 
 
 def _replace(db: Session, accepted: dict[str, Lines]) -> None:

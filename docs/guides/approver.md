@@ -46,3 +46,7 @@ If you will be away, open **Settings** (the gear at the top) → **Away? Name a 
 ## Exceptions
 
 **Exceptions** lists everything stuck that needs a person, oldest first, with the reason, who must act, the next step and the age in working days; tick **Only mine** for what waits on you. Approvals you were reminded about, goods that came with no order and other decisions show there.
+
+## Approving a forward buy
+
+A forward buy the buyer accepted comes to the person the forward-buy rule names (the purchase manager). Open the request from your task: **Approve the extra quantity** makes a new request for it, which goes through its own approval and budget check; **Decline** needs a reason. The figures are worked out again first; if anything changed you see the new recommendation instead.

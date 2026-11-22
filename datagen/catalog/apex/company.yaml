@@ -106,6 +106,7 @@ approval_rules: |
   VAR-01,price_variance,0.00,999999999.00,ANY,ANY,ANY,ANY,purchase_manager,1,2025-04-01,
   PAY-01,payment_run,0.00,999999999.00,ANY,ANY,ANY,ANY,director,1,2025-04-01,
   SUP-01,supplier_activation,0.00,999999999.00,ANY,ANY,ANY,ANY,director,1,2025-04-01,
+  FWD-01,forward_buy,0.00,999999999.00,ANY,ANY,ANY,ANY,purchase_manager,1,2025-04-01,
 
 # the autonomy gate (not master data; set by `demo reset`). po.issue: touchless orders (D35), issued and sent with no
 # buyer for contract and safe-reorder lines within the buyer's tier; the tests and limits are rows of touchless_rule
@@ -178,8 +179,13 @@ price_thresholds:
   note: Recommended default, needs validation (O2)
 
 budgets:
-  periods: ["2025-11", "2027-03"]
+  periods: ["2025-11", "2028-03"]
   policy: block
+  # FY 2027-28 about 8% above (each cost centre's row rounded to Rs 10,000; a location row is the sum of its cost centres')
+  next_year: {from: "2027-04", rise_pct: "8", round_to: "10000"}
+  # months closed before the demo: the finance manager locks each on the 10th of the next month at 18:00 (next working
+  # day), after the GSTR-1 of the 11th is prepared; November 2026 is the first month that can still be locked
+  locks: {through: "2026-10", by: U05, reason: Month-end close, day: 10, time: "18:00"}
   per_month:  # cost centre: total, then the total split by GL account (budgets are kept per GL)
     CC-PRD: {total: "1500000.00", gl: {"1410": "1450000.00", "1420": "50000.00"}}
     CC-MNT: {total: "150000.00", gl: {"1430": "100000.00", "5240": "50000.00"}}
@@ -308,6 +314,113 @@ mrp_runs:
 
 # ERP input files (decision D36), written to inputs/ as they are. production_order_line is worked out from the bill of
 # materials: one line per material, quantity per pump times pumps to make.
+# Forward buying (task 13.5): the company row of the rule is the migration's version 1 (Q27 defaults); these rows narrow
+# it. Scenarios start from the stock scenario A0 (demo reset and one store check) on Monday 23 Nov 2026; a scenario's
+# benchmark is entered by the buyer and verified by the purchase manager, its rule rows added from that day.
+forward_buy:
+  entered_by: U03
+  verified_by: U08
+  stock_base: A0
+  rules:
+    - {item: RM-08, location: PLT-CKN, storage_max_qty: "1500.0000", note: The wire cage at Chakan holds 1.5 tonnes}
+    - {item: RM-11, shelf_life_months: 12, note: Enamel paint keeps a year}
+  scenarios:
+    - {name: FB0, title: "A0 alone: September is stale, October unverified", item: RM-08, location: PLT-CKN, on: "2026-11-23"}
+    - name: FB1
+      title: Copper dips
+      item: RM-08
+      location: PLT-CKN
+      on: "2026-11-23"
+      benchmark: &copper {price: "828.0000", uom: KGS, region: MH, effective_date: "2026-11-16", source_kind: index, source_name: "Enamelled copper wire reference rate (mid-month), Pune bulletin", source_ref: Pune wire bulletin 2026-11 (mid-month)}
+    - name: FB2
+      title: Holding cost stops it
+      item: RM-08
+      location: PLT-CKN
+      on: "2026-11-23"
+      benchmark: *copper
+      rules: [{item: RM-08, location: PLT-CKN, version: 2, max_cover_months: 12, storage_max_qty: "2500.0000", note: Scenario FB2}]
+    - name: FB3
+      title: The wire cage is full
+      item: RM-08
+      location: PLT-CKN
+      on: "2026-11-23"
+      benchmark: *copper
+      rules: [{item: RM-08, location: PLT-CKN, version: 2, storage_max_qty: "600.0000", note: Scenario FB3}]
+    - name: FB4
+      title: Not low enough
+      item: RM-08
+      location: PLT-CKN
+      on: "2026-11-23"
+      benchmark: {price: "870.0000", uom: KGS, region: MH, effective_date: "2026-11-16", source_kind: index, source_name: "Enamelled copper wire reference rate (mid-month), Pune bulletin", source_ref: Pune wire bulletin 2026-11 (mid-month)}
+    - name: FB5
+      title: Saving exactly at the minimum
+      item: RM-08
+      location: PLT-CKN
+      on: "2026-11-23"
+      benchmark: *copper
+      rules: [{version: 2, enabled: true, min_gap_pct: "5.0000", min_trend_months: 6, max_cover_months: 3, holding_cost_pct_month: "1.5000", min_net_saving_inr: "44982.36", note: Scenario FB5}]
+    - name: FB5b
+      title: Saving one paisa above the minimum
+      item: RM-08
+      location: PLT-CKN
+      on: "2026-11-23"
+      benchmark: *copper
+      rules: [{version: 2, enabled: true, min_gap_pct: "5.0000", min_trend_months: 6, max_cover_months: 3, holding_cost_pct_month: "1.5000", min_net_saving_inr: "44982.35", note: Scenario FB5b}]
+    - name: FB8a
+      title: A contract item
+      item: RM-01
+      location: PLT-CKN
+      on: "2026-11-23"
+      preview: true
+    - name: FB8b
+      title: Ex-works benchmarks only
+      item: PK-01
+      location: PLT-CKN
+      on: "2026-11-23"
+      preview: true
+    - name: FB9
+      title: Dip exactly at the minimum
+      item: RM-08
+      location: PLT-CKN
+      on: "2026-11-23"
+      benchmark: {price: "858.3250", uom: KGS, region: MH, effective_date: "2026-11-16", source_kind: index, source_name: "Enamelled copper wire reference rate (mid-month), Pune bulletin", source_ref: Pune wire bulletin 2026-11 (mid-month)}
+    - name: FB9b
+      title: Dip just above the minimum
+      item: RM-08
+      location: PLT-CKN
+      on: "2026-11-23"
+      benchmark: {price: "858.3200", uom: KGS, region: MH, effective_date: "2026-11-16", source_kind: index, source_name: "Enamelled copper wire reference rate (mid-month), Pune bulletin", source_ref: Pune wire bulletin 2026-11 (mid-month)}
+
+# Budget scenarios (task 3.7), each from A0. BG1: the plant head approves MO-1, the buyer buys the wire direct from
+# SUP-005 at Rs 880 and the bearings from SUP-002 at Rs 38 (bearings have no contract, so sourcing sends them to
+# quotation first; the purchase manager agrees to both), castings come from CNT-0001 at Rs 650, the orders are made; then receipts, inspection, closing the balance,
+# paying the wire's invoice (freight Rs 500). YE1: year end on 5 Apr 2027 with A0 only. FB6: the forward-buy request.
+budget_scenarios:
+  stock_base: A0
+  department: PRD
+  location: PLT-CKN
+  scenarios:
+    - name: BG0
+      on: "2026-11-23"
+      steps:
+        - {label: base, check: [MRP-2027-01/PLT-CKN]}
+    - name: BG1
+      on: "2026-11-23"
+      steps:
+        - {label: after_orders, order: {MO-1: {RM-01: "650.0000", RM-06: "38.0000", RM-08: "880.0000"}}, check: [MO-2]}
+        - {label: after_receipt, on: "2026-11-25", accept: {MO-1: {RM-08: "40"}}, check: [MO-2]}
+        - {label: after_inspection, on: "2026-11-25", accept: {MO-1: {RM-06: "58"}}, check: [MO-2]}
+        - {label: after_close, on: "2026-11-25", close_balance: {MO-1: {RM-06: "2"}}, check: [MO-2]}
+        - {label: after_payment, on: "2026-11-27", pay_freight: {MO-1: {RM-08: "500.00"}}, check: [MO-2]}
+    - name: YE1
+      on: "2027-04-05"
+      steps:
+        - {label: new_year, check: [MRP-2027-01/PLT-CKN]}
+    - name: FB6
+      on: "2026-11-23"
+      steps:
+        - {label: forward_buy_request, add_request: [{order: FB-1, item: RM-08, qty: "746", price: "920.00"}], check: [FB-1]}
+
 inputs:
   product:
     columns: [product_code, name, unit]

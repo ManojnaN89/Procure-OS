@@ -252,7 +252,7 @@ def supplier_documents(c: Context) -> list[Finding]:
 
 def budgets_nearly_used(c: Context) -> list[Finding]:
     limit = c.days("budget_alert_pct", 90)
-    start, end = fy_bounds(c.today)
+    start, _ = fy_bounds(c.today)
     first, last = start.strftime("%Y-%m"), c.today.strftime("%Y-%m")
     out = []
     for gl, planned in c.db.execute(
@@ -264,19 +264,18 @@ def budgets_nearly_used(c: Context) -> list[Finding]:
     ):
         committed = c.db.execute(
             text(
-                "select coalesce(sum(l.qty * coalesce(l.est_price, 0)), 0) from request_line l join request r on r.no = l.request_no "
-                "where r.status in ('submitted', 'approved', 'closed') and l.status <> 'cancelled' and l.gl_code = :g "
-                "and (r.created_at at time zone 'Asia/Kolkata')::date between :s and :e"
+                "select coalesce(sum(amount), 0) from budget_use where gl_code = :g "
+                "and (part <> 'spent' or period between :a and :b)"
             ),
-            {"g": gl, "s": start, "e": end},
+            {"g": gl, "a": first, "b": last},
         ).scalar_one()
         pct = committed * 100 / planned
         if pct >= limit:
             out.append(
                 Finding(
                     "budget_used", "gl", gl, "high" if pct >= 100 else "medium",
-                    f"GL {gl}: {pct:.0f}% of the budget so far this year is committed",
-                    f"{format_inr(committed)} committed against {format_inr(planned)} planned up to this month.", "#/requisitions", ("Approver", "Finance"),
+                    f"GL {gl}: {pct:.0f}% of the budget so far this year is used",
+                    f"{format_inr(committed)} held or spent against {format_inr(planned)} planned up to this month.", "#/requisitions", ("Approver", "Finance"),
                 )
             )  # fmt: skip
     return out

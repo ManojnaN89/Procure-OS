@@ -89,6 +89,7 @@ PERMISSIONS: dict[str, str] = {
     "payment.propose": "Propose payment runs",
     "payment.approve": "Approve payment runs",
     "budget.view": "See budgets",
+    "budget.manage": "Lock budget periods, close the year, adjust budgets",
     "admin.users": "Manage people and roles",
     "admin.rules": "Manage approval chains and approvers",
     "admin.settings": "Manage policies and automation",

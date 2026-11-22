@@ -3,7 +3,7 @@ the price view of an item at a location, and strategic reviews (open, list, clos
 sourcing/price_view.py and sourcing/price_review.py."""
 
 import tempfile
-from datetime import date
+from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import Annotated, Any
 
@@ -145,7 +145,23 @@ def verify_benchmark(bid: int, payload: dict[str, Any], db: Db, ctx: Verifier) -
         db.rollback()
         raise _http(exc) from None
     worker.enqueue(ctx.slug, "price_review_item", {"item": item})  # a new fact: test that item's contract prices
+    for place in _stock_places(db, item):  # and whether it is now worth buying ahead (task 13.5)
+        worker.enqueue_unique(
+            ctx.slug, "forward_buy_item", {"item": item, "location": place}, datetime.now(UTC), same_payload=True
+        )
     return {"id": bid, "status": "verified"}
+
+
+def _stock_places(db: Session, item: str) -> list[str]:
+    return [
+        str(r[0])
+        for r in db.execute(
+            text(
+                "select il.location_code from item_location il join item i on i.code = il.item_code where il.item_code = :i and i.stocked"
+            ),
+            {"i": item},
+        )
+    ]
 
 
 @router.post("/benchmarks/{bid}/reject")

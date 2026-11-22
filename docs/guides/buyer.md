@@ -51,3 +51,7 @@ Changes from the ERP: when the ERP cuts or cancels a production order (or a join
 ## What you cannot do, and if you are stuck
 
 You cannot approve an order, verify a document you added, or activate a contract. An order held for a price waits for an Approver. Goods that came with no order show in **Receive without order**; once the purchase manager approves, click **Raise the order** and give the price agreed with the supplier, then send it as usual. A supplier with a missing or unverified document cannot be used: open the vendor to see which one. **Exceptions** lists everything stuck that needs a person, oldest first, with the reason, who must act, the next step and the age in working days; tick **Only mine** for what waits on you.
+
+## Forward buying
+
+When an item's market price is well below its trend, the request page shows **Buy more now while the price is low** with the months, quantities and savings worked out by the system and the benchmark behind them. Accept it (you may buy less, in whole purchase units) with a reason, or reject it. The extra quantity goes to the purchase manager to approve and becomes a separate request; the original request is bought as usual.

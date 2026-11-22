@@ -87,3 +87,53 @@ def _check(ctx: worker.JobContext) -> None:
             {"t": ctx.tenant, "k": CHECK_JOB, "i": ctx.id},
         )
     worker.enqueue_unique(ctx.tenant, CHECK_JOB, {}, next_run(ctx.now, CHECK_AT), exclude_id=ctx.id)
+
+
+# ---- forward buying (task 13.5) -----------------------------------------------------------------------------------
+
+FORWARD_ITEM_JOB = "forward_buy_item"
+FORWARD_DAILY_JOB = "forward_buy_daily"
+FORWARD_EXPLAIN_JOB = "forward_buy_explain"
+
+
+@worker.register(FORWARD_ITEM_JOB)
+def _forward_item(ctx: worker.JobContext) -> None:
+    """A request with the item was submitted, or a benchmark for it was verified: work out whether to buy ahead."""
+    from p2p.requests import forward_buy  # noqa: PLC0415 - forward buying reads budgets and sourcing
+
+    with Session(routing.engine_for(ctx.tenant)) as db:
+        try:
+            forward_buy.evaluate_item(
+                db, ctx.tenant, str(ctx.payload["item"]), str(ctx.payload["location"]), business_today()
+            )
+        except forward_buy.ForwardBuyError:
+            db.rollback()  # the item or place is gone, or no rule is in force: nothing to recommend
+    worker.enqueue_unique(ctx.tenant, FORWARD_DAILY_JOB, {}, next_run(ctx.now))
+
+
+@worker.register(FORWARD_DAILY_JOB)
+def _forward_daily(ctx: worker.JobContext) -> None:
+    """Every live recommendation is worked out again once a day: it stays, is replaced, or lapses."""
+    from p2p.requests import forward_buy  # noqa: PLC0415
+
+    with Session(routing.engine_for(ctx.tenant)) as db:
+        live = db.execute(
+            text("select item_code, location_code from forward_buy where status in ('open', 'accepted')")
+        ).all()
+        for item, place in live:
+            try:
+                forward_buy.evaluate_item(db, ctx.tenant, str(item), str(place), business_today())
+            except forward_buy.ForwardBuyError:
+                db.rollback()
+    if live:
+        worker.enqueue_unique(ctx.tenant, FORWARD_DAILY_JOB, {}, next_run(ctx.now), exclude_id=ctx.id)
+
+
+@worker.register(FORWARD_EXPLAIN_JOB)
+def _forward_explain(ctx: worker.JobContext) -> None:
+    """The AI step rewords a new recommendation's explanation; the template stays on any failure."""
+    from p2p.ai_steps import forward_buy_note  # noqa: PLC0415
+    from p2p.ai_steps.gateway import Gateway  # noqa: PLC0415
+
+    with Session(routing.engine_for(ctx.tenant)) as db:
+        forward_buy_note.explain(db, int(ctx.payload["id"]), Gateway())

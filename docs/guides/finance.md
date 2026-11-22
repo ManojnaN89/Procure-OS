@@ -45,3 +45,7 @@ Open **Control tower**. Under **Budgets, this financial year so far** each cost 
 ## Exceptions
 
 **Exceptions** lists everything stuck that needs a person, oldest first, with the reason, who must act, the next step and the age in working days; tick **Only mine** for what waits on you. A release you may decide shows there as yours.
+
+## Budgets: months, year end and adjustments
+
+The budgets panel on the control tower shows each budget with what requests hold, what orders hold and what was spent (stock when it is accepted, the rest when it is paid). Lock a month once it has ended (the earlier months first) with a reason; nothing is booked in a locked month after that, a late posting goes to the next open month. From 1 April close the year: open requests and orders carry into the new year, unspent budget lapses. To add to, take from or move a budget, use **Adjust a budget**: another finance person approves it.

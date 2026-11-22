@@ -109,6 +109,7 @@ approval_rules: |
   VAR-01,price_variance,0.00,999999999.00,ANY,ANY,ANY,ANY,cfo,1,2025-04-01,
   PAY-01,payment_run,0.00,999999999.00,ANY,ANY,ANY,ANY,cfo,1,2025-04-01,
   SUP-01,supplier_activation,0.00,999999999.00,ANY,ANY,ANY,ANY,cfo,1,2025-04-01,
+  FWD-01,forward_buy,0.00,999999999.00,ANY,ANY,ANY,ANY,cfo,1,2025-04-01,
 
 # the autonomy gate (set by `demo reset`): no touchless orders here, a buyer issues every order
 autonomy:
@@ -180,8 +181,13 @@ price_thresholds:
   note: Recommended default, needs validation (O2)
 
 budgets:
-  periods: ["2025-11", "2027-03"]
+  periods: ["2025-11", "2028-03"]
   policy: block
+  # FY 2027-28 about 8% above (each cost centre's row rounded to Rs 10,000; a location row is the sum of its cost centres')
+  next_year: {from: "2027-04", rise_pct: "8", round_to: "10000"}
+  # months closed before the demo: the finance manager locks each on the 10th of the next month at 18:00 (next working
+  # day), after the GSTR-1 of the 11th is prepared; November 2026 is the first month that can still be locked
+  locks: {through: "2026-10", by: U05, reason: Month-end close, day: 10, time: "18:00"}
   per_month:  # cost centre: total, then the total split by GL account (budgets are kept per GL)
     CC-ENG: {total: "600000.00", gl: {"1230": "400000.00", "5320": "50000.00", "5440": "150000.00"}}
     CC-ITO: {total: "900000.00", gl: {"1230": "250000.00", "5320": "50000.00", "5440": "600000.00"}}
@@ -289,6 +295,39 @@ benchmarks:
       prices: ["840", "852", "861", "870", "884", "895", "905", "898", "889", "880", "872", "866"]
 
 # ERP input files, written to inputs/ as they are: what each new joiner gets, and who joins when
+# Forward buying (task 13.5): laptops lose value (IT hardware never qualifies); roasted beans keep three months. FB7
+# starts from a fresh reset (no store check), on Monday 23 Nov 2026.
+forward_buy:
+  entered_by: U03
+  verified_by: U08
+  stock_base: B0
+  rules:
+    - {category: ITH, enabled: false, note: Laptops and accessories lose value}
+    - {item: OS-03, shelf_life_months: 3, note: Roasted beans keep three months}
+  scenarios:
+    - name: FB7
+      title: Coffee is cheaper, but the saving is small
+      item: OS-03
+      location: OFF-BLR
+      on: "2026-11-23"
+      preview: true
+      stock: {scenario: B0, step: reset, requests: false}
+      benchmark: {price: "790.0000", uom: KGS, region: KA, effective_date: "2026-11-16", source_kind: market_survey, source_name: Plantation coffee wholesale rate (three traders asked), source_ref: Buyer's survey 2026-11 (mid-month)}
+    - name: FB7b
+      title: Coffee without the November survey
+      item: OS-03
+      location: OFF-BLR
+      on: "2026-11-23"
+      preview: true
+      stock: {scenario: B0, step: reset, requests: false}
+    - name: FB8c
+      title: A laptop
+      item: LP-01
+      location: OFF-BLR
+      on: "2026-11-23"
+      preview: true
+      stock: {scenario: B0, step: reset, requests: false}
+
 inputs:
   joiner_kit:
     columns: [kit, item_code, qty]

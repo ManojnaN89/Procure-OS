@@ -53,6 +53,15 @@ python -m p2p.cli company resume <slug> --reason R --operator N
 python -m p2p.cli company archives <slug>
 python -m p2p.cli user repair <tenant>
         finishes logins a user creation left half made (DF-36)
+python -m p2p.cli budget periods <tenant> [--fy 2026-27]
+        the months of a financial year: open, locked (by whom, when) or not ended
+python -m p2p.cli budget lock <tenant> <YYYY-MM> --as <person code> --reason TEXT
+        locks an ended month (every earlier month of its year first); the person holds budget.manage
+python -m p2p.cli budget close-year <tenant> <FY> --as <person code> [--note TEXT]
+        the year end (from 1 April): locks the year's months and keeps the open commitments carried into the next year
+python -m p2p.cli forward-buy <tenant> [--item CODE] [--location LOC] [--dry-run]
+        works out forward-buy recommendations for items with a live request (one item, or every item); --dry-run writes
+        nothing and prints what the engine finds
 python -m p2p.cli worker      runs the job worker (timers, escalations, email, mailbox polling) until stopped
 """
 
@@ -68,6 +77,61 @@ from p2p.formulas.money import format_inr
 from p2p.formulas.words import count
 from p2p.platform import company_cli, db_logins, routing, tenants, users, worker
 from p2p.platform.company_state import StateError
+
+
+def _budget(args: argparse.Namespace) -> int:
+    """The budget commands: the same services and audit rows as the budgets panel."""
+    from sqlalchemy.orm import Session
+
+    from p2p.approvals import budget_periods
+    from p2p.formulas.fy import financial_year
+    from p2p.platform import notifications, permissions
+
+    today = business_today()
+    with Session(routing.engine_for(args.tenant)) as db:
+        try:
+            if args.cmd == "periods":
+                got = budget_periods.periods(db, args.fy or financial_year(today), today)
+                for p in got["periods"]:
+                    by = f" by {p['locked_by']} on {p['locked_at'][:10]}: {p['reason']}" if p["locked_by"] else ""
+                    print(f"  {p['period']}  {p['status']}{by}")
+                print(f"FY {got['fy']}: {'closed' if got['year_closed'] else 'not closed'}")
+                return 0
+            user_id = notifications.login_of(db, args.tenant, args.person)
+            if user_id is None or not permissions.can_anywhere(db, user_id, "budget.manage"):
+                print(f"{args.person} has no login that may manage budgets (budget.manage)")
+                return 1
+            if args.cmd == "lock":
+                done = budget_periods.lock(db, args.period, user_id, args.reason, today)
+                print(f"{done['period']} locked by {done['locked_by']}")
+                return 0
+            closed = budget_periods.close_year(db, args.fy, user_id, args.note, today)
+        except budget_periods.PeriodError as exc:
+            print(f"not done: {exc}")
+            return 1
+    print(f"FY {closed['fy']} closed; locked {', '.join(closed['locked']) or 'nothing more'}")
+    for c in closed["carried"]:
+        print(f"  carried {c['gl_code']} {c['cost_centre_code'] or '-'} {c['location_code'] or '-'}: "
+              f"requests {c['held_by_requests']}, orders {c['held_by_orders']}")  # fmt: skip
+    print(f"carried in all {format_inr(closed['carried_total'])}")
+    return 0
+
+
+def _forward_buy(args: argparse.Namespace) -> int:
+    """Forward-buy recommendations for one item or every item with a live request."""
+    from sqlalchemy.orm import Session
+
+    from p2p.requests import forward_buy
+
+    with Session(routing.engine_for(args.tenant)) as db:
+        results = forward_buy.run(
+            db, args.tenant, business_today(), item=args.item, location=args.location, dry_run=args.dry_run
+        )
+    for r in results:
+        what = f"recommend {r.qty} {r.uom} more, net saving {format_inr(r.net_saving)}" if r.recommended else r.reason
+        print(f"  {r.item_code}@{r.location_code}: {what}" + (f" ({r.outcome})" if r.outcome else ""))
+    print(f"{count(len(results), 'item')} evaluated")
+    return 0
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -137,11 +201,35 @@ def main(argv: list[str] | None = None) -> int:
     fill = demo.add_parser("populate")
     fill.add_argument("name", nargs="?", default="apex")
     fill.add_argument("--reset", action="store_true")
+    bud = sub.add_parser("budget").add_subparsers(dest="cmd", required=True)
+    bper = bud.add_parser("periods")
+    bper.add_argument("tenant")
+    bper.add_argument("--fy")
+    block = bud.add_parser("lock")
+    block.add_argument("tenant")
+    block.add_argument("period")
+    block.add_argument("--as", dest="person", required=True)
+    block.add_argument("--reason", required=True)
+    bclose = bud.add_parser("close-year")
+    bclose.add_argument("tenant")
+    bclose.add_argument("fy")
+    bclose.add_argument("--as", dest="person", required=True)
+    bclose.add_argument("--note")
+    fwd = sub.add_parser("forward-buy")
+    fwd.add_argument("tenant")
+    fwd.add_argument("--item")
+    fwd.add_argument("--location")
+    fwd.add_argument("--dry-run", action="store_true")
     sub.add_parser("worker")
     args = p.parse_args(argv)
 
     if args.group == "company":
         return company_cli.run(args)
+    if args.group == "budget":
+        return _budget(args)
+    if args.group == "forward-buy":
+        return _forward_buy(args)
+
     if args.group == "worker":
         print("worker running; stop with Ctrl-C")
         try:

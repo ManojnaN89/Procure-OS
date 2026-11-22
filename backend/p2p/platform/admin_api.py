@@ -146,8 +146,15 @@ def list_proposals(db: Db, ctx: Ctx, status: str = "pending") -> Rows:
     return mine
 
 
+def _known(db: Session, proposal_id: int) -> None:
+    """A proposal of this company, else 404 (another company's id is simply not here)."""
+    if db.execute(text("select 1 from proposal where id = :i"), {"i": proposal_id}).first() is None:
+        raise HTTPException(404, "Not found")
+
+
 @router.post("/proposals/{proposal_id}/approve")
 def approve_proposal(proposal_id: int, body: Decision, db: Db, ctx: Ctx) -> dict[str, Any]:
+    _known(db, proposal_id)
     if body.edited_payload and "*" in str(body.edited_payload.get("account_no", "")):
         raise HTTPException(422, "bank details are not changed here: ask for a bank change on the supplier's page")
     try:
@@ -162,6 +169,7 @@ def approve_proposal(proposal_id: int, body: Decision, db: Db, ctx: Ctx) -> dict
 
 @router.post("/proposals/{proposal_id}/reject")
 def reject_proposal(proposal_id: int, body: Decision, db: Db, ctx: Ctx) -> dict[str, Any]:
+    _known(db, proposal_id)
     try:
         proposals.reject(db, proposal_id, ctx.user_id, body.reason or "")
     except permissions.PermissionDenied as exc:

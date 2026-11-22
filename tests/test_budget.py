@@ -152,12 +152,12 @@ def test_requests_already_approved_or_waiting_use_up_the_budget_and_drafts_do_no
     _budgets(db)
     _ask(db, "R-A", "300000", status="approved")
     _ask(db, "R-B", "200000", status="submitted", cc="CC2")  # a named cost centre of the same location still counts
-    _ask(db, "R-C", "100000", status="closed")  # already ordered
+    _ask(db, "R-C", "100000", status="closed")  # every line ordered: its orders count, not its estimate (FR27)
     _ask(db, "R-D", "999999", status="draft")
     _ask(db, "R-E", "999999", status="rejected")
     _ask(db, "R-F", "999999", status="cancelled")
     _ask(db, "R-G", "999999", status="approved", gl="G2")  # another GL account
-    _ask(db, "R-H", "999999", status="approved", created="2025-10-01")  # last financial year
+    _ask(db, "R-H", "100000", status="approved", created="2025-10-01")  # last year, still open: carried (D-09)
     _ask(db, "R-I", "999999", status="approved", cc="CC9")  # another location's cost centre
 
     (group,) = _check(db, _ask(db, "R-N", "50000"))
@@ -311,7 +311,7 @@ def test_the_variance_shows_budget_held_and_spent_for_each_cost_centre_and_accou
     _ask(db, "R-V1", "30000", cc="CC1", status="approved")
     _ask(db, "R-V2", "20000", cc="CC1", status="submitted")
     _ask(db, "R-V3", "999999", cc="CC1", status="draft")  # a draft holds nothing
-    _ask(db, "R-V4", "7000", cc="CC2", status="closed")
+    _ask(db, "R-V4", "7000", cc="CC2", status="closed")  # every line ordered: its orders hold the budget, not it
     _ask(db, "R-V5", "5000", status="approved")  # no cost centre: listed apart
     db.execute(
         text("insert into supplier (code, legal_name, trade_name, status) values ('SV', 'Vendor', null, 'active')")
@@ -335,10 +335,12 @@ def test_the_variance_shows_budget_held_and_spent_for_each_cost_centre_and_accou
     assert (got["from"], got["to"]) == ("2026-04", "2026-11")
     cc1, cc2 = got["rows"]
     # 8 months (April to November) of 100,000 and 50,000
-    assert (cc1["cost_centre"], cc1["budget"], cc1["committed"], cc1["spent"], cc1["left"], cc1["over"]) == (
-        "CC1", "800000.00", "50000.00", "12000.00", "750000.00", False,
+    # left = budget - held by requests - held by orders - spent (task 3.7: spent now counts against what is left)
+    assert (cc1["cost_centre"], cc1["budget"], cc1["held_by_requests"], cc1["held_by_orders"], cc1["spent"]) == (
+        "CC1", "800000.00", "50000.00", "0.00", "12000.00",
     )  # fmt: skip
-    assert (cc2["budget"], cc2["committed"], cc2["spent"]) == ("400000.00", "7000.00", "0.00")
+    assert (cc1["committed"], cc1["left"], cc1["over"]) == ("50000.00", "738000.00", False)
+    assert (cc2["budget"], cc2["committed"], cc2["spent"]) == ("400000.00", "0.00", "0.00")
     assert got["unassigned"] == [{"gl_code": "G1", "location": "WH-BLR", "committed": "5000.00"}]
 
 

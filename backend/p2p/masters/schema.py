@@ -239,6 +239,18 @@ TABLES: tuple[Table, ...] = (
         ),
     ),
     Table(
+        "budget_period_lock",
+        "budget_period_lock",
+        (
+            ("period", "text"),
+            ("locked_by", "text"),
+            ("locked_at", "timestamptz"),
+            ("reason", "text"),
+        ),
+        ("period",),
+        (),
+    ),
+    Table(
         "company_bank_account",
         "company_bank_account",
         (
@@ -674,6 +686,33 @@ TABLES: tuple[Table, ...] = (
         ),
         None,
         (("item_code", "item", "code"), ("region_code", "region", "code")),
+    ),
+    Table(
+        "forward_buy_rule",
+        "forward_buy_rule",
+        (
+            ("category_code", "text"),
+            ("item_code", "text"),
+            ("location_code", "text"),
+            ("version", "integer"),
+            ("effective_from", "date"),
+            ("effective_to", "date"),
+            ("enabled", "boolean"),
+            ("min_gap_pct", "numeric(9,4)"),
+            ("min_trend_months", "integer"),
+            ("max_cover_months", "integer"),
+            ("holding_cost_pct_month", "numeric(9,4)"),
+            ("min_net_saving_inr", "numeric(18,2)"),
+            ("shelf_life_months", "integer"),
+            ("storage_max_qty", "numeric(18,4)"),
+            ("note", "text"),
+        ),
+        None,
+        (
+            ("category_code", "item_category", "code"),
+            ("item_code", "item", "code"),
+            ("location_code", "location", "code"),
+        ),
     ),
 )
 

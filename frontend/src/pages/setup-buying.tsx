@@ -638,6 +638,165 @@ export function Touchless(shared: Shared) {
 	);
 }
 
+// ---- the forward-buy rule (task 13.5) ---------------------------------------------------------------
+
+type ForwardField = {
+	key: string;
+	label: string;
+	kind: "bool" | "pct" | "inr" | "number";
+};
+type ForwardVersion = Version & {
+	scope: {
+		category: string | null;
+		item: string | null;
+		location: string | null;
+	};
+	values: Record<string, string | null>;
+};
+type ForwardData = { fields: ForwardField[]; versions: ForwardVersion[] };
+
+function scopeName(s: ForwardVersion["scope"]): string {
+	if (s.item) return s.location ? `${s.item} at ${s.location}` : s.item;
+	return s.category ? `category ${s.category}` : "the company";
+}
+
+function forwardValue(kind: string, value: string | null | undefined): string {
+	if (value === null || value === undefined || value === "")
+		return "as the wider rule";
+	if (kind === "bool") return value === "true" ? "yes" : "no";
+	if (kind === "inr") return formatInr(value);
+	if (kind === "pct") return `${value}%`;
+	return value;
+}
+
+export function ForwardBuying(shared: Shared) {
+	const data = useQuery({
+		queryKey: ["setup-forward-buy"],
+		queryFn: () => api<ForwardData>("/api/setup/forward-buy"),
+	});
+	const [scope, setScope] = useState({ category: "", item: "", location: "" });
+	const [values, setValues] = useState<Record<string, string>>({});
+	const [from, setFrom] = useState(today());
+	const d = data.data;
+	const save = useChange(
+		shared,
+		"setup-forward-buy",
+		(reason) => {
+			const body: Record<string, unknown> = {
+				category_code: scope.category.trim() || null,
+				item_code: scope.item.trim() || null,
+				location_code: scope.location.trim() || null,
+				effective_from: from,
+				reason,
+			};
+			for (const f of d?.fields ?? []) {
+				const v = (values[f.key] ?? "").trim();
+				if (v === "") body[f.key] = null;
+				else if (f.kind === "bool") body[f.key] = v === "true";
+				else if (!isNumber(v) || Number(v) < 0)
+					throw new Error(`${f.label}: a number of zero or more, or empty.`);
+				else body[f.key] = v;
+			}
+			return api("/api/setup/forward-buy", { method: "POST", json: body });
+		},
+		() => setValues({}),
+	);
+	if (!d) return null;
+	const company = d.versions.find(
+		(v) => v.in_force && !v.scope.item && !v.scope.category,
+	);
+	const narrower = d.versions.filter(
+		(v) => v.in_force && (v.scope.item || v.scope.category),
+	);
+	const describe = (v: ForwardVersion) =>
+		d.fields
+			.filter((f) => v.values[f.key] !== null)
+			.map((f) => `${f.label} ${forwardValue(f.kind, v.values[f.key])}`)
+			.join("; ");
+	return (
+		<RuleFrame
+			title="Forward buying"
+			current={
+				<ul
+					className="list-disc space-y-1 pl-5"
+					data-testid="forward-buy-in-force"
+				>
+					{company ? (
+						<li>
+							The company, version {company.version}: {describe(company)}.
+						</li>
+					) : null}
+					{narrower.map((v) => (
+						<li key={`${scopeName(v.scope)}-${v.version}`}>
+							{scopeName(v.scope)}, version {v.version}: {describe(v)}.
+						</li>
+					))}
+					<li>
+						A recommendation is only a proposal: the buyer accepts or rejects
+						it, and the extra quantity needs the person the forward-buy approval
+						rule names.
+					</li>
+				</ul>
+			}
+			versions={d.versions}
+			history={(x) => {
+				const row = x as ForwardVersion;
+				return (
+					<div className="text-xs">
+						{scopeName(row.scope)}: {describe(row)}
+					</div>
+				);
+			}}
+			form={
+				<div className="grid gap-3 md:grid-cols-3">
+					<Field label="Category (empty for the company or an item)">
+						<Input
+							name="category_code"
+							value={scope.category}
+							onChange={(e) => setScope({ ...scope, category: e.target.value })}
+						/>
+					</Field>
+					<Field label="Item (empty for the company or a category)">
+						<Input
+							name="item_code"
+							value={scope.item}
+							onChange={(e) => setScope({ ...scope, item: e.target.value })}
+						/>
+					</Field>
+					<Field label="Location (with an item only)">
+						<Input
+							name="location_code"
+							value={scope.location}
+							onChange={(e) => setScope({ ...scope, location: e.target.value })}
+						/>
+					</Field>
+					{d.fields.map((f) => (
+						<Field
+							key={f.key}
+							label={`${f.label}${f.kind === "bool" ? " (true or false)" : ""}`}
+						>
+							<Input
+								name={f.key}
+								value={values[f.key] ?? ""}
+								placeholder="empty: as the wider rule"
+								onChange={(e) =>
+									setValues({ ...values, [f.key]: e.target.value })
+								}
+							/>
+						</Field>
+					))}
+					<StartsOn value={from} onChange={setFrom} />
+					<div className="flex items-end">
+						<Button onClick={() => save.mutate()}>
+							Save new forward-buy version
+						</Button>
+					</div>
+				</div>
+			}
+		/>
+	);
+}
+
 // ---- items bought from one supplier only ---------------------------------------------------------
 
 export function SingleSource(shared: Shared) {

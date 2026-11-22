@@ -372,3 +372,26 @@ def test_the_stock_at_or_below_its_reorder_point_is_the_planned_spares_and_suppl
     low = sorted(line.item_code for line in stock.stock_levels(db) if line.status == "reorder")
 
     assert low == (["SP-01"] if name == "apex" else ["OS-01", "OS-02"])
+
+
+def test_apex_block3_truth_is_the_spec_figures_worked_out_from_the_files(datasets: dict[str, Path]) -> None:
+    """Budget and forward-buy scenarios (block 3): next year's budget, the locked months and the truth of FB1, BG1, YE1."""
+    folder = datasets["apex"]
+    budget = _rows(folder / "master" / "budget.csv")
+    assert {
+        r["amount"]
+        for r in budget
+        if (r["cost_centre_code"], r["gl_code"], r["period"]) == ("CC-PRD", "1410", "2027-04")
+    } == {"1570000.00"}
+    locks = [r["period"] for r in _rows(folder / "master" / "budget_period_lock.csv")]
+    assert locks[0] == "2025-11" and locks[-1] == "2026-10"
+    fb1 = [r for r in _rows(folder / "truth" / "truth_forward_buy.csv") if r["scenario"] == "FB1"]
+    assert [r["month_qty"] for r in fb1] == ["248.7083", "248.7083", "248.5834"]
+    assert (fb1[0]["qty"], fb1[0]["net_saving"], fb1[0]["limit"]) == ("746.0000", "44982.36", "max_cover_months")
+    rows = {
+        (r["scenario"], r["step"], r["gl_code"], r["level"]): r for r in _rows(folder / "truth" / "truth_budget.csv")
+    }
+    assert rows[("BG1", "after_orders", "1410", "department")]["committed"] == "434070.00"
+    assert rows[("YE1", "new_year", "1410", "department")]["used_pct"] == "40.82"
+    fb7 = [r for r in _rows(datasets["brightwave"] / "truth" / "truth_forward_buy.csv") if r["scenario"] == "FB7"]
+    assert (fb7[0]["qty"], fb7[0]["reason"], fb7[0]["limit"]) == ("22.0000", "saving_too_small", "shelf_life")

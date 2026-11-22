@@ -179,6 +179,7 @@ def submit(db: Session, tenant: str, no: str, actor: Actor, *, today: date | Non
         )
         db.commit()
         worker.enqueue(tenant, "source_request", {"request_no": no})
+        queue_forward_buy(db, tenant, no)
         _tell_requester(
             db,
             tenant,
@@ -221,10 +222,29 @@ def submit(db: Session, tenant: str, no: str, actor: Actor, *, today: date | Non
         },
     )
     db.commit()
+    queue_forward_buy(db, tenant, no)
     _open_step(db, tenant, no, req["total_value"], 1, round_no)
     return Submitted(
         no, "submitted", rule.code, rule.version, f"Needs approval by {names}", [s.approver for s in steps]
     )
+
+
+def queue_forward_buy(db: Session, tenant: str | None, no: str) -> None:
+    """A request with stocked items was submitted: each item and place is evaluated for forward buying (task 13.5),
+    once however many requests ask for it before the worker gets to it."""
+    if not tenant:
+        return
+    for item, place in db.execute(
+        text(
+            "select distinct l.item_code, coalesce(l.delivery_location, r.ship_to_location) from request_line l "
+            "join request r on r.no = l.request_no join item i on i.code = l.item_code where l.request_no = :n "
+            "and i.stocked and l.status <> 'cancelled'"
+        ),
+        {"n": no},
+    ):
+        worker.enqueue_unique(
+            tenant, "forward_buy_item", {"item": item, "location": place}, datetime.now(UTC), same_payload=True
+        )
 
 
 def _open_step(db: Session, tenant: str, no: str, value: Decimal, step: int, round_no: int) -> None:

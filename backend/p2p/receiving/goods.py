@@ -19,13 +19,14 @@ from typing import Any
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
+from p2p.approvals import budget_ledger
 from p2p.approvals.workflow import org_code_of
 from p2p.formulas import receiving as rules
 from p2p.formulas.calendar import business_today
 from p2p.formulas.money import format_qty
 from p2p.invoices import tolerances
 from p2p.platform import audit, notifications, numbering
-from p2p.platform.sod import user
+from p2p.platform.sod import Actor, user
 from p2p.receiving import quality
 from p2p.receiving.kinds import service_lines
 from p2p.requests import reservation
@@ -143,9 +144,11 @@ def count_accepted(
     as_of: date,
     *,
     in_stock: bool = False,
+    actor: Actor = audit.SYSTEM,
 ) -> None:
     """What was accepted (or confirmed, for a service) counts against the order line, and stocked goods go into stock
-    (unless they are there already, in quarantine: `in_stock`)."""
+    (unless they are there already, in quarantine: `in_stock`). A stocked line's accepted goods are spent against its
+    budget now, at the order price (D-10)."""
     if accepted <= 0:
         return
     total = Decimal(line["received_qty"]) + accepted
@@ -171,6 +174,7 @@ def count_accepted(
                 "ref": gr_no,
             },
         )
+    budget_ledger.post_receipt(db, gr_no, po["no"], int(line["line_no"]), accepted, as_of, actor)
 
 
 def refresh_order(db: Session, po_no: str) -> str:
@@ -313,7 +317,7 @@ def post_receipt(db: Session, po_no: str, lines: list[LineIn], header: Header, u
         )
         if result is not None:
             accepted_by_line[ln.po_line_no] = result.accepted
-            count_accepted(db, gr_no, po, row, result.accepted, as_of)
+            count_accepted(db, gr_no, po, row, result.accepted, as_of, actor=user(user_id))
         elif item["stocked"] and row["item_code"]:
             qty = (ln.qty_received * _ratio(row)).quantize(rules.QTY)
             cost = rules.stock_unit_cost(Decimal(row["unit_price"]), Decimal(row["qty"]), row["base_qty"])
@@ -403,7 +407,16 @@ def inspect(db: Session, gr_no: str, decisions: list[Decision], user_id: int, *,
             text("select 1 from stock_hold where source = 'receipt' and gr_no = :g and gr_line_no = :l"),
             {"g": gr_no, "l": line_no},
         ).first()
-        count_accepted(db, gr_no, po, order_lines[line_no], d.qty_accepted, as_of, in_stock=in_stock is not None)
+        count_accepted(
+            db,
+            gr_no,
+            po,
+            order_lines[line_no],
+            d.qty_accepted,
+            as_of,
+            in_stock=in_stock is not None,
+            actor=user(user_id),
+        )
     db.execute(
         text("update goods_receipt set inspection_status = :s, accepted_on = :d where no = :n"),
         {"s": "failed" if total_rejected > 0 else "passed", "d": as_of, "n": gr_no},

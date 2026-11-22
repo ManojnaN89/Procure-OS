@@ -547,16 +547,16 @@ def _discounts(out: Outcome, *, quick: bool) -> None:
     ).scalar_one()
     if unpaid:
         out.find("high", f"{unpaid} invoice(s) of the run are not marked paid")
+    # D-10 (block 3): stocked goods are spent when accepted; the rest, and charges less a discount taken, when paid
+    import budget_oracle
+
     spent = D(db.execute(text("select coalesce(sum(amount), 0) from budget_actual")).scalar_one())
-    expect_spent = D(
-        db.execute(
-            text(
-                "select coalesce(sum(taxable - discount_taken), 0) from invoice where status = 'paid' and type = 'invoice'"
-            )
-        ).scalar_one()
-    )
+    expect_spent = budget_oracle.at_receipt(db) + budget_oracle.at_payment(db)
     if abs(spent - expect_spent) > D("0.05"):
-        out.find("high", f"budget actuals are {spent} but the paid invoices less their discounts are {expect_spent}")
+        out.find(
+            "high",
+            f"budget actuals are {spent} but receipts of stock and paid invoices less discounts give {expect_spent}",
+        )
 
     # who is told: the buyer of each order the run closed, once, and nobody for an order that stayed open
     notified = {

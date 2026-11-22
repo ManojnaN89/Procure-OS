@@ -670,6 +670,45 @@ def create_requisition(
     return {"id": result.request_nos[0], "request_nos": result.request_nos, "warnings": result.warnings}
 
 
+def _forward_buy_of(db: Session, no: str, source_ref: str | None, user_id: int) -> dict[str, Any]:
+    """The forward-buy recommendation anchored on the request (the live one, else the latest), with what the caller may
+    do with it; and for a request a forward buy made, which one and on which request."""
+    from p2p.requests import forward_buy  # noqa: PLC0415 - forward buying reads budgets and sourcing
+
+    rec = (
+        db.execute(
+            text(
+                "select * from forward_buy where request_no = :n or new_request_no = :n "
+                "order by (status in ('open', 'accepted')) desc, id desc limit 1"
+            ),
+            {"n": no},
+        )
+        .mappings()
+        .first()
+    )
+    shown = None
+    if rec is not None and rec["request_no"] == no:
+        shown = forward_buy.as_json(db, dict(rec))
+        payload = (
+            db.execute(text("select payload from proposal where id = :i"), {"i": rec["proposal_id"]}).scalar()
+            if rec["proposal_id"] else None
+        )  # fmt: skip
+        me = approvals.org_code_of(db, user_id)
+        shown["can_decide"] = rec["status"] == "open" and can_anywhere(db, user_id, "po.create")
+        shown["can_approve"] = (
+            rec["status"] == "accepted" and payload is not None and me in (payload.get("approver"), payload.get("delegate"))
+            and me != payload.get("buyer")
+        )  # fmt: skip
+    made_by = None
+    if source_ref and source_ref.startswith("FB-"):
+        made = db.execute(
+            text("select id, request_no, approved_by from forward_buy where id = :i"), {"i": int(source_ref[3:] or 0)}
+        ).first()
+        if made is not None:
+            made_by = {"id": made[0], "anchor_request_no": made[1], "approved_by": approvals.name_of(db, made[2])}
+    return {"forward_buy": shown, "forward_buy_of": made_by}
+
+
 @router.get("/requisitions/{no}")
 def get_requisition(no: str, db: Db, ctx: Ctx) -> dict[str, Any]:
     rows = _rows(
@@ -795,6 +834,7 @@ def get_requisition(no: str, db: Db, ctx: Ctx) -> dict[str, Any]:
             and any(line["status"] == "open" and not line["source_method"] for line in lines)
             and can_anywhere(db, ctx.user_id, "rfq.create"),
         },
+        **_forward_buy_of(db, no, rows[0]["source_ref"], ctx.user_id),
     }
 
 

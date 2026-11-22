@@ -12,12 +12,14 @@ from p2p.platform.admin_api import router as admin_router
 from p2p.platform.agent_api import router as agent_router
 from p2p.platform.approval_link_api import router as approval_link_router
 from p2p.platform.auth import router as auth_router
+from p2p.platform.budget_api import router as budget_router
 from p2p.platform.buying_rules_api import router as buying_rules_router
 from p2p.platform.company_api import router as company_router
 from p2p.platform.company_state import StateError
 from p2p.platform.demand_api import router as demand_router
 from p2p.platform.export_api import router as export_router
 from p2p.platform.files import router as files_router
+from p2p.platform.forward_buy_api import router as forward_buy_router
 from p2p.platform.guides_api import router as guides_router
 from p2p.platform.invoice_api import router as invoice_router
 from p2p.platform.invoice_intake_api import router as invoice_intake_router
@@ -59,6 +61,8 @@ app.include_router(material_router)
 app.include_router(stock_router)
 app.include_router(setup_router)
 app.include_router(buying_rules_router)
+app.include_router(budget_router)
+app.include_router(forward_buy_router)
 app.include_router(ui_router)
 app.include_router(workspace_router)
 app.include_router(guides_router)

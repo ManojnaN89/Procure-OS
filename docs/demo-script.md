@@ -139,6 +139,25 @@ The data holds what these show; the screens come with the backend of block 0b.
 3. store@ cannot sign in now ("Sign-in opens at go-live ..."); finance@ can. As finance@, on the Go-live tab, load the files of `data/datasets/apex-v1/cutover/` (dry run, then load): 31 orders, 45 receipts, 44 invoices (Rs 6,05,557; PI-2627-000247 blocked as in the old system), the advance on PO-CKN-2627-00202 and the control totals, all ok. `cutover-bad/` shows every refusal with its reason.
 4. admin@ proposes going live; admin2@ approves it. The company is live: everyone signs in, the jobs run, the first payment run takes the cutover invoices.
 
+## Budget and forward buying (block 3)
+
+After `demo reset apex` and the store check (A0), on 23 Nov 2026:
+
+1. **Budget.** As Anil Mehta (finance), open the MRP request: account 1410 of department PRD at PLT-CKN, Apr to Nov 2026,
+   Rs 1,16,00,000 in all; Rs 2,76,780 held by requests, Rs 0 by orders, Rs 0 spent; this request asks for Rs 3,64,090,
+   5.52% used. Approve MO-1, buy the wire directly from SUP-005 at Rs 880 (the purchase manager agrees), make the orders:
+   MO-2's check now shows Rs 69,980 held by orders (the order prices, not the estimates). Receive the 40 kg of wire:
+   Rs 35,200 is spent in November at once (D-10). Pay its invoice later: only the Rs 500 freight is added.
+2. **Months.** The control tower's budgets panel shows the months: April to October locked, November open. On 7 Dec
+   finance locks November with a reason; a payment for a November invoice is then booked in December. An adjustment is
+   sent for another finance person to approve. From 1 April 2027 finance closes FY 2026-27: Rs 6,52,120 of open requests
+   is carried into the new year.
+3. **Forward buying.** As Neha Kulkarni (buyer), enter the Pune wire bulletin at Rs 828 a kg (16 Nov); Sanjay Rao
+   verifies it. The MRP request shows "Buy more now while the price is low": 746 kg more for February to April, net saving
+   Rs 44,982.36, with the evidence. The buyer accepts ("Copper dip; Q4 plan firm"); Sanjay Rao approves the extra
+   quantity, and a new planning request for 746 kg goes to the director for approval with its own budget check (11.44%
+   used). Command line: `python -m p2p.cli forward-buy apex --item RM-08 --dry-run`.
+
 ## Start with cases in flight
 
 `python -m p2p.cli demo populate apex --reset` (about 20 seconds, local database only) makes the company and then does what the people would do, through the real API, so every figure, email, notification and audit row is real:

@@ -37,6 +37,7 @@ from approval_scenarios import write_approval  # noqa: E402
 from demand_scenarios import write_scenarios  # noqa: E402
 from stock_scenarios import write_stock  # noqa: E402
 import cutover  # noqa: E402
+from budget_forward import block3_problems, budget_rows, fy_start, forward_rule_rows, lock_rows, write_block3  # noqa: E402
 from history_plan import mrp_results, production_lines  # noqa: E402
 from master_files import (  # noqa: E402
     EMPTY_TABLES,
@@ -144,6 +145,7 @@ class MasterWriter:
         self.suppliers()
         self.contracts()
         self.benchmarks()
+        self.put("forward_buy_rule", forward_rule_rows(self.p))
         for name in EMPTY_TABLES:
             self.put(name, [])
         return self.counts
@@ -288,27 +290,8 @@ class MasterWriter:
                 for place in self.p.places
             ],
         )
-        b = self.p["budgets"]
-        held = [(cc, "", plan) for cc, plan in b["per_month"].items()]
-        held += [("", loc, plan) for loc, plan in b["per_location"].items()]  # the location's own budget
-        self.put(
-            "budget",
-            [
-                {
-                    "cost_centre_code": cc,
-                    "gl_code": gl,
-                    "project_code": "",
-                    "period": period,
-                    "amount": amount,
-                    "version": "1",
-                    "policy": b["policy"],
-                    "location_code": loc,
-                }
-                for cc, loc, plan in held
-                for gl, amount in plan["gl"].items()
-                for period in months(*b["periods"])
-            ],
-        )
+        self.put("budget", budget_rows(self.p))  # this year's plan, and next year's risen (block 3)
+        self.put("budget_period_lock", lock_rows(self.p))
 
     def catalogue(self) -> None:
         buyer = next(u["code"] for u in self.p["people"] if "buyer" in u["roles"])
@@ -634,6 +617,7 @@ def build(profile: CompanyProfile, out: Path) -> dict[str, dict[str, int]]:
     changes = write_scenarios(profile.data, out) if history else {}  # the oracle replays the stock history
     if history:
         write_stock(profile.data, out)  # held stock and the stock check scenarios, after the demand truth
+        write_block3(profile, out)  # budget and forward-buy scenarios, after the stock truth they start from
     opening = cutover.write(out, profile) if history and "cutover" in profile.data else {}
     write_approval(profile.data, out)  # the approval scenarios of block 4: every order version worked out
     manifest = {
@@ -799,8 +783,8 @@ def check(out: Path, profile: CompanyProfile | None = None) -> list[str]:
         if not any(k[0] == document for k in bands):
             problems.append(f"no approval rule for {document}")
 
-    # budgets: every cost centre and every location with cost centres has every month, the same amount each month; a row
-    # belongs to a cost centre or to a location, never both
+    # budgets: every cost centre and every location with cost centres has every month, the same amount each month of a
+    # financial year; a row belongs to a cost centre or to a location, never both
     per_month: dict[tuple[str, str], Decimal] = defaultdict(Decimal)
     for r in t["budget"]:
         holder = r["cost_centre_code"] or r["location_code"]
@@ -811,9 +795,12 @@ def check(out: Path, profile: CompanyProfile | None = None) -> list[str]:
         per_month[(holder, r["period"])] += Decimal(r["amount"])
     holders = {r["code"] for r in t["cost_centre"]} | {r["location_code"] for r in t["cost_centre"]}
     for holder in holders:
-        amounts = {amount for (c, _), amount in per_month.items() if c == holder}
-        if len(amounts) != 1:
-            problems.append(f"{holder} has no budget or a different budget in different months")
+        years: dict[str, set[Decimal]] = defaultdict(set)
+        for (c, period), amount in per_month.items():
+            if c == holder:
+                years[fy_start(date(int(period[:4]), int(period[5:]), 1))].add(amount)
+        if not years or any(len(a) != 1 for a in years.values()):
+            problems.append(f"{holder} has no budget or a different budget in different months of a year")
 
     # stock: a stocked item has a plan and an opening balance at the location; min-max reaches above its point
     planned = {r["item_code"]: r for r in t["item_location"]}
@@ -872,6 +859,7 @@ def check(out: Path, profile: CompanyProfile | None = None) -> list[str]:
     problems += _version_problems(t)
     problems += _benchmark_problems(t)
     problems += _input_problems(out, t)
+    problems += block3_problems(out, profile)
     if profile is not None:
         problems += _profile_problems(profile, t, per_month)
         if "history" in profile.data and not problems:
@@ -1052,7 +1040,8 @@ def _profile_problems(
     for holder, plan in plans.items():
         if sum((Decimal(v) for v in plan["gl"].values()), Decimal(0)) != Decimal(plan["total"]):
             problems.append(f"budget of {holder}: the GL split does not add up to {plan['total']}")
-        if {a for (c, _), a in per_month.items() if c == holder} != {Decimal(plan["total"])}:
+        nxt = (profile["budgets"].get("next_year") or {}).get("from", "9999-12")
+        if {a for (c, p), a in per_month.items() if c == holder and p < nxt} != {Decimal(plan["total"])}:
             problems.append(f"budget of {holder} is not {plan['total']} every month")
     return problems
 

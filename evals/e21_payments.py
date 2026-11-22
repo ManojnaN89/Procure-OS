@@ -27,7 +27,9 @@ def run(ctx) -> Outcome:
     out = Outcome(True)
     world = lib.build_world("e21", with_stock=False)
     db = world.db
-    r = replay(world, release_blocked=True, load_bank_rates=True, goods_only=True)  # goods only: tax at source on services (194C, 194J) is not built yet
+    r = replay(
+        world, release_blocked=True, load_bank_rates=True, goods_only=True
+    )  # goods only: tax at source on services (194C, 194J) is not built yet
     db.commit()
     inverse = {v: k for k, v in r.platform_no.items()}
     suppliers = {s["code"]: s for s in rows("master", "supplier")}
@@ -166,15 +168,18 @@ def run(ctx) -> Outcome:
     ).scalar_one()
     if open_closed:
         out.find("high", f"{open_closed} order(s) are closed with lines still open")
-    # budget actuals equal what was paid, before tax
-    spent = D(db.execute(text("select coalesce(sum(amount), 0) from budget_actual")).scalar_one())
-    taxable_paid = D(
-        db.execute(
-            text("select coalesce(sum(taxable), 0) from invoice where status = 'paid' and type = 'invoice'")
-        ).scalar_one()
-    )
-    if abs(spent - taxable_paid) > D("0.05"):
-        out.find("high", f"budget actuals are {spent} but the paid invoices were {taxable_paid} before tax")
+    # budget actuals (D-10, block 3): stocked goods when accepted at receipt, at the order price; everything else and
+    # the charges when paid, before tax
+    import budget_oracle
+
+    for source, want in (("receipt", budget_oracle.at_receipt(db)), ("payment", budget_oracle.at_payment(db))):
+        spent = D(
+            db.execute(
+                text("select coalesce(sum(amount), 0) from budget_actual where source = :s"), {"s": source}
+            ).scalar_one()
+        )
+        if abs(spent - want) > D("0.05"):
+            out.find("high", f"budget actuals at {source} are {spent} but the documents give {want}")
     # the second payment of the same invoice is impossible
     twice = db.execute(
         text(

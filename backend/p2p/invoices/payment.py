@@ -20,6 +20,7 @@ from typing import Any
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
+from p2p.approvals import budget_ledger
 from p2p.formulas import payment as rules
 from p2p.formulas.money import format_inr
 from p2p.formulas.words import count
@@ -640,7 +641,7 @@ def mark_paid(
                 ),
                 {"d": paid_on, "i": a[0], "x": a[1]},
             )
-            _budget_actual(db, a[0])
+            budget_ledger.post_payment(db, a[0], user(user_id), paid_on)
             closed += close_case(db, a[0], user_id)
         p["utr"] = utr
     db.execute(text("update payment_run set status = 'paid' where no = :n"), {"n": no})
@@ -653,41 +654,6 @@ def mark_paid(
     for po_no in dict.fromkeys(closed):
         _notify_closed(db, tenant, po_no)
     return closed
-
-
-def _budget_actual(db: Session, invoice_no: str) -> None:
-    """What was spent, by cost centre and GL account, so the budget can show actuals."""
-    inv = db.execute(
-        text("select received_on, type, discount_taken from invoice where no = :n"), {"n": invoice_no}
-    ).first()
-    if inv is None or inv[1] != "invoice":
-        return
-    spent: list[tuple[Any, Any, Decimal]] = [
-        (r[0], r[1], D(r[2]))
-        for r in db.execute(
-            text(
-                "select rl.cost_centre_code as cc, coalesce(rl.gl_code, pl.gl_code) as gl_code, sum(il.taxable) as amount "
-                "from invoice_line il join po_line pl on pl.po_no = il.po_no and pl.line_no = il.po_line_no "
-                "left join request_line rl on rl.request_no = pl.request_no and rl.line_no = pl.request_line_no "
-                "where il.invoice_no = :n group by 1, 2"
-            ),
-            {"n": invoice_no},
-        ).all()
-    ]
-    charges = D(
-        db.execute(
-            text("select coalesce(sum(amount), 0) from invoice_charge where invoice_no = :n"), {"n": invoice_no}
-        ).scalar_one()
-    )
-    if spent and (charges or inv[2]):  # freight and packing are spent too; a discount earned is spent less
-        spent[0] = (spent[0][0], spent[0][1], spent[0][2] + charges - D(inv[2]))
-    for cc, gl, amount in spent:
-        db.execute(
-            text(
-                "insert into budget_actual (invoice_no, cost_centre_code, gl_code, period, amount) values (:i, :c, :g, :p, :a)"
-            ),
-            {"i": invoice_no, "c": cc, "g": gl, "p": inv[0].strftime("%Y-%m"), "a": amount},
-        )
 
 
 def close_case(db: Session, invoice_no: str, user_id: int) -> list[str]:

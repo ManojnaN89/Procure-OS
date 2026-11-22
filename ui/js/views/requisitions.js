@@ -289,7 +289,7 @@ const RequisitionsView = {
       <div class="panel" style="margin-bottom:12px;">
         <div class="panel-title">Approval</div>
         ${a.decision ? `<p style="margin:0 0 10px;font-size:12.5px;color:var(--text-secondary);">${this.esc(String(a.decision).replace(/ under rule [A-Za-z0-9-]+ v\d+/, ""))}</p>` : `<p style="margin:0 0 10px;font-size:12.5px;color:var(--text-muted);">Not submitted yet.</p>`}
-        ${(a.budget || []).filter((b) => b.status !== "unchecked").map((b) => `<div class="budget-check" style="margin:0 0 6px;font-size:12px;color:${b.status === "ok" ? "var(--text-secondary)" : "var(--warning-text)"};">Budget account ${this.esc(b.gl_code)}${b.holder ? ` of ${this.esc(b.holder)}` : ""}${b.period ? `, ${this.esc(b.period)}` : ""}: ${formatCurrency(b.budget)} in all, ${formatCurrency(b.committed)} already committed, this request asks for ${formatCurrency(b.requested)}${b.used_pct ? ` · ${this.esc(b.used_pct)}% used` : ""}${b.status === "over" ? ` · over the budget by ${formatCurrency(b.over_by)}` : b.status === "warn" ? " · nearly used up" : ""}</div>`).join("")}
+        ${(a.budget || []).filter((b) => b.status !== "unchecked").map((b) => `<div class="budget-check" style="margin:0 0 6px;font-size:12px;color:${b.status === "ok" ? "var(--text-secondary)" : "var(--warning-text)"};">Budget account ${this.esc(b.gl_code)}${b.holder ? ` of ${this.esc(b.holder)}` : ""}${b.period ? `, ${this.esc(b.period)}` : ""}: ${formatCurrency(b.budget)} in all; ${b.held_by_requests !== undefined ? `${formatCurrency(b.held_by_requests)} held by requests, ${formatCurrency(b.held_by_orders)} by orders, ${formatCurrency(b.spent)} spent` : `${formatCurrency(b.committed)} already committed`}; this request asks for ${formatCurrency(b.requested)}${b.used_pct ? ` · ${this.esc(b.used_pct)}% used` : ""}${b.status === "over" ? ` · over the budget by ${formatCurrency(b.over_by)}` : b.status === "warn" ? " · nearly used up" : ""}</div>`).join("")}
         ${trail}${rule}${actions}
         ${own ? `<div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:10px;">${own}</div>` : ""}
         ${a.can_source ? `<div class="btn btn-primary" id="sourceBtn" style="margin-top:6px;"><i class="ti ti-search"></i>Find suppliers</div>` : ""}
@@ -336,6 +336,65 @@ const RequisitionsView = {
           ${rows.map((l) => `<tr><td>${this.esc(l.name)}</td><td>${this.esc(l.on_hand)}</td><td>${this.esc(l.open_requests)}</td><td>${this.esc(l.open_po_balance)}</td><td>${this.esc(l.inbound)}</td><td><strong>${this.esc(l.suggested_net_qty)}</strong> <span class="cell-muted">${this.esc(l.uom)}</span></td></tr>`).join("")}
         </tbody></table>` : ""}
       </div>`;
+  },
+
+  // Forward buying (task 13.5): buy more now while the price is low. The figures are the engine's; people decide.
+  forwardBuyPanel(r) {
+    const of = r.forward_buy_of;
+    if (of) {
+      return `<p class="cell-muted" style="font-size:12px;margin:0 0 12px;">Forward buy FB-${this.esc(of.id)} for <a href="#/requisitions/${this.esc(of.anchor_request_no)}" style="color:var(--accent-tint)">${this.esc(of.anchor_request_no)}</a>, approved by ${this.esc(of.approved_by)}</p>`;
+    }
+    const f = r.forward_buy;
+    if (!f) return "";
+    const b = f.benchmark || {};
+    const unit = f.uom || "";
+    const state = {
+      accepted: `Waiting for ${this.esc(f.approver || "the approver")}`,
+      approved: `Approved: <a href="#/requisitions/${this.esc(f.new_request_no)}" style="color:var(--accent-tint)">${this.esc(f.new_request_no)}</a> for ${this.esc(Number(f.accepted_qty))} ${this.esc(unit)}`,
+      rejected: `Rejected: ${this.esc(f.decision_reason || "")}`,
+      declined: `Declined: ${this.esc(f.decision_reason || "")}`,
+      superseded: "Replaced by a newer recommendation",
+      lapsed: `No longer recommended (${this.esc(f.lapse_reason || "")})`,
+    }[f.status];
+    const field = "background:var(--surface-sunken);border:1px solid var(--border);color:var(--text-primary);border-radius:8px;padding:6px 8px;font-size:12.5px;";
+    return `
+      <div class="panel" style="margin-bottom:12px;" id="fwdPanel">
+        <div class="panel-title">Buy more now while the price is low</div>
+        <p style="font-size:12.5px;margin:0 0 8px;">${this.esc(f.explanation || "")}</p>
+        <table class="data-table"><thead><tr><th>MONTH</th><th>EXPECTED PRICE</th><th>QUANTITY</th><th>NET SAVING PER UNIT</th></tr></thead><tbody>
+          ${(f.months || []).map((m) => `<tr><td>${this.esc(m.month)}</td><td>${formatCurrency(m.expected_price)}</td><td>${this.esc(Number(m.qty))} ${this.esc(f.base_uom || unit)}</td><td>${formatCurrency(m.net_per_unit)}</td></tr>`).join("")}
+        </tbody></table>
+        <p style="font-size:12.5px;margin:8px 0 4px;">Gross ${formatCurrency(f.gross_saving)} · holding ${formatCurrency(f.holding_cost)} · net ${formatCurrency(f.net_saving)}</p>
+        <p class="cell-muted" style="font-size:11.5px;margin:0;">Evidence: ${this.esc(b.source_name || "")} ${formatCurrency(b.price)} a ${this.esc(b.uom || "")} on ${formatDate(b.effective_date)}, verified by ${this.esc(b.verified_by || "")}; trend from ${this.esc(f.trend_points)} months · ${this.esc(f.rule)}</p>
+        ${state ? `<p style="font-size:12.5px;margin:8px 0 0;"><strong>${state}</strong></p>` : ""}
+        ${f.can_decide ? `<div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px;align-items:center;">
+          <input id="fwdQty" type="number" min="1" step="1" max="${this.esc(Number(f.qty))}" value="${this.esc(Number(f.qty))}" style="${field}width:110px;"> <span class="cell-muted">${this.esc(unit)}</span>
+          <input id="fwdReason" placeholder="Reason (required)" style="${field}width:260px;">
+          <button type="button" class="btn btn-primary btn-sm" id="fwdAccept">Accept</button>
+          <button type="button" class="btn btn-sm" id="fwdReject">Reject</button></div>` : ""}
+        ${f.can_approve ? `<div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px;align-items:center;">
+          <input id="fwdReason" placeholder="Note, or the reason to decline" style="${field}width:280px;">
+          <button type="button" class="btn btn-primary btn-sm" id="fwdApprove">Approve the extra quantity</button>
+          <button type="button" class="btn btn-sm" id="fwdDecline">Decline</button></div>` : ""}
+        <div id="fwdNote" class="cell-muted" style="font-size:12px;margin-top:6px;"></div>
+      </div>`;
+  },
+
+  wireForwardBuy(r) {
+    const f = r.forward_buy;
+    if (!f) return;
+    const send = async (verb, body) => {
+      const res = await API.postJSON(`/api/forward-buys/${encodeURIComponent(f.id)}/${verb}`, body);
+      if (res.ok) return this.renderDetail(document.getElementById("appContent"), r.id);
+      const note = document.getElementById("fwdNote");
+      if (note) note.textContent = res.data.detail || "That did not work.";
+    };
+    const reason = () => (document.getElementById("fwdReason") || {}).value || "";
+    const on = (id, fn) => { const el = document.getElementById(id); if (el) el.addEventListener("click", fn); };
+    on("fwdAccept", () => send("accept", { qty: document.getElementById("fwdQty").value, reason: reason() }));
+    on("fwdReject", () => send("reject", { reason: reason() }));
+    on("fwdApprove", () => send("approve", { note: reason() }));
+    on("fwdDecline", () => send("decline", { reason: reason() }));
   },
 
   wireApproval(r) {
@@ -404,6 +463,7 @@ const RequisitionsView = {
         <div class="doc-main">
         ${this.approvalPanel(r)}
         ${this.checksPanel(r)}
+        ${this.forwardBuyPanel(r)}
         ${lines.length ? `
         <div class="table-wrap" style="margin-bottom:12px;">
           <table class="data-table">
@@ -446,6 +506,7 @@ const RequisitionsView = {
         </div>
       `;
       this.wireApproval(r);
+      this.wireForwardBuy(r);
       container.querySelectorAll(".price-view").forEach((a) => a.addEventListener("click", (ev) => { ev.preventDefault(); PriceView.open(document.getElementById("priceViewBox"), a.dataset.item, a.dataset.loc || null); }));
     } catch {
       container.innerHTML = `<div class="empty-state">Couldn't load this request. Go back to the list and try again.</div>`;

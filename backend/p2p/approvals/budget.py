@@ -6,11 +6,14 @@ use the goods) is charged to the cost centres of the request's department at its
 centres there when the department has none. A location may also have its own budget (budget rows with a location and no
 cost centre); then every line delivered there, or charged to a cost centre there, is checked against it as well.
 
-The budget counts from the start of the financial year (1 April) to the month of the check; the commitments are the
-other requests of the year that are waiting for approval, approved, or already ordered. A check warns at
-`budget_warn_pct` of the budget used (default 90) and is over above `budget_block_pct` (default 100); what an over budget
-does follows `budget_policy` or the budget rows (warn or block). The check runs at submit, at each approval step, and
-again when the order is made, on its final prices.
+The budget counts from the start of the financial year (1 April) to the month of the check. What is used of it (FR27,
+task 3.7) comes from the view `budget_use`, in three parts: request lines not yet ordered on requests waiting or
+approved (at the estimate), open order lines (at the order price, less what is already actual on them) and what is
+actual this financial year up to the month (stocked lines when accepted at receipt, the rest when paid, D-10). Open
+requests and orders count whenever they were made: at the year end they carry into the new year. The request checked
+counts in none of the parts. A check warns at `budget_warn_pct` of the budget used (default 90) and is over above
+`budget_block_pct` (default 100); what an over budget does follows `budget_policy` or the budget rows (warn or block).
+The check runs at submit, at each approval step, and again when the order is made, on its final prices.
 """
 
 from dataclasses import dataclass
@@ -26,8 +29,8 @@ from p2p.formulas.fy import financial_year, fy_bounds
 from p2p.formulas.money import format_inr
 from p2p.platform import settings
 
-COMMITTED_STATUSES = ("submitted", "approved", "closed")
 CENTS = Decimal("0.01")
+PARTS = ("request", "order", "spent")
 
 # the cost centres a line is charged to (aliases: l the line, r its request, cc a cost centre)
 _CHARGED_TO = """(cc.code = l.cost_centre_code or (l.cost_centre_code is null and cc.active
@@ -39,10 +42,15 @@ _LOCATION_OF = (
     "coalesce((select c.location_code from cost_centre c where c.code = l.cost_centre_code), "
     "l.delivery_location, r.ship_to_location)"
 )
-_COMMITTED = (
-    "select coalesce(sum(l.qty * coalesce(l.est_price, 0)), 0) from request_line l join request r on r.no = l.request_no "
-    "where r.no <> :n and r.status = any(:st) and l.status <> 'cancelled' and l.gl_code = :g "
-    "and r.created_at::date between :f and :t and "
+# a row of budget_use charged to one of the cost centres :cc (as _CHARGED_TO, for the row's own line and request)
+_USE_CHARGED = """exists (select 1 from cost_centre cc where cc.code = any(:cc) and (cc.code = u.cost_centre_code
+    or (u.cost_centre_code is null and cc.active and cc.location_code = u.charge_location
+        and (cc.department_code = u.department_code or not exists (select 1 from cost_centre d where d.active
+            and d.location_code = cc.location_code and d.department_code = u.department_code)))))"""
+# what the other documents use of an account: the three parts, the request checked left out
+_USED = (
+    "select u.part, coalesce(sum(u.amount), 0) from budget_use u where u.gl_code = :g "
+    "and u.request_no is distinct from :n and (u.part <> 'spent' or u.period between :a and :b) and "
 )
 LEVELS = {
     "cost_centre": "cost centre",
@@ -63,6 +71,7 @@ class GroupCheck:
     department: str | None = None
     period: str = ""  # the months the budget counts, in words
     warn_pct: Decimal = WARN_PCT
+    parts: tuple[Decimal, Decimal, Decimal] = (Decimal(0), Decimal(0), Decimal(0))  # held by requests, by orders, spent
 
     @property
     def holder(self) -> str:
@@ -87,6 +96,9 @@ class GroupCheck:
             "period": self.period,
             "status": self.check.status,
             "budget": None if self.check.budget is None else str(self.check.budget.quantize(CENTS)),
+            "held_by_requests": str(self.parts[0].quantize(CENTS)),
+            "held_by_orders": str(self.parts[1].quantize(CENTS)),
+            "spent": str(self.parts[2].quantize(CENTS)),
             "committed": str(self.check.committed.quantize(CENTS)),
             "requested": str(self.check.requested.quantize(CENTS)),
             "over_by": str(self.check.over_by),
@@ -126,18 +138,25 @@ def _lines(db: Session, request_no: str, final_prices: bool) -> list[dict[str, A
     return [dict(r) for r in db.execute(text(sql), {"n": request_no}).mappings()]
 
 
+def _used(db: Session, where: str, params: dict[str, Any]) -> tuple[Decimal, Decimal, Decimal]:
+    """Held by requests, held by orders and spent, for one account and holder."""
+    rows = db.execute(text(_USED + where + " group by u.part"), params)  # noqa: S608 - fixed fragments only
+    got = {r[0]: Decimal(r[1]) for r in rows}
+    return got.get("request", Decimal(0)), got.get("order", Decimal(0)), got.get("spent", Decimal(0))
+
+
 def check_request(db: Session, request_no: str, today: date, *, final_prices: bool = False) -> list[GroupCheck]:
     """One result per GL account and cost-centre scope on the request, and one per GL account and location that has a
     budget of its own (lines without a GL account cannot be checked and are left out).
 
     With `final_prices` a line that has been ordered is valued at the order's price instead of the estimate: that is the
     check an order makes on its final amount."""
-    start, fy_end = fy_bounds(today)
+    start, _ = fy_bounds(today)
     months = {"a": start.strftime("%Y-%m"), "b": today.strftime("%Y-%m")}
     warn_pct = settings.number(db, "budget_warn_pct", str(WARN_PCT))
     block_pct = settings.number(db, "budget_block_pct", str(BLOCK_PCT))
     period = period_words(today)
-    common = {"n": request_no, "st": list(COMMITTED_STATUSES), "f": start, "t": fy_end}
+    common = {"n": request_no, **months}
     setting_blocks = _policy_setting(db) == "block"
 
     charged: dict[tuple[str, tuple[str, ...], str, str | None, str | None], Decimal] = {}
@@ -170,19 +189,16 @@ def check_request(db: Session, request_no: str, today: date, *, final_prices: bo
             .mappings()
             .one()
         )
-        committed = db.execute(
-            text(_COMMITTED + "exists (select 1 from cost_centre cc where cc.code = any(:cc) and " + _CHARGED_TO + ")"),  # noqa: S608 - fixed fragments only
-            {**common, "g": gl, "cc": list(scope)},
-        ).scalar_one()
+        parts = _used(db, _USE_CHARGED, {**common, "g": gl, "cc": list(scope)})
         check = check_budget(
             Decimal(held["total"]) if held["n"] else None,
-            Decimal(committed),
+            sum(parts, Decimal(0)),
             requested,
             warn_pct=warn_pct,
             block_pct=block_pct,
         )
         policy = "block" if held["blocks"] or setting_blocks else "warn"
-        out.append(GroupCheck(gl, scope, check, policy, level, location, department, period, warn_pct))
+        out.append(GroupCheck(gl, scope, check, policy, level, location, department, period, warn_pct, parts))
 
     for (gl, location), requested in sorted(at_location.items()):
         held = (
@@ -199,16 +215,16 @@ def check_request(db: Session, request_no: str, today: date, *, final_prices: bo
         )
         if not held["n"]:
             continue  # the location has no budget of its own for this account
-        committed = db.execute(text(_COMMITTED + f"{_LOCATION_OF} = :l"), {**common, "g": gl, "l": location})
+        parts = _used(db, "u.location_code = :l", {**common, "g": gl, "l": location})
         check = check_budget(
             Decimal(held["total"]),
-            Decimal(committed.scalar_one()),
+            sum(parts, Decimal(0)),
             requested,
             warn_pct=warn_pct,
             block_pct=block_pct,
         )
         policy = "block" if held["blocks"] or setting_blocks else "warn"
-        out.append(GroupCheck(gl, (), check, policy, "location", location, None, period, warn_pct))
+        out.append(GroupCheck(gl, (), check, policy, "location", location, None, period, warn_pct, parts))
     return out
 
 
@@ -243,34 +259,41 @@ def _money(value: Decimal) -> str:
 
 
 def variance(db: Session, today: date) -> dict[str, Any]:
-    """Budget against what is committed and what was spent, from the start of the financial year to the month of `today`.
+    """Budget against what is used, from the start of the financial year to the month of `today`.
 
-    One row per cost centre and GL account that has a budget: the budget for those months, what requests already hold
-    (waiting, approved or ordered: the same count the budget check makes), what was spent (paid invoices, by the period of
-    the invoice) and what is left to commit. Request lines with no cost centre are held against all the cost centres of their
-    location, so they are listed apart rather than guessed onto one."""
-    start, end = fy_bounds(today)
+    One row per cost centre and GL account that has a budget: the budget for those months, what requests and orders
+    still hold, what was spent (actuals of the year so far) and what is left. Requests and orders with no cost centre are
+    held against all the cost centres of their location, so they are listed apart rather than guessed onto one. Location
+    budgets get their own rows, with everything delivered or charged there."""
+    start, _ = fy_bounds(today)
     first, last = start.strftime("%Y-%m"), today.strftime("%Y-%m")
-    held = {
-        (r[0], r[1]): Decimal(r[2])
-        for r in db.execute(
-            text(
-                "select l.cost_centre_code, l.gl_code, sum(l.qty * coalesce(l.est_price, 0)) from request_line l "
-                "join request r on r.no = l.request_no where r.status = any(:st) and l.status <> 'cancelled' "
-                "and l.gl_code is not null and l.cost_centre_code is not null and r.created_at::date between :f and :t group by 1, 2"
-            ),
-            {"st": list(COMMITTED_STATUSES), "f": start, "t": end},
+    window = {"a": first, "b": last}
+
+    def used_by(column: str) -> dict[tuple[str, str], dict[str, Decimal]]:
+        out: dict[tuple[str, str], dict[str, Decimal]] = {}
+        sql = (
+            f"select u.{column}, u.gl_code, u.part, sum(u.amount) from budget_use u where u.{column} is not null "  # noqa: S608 - a fixed column name
+            "and (u.part <> 'spent' or u.period between :a and :b) group by 1, 2, 3"
         )
-    }
-    spent = {
-        (r[0], r[1]): Decimal(r[2])
-        for r in db.execute(
-            text(
-                "select cost_centre_code, gl_code, sum(amount) from budget_actual where period between :a and :b group by 1, 2"
-            ),
-            {"a": first, "b": last},
-        )
-    }
+        for holder, gl, part, amount in db.execute(text(sql), window):
+            out.setdefault((holder, gl), {})[part] = Decimal(amount)
+        return out
+
+    by_cc, by_location = used_by("cost_centre_code"), used_by("location_code")
+
+    def row(budget_: Decimal, used: dict[str, Decimal]) -> dict[str, Any]:
+        req, order, spent = (used.get(p, Decimal(0)) for p in PARTS)
+        held = req + order + spent
+        return {
+            "budget": _money(budget_),
+            "held_by_requests": _money(req),
+            "held_by_orders": _money(order),
+            "spent": _money(spent),
+            "committed": _money(req + order),
+            "left": _money(budget_ - held),
+            "over": held > budget_,
+        }
+
     rows: list[dict[str, Any]] = []
     for cc, gl, name, amount, blocks in db.execute(
         text(
@@ -278,19 +301,31 @@ def variance(db: Session, today: date) -> dict[str, Any]:
             "left join cost_centre c on c.code = b.cost_centre_code where b.period between :a and :b "
             "and b.cost_centre_code is not null group by 1, 2, 3 order by 1, 2"
         ),
-        {"a": first, "b": last},
+        window,
     ):
-        budget_, committed, used = Decimal(amount), held.get((cc, gl), Decimal(0)), spent.get((cc, gl), Decimal(0))
         rows.append(
             {
                 "cost_centre": cc,
                 "cost_centre_name": name,
                 "gl_code": gl,
-                "budget": _money(budget_),
-                "committed": _money(committed),
-                "spent": _money(used),
-                "left": _money(budget_ - committed),
-                "over": committed > budget_,
+                **row(Decimal(amount), by_cc.get((cc, gl), {})),
+                "policy": "block" if blocks else "warn",
+            }
+        )
+    locations: list[dict[str, Any]] = []
+    for loc, gl, amount, blocks in db.execute(
+        text(
+            "select b.location_code, b.gl_code, sum(b.amount), bool_or(b.policy = 'block') from budget b "
+            "where b.period between :a and :b and b.cost_centre_code is null and b.location_code is not null "
+            "group by 1, 2 order by 1, 2"
+        ),
+        window,
+    ):
+        locations.append(
+            {
+                "location": loc,
+                "gl_code": gl,
+                **row(Decimal(amount), by_location.get((loc, gl), {})),
                 "policy": "block" if blocks else "warn",
             }
         )
@@ -298,11 +333,9 @@ def variance(db: Session, today: date) -> dict[str, Any]:
         {"gl_code": r[0], "location": r[1], "committed": _money(Decimal(r[2]))}
         for r in db.execute(
             text(
-                "select l.gl_code, coalesce(l.delivery_location, r.ship_to_location), sum(l.qty * coalesce(l.est_price, 0)) "
-                "from request_line l join request r on r.no = l.request_no where r.status = any(:st) and l.status <> 'cancelled' "
-                "and l.gl_code is not null and l.cost_centre_code is null and r.created_at::date between :f and :t group by 1, 2 order by 1, 2"
-            ),
-            {"st": list(COMMITTED_STATUSES), "f": start, "t": end},
+                "select u.gl_code, u.charge_location, sum(u.amount) from budget_use u where u.cost_centre_code is null "
+                "and u.part <> 'spent' group by 1, 2 having sum(u.amount) <> 0 order by 1, 2"
+            )
         )
     ]
-    return {"from": first, "to": last, "rows": rows, "unassigned": unassigned}
+    return {"from": first, "to": last, "rows": rows, "locations": locations, "unassigned": unassigned}

@@ -294,6 +294,96 @@ def _touchless(db: Session, actor: Actor, args: dict[str, Any], reason: str, app
     return Change("touchless_rule", "company", before, after, {"version": version})
 
 
+# ---- the forward-buy rule (13.5) -------------------------------------------------------------------
+
+FORWARD_FIELDS: dict[str, tuple[str, str]] = {
+    "enabled": ("Forward buying is on", "bool"),
+    "min_gap_pct": ("The market price is below its trend by more than", "pct"),
+    "min_trend_months": ("Months of benchmarks the trend needs at least", "number"),
+    "max_cover_months": ("Months ahead it may buy for at most", "number"),
+    "holding_cost_pct_month": ("Holding the stock costs a month", "pct"),
+    "min_net_saving_inr": ("The net saving is more than", "inr"),
+    "shelf_life_months": ("The item keeps for (months)", "number"),
+    "storage_max_qty": ("Stock may reach at most (stock units)", "number"),
+}
+
+
+@router.get("/forward-buy")
+def get_forward_buy(db: Db, ctx: RulesAdmin) -> dict[str, Any]:
+    today, names = business_today(), _names(db)
+    versions = []
+    for r in _rows(
+        db,
+        "select * from forward_buy_rule order by category_code nulls first, item_code nulls first, location_code nulls first, version desc",
+    ):
+        v = _version({**r, "created_by": r["entered_by"], "created_at": r["entered_at"]}, today, names)
+        v["scope"] = {"category": r["category_code"], "item": r["item_code"], "location": r["location_code"]}
+        v["values"] = {
+            k: (None if r[k] is None else str(r[k]).lower() if k == "enabled" else format(D(r[k]).normalize(), "f"))
+            for k in FORWARD_FIELDS
+        }
+        versions.append(v)
+    return {
+        "fields": [{"key": k, "label": label, "kind": kind} for k, (label, kind) in FORWARD_FIELDS.items()],
+        "versions": versions,
+    }
+
+
+class ForwardVersion(BaseModel):
+    category_code: str | None = None
+    item_code: str | None = None
+    location_code: str | None = None
+    enabled: bool | None = None
+    min_gap_pct: Decimal | None = None
+    min_trend_months: int | None = None
+    max_cover_months: int | None = None
+    holding_cost_pct_month: Decimal | None = None
+    min_net_saving_inr: Decimal | None = None
+    shelf_life_months: int | None = None
+    storage_max_qty: Decimal | None = None
+    effective_from: date
+    reason: str | None = None
+
+
+@router.post("/forward-buy", status_code=202)
+def new_forward_buy(body: ForwardVersion, db: Db, ctx: RulesAdmin) -> dict[str, Any]:
+    reason = need_reason(body.reason)
+    return _submit(db, ctx, "forward_buy", body.model_dump(mode="json", exclude={"reason"}), reason)
+
+
+@setting_changes.handler("forward_buy", "admin.rules")
+def _forward_buy(db: Session, actor: Actor, args: dict[str, Any], reason: str, apply: bool) -> Change:
+    from p2p.requests import forward_buy  # noqa: PLC0415 - forward buying reads budgets and sourcing
+
+    body = ForwardVersion.model_validate(args)
+    scope = {"c": body.category_code, "i": body.item_code, "l": body.location_code}
+    _check_start(
+        db, "forward_buy_rule", body.effective_from,
+        "category_code is not distinct from :c and item_code is not distinct from :i and location_code is not distinct from :l",
+        **scope,
+    )  # fmt: skip
+    values = body.model_dump(exclude={"effective_from", "reason"})
+    old = db.execute(
+        text(
+            "select * from forward_buy_rule where category_code is not distinct from :c and item_code is not distinct "
+            "from :i and location_code is not distinct from :l order by version desc limit 1"
+        ),
+        scope,
+    ).mappings().first()  # fmt: skip
+    label = body.item_code and f"{body.item_code}{'@' + body.location_code if body.location_code else ''}"
+    before = {k: None if old is None or old[k] is None else str(old[k]) for k in FORWARD_FIELDS}
+    after = {k: None if values[k] is None else str(values[k]) for k in FORWARD_FIELDS}
+    try:
+        if apply:
+            record_history(
+                db, actor, "forward_buy_rule", label or body.category_code or "company", before, after, reason
+            )
+        version = forward_buy.save_rule(db, actor, values, effective_from=body.effective_from, note=reason, apply=apply)
+    except forward_buy.ForwardBuyError as exc:
+        raise _422(str(exc)) from None
+    return Change("forward_buy_rule", label or body.category_code or "company", before, after, {"version": version})
+
+
 # ---- the price threshold rule (12.5) -----------------------------------------------------------------
 
 THRESHOLD_FIELDS: dict[str, tuple[str, str]] = {

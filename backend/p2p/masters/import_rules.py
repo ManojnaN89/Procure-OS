@@ -39,6 +39,7 @@ NATURAL_KEYS: dict[str, tuple[str, ...] | None] = {
     "sanction_entry": ("name", "country", "list_name"),
     "price_threshold_rule": ("category_code", "version"),
     "market_benchmark": ("item_code", "region_code", "source_name", "effective_date"),
+    "forward_buy_rule": ("category_code", "item_code", "location_code", "version"),
 }
 
 
@@ -97,6 +98,8 @@ POLICIES: dict[str, Policy] = {
     "contract": Policy("K", why="kept as it is; a contract changes on its contract page"),
     "price_record": Policy("K", why="kept as it is; a price version does not change: add the next version"),
     "market_benchmark": Policy("K", why="kept as it is; a benchmark does not change: add a new one"),
+    "budget_period_lock": Policy("C", noun="locked budget months", where="the budgets panel (Finance)"),
+    "forward_buy_rule": Policy("C", noun="forward-buy rules", where="the buying rules screen"),
 }
 DEFAULT = Policy("U")  # bank, region, payment terms, GL accounts, GST registrations, items, item details, sanctions
 

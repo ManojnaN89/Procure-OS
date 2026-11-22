@@ -68,22 +68,82 @@ const ControlTowerView = {
 
   pct(v) { return v === null || v === undefined ? "—" : `${this.esc(v)}%`; },
 
-  // Budget against what requests already hold and what was spent, per cost centre and account.
+  // Budget against what requests and orders hold and what was spent, per cost centre and account, then per location;
+  // the months of the year (locked or open) and, for Finance, locking a month, closing the year and adjusting a budget.
+  budgetRows(rows, holder) {
+    return rows.map((r) => `<tr><td>${holder(r)}</td><td>${this.esc(r.gl_code)}</td>
+      <td>${formatCurrency(r.budget)}</td><td>${formatCurrency(r.held_by_requests)}</td><td>${formatCurrency(r.held_by_orders)}</td><td>${formatCurrency(r.spent)}</td>
+      <td>${r.over ? `<span class="badge badge-rejected">${formatCurrency(r.left)}</span>` : formatCurrency(r.left)}</td></tr>`).join("");
+  },
+
+  FIELD: "background:var(--surface-sunken);border:1px solid var(--border);color:var(--text-primary);border-radius:8px;padding:6px 8px;font-size:12.5px;",
+
   async loadBudgets() {
     const box = document.getElementById("ctBudgets");
     try {
-      const b = await API.getJSON("/api/budgets/variance");
+      const [b, p] = await Promise.all([API.getJSON("/api/budgets/variance"), API.getJSON("/api/budgets/periods").catch(() => null)]);
       if (!box || !document.body.contains(box)) return;
       if (!b.rows.length) { box.innerHTML = `<div class="empty-next"><strong>No budgets are set up.</strong><br>Budgets are loaded with the company's master data.</div>`; return; }
-      box.innerHTML = `<div class="table-wrap"><table class="data-table"><thead><tr><th>COST CENTRE</th><th>ACCOUNT</th><th>BUDGET</th><th>HELD BY REQUESTS</th><th>SPENT</th><th>LEFT</th></tr></thead><tbody>
-        ${b.rows.map((r) => `<tr><td>${this.esc(r.cost_centre_name || r.cost_centre)}<div class="cell-muted" style="font-size:11px;">${this.esc(r.cost_centre)}</div></td><td>${this.esc(r.gl_code)}</td>
-          <td>${formatCurrency(r.budget)}</td><td>${formatCurrency(r.committed)}</td><td>${formatCurrency(r.spent)}</td>
-          <td>${r.over ? `<span class="badge badge-rejected">${formatCurrency(r.left)}</span>` : formatCurrency(r.left)}</td></tr>`).join("")}
+      const head = (first) => `<thead><tr><th>${first}</th><th>ACCOUNT</th><th>BUDGET</th><th>HELD BY REQUESTS</th><th>HELD BY ORDERS</th><th>SPENT</th><th>LEFT</th></tr></thead>`;
+      const manage = Auth.can("budget.manage");
+      const f = this.FIELD;
+      const lockLabel = p && p.can_lock ? (p.periods.find((m) => m.period === p.can_lock) || {}).label || p.can_lock : "";
+      box.innerHTML = `<div class="table-wrap"><table class="data-table">${head("COST CENTRE")}<tbody>
+        ${this.budgetRows(b.rows, (r) => `${this.esc(r.cost_centre_name || r.cost_centre)}<div class="cell-muted" style="font-size:11px;">${this.esc(r.cost_centre)}</div>`)}
       </tbody></table></div>
-      ${b.unassigned.length ? `<p class="cell-muted" style="font-size:12px;margin-top:8px;">Also held against the location, with no cost centre: ${b.unassigned.map((u) => `${this.esc(u.gl_code)} at ${this.esc(u.location)} ${formatCurrency(u.committed)}`).join("; ")}</p>` : ""}`;
+      ${(b.locations || []).length ? `<div class="table-wrap" style="margin-top:10px;"><table class="data-table">${head("LOCATION")}<tbody>${this.budgetRows(b.locations, (r) => this.esc(r.location))}</tbody></table></div>` : ""}
+      ${b.unassigned.length ? `<p class="cell-muted" style="font-size:12px;margin-top:8px;">Also held against the location, with no cost centre: ${b.unassigned.map((u) => `${this.esc(u.gl_code)} at ${this.esc(u.location)} ${formatCurrency(u.committed)}`).join("; ")}</p>` : ""}
+      ${p ? `<div style="margin-top:12px;font-size:12px;"><strong>Periods, FY ${this.esc(p.fy)}${p.year_closed ? " (closed)" : ""}:</strong>
+        ${p.periods.map((m) => `<span class="badge ${m.status === "locked" ? "badge-closed" : m.status === "open" ? "badge-open" : "badge-draft"}" title="${this.esc(m.status === "locked" ? `Locked by ${m.locked_by}: ${m.reason}` : m.status === "open" ? "Open" : "Not ended")}" style="margin:2px;">${m.status === "locked" ? '<i class="ti ti-lock"></i> ' : ""}${this.esc(m.label)}</span>`).join("")}</div>` : ""}
+      ${manage && p ? `<div style="margin-top:10px;display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
+        ${p.can_lock ? `<input id="ctLockReason" placeholder="Why lock it (e.g. Month-end close)" style="${f}width:240px;"><button type="button" class="btn btn-sm" id="ctLock"><i class="ti ti-lock"></i>Lock ${this.esc(lockLabel)}</button>` : ""}
+        ${p.can_close ? `<button type="button" class="btn btn-sm" id="ctClose">Close FY ${this.esc(p.fy)}</button>` : ""}
+        <button type="button" class="btn btn-sm" id="ctAdjustOpen">Adjust a budget</button></div>
+        <div id="ctAdjust" style="display:none;margin-top:8px;" class="panel">
+          <div class="panel-title">Adjust a budget</div>
+          <p class="cell-muted" style="font-size:12px;">It goes to another finance person to approve.</p>
+          <div style="display:flex;gap:8px;flex-wrap:wrap;">
+            <select id="adjKind" style="${f}"><option value="supplement">Supplement</option><option value="return">Return</option><option value="transfer">Transfer</option></select>
+            <input id="adjGl" placeholder="Account" style="${f}width:90px;">
+            <input id="adjCc" placeholder="Cost centre" style="${f}width:110px;">
+            <input id="adjLoc" placeholder="or location" style="${f}width:110px;">
+            <input id="adjPeriod" placeholder="Month (2026-12)" style="${f}width:130px;">
+            <input id="adjAmount" placeholder="Amount" style="${f}width:120px;">
+            <input id="adjToCc" placeholder="Transfer to cost centre" style="${f}width:170px;">
+            <input id="adjReason" placeholder="Reason (required)" style="${f}width:240px;">
+            <button type="button" class="btn btn-primary btn-sm" id="adjSend">Send for approval</button>
+          </div><div id="adjMsg" class="cell-muted" style="font-size:12px;margin-top:6px;"></div></div>` : ""}`;
+      this.wireBudgetActions(p);
     } catch {
       if (box) box.innerHTML = `<div class="empty-state">Couldn't load the budgets.</div>`;
     }
+  },
+
+  wireBudgetActions(p) {
+    const fail = (res, what) => UI.toast(res.data.detail || what, "danger");
+    document.getElementById("ctLock")?.addEventListener("click", async () => {
+      const reason = document.getElementById("ctLockReason").value.trim();
+      if (!reason) { UI.toast("Say why the month is locked.", "warning"); return; }
+      const res = await API.postJSON(`/api/budgets/periods/${p.can_lock}/lock`, { reason });
+      if (!res.ok) { fail(res, "Couldn't lock the month."); return; }
+      UI.toast(`${res.data.period} is locked.`, "success");
+      this.loadBudgets();
+    });
+    document.getElementById("ctClose")?.addEventListener("click", async () => {
+      const res = await API.postJSON(`/api/budgets/years/${p.fy}/close`, { note: "" });
+      if (!res.ok) { fail(res, "Couldn't close the year."); return; }
+      UI.toast(`FY ${res.data.fy} closed; ${formatCurrency(res.data.carried_total)} carried into the new year.`, "success");
+      this.loadBudgets();
+    });
+    document.getElementById("ctAdjustOpen")?.addEventListener("click", () => { const box = document.getElementById("ctAdjust"); box.style.display = box.style.display === "none" ? "" : "none"; });
+    document.getElementById("adjSend")?.addEventListener("click", async () => {
+      const v = (id) => document.getElementById(id).value.trim() || null;
+      const kind = v("adjKind");
+      const body = { kind, gl_code: v("adjGl"), cost_centre_code: v("adjCc"), location_code: v("adjLoc"), period: v("adjPeriod"), amount: v("adjAmount"), reason: v("adjReason") };
+      if (kind === "transfer") body.to = { cost_centre_code: v("adjToCc") };
+      const res = await API.postJSON("/api/budgets/adjustments", body);
+      document.getElementById("adjMsg").textContent = res.ok ? `Sent: proposal ${res.data.proposal_id} waits for another finance person.` : (res.data.detail || "Couldn't send it.");
+    });
   },
 
   async loadKpis() {
