@@ -13,13 +13,14 @@ from lib import D, Outcome, rows
 from sqlalchemy import text
 
 ID = "E41"
-TITLE = "Approval by email: the right person, a full email, one reminder, escalation on time, a code above the limit"
+TITLE = "Approval by email: the right person, a full email, one reminder, escalation on time, a code on every link"
 REQUIREMENT = (
     "Plan step 4 and D36: who approves follows the rule table by value, category, department and location (rows that add "
     "an approver too); each step keeps its rule row; the email carries the lines, the estimated total, the budget, why it "
     "came to this person and approve / reject / return links that work once; one reminder after a working day and "
-    "escalation after two, counted on the business calendar with holidays; a one-time code above Rs 5,00,000 that is "
-    "hashed, expires in 10 minutes, allows 5 tries and works once; a deputy; the requester never approves"
+    "escalation after two, counted on the business calendar with holidays; a one-time code on every decision from a link "
+    "(D-07, block 4: approve, reject and return, at any value) that is hashed, expires in 10 minutes, allows 5 tries and "
+    "works once; a deputy; the requester never approves"
 )
 IST = ZoneInfo("Asia/Kolkata")
 HOLIDAY = date(2026, 11, 9)  # a Monday made a holiday for the timing checks
@@ -248,14 +249,15 @@ def run(ctx) -> Outcome:  # noqa: C901 - one scenario, step by step
         if delegate != target:
             out.find("high", f"{no2} escalated to {delegate}, oracle {target}")
 
-        # 4. the one-time code above the limit: refused without, five wrong tries lock it, a new code works once
+        # 4. the one-time code (D-07: on every link decision, the limit included): refused without, five wrong tries
+        # lock it, a new code works once
         big = next(x for x in made if x[2] == otp_limit + D("0.01"))
         at_limit = next(x for x in made if x[2] == otp_limit)
         token = email_links.make(slug, big[0], 1, 1, login_of[big[3][0]])
         flat = email_links.make(slug, at_limit[0], 1, 1, login_of[at_limit[3][0]])
         code_checks = {
             "no code refused": client.post(f"/approve/{token}", data={"action": "approve"}).status_code == 409,
-            "at the limit needs none": client.post(f"/approve/{flat}", data={"action": "approve"}).status_code == 200,
+            "at the limit needs one too": client.post(f"/approve/{flat}", data={"action": "approve"}).status_code == 409,
         }
         def older() -> None:  # as if a quarter of an hour passed: the last code is no longer new, nor still valid
             db.execute(
@@ -300,9 +302,14 @@ def run(ctx) -> Outcome:  # noqa: C901 - one scenario, step by step
         free = [x for x in made if x[2] == D("10000.01") and x[0] not in (no, no2)][:2]
         for (rno, _, _, rchain), action in zip(free, ("reject", "return"), strict=False):
             t = email_links.make(slug, rno, 1, 1, login_of[rchain[0]])
-            bare = client.post(f"/approve/{t}", data={"action": action}).status_code
-            done = client.post(f"/approve/{t}", data={"action": action, "reason": "eval"}).status_code
-            again = client.post(f"/approve/{t}", data={"action": "approve"}).status_code
+            bare = client.post(f"/approve/{t}", data={"action": action, "reason": "eval"}).status_code  # no code
+            client.post(f"/approve/{t}/code")
+            code = sent[-1]["body"].split("code is ")[1][:6]
+            no_reason = client.post(f"/approve/{t}", data={"action": action, "code": code}).status_code
+            done = client.post(f"/approve/{t}", data={"action": action, "reason": "eval", "code": code}).status_code
+            again = client.post(f"/approve/{t}", data={"action": "approve", "code": code}).status_code
+            if no_reason != 409:
+                out.find("high", f"{action} by link without a reason: {no_reason}, expected 409")
             db.rollback()
             audited = db.execute(
                 text("select count(*) from audit_event where action = :a and entity_id = :n and after->>'via' = 'emailed link'"),

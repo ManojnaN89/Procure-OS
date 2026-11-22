@@ -135,7 +135,7 @@ settings:
   - [approval_reminder_hours, "24", Hours before an approver is reminded (one working day)]
   - [approval_reminder_days, "1", Working days before a request approver is reminded by email (once)]
   - [approval_escalation_days, "2", Working days before a waiting request approval escalates to the approver's manager or the next approver]
-  - [approval_otp_above, "500000.00", Approving a request by email above this value needs a one-time code sent to the approver]
+  - [approval_otp_above, "500000.00", "Approving a purchase order above this value needs a code sent to the approver. Every decision from an email link needs a code whatever the value."]
   - [auto_approve_requires_budget, "true", Auto-approval only when budget is available]
   - [po_send_requires_confirmation, "true", A person confirms before a PO is sent to a supplier]
   - [manual_mark_paid, "true", "Synthetic demo data only, Finance may record a payment by hand (off for every real company until settlement evidence is built)"]

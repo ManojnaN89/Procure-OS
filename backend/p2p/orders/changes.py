@@ -2,9 +2,10 @@
 
 * A revision changes the quantity or the need-by date of open lines. A buyer never changes a price (a price comes from a
   contract or an award); only a price the supplier asked for and a person accepted (orders/confirmation.py) does. Every
-  revision is a new version with its own history row. If the order's total goes up it goes through approval again on the
-  new total; a lower total or a date change needs no new approval, nor does a supplier's change that was approved on its
-  own. A supplier who already has the order gets the revised order by email.
+  revision is a new version with its own history row. It is measured from the last approved version
+  (orders/approved_versions.py), so small changes add up: a material change (formulas/po_versions.py, Q19) goes through
+  approval again on the new total; any other carries the approval. A supplier who already has the order gets the revised
+  order by email and acknowledges the new version.
 * Cancelling is for an order nothing has been received or invoiced against. It gives back the budget commitment and the
   open supply, and either frees the lines to be ordered again or ends the need.
 * Closing is for an order that was partly delivered: the part still to come is closed, so it no longer counts as supply or
@@ -24,13 +25,13 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from p2p.approvals.workflow import name_of, notify_person
-from p2p.formulas import supplier_changes as judge
+from p2p.formulas import po_versions
 from p2p.formulas.calendar import business_today
 from p2p.formulas.gst import Registration
 from p2p.formulas.money import format_qty
 from p2p.formulas.orders import LineAmounts, line_amounts, order_totals
 from p2p.invoices import tolerances
-from p2p.orders import document, supplier_links, workflow
+from p2p.orders import approved_versions, document, supplier_links, workflow
 from p2p.platform import audit, emails, notifications, proposals, tasks
 from p2p.platform.sod import Actor, user
 
@@ -309,9 +310,10 @@ def revise(
     change_id: int | None = None,
 ) -> dict[str, Any]:
     """Make a new version of the order: change the quantity or the need-by date of open lines. `approved_change` is a
-    supplier's change a person has already accepted: it may change the price. A material change (Q19: price or quantity
-    up, a date beyond the tolerance, a higher total) goes through approval again; any other change of an order the
-    supplier already has clears its acknowledgement and sends a link to answer the new version."""
+    supplier's change a person has already accepted: it may change the price. A material change against the last
+    approved version (Q19: price or quantity up, a date beyond the tolerance, a total above the band or higher) goes
+    through approval again; any other change carries the approval, and if the supplier already has the order clears its
+    acknowledgement and sends a link to answer the new version."""
     why = _reason(reason)
     if not changes:
         raise ChangeError("nothing to change")
@@ -336,6 +338,9 @@ def revise(
         )
     registration = Registration(supplier[2] or "regular")
     before_total = Decimal(po["total"])
+    # an order approved with no snapshot kept (made before block 4, or written outside the workflow) is measured
+    # from the version it is now, as the migration's backfill would have kept it
+    unsnapped = approved_versions.snapshot(db, po_no) if po["approved_at"] is not None else None
     seen: set[int] = set()
     done: list[dict[str, Any]] = []
     for ch in changes:
@@ -422,10 +427,6 @@ def revise(
     totals = order_totals(parts)
     after_total = totals.total
     version = int(po["version"]) + 1
-    material = judge.material_reasons(before_total, after_total, done, _date_tolerance(db))
-    # a material change goes for approval again; so does any change while approval is under way, so that the approval
-    # is of this version and never waits for someone who has just become one of the order's makers (C1)
-    reapprove = (bool(material) and po["status"] != "draft") or po["status"] == "submitted"
     db.execute(
         text("update po set taxable = :t, cgst = :c, sgst = :s, igst = :i, total = :tot, version = :v where no = :n"),
         {
@@ -438,10 +439,19 @@ def revise(
             "n": po_no,
         },
     )
+    # measured from the last approved version, so small changes add up (DF-07, DF-08); never approved: nothing to carry
+    base = approved_versions.baseline(db, po_no) or unsnapped
+    material = (
+        po_versions.material_reasons(base, approved_versions.snapshot(db, po_no), _date_tolerance(db)) if base else []
+    )
+    # a material change goes for approval again; so does any change while approval is under way, so that the approval
+    # is of this version and never waits for someone who has just become one of the order's makers (C1)
+    reapprove = (bool(material) and po["status"] != "draft") or po["status"] == "submitted"
+    carried = base is not None and not reapprove
     db.execute(
         text(
-            "insert into po_revision (po_no, version, changed_by, reason, changes, total_before, total_after, reapproval) "
-            "values (:n, :v, :u, :r, cast(:c as jsonb), :tb, :ta, :re)"
+            "insert into po_revision (po_no, version, changed_by, reason, changes, total_before, total_after, reapproval, "
+            "baseline_version, material) values (:n, :v, :u, :r, cast(:c as jsonb), :tb, :ta, :re, :bv, cast(:m as jsonb))"
         ),
         {
             "n": po_no,
@@ -452,17 +462,22 @@ def revise(
             "tb": before_total,
             "ta": after_total,
             "re": reapprove,
+            "bv": base.version if base else None,
+            "m": json.dumps(material),
         },
     )
     audit.record(
         db, user(user_id), "po.revise", "po", po_no,
         before={"version": version - 1, "total": before_total},
-        after={"version": version, "total": after_total, "changes": done, "material": material},
+        after={
+            "version": version, "total": after_total, "changes": done, "material": material,
+            "baseline_version": base.version if base else None, "approval_carried": carried,
+        },
         reason=why,
     )  # fmt: skip
     was = po["status"]
     if reapprove:
-        # a higher total goes through approval again on the new amount
+        # approval again on the new version and total; approved_version keeps the old one until then
         _drop_open_decisions(db, po, user_id, f"{po_no} was revised")  # commits
         db.execute(
             text(
@@ -510,6 +525,8 @@ def revise(
         "status": new_status,
         "total": str(after_total),
         "reapproval": reapprove,
+        "material": material,
+        "approval_carried": carried,
         "supplier_told": told,
     }
 
@@ -530,6 +547,9 @@ def history(db: Session, po_no: str) -> list[dict[str, Any]]:
             "total_before": str(r["total_before"]),
             "total_after": str(r["total_after"]),
             "reapproval": r["reapproval"],
+            "material": list(r["material"] or []),
+            "baseline_version": r["baseline_version"],
+            "approval_carried": r["baseline_version"] is not None and not r["reapproval"],
         }
         for r in db.execute(
             text("select * from po_revision where po_no = :n order by version desc"), {"n": po_no}

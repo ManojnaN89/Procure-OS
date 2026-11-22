@@ -1480,8 +1480,15 @@ def get_purchase_order(no: str, db: Db, ctx: Ctx) -> dict[str, Any]:
     charges = _rows(db, "select * from po_charge where po_no = :n order by id", n=no)
     promised = [line["promised_date"] for line in lines if line["promised_date"]]
     can_dispatch = can_anywhere(db, ctx.user_id, "po.send")
+    can_act = po_workflow.can_act(db, no, ctx.user_id)
+    step_version = db.execute(
+        text("select max(version) from po_approval_step where po_no = :n and round = :r"),
+        {"n": no, "r": r["approval_round"]},
+    ).scalar()
     return {
         **_po(r),
+        "version": r["version"],
+        "approved_version": r["approved_version"],
         "sent_at": _iso(r["sent_at"]),
         "sent_to": r["sent_to"],
         "acknowledged_at": _iso(r["acknowledged_at"]),
@@ -1565,7 +1572,10 @@ def get_purchase_order(no: str, db: Db, ctx: Ctx) -> dict[str, Any]:
                 }
                 for s in po_workflow.steps_of(db, no)
             ],
-            "can_act": po_workflow.can_act(db, no, ctx.user_id),
+            "can_act": can_act,
+            "version": step_version,  # the version the open round approves
+            "needs_code": can_act and po_workflow.needs_code(db, r),
+            "code_above": str(po_workflow.code_limit(db)),
         },
     }
 
@@ -1820,14 +1830,44 @@ def acknowledge_purchase_order(
 def approve_purchase_order(
     no: str, payload: dict[str, Any], db: Db, ctx: Annotated[routing.TenantContext, Depends(require("po.approve"))]
 ) -> dict[str, str]:
-    return _po_action(lambda: po_workflow.approve(db, ctx.slug, no, ctx.user_id, payload.get("comment")))
+    version, code = _seen_version(payload), payload.get("code")
+    return _po_action(
+        lambda: po_workflow.approve(
+            db, ctx.slug, no, ctx.user_id, payload.get("comment"), version=version, code=str(code) if code else None
+        )
+    )
 
 
 @router.post("/purchase-orders/{no}/reject")
 def reject_purchase_order(
     no: str, payload: dict[str, Any], db: Db, ctx: Annotated[routing.TenantContext, Depends(require("po.approve"))]
 ) -> dict[str, str]:
-    return _po_action(lambda: po_workflow.reject(db, no, ctx.user_id, payload.get("reason")))
+    version = _seen_version(payload)
+    return _po_action(lambda: po_workflow.reject(db, no, ctx.user_id, payload.get("reason"), version=version))
+
+
+def _seen_version(payload: dict[str, Any]) -> int | None:
+    """The version of the order the person saw (DF-07); omitted: the current one."""
+    raw = payload.get("version")
+    if raw in (None, ""):
+        return None
+    if isinstance(raw, bool) or not str(raw).isdigit():
+        raise HTTPException(422, "version must be a whole number")
+    return int(raw)
+
+
+@router.post("/purchase-orders/{no}/approval-code")
+def purchase_order_approval_code(
+    no: str, db: Db, ctx: Annotated[routing.TenantContext, Depends(require("po.approve"))]
+) -> dict[str, Any]:
+    """Email the approver whose turn it is a one-time code to approve this version of the order (above the limit)."""
+    try:
+        sent_to = po_workflow.send_code(db, no, ctx.user_id)
+    except approvals.ApprovalError as exc:
+        raise HTTPException(409, str(exc)) from None
+    except PermissionDenied as exc:
+        raise HTTPException(403, str(exc)) from None
+    return {"sent_to": sent_to, "expires_minutes": int(po_workflow.CODES.ttl.total_seconds() // 60)}
 
 
 _CONTRACT_TYPES = {

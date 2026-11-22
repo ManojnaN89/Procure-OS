@@ -906,8 +906,13 @@ def test_a_bigger_order_goes_through_each_person_in_its_chain(shop: Session, out
     assert shop.execute(text("select rule_code, total from po")).one() == ("PO-02", D("1416000.00"))
     with pytest.raises(workflow.ApprovalError, match="not your turn"):
         workflow.approve(shop, slug, po_no, logins["cfo"])
-    assert workflow.approve(shop, slug, po_no, logins["procurement"]) == "submitted"
-    assert workflow.approve(shop, slug, po_no, logins["cfo"]) == "approved"
+    # above Rs 5,00,000 each person approves with their own one-time code (block 4, task 1.2)
+    with pytest.raises(workflow.ApprovalError, match="needs a one-time code"):
+        workflow.approve(shop, slug, po_no, logins["procurement"])
+    for who, status in (("procurement", "submitted"), ("cfo", "approved")):
+        workflow.send_code(shop, po_no, logins[who])
+        code = outbox.sent[-1]["body"].split("code is ")[1][:6]
+        assert workflow.approve(shop, slug, po_no, logins[who], code=code) == status
 
 
 def test_rejecting_an_order_cancels_it_and_makes_its_lines_ready_to_order_again(shop: Session, outbox: Outbox) -> None:

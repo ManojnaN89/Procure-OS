@@ -367,21 +367,30 @@ def test_a_smaller_quantity_is_a_new_version_with_a_lower_total_and_the_supplier
 
 
 def test_a_higher_total_goes_through_approval_again_on_the_new_amount(store: Session, outbox: Outbox) -> None:  # noqa: F811
+    # block 4: a change is measured from the approved version, so going back up to the approved 10 carries the
+    # approval; a total above the approved one (12, the request allowing it) goes for approval again
     po_no, logins = _sent(store)
+    store.execute(text("update request_line set qty = 12"))
+    store.commit()
     changes.revise(store, store.info["slug"], po_no, logins["buyer"], "Cut", [changes.LineChange(1, qty=D("8"))])
+    back = changes.revise(
+        store, store.info["slug"], po_no, logins["buyer"], "Back to the need", [changes.LineChange(1, qty=D("10"))]
+    )
+    assert (back["reapproval"], back["status"]) == (False, "sent")
     outbox.sent.clear()
 
     done = changes.revise(
-        store, store.info["slug"], po_no, logins["buyer"], "Back to the full need", [changes.LineChange(1, qty=D("10"))]
+        store, store.info["slug"], po_no, logins["buyer"], "More is needed", [changes.LineChange(1, qty=D("12"))]
     )
 
-    assert (done["version"], done["reapproval"], done["status"]) == (3, True, "submitted")
+    assert (done["version"], done["reapproval"], done["status"]) == (4, True, "submitted")
+    assert done["material"] == ["line 1: quantity up", "the total went up"]
     po = store.execute(text("select status, approval_round, total, sent_at from po")).one()
-    assert po[0] == "submitted" and po[1] == 2 and po[2] == D("1180.00") and po[3] is None
+    assert po[0] == "submitted" and po[1] == 2 and po[2] == D("1416.00") and po[3] is None
     assert outbox.sent == []  # nothing goes out until it is approved again
     workflow.approve(store, store.info["slug"], po_no, logins["procurement"])
     dispatch.send_po(store, po_no, sod.user(logins["buyer"]))
-    assert outbox.sent[-1]["subject"] == f"Purchase order {po_no} (version 3)"
+    assert outbox.sent[-1]["subject"] == f"Purchase order {po_no} (version 4)"
 
 
 @pytest.mark.parametrize(

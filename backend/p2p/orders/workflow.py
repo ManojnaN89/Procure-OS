@@ -16,8 +16,8 @@ from p2p.approvals import budget, rules
 from p2p.approvals.workflow import ApprovalError, name_of, notify_person, org_code_of
 from p2p.formulas.calendar import business_today
 from p2p.formulas.money import format_inr
-from p2p.orders import dispatch, touchless
-from p2p.platform import audit, permissions, proposals, tasks, users
+from p2p.orders import approved_versions, dispatch, touchless
+from p2p.platform import audit, otp, permissions, proposals, settings, tasks, users
 from p2p.platform.sod import Actor
 
 DEFAULT_SLA_HOURS = 24
@@ -188,8 +188,8 @@ def submit(db: Session, tenant: str, po_no: str, actor: Actor, *, today: date | 
     for n, step in enumerate(steps, start=1):
         db.execute(
             text(
-                "insert into po_approval_step (po_no, round, step, role, approver, delegate, status) "
-                "values (:p, :r, :s, :role, :who, :dele, :st)"
+                "insert into po_approval_step (po_no, round, step, role, approver, delegate, status, version) "
+                "values (:p, :r, :s, :role, :who, :dele, :st, :ver)"
             ),
             {
                 "p": po_no,
@@ -199,6 +199,7 @@ def submit(db: Session, tenant: str, po_no: str, actor: Actor, *, today: date | 
                 "who": step.approver,
                 "dele": step.delegate,
                 "st": "pending" if n == 1 else "waiting",
+                "ver": po["version"],  # the version this step approves (DF-07)
             },
         )
     names = " then ".join(name_of(db, s.approver) for s in steps)
@@ -252,12 +253,17 @@ def _approve_by_rule(
         ),
         {"rc": rule.code, "rv": rule.version, "why": reason, "r": round_no, "n": po_no},
     )
+    version = approved_versions.record(
+        db, po_no, approved_by=f"rule:{rule.code}", rule_code=rule.code, rule_version=rule.version,
+        band=approved_versions.band_max(db, rule),
+    )  # fmt: skip
     audit.record(
         db,
         Actor("rule", rule.code),
         "po.auto_approve",
         "po",
         po_no,
+        after={"version": version},
         reason=reason,
         rule_version=f"{rule.code}:v{rule.version}",
     )
@@ -332,7 +338,10 @@ def _open_step(db: Session, tenant: str, po_no: str, total: Decimal, step: int, 
     db.commit()
 
 
-def _acting(db: Session, po_no: str, user_id: int) -> tuple[dict[str, Any], dict[str, Any], str]:
+def _acting(
+    db: Session, po_no: str, user_id: int, version: int | None = None
+) -> tuple[dict[str, Any], dict[str, Any], str]:
+    """The order, its open step and the person, when it is this person's turn on the version they saw."""
     po = _locked(db, po_no)
     if po["status"] != "submitted":
         raise ApprovalError(f"{po_no} is {po['status']}, not waiting for approval")
@@ -358,6 +367,11 @@ def _acting(db: Session, po_no: str, user_id: int) -> tuple[dict[str, Any], dict
     refuse_maker(db, po, me)
     if not permissions.can_anywhere(db, user_id, "po.approve"):
         raise permissions.PermissionDenied("this role may not approve purchase orders")
+    current = int(po["version"])
+    if (version is not None and int(version) != current) or (step["version"] not in (None, current)):
+        raise ApprovalError(
+            f"{po_no} has changed since you opened it: it is now version {current}. Open it again to see the change"
+        )
     return po, dict(step), me
 
 
@@ -369,10 +383,22 @@ def can_act(db: Session, po_no: str, user_id: int) -> bool:
     return True
 
 
-def approve(db: Session, tenant: str, po_no: str, user_id: int, comment: str | None = None) -> str:
-    # Hook: the one-time password for approvals above Rs 5,00,000 (the director's tier) belongs to the email approvals
-    # step; it is checked here, before the decision is written, once that step is built.
-    po, step, me = _acting(db, po_no, user_id)
+def approve(
+    db: Session,
+    tenant: str,
+    po_no: str,
+    user_id: int,
+    comment: str | None = None,
+    *,
+    version: int | None = None,
+    code: str | None = None,
+) -> str:
+    """Approve the open step of the version the person saw (`version`; omitted: the current one, recorded). Above the
+    code limit the person's one-time code for this version and step is needed first; it is used up with the approval."""
+    po, step, me = _acting(db, po_no, user_id, version)
+    with_code = needs_code(db, po)
+    if with_code:
+        _check_code(db, po, step, user_id, code)
     actor = Actor("user", str(user_id))
     refuse_inactive(db, po, actor)  # the supplier may have been blocked while the order waited (D-03 R5)
     db.execute(
@@ -393,6 +419,7 @@ def approve(db: Session, tenant: str, po_no: str, user_id: int, comment: str | N
             "role": step["role"],
             "approver": me,
             "on_behalf_of": step["approver"] if me != step["approver"] else None,
+            "with_code": with_code,
         },
         reason=comment,
         rule_version=f"{po['rule_code']}:v{po['rule_version']}",
@@ -413,20 +440,26 @@ def approve(db: Session, tenant: str, po_no: str, user_id: int, comment: str | N
             },
         )
     else:
-        who = ", ".join(
-            name_of(db, r[0])
+        people = [
+            str(r[0])
             for r in db.execute(
                 text("select acted_by from po_approval_step where po_no = :p and round = :r order by step"),
                 {"p": po_no, "r": po["approval_round"]},
             )
-        )
+        ]
+        who = ", ".join(name_of(db, c) for c in people)
         db.execute(
             text("update po set status = 'approved', approved_at = now(), decision_reason = :why where no = :n"),
             {"n": po_no, "why": f"Approved by {who} under rule {po['rule_code']} v{po['rule_version']}"},
         )
+        approved_versions.record(
+            db, po_no, approved_by=",".join(people), rule_code=po["rule_code"], rule_version=po["rule_version"],
+            band=approved_versions.band_of(db, po["rule_code"], po["rule_version"]),
+        )  # fmt: skip
         audit.record(
-            db, actor, "po.approved", "po", po_no, before={"status": "submitted"}, after={"status": "approved"}
-        )
+            db, actor, "po.approved", "po", po_no, before={"status": "submitted"},
+            after={"status": "approved", "version": po["version"]},
+        )  # fmt: skip
     db.commit()
     if following is None:
         dispatch.queue_if_automatic(db, tenant, po_no)
@@ -437,11 +470,12 @@ def approve(db: Session, tenant: str, po_no: str, user_id: int, comment: str | N
     return "submitted" if following is not None else "approved"
 
 
-def reject(db: Session, po_no: str, user_id: int, reason: str | None) -> str:
-    """Refuse the order. It is cancelled and its lines are ready to be ordered again."""
+def reject(db: Session, po_no: str, user_id: int, reason: str | None, *, version: int | None = None) -> str:
+    """Refuse the order (the version the person saw). It is cancelled and its lines are ready to be ordered again. No
+    code: rejecting commits no money."""
     if not reason or not reason.strip():
         raise ApprovalError("a reason is required")
-    po, step, me = _acting(db, po_no, user_id)
+    po, step, me = _acting(db, po_no, user_id, version)
     db.execute(
         text(
             "update po_approval_step set status = 'rejected', acted_by = :me, acted_at = now(), comment = :c where id = :i"
@@ -502,3 +536,46 @@ def steps_of(db: Session, po_no: str) -> list[dict[str, Any]]:
             {"n": po_no},
         ).mappings()
     ]
+
+
+# ---- the one-time code to approve an order above the limit (D-07, task 1.2) ---------------------------------------
+
+CODES = otp.OneTimeCodes("po_approval")
+NEED_CODE = "this needs a one-time code: ask for one (a code works once)"
+
+
+def needs_code(db: Session, po: dict[str, Any]) -> bool:
+    """Approving an order above `approval_otp_above` (its total with GST, the value its band uses; the limit itself
+    needs none) needs a one-time code emailed to the approver."""
+    return otp.needed(db, Decimal(po["total"]))
+
+
+def code_limit(db: Session) -> Decimal:
+    return settings.number(db, "approval_otp_above", otp.DEFAULT_LIMIT)
+
+
+def _code_ref(po: dict[str, Any], step: dict[str, Any]) -> str:
+    """A code is for one person at one step of one round of one version: a revision makes it useless."""
+    return f"{po['no']}:{po['version']}:{po['approval_round']}:{step['step']}"
+
+
+def _check_code(db: Session, po: dict[str, Any], step: dict[str, Any], user_id: int, code: str | None) -> None:
+    if not (code or "").strip():
+        raise ApprovalError(NEED_CODE)
+    try:
+        CODES.verify(db, _code_ref(po, step), user_id, code)
+    except otp.CodeError as exc:
+        raise ApprovalError(str(exc)) from None
+
+
+def send_code(db: Session, po_no: str, user_id: int) -> str:
+    """Email the person whose turn it is a code to approve this version of the order. Returns the address."""
+    po, step, _ = _acting(db, po_no, user_id)
+    if not needs_code(db, po):
+        db.rollback()
+        raise ApprovalError(f"{po_no} needs no code: it is not above {format_inr(code_limit(db))}")
+    try:
+        return CODES.issue(db, _code_ref(po, step), user_id, subject=f"Your code to approve purchase order {po_no}")
+    except otp.CodeError as exc:
+        db.rollback()
+        raise ApprovalError(str(exc)) from None

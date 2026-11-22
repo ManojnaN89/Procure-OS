@@ -59,6 +59,7 @@ class Facts:
     gate_allowed: bool
     gate_reason: str
     advance_pct: int = 0  # an advance agreed in the order's payment terms: never touchless (D-23)
+    revised: bool = False  # changed materially after approval: a person approves it (Rev s5)
 
 
 def limit(rule: TouchlessRule, buyer_tier_max: Decimal | None) -> Decimal | None:
@@ -132,6 +133,13 @@ def checks(facts: Facts, rule: TouchlessRule) -> list[Check]:
             "no advance" if facts.advance_pct == 0 else f"an advance of {facts.advance_pct}% is agreed",
         ),
         Check("touchless.gate", facts.gate_allowed, f"automatic issue: {facts.gate_reason}"),
+        Check(
+            "touchless.revision",
+            not facts.revised,
+            "the order was changed after approval: a person approves it"
+            if facts.revised
+            else "not changed after approval",
+        ),
     ]
 
 

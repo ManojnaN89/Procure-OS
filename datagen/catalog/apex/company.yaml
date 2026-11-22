@@ -132,7 +132,7 @@ settings:
   - [approval_reminder_hours, "24", Hours before an approver is reminded (one working day)]
   - [approval_reminder_days, "1", Working days before a request approver is reminded by email (once)]
   - [approval_escalation_days, "2", Working days before a waiting request approval escalates to the approver's manager or the next approver]
-  - [approval_otp_above, "500000.00", Approving a request by email above this value needs a one-time code sent to the approver]
+  - [approval_otp_above, "500000.00", "Approving a purchase order above this value needs a code sent to the approver. Every decision from an email link needs a code whatever the value."]
   - [auto_approve_requires_budget, "true", Auto-approval only when budget is available]
   - [po_send_requires_confirmation, "true", A person confirms before a PO is sent to a supplier]
   - [manual_mark_paid, "true", "Synthetic demo data only, Finance may record a payment by hand (off for every real company until settlement evidence is built)"]
@@ -591,3 +591,23 @@ cutover:
     advance: {payment_no: PAY-2627-000282, po_no: PO-CKN-2627-00202, pct: "50"}
     unknown_supplier: {po_no: PO-CKN-2627-00204, supplier_code: SUP-099, copy_of: PO-CKN-2627-00202}
     control_invoice_off: "1000.00"
+
+# Block 4 (task 0.2, approval bound to the version; task 1.2, the order approval code). Each scenario is one order from
+# the demo reset by the quotation path (production@ asks for `item`, need-by `need_by`, delivery at PLT-CKN; director@
+# approves the request; buyer@ awards SUP-005 Pune Copper, else SUP-003, at the first version's price) or, for V5, the
+# contract path. A version lists what changed: qty, need_by, a price the supplier `asked` for (accepted), `while:
+# submitted` (changed while it waited for approval), `approved` (that version was approved before the next change),
+# `touchless` (approved by the rule). The generator works out every version (truth/truth_approval_binding.csv).
+# O1 (every email decision needs a code) makes requests only: RM-07 120 (U07) and RM-08 120 (U09); no order truth.
+approval_scenarios:
+  - {name: V1, title: Approval of the version seen, item: RM-08, need_by: "2026-12-14", versions: [{qty: "120", price: "905.00"}, {qty: "100", while: submitted, approved: true}]}
+  - {name: V2, title: Material change after approval, item: RM-08, need_by: "2026-12-14", versions: [{qty: "120", price: "905.00", approved: true}, {need_by: "2026-12-19", approved: true}]}
+  - {name: V2b, title: A change that is not material carries the approval, item: RM-08, need_by: "2026-12-14", versions: [{qty: "120", price: "905.00", approved: true}, {qty: "100"}, {need_by: "2026-12-17"}]}
+  - {name: V3, title: Date slips add up from the approved date, item: RM-08, need_by: "2026-12-14", versions: [{qty: "120", price: "905.00", approved: true}, {need_by: "2026-12-16"}, {need_by: "2026-12-18", approved: true}]}
+  - {name: V4, title: Price rises add up from the first approved price, item: RM-08, need_by: "2026-12-14", versions: [{qty: "120", price: "905.00", approved: true}, {asked: "920.00", approved: true}, {asked: "925.00", approved: true}]}
+  - {name: V4b, title: "Price rise at exactly 2% of the first approved price", item: RM-08, need_by: "2026-12-14", versions: [{qty: "120", price: "905.00", approved: true}, {asked: "920.00", approved: true}, {asked: "923.10"}]}
+  - {name: V4b-out, title: "One paisa above 2% of the first approved price", item: RM-08, need_by: "2026-12-14", versions: [{qty: "120", price: "905.00", approved: true}, {asked: "920.00", approved: true}, {asked: "923.11"}]}
+  - {name: V5, title: A revised order is not touchless, item: RM-05, gst: "5", need_by: "2026-12-14", versions: [{qty: "10", price: "180.00", touchless: true, approved: true}, {need_by: "2026-12-19"}]}
+  - {name: O2, title: The order approval code above Rs 5 lakh, item: RM-08, need_by: "2026-12-14", versions: [{qty: "500", price: "905.00", approved: true}]}
+  - {name: O2-small, title: No code at or below Rs 5 lakh, item: RM-08, need_by: "2026-12-14", versions: [{qty: "120", price: "905.00"}]}
+  - {name: O2b, title: A code is bound to the version, item: RM-08, need_by: "2026-12-14", versions: [{qty: "500", price: "905.00"}, {qty: "480", while: submitted, approved: true}]}

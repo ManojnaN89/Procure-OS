@@ -88,6 +88,14 @@ const PurchaseOrdersView = {
         ${a.decision ? `<p style="margin:0 0 10px;font-size:12.5px;color:var(--text-secondary);">${this.esc(a.decision)}</p>` : ""}
         ${UI.approvalSteps(a.steps, this.STEP_LABEL)}
         ${a.rule_code ? `<div class="cell-muted" style="font-size:11.5px;margin:10px 0;">Rule ${this.esc(a.rule_code)} version ${this.esc(a.rule_version)}</div>` : ""}
+        ${a.can_act ? `<p style="margin:0 0 8px;font-size:12.5px;color:var(--text-secondary);">Approving version ${this.esc(po.version)}</p>` : ""}
+        ${a.can_act && a.needs_code ? `<div id="poCodeBox" style="margin:0 0 10px;font-size:12.5px;color:var(--text-secondary);">
+            <p style="margin:0 0 6px;">This order is above ${formatCurrency(a.code_above)}: approving needs a one-time code.</p>
+            <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
+              <div class="btn btn-sm" id="poCodeAsk"><i class="ti ti-mail"></i>Email me a code</div>
+              <input id="poCode" inputmode="numeric" autocomplete="one-time-code" maxlength="6" placeholder="Six-digit code" style="padding:6px;width:130px;">
+              <span id="poCodeSent" class="cell-muted" style="font-size:11.5px;"></span>
+            </div></div>` : ""}
         ${a.can_act ? `<div class="btn-row"><div class="btn btn-primary" id="poApprove"><i class="ti ti-check"></i>Approve</div><div class="btn btn-danger" id="poReject"><i class="ti ti-x"></i>Reject</div></div>` : ""}
         <div id="poNote" style="font-size:12px;color:var(--warning-text);margin-top:8px;"></div>
         <div id="poReasonBox" style="display:none;margin-top:10px;">
@@ -124,7 +132,17 @@ const PurchaseOrdersView = {
       if (note) note.textContent = res.data.detail || "That did not work.";
     };
     const on = (id, fn) => { const el = document.getElementById(id); if (el) el.addEventListener("click", fn); };
-    on("poApprove", () => act("approve", {}));
+    // the approver says which version they saw: a revision since then is refused, never approved unseen
+    on("poApprove", () => {
+      const code = document.getElementById("poCode");
+      act("approve", { version: po.version, ...(code && code.value ? { code: code.value.trim() } : {}) });
+    });
+    on("poCodeAsk", async () => {
+      const res = await API.postJSON(`/api/purchase-orders/${encodeURIComponent(po.id)}/approval-code`, {});
+      const sent = document.getElementById("poCodeSent");
+      if (res.ok && sent) sent.textContent = `Sent to ${res.data.sent_to}. It works once and expires in ${res.data.expires_minutes} minutes.`;
+      else { const note = document.getElementById("poNote"); if (note) note.textContent = res.data.detail || "That did not work."; }
+    });
     on("poSend", () => act("send", {}));
     on("poAck", async () => {
       const res = await API.postJSON(`/api/purchase-orders/${encodeURIComponent(po.id)}/acknowledge`, {
@@ -137,7 +155,7 @@ const PurchaseOrdersView = {
     });
     on("poReject", () => { document.getElementById("poReasonBox").style.display = "block"; document.getElementById("poReason").focus(); });
     on("poReasonCancel", () => { document.getElementById("poReasonBox").style.display = "none"; });
-    on("poReasonOk", () => act("reject", { reason: document.getElementById("poReason").value }));
+    on("poReasonOk", () => act("reject", { reason: document.getElementById("poReason").value, version: po.version }));
   },
 
   // The order document, its version and history, and what a buyer may change after the order was made.
@@ -151,7 +169,7 @@ const PurchaseOrdersView = {
     const history = (c.history || []).map((h) => `
       <div style="padding:6px 0;border-bottom:1px solid var(--border);font-size:12px;">
         <b>Version ${this.esc(h.version)}</b> · ${formatDate(h.at)} · ${this.esc(h.by)}
-        <div class="cell-muted">${this.esc(h.reason)} · total ${formatCurrency(h.total_before)} → ${formatCurrency(h.total_after)}${h.reapproval ? " · approved again" : ""}</div>
+        <div class="cell-muted">${this.esc(h.reason)} · total ${formatCurrency(h.total_before)} → ${formatCurrency(h.total_after)}${h.reapproval ? ` · approved again${(h.material || []).length ? `: ${this.esc(h.material.join("; "))}` : ""}` : ""}${h.approval_carried ? ` · approval of version ${this.esc(h.baseline_version)} carries: nothing material changed` : ""}</div>
       </div>`).join("");
     box.innerHTML = `
       <div class="panel" style="margin-bottom:12px;">
@@ -189,7 +207,7 @@ const PurchaseOrdersView = {
           <input id="poRevDate" type="date" title="New date needed" style="padding:6px;">
         </div>${reason}
         <div class="btn btn-primary btn-sm" id="poRevGo" style="margin-top:8px;display:inline-block;">Make a new version</div>
-        <span class="cell-muted" style="font-size:11.5px;"> A higher total goes for approval again.</span>`);
+        <span class="cell-muted" style="font-size:11.5px;"> A material change from the approved version (a higher quantity or total, a date moved beyond the tolerance) goes for approval again.</span>`);
       on("poRevGo", () => {
         const line = { line_no: Number(document.getElementById("poRevLine").value) };
         const q = document.getElementById("poRevQty").value, d = document.getElementById("poRevDate").value;
@@ -226,6 +244,7 @@ const PurchaseOrdersView = {
         <div style="display:flex;justify-content:space-between;gap:12px;">
           <div><span style="color:var(--text-primary);">${this.esc(c.what)}</span>
             <span class="cell-muted"> · by ${c.source === "email" ? "email" : "the supplier's link"} · ${formatDate(c.at)}</span>
+            ${c.kind === "price" && c.rise_pct !== null && c.rise_pct !== undefined ? `<div class="cell-muted" style="font-size:11.5px;">${this.esc(c.rise_pct)}% above the first approved price ${formatCurrency(c.base_value)}</div>` : ""}
             ${c.kind === "price" && c.status === "proposed" ? `<div class="cell-muted" style="font-size:11.5px;">${c.within_tolerance ? "Within the price tolerance: yours to accept" : "Above the price tolerance: accepting sends it to the purchase manager"}</div>` : ""}
             ${c.reason ? `<div class="cell-muted" style="font-size:11.5px;">“${this.esc(c.reason)}”</div>` : ""}
             ${c.waiting_for ? `<div class="cell-muted" style="font-size:11.5px;">Waiting for ${this.esc(c.waiting_for)}</div>` : ""}

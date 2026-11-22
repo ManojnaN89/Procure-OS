@@ -86,7 +86,7 @@ class Shop:
         from p2p.agents import autonomy
         from p2p.platform import sod, users
 
-        lib.capture_mail()
+        self.box = lib.capture_mail()
         self.world = lib.build_world("e53", with_stock=False)
         self.db, self.slug = self.world.db, self.world.slug
         self.pm, self.director = person_for("purchase_manager"), person_for("director")
@@ -263,7 +263,19 @@ def run(ctx: lib.Ctx) -> Outcome:  # noqa: C901 - one scenario, step by step
     out = Outcome(True)
     shop = Shop()
     db, pm, director, buyer = shop.db, shop.pm, shop.director, shop.buyer
-    approve = lambda no, who: shop.attempt(lambda: workflow.approve(db, shop.slug, no, shop.login[who]))  # noqa: E731
+
+    def with_code(no: str, who: str) -> str:
+        """Above Rs 5,00,000 the person whose turn it is asks for and types a one-time code (block 4, task 1.2)."""
+        workflow.send_code(db, no, shop.login[who])
+        return shop.box.sent[-1]["body"].split("code is ")[1][:6]
+
+    def approve_as(no: str, who: str) -> str:
+        po = shop.po(no)
+        code = with_code(no, who) if workflow.needs_code(db, po) and workflow.can_act(db, no, shop.login[who]) else None
+        db.rollback()
+        return workflow.approve(db, shop.slug, no, shop.login[who], code=code)
+
+    approve = lambda no, who: shop.attempt(lambda: approve_as(no, who))  # noqa: E731
     mid, held_price, high, small = D("200000.00"), D("250000.00"), D("700000.00"), D("50000.00")
     rise_person = price_rise_person()
     tolerance = D(next(r["value"] for r in rows("master", "tolerance") if r["key"] == "supplier_price_pct"))

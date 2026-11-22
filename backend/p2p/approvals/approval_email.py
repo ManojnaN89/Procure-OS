@@ -43,7 +43,8 @@ def compose(db: Session, tenant: str, no: str, round_no: int, step: int, user_id
     except email_links.LinkError:  # no signing secret: decide in the app
         base, links = "", {}
     code_note = (
-        "Approving needs a one-time code (the request is above the limit); the page emails it to you."
+        "Deciding from this email needs a one-time code: the page emails it to you. "
+        "Or open the request in the app and sign in."
         if f["otp"]
         else ""
     )
@@ -64,6 +65,7 @@ def compose(db: Session, tenant: str, no: str, round_no: int, step: int, user_id
         "",
         f"Why you: {f['why']}",
         *([code_note] if code_note else []),
+        f"Open the request in the app: {f['app_url']}",
         "",
     ]
     if links:
@@ -115,6 +117,7 @@ def compose(db: Session, tenant: str, no: str, round_no: int, step: int, user_id
         f"<table role='presentation' style='border-collapse:collapse;margin:0 0 16px'>{facts}</table>"
         + (f"<p style='margin:0 0 12px'><b>{escape(code_note)}</b></p>" if code_note else "")
         + f"<p style='margin:8px 0 8px'>{buttons}</p>"
+        + f"<p style='margin:0 0 12px'><a href='{escape(f['app_url'])}'>Open the request in the app</a></p>"
     )
     html = email_layout.wrap(
         f"Request {no}",

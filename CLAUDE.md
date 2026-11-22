@@ -91,6 +91,7 @@ Match the surrounding code. Short plain-language comments only where the reason 
 | A later masters import by key: keys and per-table policy, the comparison and its writes, the report | `masters/import_rules.py`, `masters/upsert.py`, `masters/report.py` |
 | AI on top: reading supplier replies into draft quotes (`ai_steps/quote_reading.py`, `sourcing/replies.py`), the assistant (`agents/assistant.py`, read-only tools, answers checked against tool results) | see left |
 | PO tiers and touchless orders (the tests, the versioned rule, issuing and sending without a buyer) | `orders/touchless.py`, `formulas/touchless.py` |
+| Approval bound to the version (step versions, the approved version's snapshot, material change measured from it, the first approved price for supplier price rises), the order approval code above `approval_otp_above` | `orders/approved_versions.py`, `formulas/po_versions.py`, `orders/workflow.py` (`needs_code`, `send_code`) |
 | Quotes, comparison and supplier selection (must-haves, total cost, weighted score, tie-break, split lines; the versioned rule), purchase orders with GST, order approval (budget checked again at the final price) | `orders/quotes.py`, `formulas/selection.py`, `orders/selection_rule.py`, `orders/service.py`, `orders/workflow.py`, `formulas/orders.py` |
 | The order document (PDF), revising an order (versions), cancelling it, closing what is still to come | `orders/document.py`, `orders/changes.py`, `platform/order_api.py` |
 | Invoices: intake, duplicates, three-way match, blocks and releases | `invoices/service.py`, `formulas/matching.py`, `platform/invoice_api.py` |
@@ -136,4 +137,4 @@ Match the surrounding code. Short plain-language comments only where the reason 
 | Reference tables (GST rates, HSN, TDS sections, holidays) | `platform/reference.py`, `data/reference/` |
 | The demo companies `apex` and `brightwave` (reset command, logins, cases in flight) | `platform/demo.py`, `platform/demo_cases.py`, `datagen/generator/company_profile.py`, `datagen/catalog/<name>/company.yaml`, `docs/demo-script.md` |
 
-A new tenant-database table is a new file in `platform/migrations/tenant/versions/` (next number; the latest is 0080, the control database has 0001-0005). A new agent tool is registered with `ToolRegistry`; modules that register tools or executors are listed in `EXTRA_MODULES` so the API process loads them.
+A new tenant-database table is a new file in `platform/migrations/tenant/versions/` (next number; the latest is 0110, the control database has 0001-0005). A new agent tool is registered with `ToolRegistry`; modules that register tools or executors are listed in `EXTRA_MODULES` so the API process loads them.

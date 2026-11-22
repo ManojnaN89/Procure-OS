@@ -24,7 +24,8 @@ from lib import Ctx, Finding, Outcome
 
 
 def discover() -> list:
-    names = sorted(p.stem for p in HERE.glob("e[0-9][0-9]_*.py"))
+    found = [p.stem for p in HERE.glob("e[0-9]*_*.py") if p.stem.split("_")[0][1:].isdigit()]
+    names = sorted(found, key=lambda n: int(n.split("_")[0][1:]))  # two or three digits, by number
     return [importlib.import_module(n) for n in names]
 
 

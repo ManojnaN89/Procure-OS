@@ -28,7 +28,7 @@ A price far below the other quotes or the last price paid shows "Ask the supplie
 
 ## The supplier's answer
 
-The order email has a link where the supplier accepts the order, declines it or asks for a new date, quantity or price; it may also reply by email. Nothing changes by itself: the panel **Supplier's answer** on the order lists each change, old value to new. Click **Accept**, or write a reason and click **Reject** (the supplier gets a new link). An accepted change makes a new version of the order and the requester is told; a price rise above 2% goes on to the purchase manager; an accepted decline cancels the order and gives you a task to source the line again. The panel also shows what the supplier says it has shipped. Reminders about the delivery date go to the supplier by themselves.
+The order email has a link where the supplier accepts the order, declines it or asks for a new date, quantity or price; it may also reply by email. Nothing changes by itself: the panel **Supplier's answer** on the order lists each change, old value to new. Click **Accept**, or write a reason and click **Reject** (the supplier gets a new link). An accepted change makes a new version of the order and the requester is told; a price rise above 2% of the first approved price goes on to the purchase manager (small rises add up: 1.5% and then 1% is 2.5%, so the second is not yours); an accepted decline cancels the order and gives you a task to source the line again. The panel also shows what the supplier says it has shipped. Reminders about the delivery date go to the supplier by themselves.
 
 ## Supply promised too late
 
@@ -38,7 +38,7 @@ When an order brings what a production order needs after it needs it (the need-b
 
 On the order page, the panel **Order document and changes** keeps the version and its history. Every change needs a reason.
 
-- **Change quantity or date** → **Make a new version**: lower the quantity or move the date of a line. A lower total needs no new approval and the supplier gets the revised order by email. A higher total goes for approval again.
+- **Change quantity or date** → **Make a new version**: lower the quantity or move the date of a line. A change is measured from the approved version, not the one before, so small changes add up. It is material, and goes for approval again, when a quantity or price is above the approved one, a date moves more than the tolerance (3 days) either way from the approved date, or the total is higher. Anything else keeps the approval; the supplier gets the revised order by email and accepts the new version. The history says which: "approved again" with the reasons, or "approval of version 1 carries". A changed order is never touchless again.
 - **Cancel this order**: only before anything arrives or is invoiced. Tick **Order these lines again** if you want a different supplier or price; otherwise the need is dropped. The supplier and the requester are told.
 - **Close what is still to come**: after a part delivery, when the supplier will not send the rest.
 

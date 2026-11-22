@@ -6,8 +6,9 @@ supplier-mail agent (agents/supplier_comms.py), where a model only classifies an
 nothing on the order moves before that:
 
 * an accepted date, quantity or price makes a new version of the order (orders/changes.py) and tells the requester;
-* a price rise above 'supplier_price_pct' is not the buyer's to accept: accepting it makes a proposal for the person the
-  price variance rule names (the purchase manager), and only that person's approval changes the order;
+* a price rise above 'supplier_price_pct' of the first approved price (the rises add up, DF-08) is not the buyer's to
+  accept: accepting it makes a proposal for the person the price variance rule names (the purchase manager), on the
+  whole rise from that price, and only that person's approval changes the order;
 * an accepted decline cancels the order and gives its lines back to the buyer to source again.
 
 The supplier is told the outcome; a rejected change comes with a fresh link to answer the order as it stands.
@@ -16,7 +17,7 @@ The supplier is told the outcome; a rejected change comes with a fresh link to a
 import logging
 from dataclasses import dataclass
 from datetime import date
-from decimal import Decimal, InvalidOperation
+from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 from typing import Any
 
 from sqlalchemy import text
@@ -24,11 +25,12 @@ from sqlalchemy.orm import Session
 
 from p2p.approvals import rules as approval_rules
 from p2p.approvals.workflow import name_of, org_code_of
+from p2p.formulas import po_versions
 from p2p.formulas import supplier_changes as judge
 from p2p.formulas.calendar import business_today
 from p2p.formulas.money import format_inr, format_qty
 from p2p.invoices import tolerances
-from p2p.orders import changes, dispatch, supplier_links
+from p2p.orders import approved_versions, changes, dispatch, supplier_links
 from p2p.orders import workflow as po_workflow
 from p2p.platform import audit, notifications, permissions, proposals, tasks
 from p2p.platform.sod import Actor, user
@@ -168,8 +170,12 @@ def propose(
         if new == old:
             db.rollback()
             raise ConfirmationError(f"line {item.line_no}: the {item.kind} asked for is the one on the order")
-        within = judge.judge_price(Decimal(old), Decimal(new), tolerance).ok if item.kind == "price" else None
-        rows.append({"kind": item.kind, "line": item.line_no, "old": old, "new": new, "within": within})
+        within, base = None, None
+        if item.kind == "price":  # judged from the first approved price, so small rises add up (DF-08)
+            first = approved_versions.base_price(db, po_no, int(line["line_no"]))
+            base = f"{(first if first is not None else Decimal(old)).normalize():f}"
+            within = judge.judge_price(Decimal(base), Decimal(new), tolerance).ok
+        rows.append({"kind": item.kind, "line": item.line_no, "old": old, "new": new, "within": within, "base": base})
     if task_id is None:
         what = "cannot supply" if any(r["kind"] == "decline" for r in rows) else "asks for a change to"
         task_id = tasks.create_task(
@@ -189,11 +195,13 @@ def propose(
                 db.execute(
                     text(
                         "insert into po_change (po_no, po_line_no, kind, old_value, new_value, reason, source, email_id, "
-                        "within_tolerance, task_id) values (:p, :l, :k, :o, :n, :r, :s, :e, :w, :t) returning id"
+                        "within_tolerance, task_id, base_value) values (:p, :l, :k, :o, :n, :r, :s, :e, :w, :t, :b) "
+                        "returning id"
                     ),
                     {
                         "p": po_no, "l": r["line"], "k": r["kind"], "o": r["old"], "n": r["new"],
                         "r": (reason or "").strip()[:500] or None, "s": source, "e": email_id, "w": r["within"], "t": task_id,
+                        "b": r.get("base"),
                     },
                 ).scalar_one()
             )
@@ -431,7 +439,9 @@ def _ask_for_price_approval(
     qty = db.execute(
         text("select qty from po_line where po_no = :p and line_no = :l"), {"p": ch["po_no"], "l": ch["po_line_no"]}
     ).scalar_one()
-    rise = ((Decimal(ch["new_value"]) - Decimal(ch["old_value"])) * Decimal(qty)).quantize(Decimal("0.01"))
+    # the whole rise from the first approved price, so the approver's limit sees all of it (DF-08)
+    base = Decimal(ch["base_value"] or ch["old_value"])
+    rise = ((Decimal(ch["new_value"]) - base) * Decimal(qty)).quantize(Decimal("0.01"), ROUND_HALF_UP)
     try:
         step = _price_approver(db, ch["po_no"], rise)
     except approval_rules.ApprovalRuleError as exc:
@@ -591,6 +601,8 @@ def list_changes(db: Session, po_no: str, user_id: int) -> list[dict[str, Any]]:
                 "source": r["source"],
                 "status": r["status"],
                 "within_tolerance": r["within_tolerance"],
+                "base_value": r["base_value"],
+                "rise_pct": _rise(r["base_value"], r["new_value"]) if r["kind"] == "price" else None,
                 "waiting_for": name_of(db, named[0]) if r["status"] == "waiting_approval" else None,
                 "decision_note": r["decision_note"],
                 "version_made": r["version_made"],
@@ -600,3 +612,9 @@ def list_changes(db: Session, po_no: str, user_id: int) -> list[dict[str, Any]]:
             }
         )
     return out
+
+
+def _rise(base: str | None, new: str | None) -> str | None:
+    """How far the asked price is above the first approved price, in percent, for people to read."""
+    pct = po_versions.rise_pct(Decimal(base), Decimal(new)) if base and new else None
+    return None if pct is None else str(pct)

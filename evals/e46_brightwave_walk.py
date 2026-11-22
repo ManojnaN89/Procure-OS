@@ -244,8 +244,15 @@ def _run(ctx: Any) -> Outcome:  # noqa: C901 - one story, step by step
                     )
                     if later == 0 and link:
                         url = re.search(r"https?://\S+/approve/[\w.\-]+", link["body"]).group(0)  # type: ignore[union-attr]
-                        with d.step(key, f"opens the emailed link for {no} and clicks Approve") as page:
+                        # D-07 (block 4): a decision from an email link needs the one-time code emailed to that person
+                        with d.step(
+                            key, f"opens the emailed link for {no}, asks for a code, types it and clicks Approve"
+                        ) as page:
                             page.goto(url)
+                            page.get_by_role("button", name="Email me a code").click()
+                            expect(page.locator("body")).to_contain_text("A code was sent to")
+                            coded = [m for m in mails_to(f"{key}@{DOMAIN}") if "code is " in m["body"]]
+                            page.locator("input[name=code]").fill(coded[-1]["body"].split("code is ")[1][:6] if coded else "")
                             page.get_by_role("button", name="Approve").click()
                             expect(page.locator("body")).to_contain_text("Approved")
                         d.mark(4)
@@ -388,6 +395,11 @@ def _run(ctx: Any) -> Outcome:  # noqa: C901 - one story, step by step
                     d.go("cfo", "dashboard")
                     expect(page.locator("#myWork")).to_contain_text(no)
                     d.go("cfo", f"purchase-orders/{no}")
+                    if page.locator("#poCodeAsk").count():  # above Rs 5,00,000 approving needs a code (block 4)
+                        page.locator("#poCodeAsk").click()
+                        expect(page.locator("#poCodeSent")).to_contain_text("Sent to")
+                        coded = [m for m in mails_to(f"cfo@{DOMAIN}") if "code is " in m["body"]]
+                        page.locator("#poCode").fill(coded[-1]["body"].split("code is ")[1][:6] if coded else "")
                     page.locator("#poApprove").click()
                     expect(page.locator("#appContent")).to_contain_text("Approved by")
                 d.mark(7)

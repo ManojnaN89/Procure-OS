@@ -5,8 +5,9 @@ The email to an approver carries a link to a page that shows the request and ask
 so a mail scanner that fetches links does no harm; the decision is a separate button. It works once because the step stops
 waiting after the decision, and a link for a step that is no longer waiting for that person is refused. The decision is the
 same as on the screen: same turn, same role, same separation of duties, and the audit row says it came by an emailed link.
-Approving a request above the setting `approval_otp_above` also needs a one-time code emailed to the approver
-(platform/otp.py); rejecting or returning needs a reason, never a code.
+Every decision from a link (approve, reject, return) needs a one-time code emailed to the login the link names
+(platform/otp.py), whatever the amount, so a forwarded link decides nothing (D-07). Instead of a code the approver can
+open the request in the app and sign in. Rejecting or returning also needs a reason.
 """
 
 import time
@@ -154,7 +155,8 @@ def facts(db: Session, no: str, round_no: int, step_no: int, me: str | None) -> 
         "budget": budget.summary(budget.check_request(db, no, business_today())),
         "why": why,
         "summary": summary,
-        "otp": otp.needed(db, total),
+        "otp": True,  # every decision from an email link needs a code (D-07)
+        "app_url": app_url(req["no"]),
     }
 
 
@@ -168,24 +170,22 @@ def send_code(db: Session, link: Link) -> str:
     """Email the approver a one-time code for this step. Returns the address it went to."""
     _waiting(db, link)
     try:
-        return CODES.issue(db, link.ref, link.user_id, subject=f"Your code to approve request {link.request_no}")
+        return CODES.issue(db, link.ref, link.user_id, subject=f"Your code to decide request {link.request_no}")
     except otp.CodeError as exc:
         raise LinkError(str(exc)) from None
 
 
 def decide(db: Session, link: Link, action: str, reason: str | None, code: str | None = None) -> str:
-    """Approve, reject or return for the person the link names. Everything the screen checks is checked here too, and an
-    approval above the code limit needs the code first (it is used up only when the approval goes through)."""
+    """Approve, reject or return for the person the link names. Everything the screen checks is checked here too, and
+    every decision needs the person's one-time code first (D-07; it is used up only when the decision goes through)."""
     _waiting(db, link)
     if action not in ACTIONS:
         raise LinkError("the decision must be approve, reject or return")
+    if not (code or "").strip():
+        raise LinkError("this needs a one-time code: ask for one (a code works once)")
     try:
+        CODES.verify(db, link.ref, link.user_id, code)
         if action == "approve":
-            total = db.execute(
-                text("select total_value from request where no = :n"), {"n": link.request_no}
-            ).scalar_one()
-            if otp.needed(db, Decimal(total)):
-                CODES.verify(db, link.ref, link.user_id, code)
             return workflow.approve(db, link.tenant, link.request_no, link.user_id, reason, via=VIA)
         if action == "reject":
             return workflow.reject(db, link.request_no, link.user_id, reason, tenant=link.tenant, via=VIA)
@@ -193,6 +193,11 @@ def decide(db: Session, link: Link, action: str, reason: str | None, code: str |
     except (workflow.ApprovalError, permissions.PermissionDenied, otp.CodeError) as exc:
         db.rollback()
         raise LinkError(str(exc)) from None
+
+
+def app_url(request_no: str) -> str:
+    """The request in the app, where the approver signs in and decides without a code."""
+    return f"{get_settings().public_base_url.rstrip('/')}/#/requisitions/{request_no}"
 
 
 def url(tenant: str, request_no: str, round_no: int, step: int, user_id: int) -> str:

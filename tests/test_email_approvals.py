@@ -230,6 +230,7 @@ def test_given_a_step_opens_when_the_email_goes_then_it_has_the_lines_total_budg
 def test_given_the_reject_or_return_button_when_the_page_opens_then_it_asks_for_a_reason_and_decides_once(
     db: Session,
     logins: Logins,  # noqa: F811
+    outbox: list[dict[str, Any]],
 ) -> None:
     no = _gasket(db, "R-W3", "20000.00")
     token = email_links.make(db.info["slug"], no, 1, 1, logins.stores)
@@ -237,26 +238,31 @@ def test_given_the_reject_or_return_button_when_the_page_opens_then_it_asks_for_
     page = client.get(f"/approve/{token}?do=return")
     assert page.status_code == 200 and "Send back for changes" in page.text and "required" in page.text
     assert ">Approve<" not in page.text  # only the one decision on this small page
-    assert client.post(f"/approve/{token}", data={"action": "return"}).status_code == 409  # no reason
-    done = client.post(f"/approve/{token}", data={"action": "return", "reason": "Wrong gasket size"})
+    client.post(f"/approve/{token}/code")
+    code = _code(outbox)  # every decision from a link needs the code (D-07)
+    assert client.post(f"/approve/{token}", data={"action": "return", "code": code}).status_code == 409  # no reason
+    done = client.post(f"/approve/{token}", data={"action": "return", "reason": "Wrong gasket size", "code": code})
     assert done.status_code == 200 and "Sent back for changes" in done.text
     db.rollback()
     assert _row(db, no)["status"] == "returned"
     (row,) = _audit(db, "request.return", no)
     assert row["after"]["via"] == "emailed link" and row["reason"] == "Wrong gasket size"
-    assert client.post(f"/approve/{token}", data={"action": "approve"}).status_code == 409  # the link worked once
+    again = client.post(f"/approve/{token}", data={"action": "approve", "code": code})
+    assert again.status_code == 409  # the link worked once
 
 
 def test_given_the_requester_holds_a_link_when_they_approve_their_own_request_then_it_is_refused(
     db: Session,
     logins: Logins,  # noqa: F811
+    outbox: list[dict[str, Any]],
 ) -> None:
     no = _gasket(db, "R-W4", "20000.00", requester="U3")  # the stores head asks; their manager (the CFO) decides
     db.execute(text("update approval_step set approver = 'U3' where request_no = :n"), {"n": no})  # as if data changed
     db.commit()
     token = email_links.make(db.info["slug"], no, 1, 1, logins.stores)
+    client.post(f"/approve/{token}/code")
 
-    r = client.post(f"/approve/{token}", data={"action": "approve"})
+    r = client.post(f"/approve/{token}", data={"action": "approve", "code": _code(outbox)})  # a code never replaces SoD
 
     assert r.status_code == 409 and "segregation of duties" in r.text
     db.rollback()
@@ -409,19 +415,49 @@ def _code(sent: list[dict[str, Any]]) -> str:
     return sent[-1]["body"].split("code is ")[1][:6]
 
 
-def test_given_the_code_limit_when_a_request_is_at_or_above_rs_5_lakh_then_only_above_needs_a_code(
+@pytest.mark.parametrize("action", ["approve", "reject", "return"])
+def test_given_a_link_below_the_limit_when_deciding_without_a_code_then_it_is_refused_and_with_it_it_works(
     db: Session,
     logins: Logins,  # noqa: F811
+    outbox: list[dict[str, Any]],
+    action: str,
 ) -> None:
-    assert otp.needed(db, D("500000.00")) is False
-    assert otp.needed(db, D("500000.01")) is True
-    at = _gasket(db, "R-O1", "500000.00")
+    # D-07: every email decision needs a login or a one-time code, whatever the amount (the limit now governs only
+    # the order approval code in the app)
+    assert otp.needed(db, D("500000.00")) is False and otp.needed(db, D("500000.01")) is True
+    no = _gasket(db, f"R-O1{action[0]}", "20000.00")
+    token = email_links.make(db.info["slug"], no, 1, 1, logins.stores)
+    form = {"action": action, "reason": "Checked"}
 
-    done = client.post(
-        f"/approve/{email_links.make(db.info['slug'], at, 1, 1, logins.stores)}", data={"action": "approve"}
-    )
+    refused = client.post(f"/approve/{token}", data=form)
+    assert refused.status_code == 409 and "needs a one-time code" in refused.text
+    client.post(f"/approve/{token}/code")
+    done = client.post(f"/approve/{token}", data={**form, "code": _code(outbox)})
 
-    assert done.status_code == 200 and "Approved" in done.text
+    assert done.status_code == 200
+    db.rollback()
+    assert _row(db, no)["status"] in ("approved", "submitted", "rejected", "returned")
+    assert [r["action"] for r in _audit(db, "otp.use", f"approval:{no}:1:1")] == ["otp.use"]
+
+
+def test_given_a_forwarded_link_then_the_code_goes_only_to_the_named_login_and_never_shows_on_the_page(
+    db: Session,
+    logins: Logins,  # noqa: F811
+    outbox: list[dict[str, Any]],
+) -> None:
+    no = _gasket(db, "R-O3", "20000.00")
+    token = email_links.make(db.info["slug"], no, 1, 1, logins.stores)
+
+    page = client.post(f"/approve/{token}/code")  # whoever holds the link asks
+
+    (mail_sent,) = outbox
+    code = _code(outbox)
+    assert mail_sent["to"].startswith("stores") and code not in page.text  # only the named person's mailbox has it
+    assert code not in client.get(f"/approve/{token}").text
+    assert f"/#/requisitions/{no}" in page.text and "Open the request in the app" in page.text
+    (mail_job,) = [j for j in _jobs(db.info["slug"], "send_email") if no in j["subject"]]
+    assert f"/#/requisitions/{no}" in mail_job["body"] and "needs a one-time code" in mail_job["body"]
+    assert f"/#/requisitions/{no}" in mail_job["html"]
 
 
 def test_given_a_request_above_the_limit_when_approving_by_link_then_the_emailed_code_is_needed_once(

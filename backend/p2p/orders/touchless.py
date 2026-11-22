@@ -196,6 +196,9 @@ def facts(db: Session, po_no: str, rule: rules.ApprovalRule, today: date) -> tl.
         gate_allowed=gate.allowed,
         gate_reason=gate.reason,
         advance_pct=int(po["advance_pct"]),
+        revised=db.execute(
+            text("select exists (select 1 from po_revision where po_no = :n and reapproval)"), {"n": po_no}
+        ).scalar_one(),
     )
 
 

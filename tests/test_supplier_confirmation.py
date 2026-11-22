@@ -570,31 +570,3 @@ def test_the_confirmation_service_refuses_an_order_no_longer_with_the_supplier(s
             shop, shop.info["slug"], po_no, [confirmation.Proposed("decline")], source="link", reason="x",
             actor=confirmation.supplier_actor("S1"),
         )  # fmt: skip
-
-
-@pytest.mark.parametrize(
-    ("changes", "reasons"),
-    [
-        ([{"line": 1, "unit_price": {"from": "100", "to": "100"}}], []),
-        ([{"line": 1, "unit_price": {"from": "100", "to": "100.01"}}], ["line 1: price up"]),
-        ([{"line": 1, "unit_price": {"from": "100", "to": "99.99"}}], []),
-        ([{"line": 1, "qty": {"from": "10", "to": "10.0001"}}], ["line 1: quantity up"]),
-        ([{"line": 1, "qty": {"from": "10", "to": "8"}}], []),
-        ([{"line": 1, "need_by": {"from": "2026-11-20", "to": "2026-11-23"}}], []),
-        (
-            [{"line": 1, "need_by": {"from": "2026-11-20", "to": "2026-11-24"}}],
-            ["line 1: date moved 4 days, more than the 3 accepted"],
-        ),
-        (
-            [{"line": 1, "need_by": {"from": "2026-11-20", "to": "2026-11-16"}}],
-            ["line 1: date moved 4 days, more than the 3 accepted"],
-        ),
-    ],
-)
-def test_what_makes_a_revision_material_q19(changes: list, reasons: list) -> None:
-    assert judge.material_reasons(D("100"), D("100"), changes, 3) == reasons
-
-
-def test_a_higher_total_alone_is_material_and_an_equal_one_is_not() -> None:
-    assert judge.material_reasons(D("1180.00"), D("1180.01"), [], 3) == ["the total went up"]
-    assert judge.material_reasons(D("1180.00"), D("1180.00"), [], 3) == []

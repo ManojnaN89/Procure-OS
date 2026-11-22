@@ -32,6 +32,8 @@ from history_check import history_problems  # noqa: E402
 from history_close import Closing  # noqa: E402
 from history_close import write as write_tables  # noqa: E402
 from history_money import Money  # noqa: E402
+from approval_scenarios import check as check_approval  # noqa: E402
+from approval_scenarios import write_approval  # noqa: E402
 from demand_scenarios import write_scenarios  # noqa: E402
 from stock_scenarios import write_stock  # noqa: E402
 import cutover  # noqa: E402
@@ -633,6 +635,7 @@ def build(profile: CompanyProfile, out: Path) -> dict[str, dict[str, int]]:
     if history:
         write_stock(profile.data, out)  # held stock and the stock check scenarios, after the demand truth
     opening = cutover.write(out, profile) if history and "cutover" in profile.data else {}
+    write_approval(profile.data, out)  # the approval scenarios of block 4: every order version worked out
     manifest = {
         "dataset": profile.dataset,
         "profile": profile.name,
@@ -724,7 +727,7 @@ def _column(path: Path, column: str) -> set[str]:
 
 def check(out: Path, profile: CompanyProfile | None = None) -> list[str]:
     """What is wrong with the dataset, in plain words. Empty when it is as designed."""
-    problems = common_problems(out)
+    problems = common_problems(out) + check_approval(out)
     if problems:
         return problems
     m = out / "master"

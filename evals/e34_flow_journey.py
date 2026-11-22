@@ -443,7 +443,12 @@ def _run(ctx: Any) -> Outcome:
                     q("select status from request where no = :n", n=r_copper)[0][0],
                     "submitted",
                 )
-                with d.step("director", "clicks Approve on that page") as page:
+                # D-07 (block 4): every decision from an email link needs a one-time code, emailed to the director
+                with d.step("director", "clicks Email me a code, types the code from the email and clicks Approve") as page:
+                    page.get_by_role("button", name="Email me a code").click()
+                    expect(page.locator("body")).to_contain_text("A code was sent to")
+                    coded = [m for m in mails_to("director") if "code is " in m["body"]]
+                    page.locator("input[name=code]").fill(coded[-1]["body"].split("code is ")[1][:6] if coded else "")
                     page.get_by_role("button", name="Approve").click()
                     expect(page.locator("body")).to_contain_text("Approved")
                 d.sync()
@@ -1699,8 +1704,12 @@ def production_orders(
     c.true(f"the {NAMES[approver]} was emailed a link for {r_no}", mail is not None)
     if mail:
         url = re.search(r"https?://\S+/approve/[\w.\-]+", mail["body"]).group(0)  # type: ignore[union-attr]
-        with d.step(approver, f"opens the link in the email for {r_no} and clicks Approve") as page:
+        with d.step(approver, f"opens the link in the email for {r_no}, asks for a code, types it, clicks Approve") as page:
             page.goto(url)
+            page.get_by_role("button", name="Email me a code").click()  # D-07 (block 4): a code on every link
+            expect(page.locator("body")).to_contain_text("A code was sent to")
+            coded = [m for m in mails_to(approver) if "code is " in m["body"]]
+            page.locator("input[name=code]").fill(coded[-1]["body"].split("code is ")[1][:6] if coded else "")
             page.get_by_role("button", name="Approve").click()
             expect(page.locator("body")).to_contain_text("Approved")
         d.mark(4)

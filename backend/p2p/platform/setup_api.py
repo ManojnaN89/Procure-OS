@@ -383,8 +383,9 @@ POLICIES: dict[str, tuple[str, str, str, str, str, float | None, float | None, t
     "approval_otp_above": (
         "org",
         "decimal",
-        "One-time code for approvals above (Rs)",
-        "Approving by email above this value needs a code sent to the approver",
+        "One-time code to approve an order above (Rs)",
+        "Approving a purchase order above this value needs a code sent to the approver. Every decision from an email "
+        "link needs a code whatever the value.",
         "500000.00",
         0,
         999999999,

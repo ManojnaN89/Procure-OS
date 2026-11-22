@@ -89,6 +89,12 @@ def send_po(db: Session, po_no: str, actor: Actor = SERVICE, *, tenant: str | No
         raise DispatchError(f"{po_no} is {po['status']}; only an approved order can be sent")
     if po["hold_reason"]:
         raise DispatchError(f"{po_no} is on hold: {po['hold_reason']}")
+    unapproved = db.execute(
+        text("select max(version) from po_revision where po_no = :n and reapproval and version > coalesce(:a, 0)"),
+        {"n": po_no, "a": po["approved_version"]},
+    ).scalar()
+    if unapproved is not None:  # a safety net: revise already sends such an order back to approval (DF-07)
+        raise DispatchError(f"version {unapproved} changed materially after approval: it must be approved first")
     supplier = db.execute(
         text("select status, coalesce(trade_name, legal_name) from supplier where code = :c"),
         {"c": po["supplier_code"]},

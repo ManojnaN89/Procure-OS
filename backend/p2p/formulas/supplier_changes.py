@@ -87,28 +87,3 @@ def price_change_pct(old: Decimal | None, new: Decimal | None) -> Decimal | None
     if not old or old <= 0 or new is None:
         return None
     return ((new - old) * 100 / old).quantize(Decimal("0.1"))
-
-
-def material_reasons(
-    before_total: Decimal, after_total: Decimal, line_changes: list[dict[str, dict[str, str | None]]], date_days: int
-) -> list[str]:
-    """Why a revision of an approved order is material (Q19): it then needs approval again and a new acknowledgement.
-
-    A price up, any quantity increase, a date moved by more than the tolerance (either way) or a higher total is
-    material. Anything else is a new version that only the supplier acknowledges again. An empty list: not material.
-    """
-    reasons: list[str] = []
-    for ch in line_changes:
-        line = ch.get("line")
-        price, qty, when = ch.get("unit_price"), ch.get("qty"), ch.get("need_by")
-        if price and Decimal(str(price["to"])) > Decimal(str(price["from"])):
-            reasons.append(f"line {line}: price up")
-        if qty and Decimal(str(qty["to"])) > Decimal(str(qty["from"])):
-            reasons.append(f"line {line}: quantity up")
-        if when and when.get("from") and when.get("to"):
-            moved = abs((date.fromisoformat(str(when["to"])) - date.fromisoformat(str(when["from"]))).days)
-            if moved > date_days:
-                reasons.append(f"line {line}: date moved {count(moved, 'day')}, more than the {date_days} accepted")
-    if after_total > before_total:
-        reasons.append("the total went up")
-    return reasons

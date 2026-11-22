@@ -2,7 +2,8 @@
 
 No sign-in: the signed link is the key (approvals/email_links.py). Opening the page changes nothing; the decision is a
 separate button. The email's buttons open the same page for one decision (`?do=approve|reject|return`); rejecting or
-sending back asks for a reason there. Approving above the code limit asks for a one-time code, emailed on request. A page
+sending back asks for a reason there. Every decision asks for a one-time code, emailed on request to the login the link
+names, or the approver opens the request in the app and signs in (D-07). A page
 that is not for this person any more, or a link that was altered or has expired, says so and does nothing. Wrong links are
 counted per address, so guessing is stopped.
 """
@@ -57,12 +58,13 @@ def _form(token: str, data: dict[str, Any], do: str | None, note: str = "") -> H
     )
     actions = [do] if do in email_links.ACTIONS else list(email_links.ACTIONS)
     needs_reason = "approve" not in actions
+    app = f"<a href='{escape(data['app_url'])}'>Open the request in the app</a>"
     code = (
-        "<p class=note>Approving needs the one-time code we email you (it is above the limit). "
+        "<p class=note>Deciding needs the one-time code we email you, or open the request in the app and sign in. "
         f"<button class=plain formaction='/approve/{escape(token)}/code' formmethod=post formnovalidate>"
         "Email me a code</button></p><input name=code inputmode=numeric autocomplete=one-time-code maxlength=6 "
-        "placeholder='Six-digit code'>"
-        if data["otp"] and "approve" in actions
+        f"placeholder='Six-digit code'><p class=muted>{app}</p>"
+        if data["otp"]
         else ""
     )
     prompt = (
@@ -105,10 +107,10 @@ def send_code(token: str, request: Request) -> HTMLResponse:
             try:
                 address = email_links.send_code(db, link)
             except email_links.LinkError as exc:
-                return _form(token, data, "approve", str(exc))
+                return _form(token, data, None, str(exc))
     except _Refused as error:
         return _refuse(error)
-    return _form(token, data, "approve", f"A code was sent to {address}. It works once and expires in 10 minutes.")
+    return _form(token, data, None, f"A code was sent to {address}. It works once and expires in 10 minutes.")
 
 
 @router.post("/approve/{token}", response_class=HTMLResponse)

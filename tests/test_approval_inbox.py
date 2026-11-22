@@ -3,6 +3,7 @@ requester's reminder to whoever has the request."""
 
 import time
 from decimal import Decimal
+from typing import Any
 
 import pytest
 from fastapi.testclient import TestClient
@@ -13,7 +14,7 @@ from test_sourcing import _headers
 
 from p2p.approvals import email_links, workflow
 from p2p.main import app
-from p2p.platform import permissions, tenants, users
+from p2p.platform import mail, permissions, tenants, users
 
 D = Decimal
 client = TestClient(app)
@@ -137,6 +138,24 @@ def test_the_screens_approve_with_a_quantity_and_in_bulk_over_the_api(db: Sessio
 # ---- an emailed link --------------------------------------------------------------------------
 
 
+@pytest.fixture
+def codes(monkeypatch: pytest.MonkeyPatch) -> list[str]:
+    """The one-time codes emailed to approvers: every decision from a link needs one (D-07)."""
+    sent: list[str] = []
+
+    def fake(to: str, subject: str, body: str, **kw: Any) -> str:
+        sent.append(body.split("code is ")[1][:6])
+        return "id"
+
+    monkeypatch.setattr(mail, "send_email", fake)
+    return sent
+
+
+def _code(token: str, codes: list[str]) -> str:
+    client.post(f"/approve/{token}/code")
+    return codes[-1]
+
+
 def _link_for(db: Session, no: str, user_id: int) -> str:
     req = _row(db, no)
     step = db.execute(
@@ -177,7 +196,11 @@ def test_a_link_that_was_altered_or_has_expired_is_not_valid(db: Session, logins
         email_links.read(token, now=time.time() + 8 * 86400)
 
 
-def test_opening_the_page_changes_nothing_and_the_button_decides_once(db: Session, logins: Logins) -> None:  # noqa: F811
+def test_opening_the_page_changes_nothing_and_the_button_decides_once(
+    db: Session,
+    logins: Logins,  # noqa: F811
+    codes: list[str],
+) -> None:
     no = _big(db, "R-E3")
     token = _link_for(db, no, logins.stores)
 
@@ -186,35 +209,42 @@ def test_opening_the_page_changes_nothing_and_the_button_decides_once(db: Sessio
     assert page.headers["cache-control"] == "no-store"
     assert _row(db, no)["status"] == "submitted"  # a mail scanner opening the link decides nothing
 
-    done = client.post(f"/approve/{token}", data={"action": "approve", "reason": "fine"})
+    code = _code(token, codes)
+    done = client.post(f"/approve/{token}", data={"action": "approve", "reason": "fine", "code": code})
     assert done.status_code == 200 and "Approved" in done.text
     db.rollback()
     assert _row(db, no)["status"] == "approved"
     (row,) = _audit(db, "request.approve", no)
     assert row["after"]["via"] == "emailed link" and row["reason"] == "fine"
 
-    again = client.post(f"/approve/{token}", data={"action": "approve"})
+    again = client.post(f"/approve/{token}", data={"action": "approve", "code": code})
     assert again.status_code == 409 and "no longer waiting" in again.text  # it works once
     assert client.get(f"/approve/{token}").status_code == 409
 
 
-def test_a_link_is_for_one_person_and_the_same_rules_apply_as_on_the_screen(db: Session, logins: Logins) -> None:  # noqa: F811
+def test_a_link_is_for_one_person_and_the_same_rules_apply_as_on_the_screen(
+    db: Session,
+    logins: Logins,  # noqa: F811
+    codes: list[str],
+) -> None:
     no = _big(db, "R-E4")
 
     director = client.post(f"/approve/{_link_for(db, no, logins.director)}", data={"action": "approve"})
     assert director.status_code == 409  # the stores head's turn, not the director's
     stores = _link_for(db, no, logins.stores)
-    no_reason = client.post(f"/approve/{stores}", data={"action": "reject"})
+    code = _code(stores, codes)
+    no_reason = client.post(f"/approve/{stores}", data={"action": "reject", "code": code})
     assert no_reason.status_code == 409 and "reason" in no_reason.text
     assert _row(db, no)["status"] == "submitted"
 
-    rejected = client.post(f"/approve/{stores}", data={"action": "reject", "reason": "not needed"})
+    rejected = client.post(f"/approve/{stores}", data={"action": "reject", "reason": "not needed", "code": code})
     assert rejected.status_code == 200 and "Rejected" in rejected.text
     db.rollback()
     assert _row(db, no)["status"] == "rejected"
     (row,) = _audit(db, "request.reject", no)
     assert row["after"]["via"] == "emailed link"
-    odd = client.post(f"/approve/{_link_for(db, _big(db, 'R-E5'), logins.stores)}", data={"action": "shrug"})
+    odd_link = _link_for(db, _big(db, "R-E5"), logins.stores)
+    odd = client.post(f"/approve/{odd_link}", data={"action": "shrug", "code": _code(odd_link, codes)})
     assert odd.status_code == 409
 
 

@@ -208,6 +208,7 @@ def test_the_apex_casting_on_contract_is_issued_and_sent_with_no_buyer(tiers: Se
         "touchless.budget",
         "touchless.advance",
         "touchless.gate",
+        "touchless.revision",  # block 4: a materially revised order is never touchless
     ]
     (mail,) = [m for m in outbox.sent if po in m["subject"]]
     assert "Deliver to: Bengaluru store (WH-BLR)" in mail["body"]
@@ -335,7 +336,7 @@ def test_a_touchless_order_is_audited_as_the_system_and_its_rule_with_the_facts_
         "touchless_po v1",
         "touchless_po v1; PO-01:v1",
     )
-    assert check["after"]["touchless"] is True and len(check["after"]["checks"]) == 9
+    assert check["after"]["touchless"] is True and len(check["after"]["checks"]) == 10
     assert (rows["po.send"]["actor_type"], rows["po.send"]["actor_id"]) == ("rule", "touchless_po v1")
     outcome = tiers.execute(text("select auto, ref from autonomy_outcome where decision_type = 'po.issue'")).one()
     assert tuple(outcome) == (True, po)
@@ -477,7 +478,7 @@ def test_the_order_list_and_page_show_the_tier_approver_place_and_touchless_badg
         "Bengaluru store",
         True,
     )
-    assert page["touchless_note"].startswith("Touchless") and len(page["touchless_checks"]) == 9
+    assert page["touchless_note"].startswith("Touchless") and len(page["touchless_checks"]) == 10
     assert page["touchless_rule"] == "touchless_po v1" and page["ship_to"] == "WH-BLR"
 
 
