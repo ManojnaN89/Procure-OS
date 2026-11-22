@@ -14,6 +14,7 @@ import re
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Any
 
@@ -21,6 +22,8 @@ from pydantic import BaseModel, ValidationError
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
+from p2p.agents import trace
+from p2p.ai_steps import costs
 from p2p.ai_steps.adapters import (
     Adapter,
     AnthropicAdapter,
@@ -94,8 +97,14 @@ DEFAULT_LIMITS: dict[str, Limits] = {
     "nvidia": Limits(rpm=30),
 }
 
-# US dollars per million tokens (input, output). Free tiers cost nothing; add paid models here.
-PRICE_PER_MTOK: dict[tuple[str, str], tuple[Decimal, Decimal]] = {}
+
+def _traced() -> dict[str, Any]:
+    """What the call belongs to (agents/trace.py): the run, capability, person, workflow and document."""
+    t = trace.current()
+    return {
+        "run": t.run_id, "cap": t.capability, "uid": t.user_id, "wf": t.workflow_id, "ent": t.entity,
+        "eid": t.entity_id,
+    }  # fmt: skip
 
 
 @dataclass(frozen=True)
@@ -207,6 +216,7 @@ class Gateway:
                 return done
         last_error: ModelError | None = None
         attempts = 0
+        capped: tuple[str | None, str | None] = (None, None)  # the model the budget refused, for the log row
         for entry in route:
             provider, model = entry[0], entry[1]
             extra = entry[2] if len(entry) > 2 else None
@@ -216,6 +226,12 @@ class Gateway:
                 continue
             limiter = self._limiter(provider, model)
             estimate = estimate_tokens(" ".join(m["content"] for m in messages)) + max_tokens
+            if db is not None:
+                try:
+                    costs.check_cap(db, provider, model, estimate)  # before the call: the month's budget (DF-32)
+                except costs.CostCapReached as exc:
+                    last_error, capped = exc, (provider, model)
+                    continue  # the next model of the route may be free
             for attempt in range(self.max_retries + 1):
                 attempts += 1
                 if limiter is not None:
@@ -283,7 +299,7 @@ class Gateway:
                     use_cache,
                     masked,
                 )
-        self._fail(db, step, prompt_version, None, None, attempts, started, "error", str(last_error), cache_key, masked)
+        self._fail(db, step, prompt_version, *capped, attempts, started, "error", str(last_error), cache_key, masked)
         raise last_error or ModelError("no model configured for this step")
 
     def extract[T: BaseModel](
@@ -373,12 +389,7 @@ class Gateway:
         use_cache: bool,
         masked: dict[str, int],
     ) -> Completion:
-        price = PRICE_PER_MTOK.get((provider, model))
-        cost = (
-            (Decimal(raw.tokens_in) * price[0] + Decimal(raw.tokens_out) * price[1]) / Decimal(1_000_000)
-            if price
-            else Decimal(0)
-        )
+        cost = costs.cost(costs.price(provider, model, datetime.now(UTC).date()), raw.tokens_in, raw.tokens_out)
         done = Completion(
             raw.text,
             provider,
@@ -391,6 +402,8 @@ class Gateway:
         )
         if db is not None:
             self._log(db, step, prompt_version, done, "ok", None, cache_key, masked=masked)
+            if cost > 0:
+                costs.warn_if_passed(db)
             if use_cache and temperature == 0:
                 payload = {**done.__dict__, "cost_usd": str(done.cost_usd)}
                 payload.pop("cached", None)
@@ -422,9 +435,11 @@ class Gateway:
         db.execute(
             text(
                 "insert into model_call (step, provider, model, prompt_version, attempts, ms, outcome, error, request_hash, "
-                "masked) values (:s, :p, :m, :pv, :a, :ms, :o, :e, :h, cast(:mk as jsonb))"
+                "masked, run_id, capability, user_id, workflow_id, entity, entity_id) values (:s, :p, :m, :pv, :a, :ms, :o, "
+                ":e, :h, cast(:mk as jsonb), :run, :cap, :uid, :wf, :ent, :eid)"
             ),
             {
+                **_traced(),
                 "s": step,
                 "p": provider,
                 "m": model,
@@ -455,10 +470,11 @@ class Gateway:
         db.execute(
             text(
                 "insert into model_call (step, provider, model, prompt_version, tokens_in, tokens_out, cost_usd, ms, attempts, "
-                "outcome, error, request_hash, masked) values (:s, :p, :m, :pv, :ti, :to, :c, :ms, :a, :o, :e, :h, "
-                "cast(:mk as jsonb))"
+                "outcome, error, request_hash, masked, run_id, capability, user_id, workflow_id, entity, entity_id) values "
+                "(:s, :p, :m, :pv, :ti, :to, :c, :ms, :a, :o, :e, :h, cast(:mk as jsonb), :run, :cap, :uid, :wf, :ent, :eid)"
             ),
             {
+                **_traced(),
                 "s": step,
                 "p": done.provider,
                 "m": done.model,

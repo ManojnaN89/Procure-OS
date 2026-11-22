@@ -7,14 +7,14 @@ sent. A linked message that matches a case adds a case event.
 
 import json
 import re
-from datetime import UTC, datetime, timedelta
+from datetime import timedelta
 from email.utils import parseaddr
 
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from p2p.config import get_settings
-from p2p.platform import audit, cases, email_layout, files, mail, worker
+from p2p.platform import audit, cases, email_layout, events, files, outbox, worker
 from p2p.platform.mailbox import ImapMailbox, IncomingMail, Mailbox, MailpitMailbox
 from p2p.platform.sod import Actor
 
@@ -51,40 +51,24 @@ def send_linked_email(
     case_id: int | None = None,
     attachments: list[tuple[str, str, bytes]] | None = None,
 ) -> str:
-    """Send an email whose replies will be linked back to the RFQ, PO or invoice. Returns the Message-ID."""
-    message_id = mail.new_message_id()
-    reply_to = plus_address(linked_type, linked_ref)
-    mail.send_email(
-        to,
-        subject,
-        body,
-        message_id=message_id,
-        reply_to=reply_to,
-        attachments=attachments,
+    """Queue an email whose replies will be linked back to the RFQ, PO or invoice, and commit it with the caller's work
+    so far (as this function always has: some callers end their work here). It is sent right after that commit, and the
+    `email` job retries it if the mail server is down (platform/outbox.py). Returns the Message-ID. A caller that must
+    keep several mails in one transaction uses `outbox.queue_email` itself."""
+    message_id = outbox.queue_email(
+        db,
+        to=to,
+        subject=subject,
+        body=body,
         html=email_layout.text_email(subject, body),
-    )
-    db.execute(
-        text(
-            "insert into email_message (message_id, direction, from_addr, to_addr, subject, body_text, sent_at, plus_tag, "
-            "linked_type, linked_id, case_id) values (:m, 'out', :f, :t, :s, :b, :n, :tag, :lt, :li, :c)"
-        ),
-        {
-            "m": message_id,
-            "f": mail.DEFAULT_SENDER,
-            "t": to,
-            "s": subject,
-            "b": body[:100_000],
-            "n": datetime.now(UTC),
-            "tag": linked_ref,
-            "lt": linked_type.lower(),
-            "li": linked_ref,
-            "c": case_id,
-        },
-    )
-    audit.record(
-        db, audit.SYSTEM, "email.send", "email", message_id, after={"to": to, "subject": subject, "linked": linked_ref}
+        linked_type=linked_type,
+        linked_ref=linked_ref,
+        case_id=case_id,
+        attachments=attachments,
+        reply_to=plus_address(linked_type, linked_ref),
     )
     db.commit()
+    outbox.send_now(outbox.tenant_of(db), [message_id], engine=db.get_bind().engine)
     return message_id
 
 
@@ -178,22 +162,30 @@ def ingest(db: Session, tenant: str, incoming: IncomingMail) -> int | None:
             MAILER,
             {"email_id": email_id, "from": incoming.from_addr, "subject": incoming.subject},
         )
+    events.emit(
+        db, "email.received", incoming.message_id, source="mailbox", payload={"email_id": email_id, "linked_type": linked_type, "to": incoming.to_addrs},
+        occurred_at=incoming.sent_at, inline=True,
+    )  # fmt: skip
     db.commit()
-    if linked_type == "rfq":
-        worker.enqueue(
-            tenant, "read_supplier_reply", {"email_id": email_id}
-        )  # a supplier's reply: read it into a draft
-    elif linked_type == "po":
-        worker.enqueue(
-            tenant, "supplier_message", {"email_id": email_id}
-        )  # a supplier's mail about an order: the supplier communication agent reads it
-    elif linked_type is None and _to_invoice_mailbox(db, incoming.to_addrs):
-        worker.enqueue(tenant, "read_invoice_email", {"email_id": email_id})  # a supplier's invoice: read into a draft
-    elif linked_type is None and _to_request_mailbox(db, incoming.to_addrs):
-        worker.enqueue(
-            tenant, "intake_email", {"email_id": email_id}
-        )  # a colleague's request: the intake agent drafts it
     return email_id
+
+
+# The job that reads each kind of incoming mail (by what it is linked to, or the mailbox it came to).
+@events.route("email.received")
+def _route_email(db: Session, tenant: str, ev: events.EventRow) -> None:
+    """A stored mail goes to the one capability that reads it; a mail for nobody stays stored and nothing else."""
+    email_id, linked_type, to_addrs = int(ev.payload["email_id"]), ev.payload.get("linked_type"), ev.payload["to"]
+    if linked_type == "rfq":
+        kind = "read_supplier_reply"  # a supplier's reply: read it into a draft
+    elif linked_type == "po":
+        kind = "supplier_message"  # a supplier's mail about an order: the supplier communication agent reads it
+    elif linked_type is None and _to_invoice_mailbox(db, to_addrs):
+        kind = "read_invoice_email"  # a supplier's invoice: read into a draft
+    elif linked_type is None and _to_request_mailbox(db, to_addrs):
+        kind = "intake_email"  # a colleague's request: the intake agent drafts it
+    else:
+        return
+    worker.enqueue(tenant, kind, {"email_id": email_id}, key=f"email:{email_id}")
 
 
 def _to_invoice_mailbox(db: Session, to_addrs: list[str]) -> bool:

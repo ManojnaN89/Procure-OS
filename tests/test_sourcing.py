@@ -562,20 +562,25 @@ def test_one_supplier_whose_email_fails_does_not_hold_up_the_rest_and_is_retried
 
     result = _source(db, no)
 
-    assert result.sent == 2
+    assert result.sent == 3  # every invitation is queued in one transaction (DF-28); two leave at once
+    assert sorted(m["to"] for m in outbox.sent) == ["s1@supplier.example", "s3@supplier.example"]
+    db.rollback()
     state = {
         r[0]: (r[1] is not None, r[2])
         for r in db.execute(text("select supplier_code, invited_at, send_error from rfq_supplier"))
     }
     assert state["S1"] == (True, None) and state["S3"] == (True, None)
-    assert state["S2"][0] is False and "refused" in state["S2"][1]
-    assert db.execute(text("select status from rfq")).scalar_one() == "sent"  # at least one went
+    assert state["S2"][0] is True and "refused" in state["S2"][1]  # shown on the RFQ page; the email job retries it
+    assert db.execute(text("select status from rfq")).scalar_one() == "sent"
 
     outbox.refuse = set()
-    assert service.send_rfq(db, "RFQ-2627-00001") == 1  # only the one that had failed
+    assert service.send_rfq(db, "RFQ-2627-00001") == 0  # nobody is invited twice
+    worker.run_once(tenant=db.info["slug"])  # the email job sends the one that had failed
     assert [m["to"] for m in outbox.sent].count("s2@supplier.example") == 1
+    db.rollback()
     assert db.execute(text("select send_error from rfq_supplier where supplier_code = 'S2'")).scalar_one() is None
-    assert service.send_rfq(db, "RFQ-2627-00001") == 0  # nothing left to send
+    worker.run_once(tenant=db.info["slug"])
+    assert len(outbox.sent) == 3
 
 
 def test_an_rfq_that_is_closed_cannot_be_sent(db: Session, outbox: Outbox) -> None:
@@ -878,16 +883,22 @@ def test_no_reminder_goes_out_while_the_kill_switch_is_on_or_for_an_rfq_that_is_
     assert _remind(db, TUE).sent == [] and outbox.sent == []
 
 
-def test_a_failed_reminder_is_not_counted_and_is_tried_again(db: Session, outbox: Outbox) -> None:
+def test_a_reminder_the_mail_server_refuses_is_counted_once_and_its_mail_is_retried(
+    db: Session, outbox: Outbox
+) -> None:
     _sent_rfq(db, outbox)
     outbox.refuse = {"s2@supplier.example"}
+    before = len(outbox.sent)
 
     done = _remind(db, TUE)
 
-    assert len(done.sent) == 2 and [s for _, s in done.failed] == ["S2"]
-    assert db.execute(text("select reminders_sent from rfq_supplier where supplier_code = 'S2'")).scalar_one() == 0
+    # the reminder is written with its mail (11a.1): counted once, and the email job sends it when the server takes it
+    assert len(done.sent) == 3 and not done.failed and len(outbox.sent) == before + 2
+    assert db.execute(text("select reminders_sent from rfq_supplier where supplier_code = 'S2'")).scalar_one() == 1
     outbox.refuse = set()
-    assert [s for _, s in _remind(db, WED).sent] == ["S2"]  # the others were reminded on Tuesday
+    worker.run_once(tenant=db.info["slug"])
+    assert len(outbox.sent) == before + 3
+    assert _remind(db, WED).sent == []  # nobody is reminded twice for one round
 
 
 def test_the_daily_job_sends_reminders_and_queues_the_next_morning(db: Session, outbox: Outbox) -> None:

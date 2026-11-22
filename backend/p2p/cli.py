@@ -134,6 +134,29 @@ def _forward_buy(args: argparse.Namespace) -> int:
     return 0
 
 
+def _capability(args: argparse.Namespace) -> int:
+    """The AI capability switches: list them, or switch one off at once as the service `cli`."""
+    from fastapi import HTTPException
+    from sqlalchemy.orm import Session
+
+    from p2p.agents import capabilities
+    from p2p.platform.sod import Actor
+
+    with Session(routing.engine_for(args.tenant)) as db:
+        if args.cmd == "list":
+            for c in capabilities.listing(db, args.tenant):
+                work = ", ".join(f"{k} {v}" for k, v in c["open_work"].items() if v) or "nothing open"
+                print(f"{c['code']:<11} {'on ' if c['enabled'] else 'off'}  {c['label']} ({work})")
+            return 0
+        try:
+            done = capabilities.switch_off(db, args.tenant, Actor("service", "cli"), args.code, args.reason)
+        except HTTPException as exc:
+            print(exc.detail)
+            return 1
+    print(f"{args.code} is off; handed to people: {capabilities.handed_over_words(done)}")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(prog="p2p")
     sub = p.add_subparsers(dest="group", required=True)
@@ -221,6 +244,12 @@ def main(argv: list[str] | None = None) -> int:
     fwd.add_argument("--location")
     fwd.add_argument("--dry-run", action="store_true")
     sub.add_parser("worker")
+    capab = sub.add_parser("capability").add_subparsers(dest="cmd", required=True)
+    capab.add_parser("list").add_argument("tenant")
+    off = capab.add_parser("off", help="switch an AI capability off now (switching on needs two administrators)")
+    off.add_argument("tenant")
+    off.add_argument("code")
+    off.add_argument("--reason", required=True)
     args = p.parse_args(argv)
 
     if args.group == "company":
@@ -274,6 +303,8 @@ def main(argv: list[str] | None = None) -> int:
             print(f"  {email}  {role}  ({designation})")
         print(f"passwords are in {built.credentials_file}")
         return 0
+    if args.group == "capability":
+        return _capability(args)
     if args.group == "material":
         from sqlalchemy.orm import Session
 

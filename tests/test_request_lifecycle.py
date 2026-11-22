@@ -4,6 +4,7 @@ from datetime import date, timedelta
 
 import pytest
 from fastapi.testclient import TestClient
+from outbox_support import queued_mails
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 from test_approvals import Logins, _audit, _headers, _queued_for_sourcing, _request, _row, _submit, db, logins  # noqa: F401 - fixtures
@@ -302,16 +303,7 @@ def test_every_decision_is_also_queued_as_an_email_to_the_requester(db: Session,
 
     workflow.reject(db, no, logins.stores, "No budget", tenant=db.info["slug"])
 
-    from p2p.platform import tenants
-
-    with tenants.control_engine().connect() as c:
-        mails = [
-            r[0]
-            for r in c.execute(
-                text("select payload->>'subject' from job where tenant_slug = :t and kind = 'send_email'"),
-                {"t": db.info["slug"]},
-            )
-        ]
+    mails = [m["subject"] for m in queued_mails(db)]
     assert "Request R-N6 rejected" in mails
 
 

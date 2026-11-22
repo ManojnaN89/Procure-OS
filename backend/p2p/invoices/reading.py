@@ -898,8 +898,12 @@ def read_email(db: Session, tenant: str, email_id: int, gateway: Gateway, *, as_
 
 @worker.register("read_invoice_email")
 def _read_email_job(ctx: worker.JobContext) -> None:
+    from p2p.agents import capabilities  # noqa: PLC0415 - the switch imports the agents
     from p2p.ai_steps.gateway import Gateway as RealGateway
     from p2p.platform import routing
 
     with Session(routing.engine_for(ctx.tenant)) as db:  # a person sees every draft that needs one on the Invoices page
-        read_email(db, ctx.tenant, int(ctx.payload["email_id"]), RealGateway(), as_of=ctx.now.astimezone(IST).date())
+        if capabilities.job_allowed(db, ctx.tenant, "read_invoice_email", ctx.payload):  # else handed to a person
+            read_email(
+                db, ctx.tenant, int(ctx.payload["email_id"]), RealGateway(), as_of=ctx.now.astimezone(IST).date()
+            )

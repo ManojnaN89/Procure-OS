@@ -5,6 +5,7 @@ given. A tool that writes never runs on its own say-so: it goes through the auto
 it, becomes a proposal for a person.
 """
 
+import json
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from decimal import Decimal
@@ -13,7 +14,7 @@ from typing import Any
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
-from p2p.platform import proposals
+from p2p.platform import proposals, workflows
 from p2p.platform.sod import Actor
 
 ToolFn = Callable[[Session, Any, Actor], dict[str, Any]]
@@ -32,6 +33,10 @@ class Tool:
     document: str | None = None  # approval-limit document type, when the action has a value
     value_of: Callable[[BaseModel], Decimal | None] = field(default=lambda p: None)
     summary: Callable[[BaseModel], str] = field(default=lambda p: "")
+    # what the action is about (a business key) and the engine's figures for it: a recommendation keeps them, and they
+    # are worked out again before a person's confirmation runs (platform/workflows.py)
+    business_key: Callable[[BaseModel], str] | None = None
+    basis: Callable[[Session, str], dict[str, Any]] | None = None
 
 
 class ToolRegistry:
@@ -44,6 +49,8 @@ class ToolRegistry:
         self._tools[tool.name] = tool
         if tool.writes:
             proposals.EXECUTORS[f"tool.{tool.name}"] = _executor_for(tool)
+        if tool.basis is not None:
+            workflows.BASIS[f"tool.{tool.name}"] = _basis_for(tool.basis)
         return tool
 
     def get(self, name: str) -> Tool | None:
@@ -61,6 +68,14 @@ class ToolRegistry:
             }
             for t in self._tools.values()
         ]
+
+
+def _basis_for(fn: Callable[[Session, str], dict[str, Any]]) -> workflows.BasisFn:
+    def basis(db: Session, key: str) -> workflows.Basis:
+        figures = json.loads(json.dumps(fn(db, key), default=str))
+        return workflows.Basis(workflows.hash_of(figures), figures)
+
+    return basis
 
 
 def _executor_for(tool: Tool) -> proposals.Executor:

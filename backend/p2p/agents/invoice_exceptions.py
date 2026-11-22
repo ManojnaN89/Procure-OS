@@ -73,6 +73,9 @@ class SupplierCode(BaseModel):
     code: str = Field(description="the supplier code")
 
 
+CAPABILITY = "invoice_ap"
+
+
 @dataclass
 class Diagnosis:
     invoice_no: str
@@ -406,12 +409,18 @@ UNTRUSTED_TOOLS = ("supplier_emails",)
 
 def explain(db: Session, tenant: str, user_id: int, invoice_no: str, gateway: Any) -> Diagnosis | None:
     """Investigate a blocked invoice. The rules' diagnosis is the floor: the model's wording replaces it only if checked."""
+    from p2p.agents import capabilities  # noqa: PLC0415 - the switch imports the agents
+
     base = diagnose(db, invoice_no)
     if base is None:
         return None
+    if not capabilities.is_on(db, CAPABILITY):  # switched off: the rules' diagnosis only, no model
+        _store(db, base, user_id)
+        return base
     runtime = AgentRuntime(
         tenant, db, build_registry(db), GatewayDecider(gateway, "agent_invoice_exceptions", db, max_wait=30.0),
-        agent="invoice_exceptions", max_steps=MAX_STEPS, system=SYSTEM,
+        agent="invoice_exceptions", max_steps=MAX_STEPS, system=SYSTEM, capability=CAPABILITY, user_id=user_id,
+        started_by=f"user:{user_id}",
     )  # fmt: skip
     answer = ""
     run_id: int | None = None

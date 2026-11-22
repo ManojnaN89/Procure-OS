@@ -28,7 +28,7 @@ from p2p.formulas.money import format_inr
 from p2p.formulas.words import count
 from p2p.invoices import payment as payments
 from p2p.invoices.service import InvoiceError
-from p2p.platform import audit, tasks
+from p2p.platform import audit, tasks, users
 from p2p.platform.sod import user
 
 D = Decimal
@@ -136,16 +136,6 @@ def _payments(db: Session) -> list[dict[str, Any]]:
             )
         ).mappings()
     ]
-
-
-def _first_user_with_role(db: Session, *roles: str) -> int:
-    for role in roles:
-        found = db.execute(
-            text("select user_id from user_profile where role = :r order by user_id limit 1"), {"r": role}
-        ).scalar()
-        if found:
-            return int(found)
-    return int(db.execute(text("select user_id from user_profile order by user_id limit 1")).scalar() or 0)
 
 
 def _key(line: Line, seen: dict[str, int]) -> str:
@@ -293,7 +283,7 @@ def import_statement(
             tenant,
             kind="bank_statement_lines",
             title=f"Bank statement: {count(open_items, 'line')} {'needs' if open_items == 1 else 'need'} a person",
-            assignee=_first_user_with_role(db, "Finance", "AP"),
+            assignee=users.first_with_role(db, "Finance", "AP"),
             sla_hours=24,
             payload={"for_a_person": out.for_a_person[:50], "waiting": out.waiting[:50]},
             actor=user(user_id),

@@ -57,11 +57,12 @@ def supplier_for_emails() -> tuple[str, str]:
     raise RuntimeError("no supplier with an email")
 
 
-def setup_rfq(world: World, tag: str, items: list[Item]) -> tuple[str, str, str]:
-    """An approved request with an RFQ out to one supplier, one line per item. Returns (rfq, supplier, supplier email)."""
+def setup_rfq(world: World, tag: str, items: list[Item], *, rfq_no: str | None = None) -> tuple[str, str, str]:
+    """An approved request with an RFQ out to one supplier, one line per item. Returns (rfq, supplier, supplier email).
+    `rfq_no` gives the RFQ a number the mailbox recognises in a reply's plus address (RFQ-...)."""
     db = world.db
     supplier, email = supplier_for_emails()
-    req, rfq = f"EV-R-{tag}", f"EV-Q-{tag}"
+    req, rfq = f"EV-R-{tag}", rfq_no or f"EV-Q-{tag}"
     db.execute(
         text(
             "insert into request (no, ship_to_location, type, channel, status, total_value) values (:n, :loc, 'goods', 'planning', 'approved', 1)"

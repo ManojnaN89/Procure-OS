@@ -7,6 +7,7 @@ from typing import Any
 
 import pytest
 from fastapi.testclient import TestClient
+from outbox_support import queued_mails
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 from test_approvals import PASSWORD, TODAY, Logins, _audit, _request, _row, _submit, db, logins  # noqa: F401 - fixtures
@@ -14,7 +15,7 @@ from test_sourcing import _headers
 
 from p2p.approvals import email_links, workflow
 from p2p.main import app
-from p2p.platform import mail, permissions, tenants, users
+from p2p.platform import mail, permissions, users
 
 D = Decimal
 client = TestClient(app)
@@ -168,14 +169,7 @@ def _link_for(db: Session, no: str, user_id: int) -> str:
 def test_the_email_to_the_approver_carries_a_link_that_is_not_kept_in_the_app(db: Session, logins: Logins) -> None:  # noqa: F811
     no = _big(db, "R-E1")
 
-    with tenants.control_engine().connect() as c:
-        bodies = [
-            r[0]
-            for r in c.execute(
-                text("select payload->>'body' from job where tenant_slug = :t and kind = 'send_email'"),
-                {"t": db.info["slug"]},
-            )
-        ]
+    bodies = [m["body"] for m in queued_mails(db)]  # the mail itself (its link is sealed until it is sent)
     assert any(f"Approve request {no}" in (b or "") or "/approve/" in (b or "") for b in bodies)
     link = next(b for b in bodies if "/approve/" in (b or ""))
     token = link.split("/approve/")[1].split()[0]

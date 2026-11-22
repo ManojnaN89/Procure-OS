@@ -12,7 +12,6 @@ figures it was given; the same figures are never explained twice. The capability
 `planning.explain` is set to act (by two administrators); the kill switch stops it.
 """
 
-import hashlib
 import json
 import logging
 import re
@@ -35,13 +34,15 @@ from p2p.ai_steps.evidence import dates_in, numbers_in
 from p2p.approvals.workflow import name_of, org_code_of
 from p2p.formulas.calendar import business_today
 from p2p.formulas.money import format_qty
-from p2p.platform import audit, routing, tenants, worker
+from p2p.platform import audit, events, routing, tenants, worker, workflows
 from p2p.platform.sod import Actor
 from p2p.requests import shortfall
 
 log = logging.getLogger(__name__)
 DECISION = "planning.explain"
 JOB = "planning_explain"
+CHANGED = "material_request.figures_changed"
+CAPABILITY = "planning"
 AGENT = Actor("agent", "planning")
 MAX_STEPS = 8
 TOOLS = (
@@ -344,8 +345,14 @@ def is_on(db: Session) -> bool:
     return autonomy.gate(db, DECISION, value=None, confidence=1.0).allowed
 
 
-def _hash(figures: dict[str, Any]) -> str:
-    return hashlib.sha256(json.dumps(figures, sort_keys=True, default=str).encode()).hexdigest()
+_hash = workflows.hash_of  # one hash for the figures, shared with revalidation (platform/workflows.py)
+
+
+@workflows.basis(DECISION)
+def _basis(db: Session, mr_no: str) -> workflows.Basis:
+    """What an explanation of a material request rests on: the engine's figures for it."""
+    figures = request_figures(db, mr_no)
+    return workflows.Basis(_hash(figures), figures)
 
 
 def _facts(figures: dict[str, Any]) -> list[dict[str, Any]]:
@@ -364,8 +371,19 @@ def _stored(db: Session, note_id: int, figures: dict[str, Any]) -> Explanation:
     return Explanation(r[1], r[2], list(r[3] or []), list(r[4] or []), r[5], int(r[0]), _facts(figures))
 
 
-def explain(db: Session, tenant: str, user_id: int | None, mr_no: str, gateway: Any) -> Explanation:
-    """Explain one material request (see the module). Never raises for a model problem."""
+def explain(
+    db: Session,
+    tenant: str,
+    user_id: int | None,
+    mr_no: str,
+    gateway: Any,
+    *,
+    started_by: str | None = None,
+    job_id: int | None = None,
+    workflow_id: int | None = None,
+) -> Explanation:
+    """Explain one material request (see the module). Never raises for a model problem. `started_by` says who asked
+    (default: the user, else the system), for the run's trace."""
     figures = request_figures(db, mr_no)
     if not is_on(db):
         return Explanation("off", facts=_facts(figures))
@@ -377,7 +395,9 @@ def explain(db: Session, tenant: str, user_id: int | None, mr_no: str, gateway: 
         return _stored(db, int(seen), figures)
     runtime = AgentRuntime(
         tenant, db, build_registry(db), GatewayDecider(gateway, "agent", db, max_wait=30.0), agent="planning",
-        max_steps=MAX_STEPS, system=SYSTEM,
+        max_steps=MAX_STEPS, system=SYSTEM, capability=CAPABILITY, user_id=user_id,
+        started_by=started_by or (f"user:{user_id}" if user_id is not None else "service:planning"),
+        workflow_id=workflow_id, job_id=job_id,
     )  # fmt: skip
     parsed: _Answer | None = None
     run_id: int | None = None
@@ -388,7 +408,11 @@ def explain(db: Session, tenant: str, user_id: int | None, mr_no: str, gateway: 
         run_id = outcome.run_id
         steps = _tool_steps(db, outcome.run_id)
         if outcome.status != "done" or not (outcome.result or "").strip():
-            reasons = [f"the agent did not finish ({outcome.status})"]
+            reasons = [
+                f"the agent did not finish ({outcome.status}"
+                + (f": {outcome.result}" if outcome.status == "failed" and outcome.result else "")
+                + ")"
+            ]  # e.g. the month's AI budget is used up
         else:
             tool_text = "\n".join(json.dumps(r, default=str) for _, r in steps)
             refused = [
@@ -426,6 +450,11 @@ def explain(db: Session, tenant: str, user_id: int | None, mr_no: str, gateway: 
     return _stored(db, note_id, figures)
 
 
+def _note_hash(db: Session, note_id: int) -> str | None:
+    found = db.execute(text("select snapshot_hash from planning_note where id = :i"), {"i": note_id}).scalar()
+    return None if found is None else str(found)
+
+
 def _tool_steps(db: Session, run_id: int) -> list[tuple[str, Any]]:
     out: list[tuple[str, Any]] = []
     for name, detail in db.execute(
@@ -440,8 +469,9 @@ def _tool_steps(db: Session, run_id: int) -> list[tuple[str, Any]]:
 
 
 def queue_changed(db: Session, tenant: str, mr_nos: list[str]) -> list[str]:
-    """After a store check: an explanation job for each request with short or at-risk lines whose figures have no note
-    yet. Nothing when the capability is off. Never raises."""
+    """After a store check: an event for each request with short or at-risk lines whose figures have no note yet,
+    recorded once per request and figures (D39 rule 1). Its route joins the request's workflow and queues one
+    explanation job for it. Nothing when the capability is off. Never raises."""
     try:
         if not mr_nos or not is_on(db):
             return []
@@ -452,19 +482,33 @@ def queue_changed(db: Session, tenant: str, mr_nos: list[str]) -> list[str]:
                 ln["status"] == "open" and (ln["short"] != "0" or ln["at_risk"] != "0") for ln in figures["lines"]
             ):
                 continue
+            digest = _hash(figures)
             seen = db.execute(
-                text("select 1 from planning_note where mr_no = :n and snapshot_hash = :h"),
-                {"n": mr_no, "h": _hash(figures)},
+                text("select 1 from planning_note where mr_no = :n and snapshot_hash = :h"), {"n": mr_no, "h": digest}
             ).first()
-            if seen is None and worker.enqueue_unique(
-                tenant, JOB, {"mr_no": mr_no}, datetime.now(UTC), same_payload=True
-            ):
+            if seen is None and events.emit(
+                db, CHANGED, f"{mr_no}:{digest}", source="store_check", payload={"mr_no": mr_no, "hash": digest},
+                inline=True,
+            ).new:  # fmt: skip
                 queued.append(mr_no)
+        db.commit()
         return queued
     except Exception:  # noqa: BLE001 - an explanation never stops the store check
         db.rollback()
         log.warning("could not queue planning explanations for %s", tenant, exc_info=True)
         return []
+
+
+@events.route(CHANGED)
+def _route_changed(db: Session, tenant: str, ev: events.EventRow) -> None:
+    """The figures of a request changed: join its open explanation workflow (or start one) and queue one job for it."""
+    mr_no = str(ev.payload["mr_no"])
+    joined = workflows.join_or_start(
+        db, DECISION, mr_no, capability=CAPABILITY, event_id=ev.id, basis_hash=str(ev.payload.get("hash") or "") or None
+    )
+    worker.enqueue(
+        tenant, JOB, {"mr_no": mr_no, "workflow_id": joined.id}, datetime.now(UTC), key=f"workflow:{joined.id}"
+    )
 
 
 def drop_queued(tenant: str) -> int:
@@ -484,5 +528,13 @@ def _explain_job(ctx: worker.JobContext) -> None:
     from p2p.ai_steps.gateway import Gateway  # noqa: PLC0415 - only the worker needs a gateway of its own
 
     with Session(routing.engine_for(ctx.tenant)) as db:
-        if is_on(db):
-            explain(db, ctx.tenant, None, str(ctx.payload["mr_no"]), Gateway())
+        if not is_on(db):  # the automation setting and the planning capability (its gate checks both)
+            return
+        mr_no, workflow_id = str(ctx.payload["mr_no"]), ctx.payload.get("workflow_id")
+        got = explain(db, ctx.tenant, None, mr_no, Gateway(), started_by=f"job:{ctx.id}", job_id=ctx.id,
+                      workflow_id=workflow_id)  # fmt: skip
+        if workflow_id is not None:
+            basis = db.execute(text("select basis_hash from workflow where id = :i"), {"i": workflow_id}).scalar()
+            if basis is None or got.note_id is None or _note_hash(db, got.note_id) == basis:
+                workflows.close(db, int(workflow_id), "done", "explained")
+            db.commit()  # figures newer than the note keep it open for their own event

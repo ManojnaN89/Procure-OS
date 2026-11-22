@@ -28,13 +28,15 @@ def _run(ctx: worker.JobContext) -> None:
 
 @worker.register("read_supplier_reply")
 def _read_reply(ctx: worker.JobContext) -> None:
+    from p2p.agents import capabilities  # noqa: PLC0415 - the switch imports the agents
     from p2p.ai_steps.gateway import Gateway
     from p2p.sourcing import replies
 
     with Session(routing.engine_for(ctx.tenant)) as db:
-        replies.read_reply(
-            db, ctx.tenant, int(ctx.payload["email_id"]), Gateway(), as_of=ctx.now.astimezone(IST).date()
-        )
+        if capabilities.job_allowed(db, ctx.tenant, "read_supplier_reply", ctx.payload):  # else handed to a person
+            replies.read_reply(
+                db, ctx.tenant, int(ctx.payload["email_id"]), Gateway(), as_of=ctx.now.astimezone(IST).date()
+            )
 
 
 REVIEW_JOB = "price_review_daily"

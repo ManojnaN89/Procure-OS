@@ -90,6 +90,9 @@ CARRIED: dict[str, str | None] = {
             "item_single_source",
             "erp_column_map",
             "joiner_kit",
+            "budget_period_lock",  # block 3: locks of the loaded history months
+            "forward_buy_rule",  # block 3
+            "ai_capability",  # AI foundation: the capability switches
         )
     },  # fmt: skip
     "stock_movement": "source = 'import'",  # the loaded history; what the platform posted in setup is test data
@@ -114,6 +117,8 @@ NOT_CARRIED = (
     "rule_evaluation", "serial_number", "service_entry", "setup_change", "sourcing_decision", "stock_hold",
     "supplier_chase", "supplier_link", "supplier_message", "supply_risk", "task", "tds_entry", "unordered_receipt",
     "vendor_statement", "vendor_statement_line",
+    # blocks 3 and 4 and the AI foundation: transactions and their records
+    "budget_year_end", "forward_buy", "po_approved_version", "event", "recommendation", "workflow",
     # loaded fresh into the new database
     "ref_gst_rate", "ref_gst_state", "ref_holiday", "ref_hsn_sac", "ref_load", "ref_rbi_bank_rate", "ref_tds_section",
     "ref_uom",

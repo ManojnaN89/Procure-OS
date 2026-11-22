@@ -104,6 +104,27 @@ APPROVER_SOURCES = ("requester_manager", "department_head", "department_head_of"
 # Only settings that some code reads are offered here: a setting that nothing reads would be a control that does nothing.
 # key -> (where it is stored, kind, label, help, default, low, high, choices)
 POLICIES: dict[str, tuple[str, str, str, str, str, float | None, float | None, tuple[str, ...]]] = {
+    "ai_monthly_cost_cap_usd": (
+        "org",
+        "decimal",
+        "Monthly AI budget (US dollars)",
+        "Model calls stop for the month once this is spent (empty: no budget). A model with no known price is not used "
+        "while a budget is set",
+        "",
+        0,
+        None,
+        (),
+    ),
+    "ai_cost_warn_pct": (
+        "org",
+        "int",
+        "Warn at (% of the AI budget)",
+        "The administrators are told once a month when the AI spend reaches this share of the budget",
+        "80",
+        1,
+        100,
+        (),
+    ),
     "identity_check_methods": (
         "org",
         "list",
@@ -1448,7 +1469,8 @@ def _policy(db: Session, actor: Actor, args: dict[str, Any], reason: str, apply:
     if spec is None:
         raise HTTPException(404, f"there is no policy '{key}'")
     store, kind, label, _, default, low, high, choices = spec
-    value = _validate(kind, body.value, low, high, choices, label)
+    optional = default == "" and not str(body.value).strip()  # a setting whose default is empty can be emptied again
+    value = "" if optional else _validate(kind, body.value, low, high, choices, label)
     if key in MAILBOXES and value:
         other = next(k for k in MAILBOXES if k != key)
         if _stored(db, "org", other) == value:

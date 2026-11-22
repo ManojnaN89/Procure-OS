@@ -50,6 +50,29 @@ Score is the share of checked fields that are exactly right. Time is per call wi
 
 These are the default routes in `backend/p2p/ai_steps/gateway.py`. Override any of them with `MODEL_ROUTES` in `.env`, and the limits with `MODEL_LIMITS`.
 
+## Prices and the monthly budget (task 11a.6)
+
+Prices are in `data/reference/model_prices.csv`: one row per provider, model and the date the price took effect, in US
+dollars per million input and output tokens, with the plan, where the price was read and when. The free tiers above are
+rows at 0. A paid row is added only with the provider's price page and the date it was read (no price is guessed);
+`MODEL_PRICES` in `.env` adds rows. Each call's cost is worked out in Decimal (`ai_steps/costs.py`) and kept on
+`model_call.cost_usd`.
+
+A company can set a monthly AI budget in US dollars (policy `ai_monthly_cost_cap_usd`, two administrators). Before each
+model call the gateway checks that the month's spend plus the call's worst case (its token estimate at the output price)
+stays within it; a model with no known price is not used while a budget is set; the next model of the route is tried
+(a free one passes), else the caller's usual fallback applies. The administrators are told once a month when the spend
+reaches `ai_cost_warn_pct` (80 % by default). The Automation page shows the month's spend.
+
+## What is stored about a model call (task 11a.4)
+
+- Prompts and raw model answers are **not** stored. `model_call` keeps the request hash, the prompt version, tokens,
+  cost, time, outcome, the count of masked values, and what the call belonged to: the agent run, the capability, the
+  person, the workflow and the document an AI step read.
+- `agent_step` keeps the agent's decisions and the tool results (the company's own data, in its own database).
+- `model_cache` keeps answers to identical prompts at temperature 0, so the same reading is not paid twice. It is to be
+  emptied after 30 days (a trimming job is not built yet).
+
 ## Open points
 
 - Choose the paid plan or provider for the pilot, and check its data terms with the client.

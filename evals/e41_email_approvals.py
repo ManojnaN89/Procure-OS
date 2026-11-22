@@ -1,5 +1,6 @@
 """E41: email approvals on the main demo company (plan step 4, D36), against an oracle from the raw files."""
 
+import json
 from datetime import date, datetime, time, timedelta
 from decimal import Decimal
 from typing import Any
@@ -65,7 +66,7 @@ def run(ctx) -> Outcome:  # noqa: C901 - one scenario, step by step
     from p2p.approvals import chasing, deputies, email_links, workflow
     from p2p.formulas.calendar import pin_today
     from p2p.main import app
-    from p2p.platform import mail, sod, tasks, tenants, worker
+    from p2p.platform import crypto, mail, sod, tasks, tenants, worker
 
     out = Outcome(True)
     e02_approvals.ROLES = lib.demo_company().approver_roles  # how the company names its chain roles, for the oracle
@@ -94,9 +95,22 @@ def run(ctx) -> Outcome:  # noqa: C901 - one scenario, step by step
             return [
                 dict(r[0])
                 for r in c.execute(
-                    text("select payload from job where tenant_slug = :t and kind = :k order by id"), {"t": slug, "k": kind}
+                    text("select payload from job where tenant_slug = :t and kind = :k order by id"),
+                    {"t": slug, "k": kind},
                 )
             ]
+
+    def queued() -> list[dict[str, Any]]:
+        """The mails waiting to go, as they will go: the outbox keeps the full text (with the signed links) sealed until
+        it is sent (11a.1), so the eval opens it as the sender does."""
+        db.rollback()
+        out = []
+        for subject, sealed in db.execute(
+            text("select subject, sealed from email_message where status = 'queued' and sealed is not null order by id")
+        ):
+            full = json.loads(crypto.decrypt(str(sealed)))
+            out.append({"subject": subject, "body": full["body"], "html": full.get("html") or ""})
+        return out
 
     def request(value: Decimal, requester: str, kind: str = "goods") -> str:
         no = f"E41-{next(seq):04d}"
@@ -105,7 +119,14 @@ def run(ctx) -> Outcome:  # noqa: C901 - one scenario, step by step
                 "insert into request (no, requester, department_code, ship_to_location, type, channel, status, total_value) "
                 "values (:no, :r, :d, :loc, :k, 'form', 'draft', :v)"
             ),
-            {"no": no, "r": requester, "d": org[requester]["department_code"], "loc": loc["code"], "k": kind, "v": value},
+            {
+                "no": no,
+                "r": requester,
+                "d": org[requester]["department_code"],
+                "loc": loc["code"],
+                "k": kind,
+                "v": value,
+            },
         )
         db.execute(
             text(
@@ -137,8 +158,12 @@ def run(ctx) -> Outcome:  # noqa: C901 - one scenario, step by step
                     routed += 1
                     dept = org[who]["department_code"]
                     try:
-                        code, version, chain = oracle_rule(rule_rows, "request", value, lib.TODAY, spend, None, dept, loc["code"])
-                        people = oracle_people(chain, who, dept, lib.TODAY, org, depts, delegations, loc["code"], loc_heads)
+                        code, version, chain = oracle_rule(
+                            rule_rows, "request", value, lib.TODAY, spend, None, dept, loc["code"]
+                        )
+                        people = oracle_people(
+                            chain, who, dept, lib.TODAY, org, depts, delegations, loc["code"], loc_heads
+                        )
                         want: Any = ("approved", []) if not chain else ("submitted", [p for p, _ in people])
                     except NoRule as exc:
                         want = ("refused", str(exc))
@@ -160,7 +185,11 @@ def run(ctx) -> Outcome:  # noqa: C901 - one scenario, step by step
                     first = steps(no)
                     for st in first:
                         source = next(
-                            (r for r in rule_rows if r["rule_code"] == st["rule_code"] and int(r["version"]) == st["rule_version"]),
+                            (
+                                r
+                                for r in rule_rows
+                                if r["rule_code"] == st["rule_code"] and int(r["version"]) == st["rule_version"]
+                            ),
                             None,
                         )
                         if source is None or st["rule_id"] is None or not st["route_reason"]:
@@ -174,7 +203,7 @@ def run(ctx) -> Outcome:  # noqa: C901 - one scenario, step by step
             out.find("high", f"{refused_own} request(s) name their own requester as an approver")
 
         # 2. the email of each first step: lines, the estimated total to the paisa, the budget, why, three links
-        mails = [m for m in jobs("send_email") if m["subject"].startswith("Approve request")]
+        mails = [m for m in queued() if m["subject"].startswith("Approve request")]
         checked = 0
         for no, _asker, value, chain in made:
             mine = [m for m in mails if f"request {no} " in m["subject"]]
@@ -184,7 +213,12 @@ def run(ctx) -> Outcome:  # noqa: C901 - one scenario, step by step
             m, checked = mine[0], checked + 1
             body = m["body"]
             st = steps(no)[0]
-            for part in ("Eval part", f"Estimated total: {inr(value)}", "Budget:", f"{st['rule_code']} v{st['rule_version']}"):
+            for part in (
+                "Eval part",
+                f"Estimated total: {inr(value)}",
+                "Budget:",
+                f"{st['rule_code']} v{st['rule_version']}",
+            ):
                 if part not in body:
                     out.find("high", f"{no}: the email lacks '{part}'")
             tokens = {
@@ -217,7 +251,7 @@ def run(ctx) -> Outcome:  # noqa: C901 - one scenario, step by step
         db.commit()
         remind_at = working_time_later(friday, remind_days, holidays)
         payload = {"request_no": no, "round": 1, "step": 1}
-        before = len(jobs("send_email"))
+        before = len(queued())
         chasing._remind(worker.JobContext(0, slug, payload, remind_at - timedelta(seconds=1)))
         chasing._remind(worker.JobContext(0, slug, payload, remind_at))
         chasing._remind(worker.JobContext(0, slug, payload, remind_at + timedelta(hours=2)))
@@ -226,14 +260,21 @@ def run(ctx) -> Outcome:  # noqa: C901 - one scenario, step by step
         audits = db.execute(
             text("select count(*) from audit_event where action = 'request.remind' and entity_id = :n"), {"n": no}
         ).scalar_one()
-        reminders = [m for m in jobs("send_email")[before:] if m["subject"].startswith("Reminder: request")]
-        out.metrics["reminder due (oracle) / sent at"] = f"{remind_at:%a %d %b %H:%M} / {reminded and reminded.astimezone(IST):%a %d %b %H:%M}"
+        reminders = [m for m in queued()[before:] if m["subject"].startswith("Reminder: request")]
+        out.metrics["reminder due (oracle) / sent at"] = (
+            f"{remind_at:%a %d %b %H:%M} / {reminded and reminded.astimezone(IST):%a %d %b %H:%M}"
+        )
         if reminded != remind_at or audits != 1 or len(reminders) != 1:
-            out.find("high", f"reminder: at {reminded}, {audits} audit rows, {len(reminders)} emails; expected one at {remind_at}")
+            out.find(
+                "high",
+                f"reminder: at {reminded}, {audits} audit rows, {len(reminders)} emails; expected one at {remind_at}",
+            )
 
         # the escalation: the task's due time against the oracle (from when the step opened), then who it moves to
         row = db.execute(
-            text("select s.opened_at, t.due_at, t.id from approval_step s join task t on t.id = s.task_id where s.request_no = :n"),
+            text(
+                "select s.opened_at, t.due_at, t.id from approval_step s join task t on t.id = s.task_id where s.request_no = :n"
+            ),
             {"n": made[1][0]},
         ).one()
         due = working_time_later(row.opened_at, escalate_days, set())
@@ -241,10 +282,16 @@ def run(ctx) -> Outcome:  # noqa: C901 - one scenario, step by step
             out.find("high", f"escalation due {row.due_at}, oracle {due}")
         no2, who2, _, chain2 = made[1]
         manager = org[chain2[0]]["manager_code"]
-        target = manager if manager and manager not in (who2, chain2[0]) and manager in login_of else (chain2[1] if len(chain2) > 1 else None)
+        target = (
+            manager
+            if manager and manager not in (who2, chain2[0]) and manager in login_of
+            else (chain2[1] if len(chain2) > 1 else None)
+        )
         tasks._escalate(worker.JobContext(0, slug, {"task_id": row.id}, row.due_at + timedelta(minutes=1)))
         db.rollback()
-        delegate = db.execute(text("select delegate from approval_step where request_no = :n and step = 1"), {"n": no2}).scalar()
+        delegate = db.execute(
+            text("select delegate from approval_step where request_no = :n and step = 1"), {"n": no2}
+        ).scalar()
         out.metrics["escalated to (platform / oracle)"] = f"{delegate} / {target}"
         if delegate != target:
             out.find("high", f"{no2} escalated to {delegate}, oracle {target}")
@@ -259,6 +306,7 @@ def run(ctx) -> Outcome:  # noqa: C901 - one scenario, step by step
             "no code refused": client.post(f"/approve/{token}", data={"action": "approve"}).status_code == 409,
             "at the limit needs one too": client.post(f"/approve/{flat}", data={"action": "approve"}).status_code == 409,
         }
+
         def older() -> None:  # as if a quarter of an hour passed: the last code is no longer new, nor still valid
             db.execute(
                 text(
@@ -271,7 +319,9 @@ def run(ctx) -> Outcome:  # noqa: C901 - one scenario, step by step
         client.post(f"/approve/{token}/code")
         first_code = sent[-1]["body"].split("code is ")[1][:6]
         wrong = "000000" if first_code != "000000" else "999999"
-        tries = [client.post(f"/approve/{token}", data={"action": "approve", "code": wrong}).status_code for _ in range(5)]
+        tries = [
+            client.post(f"/approve/{token}", data={"action": "approve", "code": wrong}).status_code for _ in range(5)
+        ]
         code_checks["five wrong tries refused"] = tries == [409] * 5
         code_checks["locked after five"] = (
             client.post(f"/approve/{token}", data={"action": "approve", "code": first_code}).status_code == 409
@@ -312,7 +362,9 @@ def run(ctx) -> Outcome:  # noqa: C901 - one scenario, step by step
                 out.find("high", f"{action} by link without a reason: {no_reason}, expected 409")
             db.rollback()
             audited = db.execute(
-                text("select count(*) from audit_event where action = :a and entity_id = :n and after->>'via' = 'emailed link'"),
+                text(
+                    "select count(*) from audit_event where action = :a and entity_id = :n and after->>'via' = 'emailed link'"
+                ),
                 {"a": f"request.{action}", "n": rno},
             ).scalar_one()
             if (bare, done, again, audited) != (409, 200, 409, 1):

@@ -164,6 +164,7 @@ def approve(
         except Exception as exc:  # the action's own refusal (segregation of duties, not the named person): a 403
             db.rollback()
             raise permissions.PermissionDenied(str(exc)) from None
+    _recommended(db, p, user_id, note, now)
     db.execute(
         text(
             "update proposal set status = 'approved', decided_by = :u, decided_at = :n, decision_note = :note where id = :i"
@@ -191,6 +192,22 @@ def approve(
     )
     db.commit()
     return ProposalRef(proposal_id, p.action, "approved", dict(p.payload))
+
+
+def _recommended(db: Session, p: Any, user_id: int, note: str | None, now: datetime) -> None:
+    """A proposal made from an agent's recommendation (11a.2, 11a.3): its figures are checked again before anything
+    runs. Changed figures close the proposal (a fresh recommendation is asked for) and stop the approval; otherwise the
+    recommendation records who confirmed it, in the same transaction as the approval."""
+    from p2p.agents import recommendations  # noqa: PLC0415 - agents build on this module
+
+    if recommendations.KEY not in (p.payload or {}):
+        return
+    stale = recommendations.check_before_confirm(db, dict(p.payload), user_id)
+    if stale is not None:
+        why = f"the figures changed since this was recommended: {stale}; a fresh recommendation is being prepared"
+        _set(db, p.id, "withdrawn", None, now, why)  # nobody can approve it on the old figures
+        raise ProposalError(why)
+    recommendations.on_decision(db, dict(p.payload), user_id, accepted=True, note=note)
 
 
 def _replace(
@@ -246,6 +263,9 @@ def reject(db: Session, proposal_id: int, user_id: int, reason: str, *, now: dat
     if not permissions.can_anywhere(db, user_id, p.required_permission):
         db.rollback()
         raise permissions.PermissionDenied(f"role does not allow {p.required_permission}")
+    from p2p.agents import recommendations  # noqa: PLC0415 - agents build on this module
+
+    recommendations.on_decision(db, dict(p.payload or {}), user_id, accepted=False, note=reason)
     _set(db, proposal_id, "rejected", user_id, now or datetime.now(UTC), reason)
 
 

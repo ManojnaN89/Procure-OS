@@ -198,3 +198,15 @@ def set_limit(
             after={"document": document, "max_value": max_value, "category": category, "location": location},
         )
         ts.commit()
+
+
+def first_with_role(db: Session, *roles: str) -> int:
+    """The first person holding one of the roles, tried in order (else the first person of the company): who gets a
+    task that belongs to a role rather than to someone named."""
+    for role in roles:
+        found = db.execute(
+            text("select user_id from user_profile where role = :r order by user_id limit 1"), {"r": role}
+        ).scalar()
+        if found:
+            return int(found)
+    return int(db.execute(text("select user_id from user_profile order by user_id limit 1")).scalar() or 0)

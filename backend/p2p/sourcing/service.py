@@ -12,7 +12,6 @@ administrator has set 'rfq.send' to automatic, the RFQ is prepared and a proposa
 """
 
 import json
-import smtplib
 from dataclasses import dataclass, field
 from datetime import date
 from decimal import Decimal
@@ -29,7 +28,7 @@ from p2p.formulas.sourcing import PriceOption, pick_contract_price
 from p2p.formulas.words import count
 from p2p.masters import regions
 from p2p.orders import contracts as contract_usage
-from p2p.platform import audit, emails, numbering, proposals, reference, worker
+from p2p.platform import audit, email_layout, emails, numbering, outbox, proposals, reference, worker
 from p2p.platform.sod import Actor
 from p2p.sourcing import documents, quote_sheet, route, templates
 from p2p.suppliers import scoring
@@ -953,9 +952,11 @@ def _body(
 
 
 def send_rfq(db: Session, rfq_no: str, actor: Actor = SERVICE) -> int:
-    """Email the RFQ to every invited supplier it has not reached yet. Returns how many emails went out now.
+    """Email the RFQ to every invited supplier it has not invited yet. Returns how many emails were queued now.
 
-    A supplier whose email fails is recorded and retried the next time; the others are not held up.
+    All in one transaction under the RFQ's lock (DF-28): a second call waits, then finds nobody left to invite. The mails
+    leave right after the commit (platform/outbox.py); one that fails is shown on the supplier's row (`send_error`) and
+    retried by the email job, and the others are not held up.
     """
     rfq = db.execute(text("select * from rfq where no = :n for update"), {"n": rfq_no}).mappings().first()
     if rfq is None:
@@ -980,42 +981,36 @@ def send_rfq(db: Session, rfq_no: str, actor: Actor = SERVICE) -> int:
     subject = f"Request for quotation {rfq_no}" + (f": {category}" if category else "")
     template = rfq_template(db)
     sheet = quote_sheet.build(dict(rfq), lines, str(company))
-    sent = failed = 0
+    queued: list[str] = []
     for code, email, contact in pending:
-        try:
-            emails.send_linked_email(
-                db,
-                email,
-                subject,
-                _body(template, dict(rfq), lines, contact, str(company), str(deliver_to)),
-                linked_type="rfq",
-                linked_ref=rfq_no,
-                attachments=[(f"{rfq_no}-quotation-form.xlsx", quote_sheet.CONTENT_TYPE, sheet)],
-            )
-        except (OSError, smtplib.SMTPException) as exc:
-            db.rollback()
-            db.execute(
-                text("update rfq_supplier set send_error = :e where rfq_no = :n and supplier_code = :s"),
-                {"e": str(exc)[:300], "n": rfq_no, "s": code},
-            )
-            db.commit()
-            failed += 1
-            continue
+        message_id = outbox.queue_email(
+            db,
+            to=email,
+            subject=subject,
+            body=(body := _body(template, dict(rfq), lines, contact, str(company), str(deliver_to))),
+            html=email_layout.text_email(subject, body),
+            linked_type="rfq",
+            linked_ref=rfq_no,
+            attachments=[(f"{rfq_no}-quotation-form.xlsx", quote_sheet.CONTENT_TYPE, sheet)],
+            reply_to=emails.plus_address("rfq", rfq_no),
+        )
         db.execute(
             text(
-                "update rfq_supplier set invited_at = now(), send_error = null where rfq_no = :n and supplier_code = :s"
+                "update rfq_supplier set invited_at = now(), send_error = null, message_id = :m "
+                "where rfq_no = :n and supplier_code = :s"
             ),
-            {"n": rfq_no, "s": code},
+            {"m": message_id, "n": rfq_no, "s": code},
         )
-        db.commit()
-        sent += 1
-    if sent:
+        queued.append(message_id)
+    if queued:
         db.execute(
             text("update rfq set status = 'sent', sent_at = coalesce(sent_at, now()) where no = :n"), {"n": rfq_no}
         )
-    audit.record(db, actor, "rfq.send", "rfq", rfq_no, after={"sent": sent, "failed": failed})
-    db.commit()
-    return sent
+    if queued:  # a second sender finds nobody left to invite and records nothing
+        audit.record(db, actor, "rfq.send", "rfq", rfq_no, after={"queued": len(queued)})
+    db.commit()  # one transaction: the RFQ stays locked until every invitation is queued
+    outbox.send_now(outbox.tenant_of(db), queued, engine=db.get_bind().engine)  # then they leave
+    return len(queued)
 
 
 @proposals.executor("rfq.send")

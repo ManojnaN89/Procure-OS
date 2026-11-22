@@ -10,6 +10,7 @@ from typing import Any
 
 import pytest
 from fastapi.testclient import TestClient
+from outbox_support import queued_mails
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 from test_approvals import PASSWORD, TODAY, Logins, _audit, _request, _row, _submit, db, logins  # noqa: F401 - fixtures
@@ -211,7 +212,7 @@ def test_given_a_step_opens_when_the_email_goes_then_it_has_the_lines_total_budg
 ) -> None:
     no = _gasket(db, "R-W2", "20000.00")
 
-    (mail_job,) = [j for j in _jobs(db.info["slug"], "send_email") if no in j["subject"]]
+    (mail_job,) = [j for j in queued_mails(db) if no in j["subject"]]
     body, html = mail_job["body"], mail_job["html"]
     assert mail_job["subject"] == f"Approve request {no} (₹ 20,000.00)"
     for part in ("Gasket: 1", "Estimated total: ₹ 20,000.00", "Budget: No budget was checked", "Why you:", "REQ-02 v2"):
@@ -320,7 +321,7 @@ def test_given_a_holiday_monday_when_a_step_waits_from_friday_then_the_reminder_
     db.execute(text("update approval_step set opened_at = :t where request_no = :n"), {"t": friday, "n": no})
     db.commit()
     due = datetime(2026, 11, 10, 11, 0, tzinfo=IST)
-    before = len(_jobs(slug, "send_email"))
+    before = len(queued_mails(db))
 
     _remind(slug, no, due - timedelta(seconds=1))  # Monday was a holiday: not yet
     db.rollback()
@@ -336,7 +337,7 @@ def test_given_a_holiday_monday_when_a_step_waits_from_friday_then_the_reminder_
         and row["after"]["approver"] == "U3"
         and row["actor_id"] == "approval-reminder"
     )
-    reminders = [j for j in _jobs(slug, "send_email")[before:] if j["subject"].startswith("Reminder: request")]
+    reminders = [j for j in queued_mails(db)[before:] if j["subject"].startswith("Reminder: request")]
     assert len(reminders) == 1 and "/approve/" in reminders[0]["body"]
 
 
@@ -372,7 +373,7 @@ def test_given_two_working_days_without_a_decision_then_it_escalates_to_the_mana
     db.rollback()
 
     assert _step(db, no)["delegate"] == "U2"
-    escalated = [j for j in _jobs(slug, "send_email") if j["subject"].startswith("Escalated to you: request")]
+    escalated = [j for j in queued_mails(db) if j["subject"].startswith("Escalated to you: request")]
     assert len(escalated) == 1 and "/approve/" in escalated[0]["body"]
     assert "standing in for Stores Prakash" in escalated[0]["body"]
 

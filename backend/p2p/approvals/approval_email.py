@@ -12,7 +12,7 @@ from html import escape
 from sqlalchemy.orm import Session
 
 from p2p.approvals import email_links
-from p2p.platform import audit, email_layout, notifications, worker
+from p2p.platform import audit, email_layout, notifications, outbox
 
 OPENING = {
     "new": "A request is waiting for your approval.",
@@ -135,7 +135,10 @@ def send(db: Session, tenant: str, no: str, round_no: int, step: int, user_id: i
     if not address:
         return False
     m = compose(db, tenant, no, round_no, step, user_id, kind)
-    worker.enqueue(tenant, "send_email", {"to": address, "subject": m.subject, "body": m.text, "html": m.html})
+    outbox.queue_email(
+        db, to=address, subject=m.subject, body=m.text,
+        record=f"Request {no} waits for a decision at step {step} (the links are only in the email).", html=m.html,
+    )  # fmt: skip
     audit.record(
         db, audit.SYSTEM, "request.approval_email", "request", no,
         after={"to": address, "round": round_no, "step": step, "kind": kind},

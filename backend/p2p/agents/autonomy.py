@@ -67,6 +67,11 @@ def gate(
     name = label(decision_type)
     if decision_type in LOCKED:
         return GateDecision(False, f"“{name}” is always decided by a person")
+    from p2p.agents import capabilities  # noqa: PLC0415 - the switch's module reads the automation settings
+
+    cap = capabilities.of_decision(decision_type)
+    if cap is not None and not capabilities.is_on(db, cap.code):
+        return GateDecision(False, f"the {cap.label} capability is switched off")
     if db.execute(text("select kill_switch from autonomy_global where id = 1")).scalar_one():
         return GateDecision(False, "the kill switch is on")
     row = db.execute(
@@ -100,11 +105,20 @@ def gate(
 
 
 def record_outcome(
-    db: Session, decision_type: str, *, auto: bool, ref: str | None = None, now: datetime | None = None
+    db: Session,
+    decision_type: str,
+    *,
+    auto: bool,
+    ref: str | None = None,
+    now: datetime | None = None,
+    recommendation_id: int | None = None,
 ) -> int:
     row = db.execute(
-        text("insert into autonomy_outcome (decision_type, auto, ref, at) values (:d, :a, :r, :n) returning id"),
-        {"d": decision_type, "a": auto, "r": ref, "n": now or datetime.now(UTC)},
+        text(
+            "insert into autonomy_outcome (decision_type, auto, ref, at, recommendation_id) "
+            "values (:d, :a, :r, :n, :rec) returning id"
+        ),
+        {"d": decision_type, "a": auto, "r": ref, "n": now or datetime.now(UTC), "rec": recommendation_id},
     ).scalar_one()
     db.commit()
     return int(row)

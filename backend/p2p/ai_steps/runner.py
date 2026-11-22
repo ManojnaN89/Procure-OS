@@ -13,11 +13,29 @@ from typing import Any
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
+from p2p.agents import trace
 from p2p.ai_steps.adapters import InvalidOutput, ModelError
 from p2p.ai_steps.evidence import EvidenceFailure, check_evidence
 from p2p.ai_steps.gateway import Completion, Gateway
 from p2p.platform import audit, tasks
 from p2p.platform.sod import Actor
+
+# The capability (D49) each AI step belongs to, for a caller that does not say.
+CAPABILITY_OF = {
+    "request_reading": "intake",
+    "item_mapping": "intake",
+    "quote_reading": "sourcing",
+    "certificate_reading": "sourcing",
+    "supplier_message": "execution",
+    "reply_classification": "execution",
+    "invoice_reading": "invoice_ap",
+}
+
+
+def _capability_on(db: Session, code: str) -> bool:
+    from p2p.agents import capabilities  # noqa: PLC0415 - the switch imports the AI steps' callers
+
+    return capabilities.is_on(db, code)
 
 
 @dataclass(frozen=True)
@@ -69,6 +87,33 @@ def run_step(
     inputs: dict[str, Any] | None = None,
     review_sla_hours: Decimal | int = 8,
     case_id: int | None = None,
+    capability: str | None = None,
+) -> StepResult:
+    """Run the step (see the module). Its capability (by its name when not given) must be switched on; when it is off,
+    no model is asked and a person gets the reading to do."""
+    capability = capability or CAPABILITY_OF.get(step.name)
+    if capability is not None and not _capability_on(db, capability):
+        return _send_to_person(
+            db, tenant, step, None, [f"the {capability} capability is switched off"], entity, entity_id,
+            review_assignee, review_sla_hours, case_id,
+        )  # fmt: skip
+    with trace.span(capability=capability, entity=entity, entity_id=entity_id):
+        return _run(db, tenant, step, source, gateway, review_assignee, entity, entity_id, inputs, review_sla_hours,
+                    case_id)  # fmt: skip
+
+
+def _run(
+    db: Session,
+    tenant: str,
+    step: AiStep,
+    source: str,
+    gateway: Gateway,
+    review_assignee: int,
+    entity: str,
+    entity_id: str,
+    inputs: dict[str, Any] | None,
+    review_sla_hours: Decimal | int,
+    case_id: int | None,
 ) -> StepResult:
     messages = [
         {"role": "system", "content": step.system},
@@ -84,6 +129,10 @@ def run_step(
             continue
         last = (got.value, got.completion)
         failures = _problems(step, got.value, source)
+        capability = trace.current().capability
+        if capability is not None and not _capability_on(db, capability):  # switched off while the model answered
+            failures = [f"the {capability} capability was switched off before the reading was used"]
+            break
         if not failures:
             audit.record(
                 db,

@@ -1,0 +1,7 @@
+provider,model,effective_from,usd_in_per_mtok,usd_out_per_mtok,plan,source,checked_on
+groq,openai/gpt-oss-120b,2026-11-06,0,0,free,free tier of this key (docs/model-selection.md),2026-11-06
+groq,openai/gpt-oss-20b,2026-11-06,0,0,free,free tier of this key (docs/model-selection.md),2026-11-06
+groq,qwen/qwen3.8-27b,2026-11-06,0,0,free,free tier of this key (docs/model-selection.md),2026-11-06
+groq,allam-2-7b,2026-11-06,0,0,free,free tier of this key (docs/model-selection.md),2026-11-06
+nvidia,poolside/laguna-xs-2.1,2026-11-06,0,0,free,NVIDIA free trial for development and testing (docs/model-selection.md),2026-11-06
+nvidia,nvidia/nemotron-3-ultra-550b-a55b,2026-11-06,0,0,free,NVIDIA free trial for development and testing (docs/model-selection.md),2026-11-06

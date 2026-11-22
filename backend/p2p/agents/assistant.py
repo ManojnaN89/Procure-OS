@@ -364,7 +364,12 @@ class Answer:
 
 
 def ask(db: Session, tenant: str, user_id: int, question: str, gateway: Any) -> Answer:
-    """Answer one question. Never raises for a model problem: the person gets a plain message instead."""
+    """Answer one question. Never raises for a model problem: the person gets a plain message instead (also when the
+    assistant capability is switched off)."""
+    from p2p.agents import capabilities  # noqa: PLC0415 - the switch imports the agents
+
+    if not capabilities.is_on(db, "assistant"):
+        return Answer(UNAVAILABLE, True, None, [])
     registry = build_registry(db, user_id)
     runtime = AgentRuntime(
         tenant,
@@ -374,6 +379,9 @@ def ask(db: Session, tenant: str, user_id: int, question: str, gateway: Any) -> 
         agent="assistant",
         max_steps=MAX_STEPS,
         system=SYSTEM,
+        capability="assistant",
+        user_id=user_id,
+        started_by=f"user:{user_id}",
     )
     try:
         outcome = runtime.start(question.strip()[:2000], thread_id=f"assistant-{uuid.uuid4().hex}")

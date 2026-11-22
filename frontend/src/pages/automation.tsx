@@ -7,6 +7,7 @@ import { Field, Input } from "../components/ui/input";
 import { Table, Td, Th } from "../components/ui/table";
 import { api } from "../lib/api";
 import { can, useMe } from "../lib/me";
+import { CapabilitiesCard } from "./automation-capabilities";
 import { PendingChanges, select } from "./setup-shared";
 
 type Decision = {
@@ -124,6 +125,7 @@ export function AutomationPage() {
 				</p>
 			) : null}
 			<PendingChanges />
+			<CapabilitiesCard reason={reason} />
 			<Card>
 				<CardHeader className="font-medium">Decisions</CardHeader>
 				<Table>

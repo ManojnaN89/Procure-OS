@@ -24,12 +24,27 @@ from pydantic import BaseModel, Field, ValidationError
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
-from p2p.agents import autonomy
+from p2p.agents import autonomy, recommendations, trace
 from p2p.agents.tools import Tool, ToolRegistry
 from p2p.platform import audit, proposals, tenants
 from p2p.platform.sod import Actor
 
 Message = dict[str, Any]
+
+# The capability (D49) each agent belongs to, for a caller that does not say.
+CAPABILITY_OF = {
+    "assistant": "assistant",
+    "invoice_exceptions": "invoice_ap",
+    "planning": "planning",
+    "intake": "intake",
+    "supplier_comms": "execution",
+}
+
+
+def _capability_on(db: Session, code: str) -> bool:
+    from p2p.agents import capabilities  # noqa: PLC0415 - the switch imports the runtime's neighbours
+
+    return capabilities.is_on(db, code)
 
 
 class Decision(BaseModel):
@@ -99,21 +114,40 @@ class AgentRuntime:
         agent: str,
         max_steps: int = 10,
         system: str = "",
+        capability: str | None = None,
+        user_id: int | None = None,
+        started_by: str | None = None,
+        workflow_id: int | None = None,
+        event_id: int | None = None,
+        job_id: int | None = None,
+        directed_by: int | None = None,
     ) -> None:
         self.tenant, self.db, self.tools, self.decide = tenant, db, tools, decide
         self.agent, self.max_steps, self.system = agent, max_steps, system
         self.actor = Actor("agent", agent)
+        self.capability = capability or CAPABILITY_OF.get(agent)
+        self.user_id, self.workflow_id, self.event_id, self.job_id = user_id, workflow_id, event_id, job_id
+        self.started_by = started_by or (f"user:{user_id}" if user_id is not None else f"service:{agent}")
+        self.directed_by = directed_by if directed_by is not None else user_id  # the maker of what it recommends (C1)
         self._current_run = 0
 
     # ---- public ------------------------------------------------------------------------------
 
     def start(self, task: str, thread_id: str) -> RunOutcome:
+        via = getattr(audit, "VIA", None)  # the dev switcher's marker, where the app has one
         run_id = int(
             self.db.execute(
-                text("insert into agent_run (thread_id, agent, input) values (:t, :a, :i) returning id"),
-                {"t": thread_id, "a": self.agent, "i": task},
+                text(
+                    "insert into agent_run (thread_id, agent, input, capability, started_by, user_id, via, workflow_id, "
+                    "event_id, job_id) values (:t, :a, :i, :c, :sb, :u, :via, :w, :e, :j) returning id"
+                ),
+                {
+                    "t": thread_id, "a": self.agent, "i": task, "c": self.capability, "sb": self.started_by,
+                    "u": self.user_id, "via": via.get() if via is not None else None, "w": self.workflow_id,
+                    "e": self.event_id, "j": self.job_id,
+                },
             ).scalar_one()
-        )
+        )  # fmt: skip
         self.db.commit()
         messages: list[Message] = [{"role": "user", "content": task}]
         if self.system:
@@ -126,9 +160,16 @@ class AgentRuntime:
 
     def resume(self, thread_id: str, proposal_id: int) -> RunOutcome:
         """Continue a paused run after the person has decided the proposal. Works from a fresh process."""
-        run_id = int(
-            self.db.execute(text("select id from agent_run where thread_id = :t"), {"t": thread_id}).scalar_one()
-        )
+        run = self.db.execute(
+            text("select id, capability, user_id, workflow_id from agent_run where thread_id = :t"),
+            {"t": thread_id},
+        ).one()
+        run_id = int(run[0])
+        self.capability, self.user_id, self.workflow_id = run[1], run[2], run[3]
+        if self.capability and not _capability_on(self.db, self.capability):
+            raise proposals.ProposalError(
+                f"the {self.capability} capability is switched off; the run does not continue"
+            )
         row = self.db.execute(
             text("select status, execution, result, decision_note from proposal where id = :i"), {"i": proposal_id}
         ).one()
@@ -146,7 +187,10 @@ class AgentRuntime:
 
     def _drive(self, start: Any, thread_id: str, run_id: int) -> RunOutcome:
         self._current_run = run_id
-        with checkpointer(self.tenant) as saver:
+        with (
+            trace.span(run_id=run_id, capability=self.capability, user_id=self.user_id, workflow_id=self.workflow_id),
+            checkpointer(self.tenant) as saver,
+        ):
             graph = self._build().compile(checkpointer=saver)
             cfg: RunnableConfig = {"configurable": {"thread_id": thread_id}}
             try:
@@ -266,19 +310,43 @@ class AgentRuntime:
                 ],
                 "pending": None,
             }
+        args = params.model_dump(mode="json")
+        rec_id = self._recommend(tool, params, args, value, messages)
         pid = proposals.propose(
             self.db,
             self.actor,
             action=f"tool.{tool.name}",
             summary=tool.summary(params) or f"{self.agent} wants to run {tool.name}",
-            payload=params.model_dump(mode="json"),
+            payload={**args, recommendations.KEY: rec_id},
             required_permission=tool.required_permission or "",
             risk=tool.risk,
             document=tool.document,
             value=value,
         )
+        recommendations.link_proposal(self.db, rec_id, pid)
+        self.db.commit()
         self._log(None, "wait", tool.name, {"proposal_id": pid, "why": verdict.reason})
         return {"waiting_proposal": pid, "pending": None}
+
+    def _recommend(
+        self, tool: Tool, params: BaseModel, args: dict[str, Any], value: Any, messages: list[Message]
+    ) -> int:
+        """The recommendation behind a write the gate sends to a person: the run's tool results as evidence, the
+        engine's figures for its business key (or the call itself when the tool has none)."""
+        key = tool.business_key(params) if tool.business_key else f"{tool.name}:{self._current_run}"
+        # with no basis (or an empty one) the call itself is what the person confirms: never refused here
+        figures = (tool.basis(self.db, key) if tool.basis else None) or {"value": value, "params": args}
+        evidence = [
+            {"source": "tool", "ref": m.get("name"), "value": m.get("content")}
+            for m in messages
+            if m.get("role") == "tool"
+        ] + [{"source": "tool_call", "ref": tool.name, "value": args}]
+        return recommendations.record(
+            self.db, capability=self.capability or self.agent, kind=f"tool.{tool.name}", business_key=key,
+            summary=tool.summary(params) or f"{self.agent} wants to run {tool.name}", evidence=evidence,
+            engine_figures=figures, actor=self.actor, run_id=self._current_run or None, workflow_id=self.workflow_id,
+            event_id=self.event_id, directed_by=self.directed_by,
+        )  # fmt: skip
 
     def _wait_node(self, state: State) -> dict[str, Any]:
         pid = state["waiting_proposal"]

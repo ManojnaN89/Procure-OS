@@ -900,7 +900,9 @@ def _attachment_text(db: Session, tenant: str, ids: list[int]) -> str:
 
 @worker.register("intake_email")
 def _intake_email_job(ctx: worker.JobContext) -> None:
+    from p2p.agents import capabilities  # noqa: PLC0415 - the switch imports the agents
     from p2p.ai_steps.gateway import Gateway  # noqa: PLC0415
 
     with Session(routing.engine_for(ctx.tenant)) as db:
-        handle_email(db, ctx.tenant, int(ctx.payload["email_id"]), Gateway())
+        if capabilities.job_allowed(db, ctx.tenant, "intake_email", ctx.payload):  # else handed to a person
+            handle_email(db, ctx.tenant, int(ctx.payload["email_id"]), Gateway())

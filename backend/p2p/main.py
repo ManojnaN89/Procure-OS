@@ -10,6 +10,7 @@ from p2p.config import REPO_ROOT, get_settings
 from p2p.platform import db_logins, logs, tenants
 from p2p.platform.admin_api import router as admin_router
 from p2p.platform.agent_api import router as agent_router
+from p2p.platform.ai_api import router as ai_router
 from p2p.platform.approval_link_api import router as approval_link_router
 from p2p.platform.auth import router as auth_router
 from p2p.platform.budget_api import router as budget_router
@@ -54,6 +55,7 @@ def _state_refused(_: Request, exc: StateError) -> JSONResponse:
 app.include_router(auth_router)
 app.include_router(company_router)
 app.include_router(admin_router)
+app.include_router(ai_router)
 app.include_router(files_router)
 app.include_router(export_router)
 app.include_router(demand_router)

@@ -4,13 +4,14 @@ Jobs survive a restart because they are rows. A worker claims due jobs with FOR 
 never take the same job. A job claimed by a worker that died is picked up again after the lock times out.
 """
 
+import hashlib
 import json
 import logging
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from typing import Any
+from typing import Any, overload
 
 from sqlalchemy import text
 
@@ -29,6 +30,7 @@ class JobContext:
     tenant: str
     payload: dict[str, Any]
     now: datetime
+    created_at: datetime | None = None  # when the job was queued (a handler can tell how old its work is)
 
 
 Handler = Callable[[JobContext], None]
@@ -45,28 +47,47 @@ def register(kind: str) -> Callable[[Handler], Handler]:
 
 def load_handlers() -> None:
     """Import the modules that register handlers."""
-    from p2p.agents import intake, planning, supplier_comms  # noqa: F401, PLC0415 - agent jobs
+    from p2p.agents import capabilities, intake, planning, supplier_comms  # noqa: F401, PLC0415 - agent jobs
     from p2p.approvals import chasing  # noqa: F401, PLC0415 - approval reminders
     from p2p.invoices import reading  # noqa: F401, PLC0415 - reads invoice mails into drafts
     from p2p.orders import jobs as order_jobs  # noqa: F401, PLC0415
-    from p2p.platform import alerts, emails, notifications, setting_changes, tasks  # noqa: F401, PLC0415
+    from p2p.platform import alerts, emails, events, notifications, outbox, setting_changes, tasks  # noqa: F401, PLC0415
     from p2p.requests import jobs  # noqa: F401, PLC0415
     from p2p.sourcing import jobs as sourcing_jobs  # noqa: F401, PLC0415
     from p2p.sourcing import reminders  # noqa: F401, PLC0415
 
 
-def enqueue(tenant: str, kind: str, payload: dict[str, Any], run_at: datetime | None = None) -> int:
+@overload
+def enqueue(tenant: str, kind: str, payload: dict[str, Any], run_at: datetime | None = None) -> int: ...
+
+
+@overload
+def enqueue(
+    tenant: str, kind: str, payload: dict[str, Any], run_at: datetime | None = None, *, key: str | None
+) -> int | None: ...
+
+
+def enqueue(
+    tenant: str, kind: str, payload: dict[str, Any], run_at: datetime | None = None, *, key: str | None = None
+) -> int | None:
+    """Queue a job. With a `key`, nothing is queued while a job of this kind and key waits or runs (the unique index of
+    control 0006 decides, so two callers at once still make one job): returns None then."""
     engine = tenants.control_engine()
     with engine.begin() as c:
-        return int(
-            c.execute(
-                text(
-                    "insert into job (tenant_slug, kind, payload, run_at) "
-                    "values (:t, :k, cast(:p as jsonb), coalesce(:r, now())) returning id"
-                ),
-                {"t": tenant, "k": kind, "p": json.dumps(payload, default=str), "r": run_at},
-            ).scalar_one()
-        )
+        got = c.execute(
+            text(
+                "insert into job (tenant_slug, kind, payload, run_at, dedupe_key) "
+                "values (:t, :k, cast(:p as jsonb), coalesce(:r, now()), :key) "
+                "on conflict (tenant_slug, kind, dedupe_key) where dedupe_key is not null "
+                "and status in ('queued', 'running') do nothing returning id"
+            ),
+            {"t": tenant, "k": kind, "p": json.dumps(payload, default=str), "r": run_at, "key": key},
+        ).scalar()
+        return None if got is None else int(got)
+
+
+def payload_key(payload: dict[str, Any]) -> str:
+    return hashlib.sha256(json.dumps(payload, sort_keys=True, default=str).encode()).hexdigest()
 
 
 def enqueue_unique(
@@ -79,27 +100,34 @@ def enqueue_unique(
     same_payload: bool = False,
 ) -> int | None:
     """Queue a job unless the tenant already has one of this kind waiting (used for self-rescheduling polls); with
-    `same_payload`, one of this kind for the same payload (one job per business key)."""
-    engine = tenants.control_engine()
-    with engine.begin() as c:
-        waiting = c.execute(
-            text(
-                "select 1 from job where tenant_slug = :t and kind = :k and status in ('queued', 'running') "
-                "and id <> coalesce(:x, -1) and (not :same or payload = cast(:p as jsonb)) limit 1"
-            ),
-            {"t": tenant, "k": kind, "x": exclude_id, "same": same_payload, "p": json.dumps(payload, default=str)},
-        ).first()
-        if waiting:
-            return None
-    return enqueue(tenant, kind, payload, run_at)
+    `same_payload`, one of this kind for the same payload (one job per business key). `exclude_id` is the running job
+    that reschedules itself: its own key is released first, so the next run can be queued."""
+    key = payload_key(payload) if same_payload else "*"
+    if exclude_id is not None:
+        with tenants.control_engine().begin() as c:
+            c.execute(text("update job set dedupe_key = null where id = :i"), {"i": exclude_id})
+    return enqueue(tenant, kind, payload, run_at, key=key)
 
 
-def _claim(now: datetime, limit: int, tenant: str | None = None) -> list[tuple[int, str, str, dict[str, Any]]]:
+def settle(job_id: int | None) -> None:
+    """A queued job whose work was already done by its caller: finished now, so no worker takes it."""
+    if job_id is None:
+        return
+    with tenants.control_engine().begin() as c:
+        c.execute(
+            text("update job set status = 'done', finished_at = now() where id = :i and status = 'queued'"),
+            {"i": job_id},
+        )
+
+
+def _claim(
+    now: datetime, limit: int, tenant: str | None = None
+) -> list[tuple[int, str, str, dict[str, Any], datetime]]:
     engine = tenants.control_engine()
     with engine.begin() as c:
         rows = c.execute(
             text(
-                "select id, tenant_slug, kind, payload from job "
+                "select id, tenant_slug, kind, payload, created_at from job "
                 "where ((status = 'queued' and run_at <= :now) or (status = 'running' and locked_at < :stale)) "
                 "and (cast(:t as text) is null or tenant_slug = :t) "
                 # a company in cutover or suspended runs nothing: its jobs wait (D-04)
@@ -116,7 +144,7 @@ def _claim(now: datetime, limit: int, tenant: str | None = None) -> list[tuple[i
                 ),
                 {"now": now, "ids": ids},
             )
-        return [(r[0], r[1], r[2], r[3]) for r in rows]
+        return [(r[0], r[1], r[2], r[3], r[4]) for r in rows]
 
 
 def _finish(job_id: int, now: datetime, error: str | None) -> None:
@@ -147,9 +175,9 @@ def run_once(now: datetime | None = None, limit: int = 10, tenant: str | None = 
     load_handlers()
     now = now or datetime.now(UTC)
     taken = _claim(now, limit, tenant)
-    for job_id, tenant, kind, payload in taken:
+    for job_id, tenant, kind, payload, created_at in taken:
         try:
-            HANDLERS[kind](JobContext(job_id, tenant, payload, now))
+            HANDLERS[kind](JobContext(job_id, tenant, payload, now, created_at))
             _finish(job_id, now, None)
         except Exception as exc:  # noqa: BLE001 - recorded on the job and retried
             log.warning("job %s (%s) failed: %s", job_id, kind, exc)

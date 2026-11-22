@@ -43,8 +43,10 @@ def save_file(
     uploaded_by: int | None,
     linked_type: str | None = None,
     linked_id: str | None = None,
+    commit: bool = True,
 ) -> FileOut:
-    """Store the bytes, add the document row and audit it. Used by the upload route and by services (email, parsing)."""
+    """Store the bytes, add the document row and audit it. Used by the upload route and by services (email, parsing).
+    `commit=False` leaves the row in the caller's transaction (the email outbox)."""
     if len(data) > MAX_BYTES:
         raise ValueError("file is too large")
     digest = hashlib.sha256(data).hexdigest()
@@ -73,7 +75,8 @@ def save_file(
     audit.record(
         db, actor, "file.upload", "document", doc_id, after={"filename": name, "size": len(data), "sha256": digest}
     )
-    db.commit()
+    if commit:
+        db.commit()
     return FileOut(id=doc_id, filename=name, content_type=content_type, size=len(data), sha256=digest)
 
 

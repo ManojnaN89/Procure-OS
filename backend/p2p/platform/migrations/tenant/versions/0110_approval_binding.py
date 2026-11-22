@@ -10,13 +10,13 @@ Backfill: steps of the current round get the order's version; every approved ord
 (approved by 'backfill'), its band from its rule, and `approved_version` = its version.
 
 Revision ID: 0110
-Revises: 0091
+Revises: 0104
 """
 
 from alembic import op
 
 revision = "0110"
-down_revision = "0091"
+down_revision = "0104"
 branch_labels = None
 depends_on = None
 

@@ -37,7 +37,7 @@ from p2p.formulas.calendar import IST, business_today
 from p2p.formulas.money import format_inr, format_qty
 from p2p.invoices import tolerances
 from p2p.orders import confirmation, dispatch, dispatch_notes
-from p2p.platform import audit, emails, routing, tasks, worker
+from p2p.platform import audit, emails, routing, tasks, users, worker
 from p2p.platform.sod import Actor
 
 AGENT = Actor("agent", "supplier_comms")
@@ -72,16 +72,6 @@ def _setting(db: Session, key: str, default: str) -> str:
     return str(value) if value not in (None, "") else default
 
 
-def _user_with_role(db: Session, *roles: str) -> int:
-    for role in roles:
-        found = db.execute(
-            text("select user_id from user_profile where role = :r order by user_id limit 1"), {"r": role}
-        ).scalar()
-        if found:
-            return int(found)
-    return int(db.execute(text("select user_id from user_profile order by user_id limit 1")).scalar() or 0)
-
-
 def _task(
     db: Session, tenant: str, kind: str, title: str, roles: tuple[str, ...], sla: int, payload: dict[str, Any]
 ) -> int:
@@ -90,7 +80,7 @@ def _task(
         tenant,
         kind=kind,
         title=title[:200],
-        assignee=_user_with_role(db, *roles),
+        assignee=users.first_with_role(db, *roles),
         sla_hours=sla,
         payload=payload,
         actor=AGENT,
@@ -320,7 +310,7 @@ def handle_email(db: Session, tenant: str, email_id: int, gateway: Any, *, as_of
         step.STEP,
         source,
         gateway=gateway,
-        review_assignee=_user_with_role(db, "Buyer"),
+        review_assignee=users.first_with_role(db, "Buyer"),
         entity=linked_type,
         entity_id=ref,
         inputs={
@@ -937,8 +927,10 @@ def _chase_job(ctx: worker.JobContext) -> None:
 
 @worker.register("supplier_message")
 def _message_job(ctx: worker.JobContext) -> None:
+    from p2p.agents import capabilities  # noqa: PLC0415 - the switch imports the agents
     from p2p.ai_steps.gateway import Gateway  # noqa: PLC0415
 
     with Session(routing.engine_for(ctx.tenant)) as db:
-        handle_email(db, ctx.tenant, int(ctx.payload["email_id"]), Gateway(), as_of=ctx.now.astimezone(IST).date())
+        if capabilities.job_allowed(db, ctx.tenant, "supplier_message", ctx.payload):  # else handed to a person
+            handle_email(db, ctx.tenant, int(ctx.payload["email_id"]), Gateway(), as_of=ctx.now.astimezone(IST).date())
     schedule(ctx.tenant)  # the daily chase keeps itself going once it has started

@@ -1,9 +1,9 @@
-"""Notifications: an in-app row for the bell and list, and an email sent through the job worker."""
+"""Notifications: an in-app row for the bell and list, and an email through the outbox (sent by the job worker)."""
 
 from sqlalchemy import select, text
 from sqlalchemy.orm import Session
 
-from p2p.platform import email_layout, mail, tenants, users, worker
+from p2p.platform import email_layout, mail, outbox, tenants, users, worker
 from p2p.platform.control_models import AppUser
 
 
@@ -33,8 +33,9 @@ def notify(
     email: bool = True,
     email_extra: str = "",
 ) -> int:
-    """Add a notification for a user. The email goes out through a job, so a mail outage never blocks the caller.
-    `email_extra` is added to the email only, never kept in the app (for a link that works as a key)."""
+    """Add a notification for a user, and its email in the same transaction (platform/outbox.py): the worker sends it,
+    so a mail outage never blocks the caller, and a rollback leaves neither. `email_extra` is added to the email only,
+    never kept in the app nor in the job (for a link that works as a key). Commits."""
     nid = int(
         db.execute(
             text(
@@ -43,19 +44,18 @@ def notify(
             {"u": user_id, "k": kind, "t": title, "b": body, "l": link},
         ).scalar_one()
     )
-    db.commit()
     if email and (address := email_of(user_id)):
-        text_body = ((body or title) + email_extra).strip()
-        worker.enqueue(
-            tenant,
-            "send_email",
-            {
-                "to": address,
-                "subject": title,
-                "body": text_body,
-                "html": email_layout.text_email(title, text_body, footer="Sent by the purchasing system."),
-            },
+        text_body = (body or title).strip()
+        full = ((body or title) + email_extra).strip()
+        outbox.queue_email(
+            db,
+            to=address,
+            subject=title,
+            body=text_body,
+            secret=full[len(text_body) :] if full.startswith(text_body) else "",
+            html=email_layout.text_email(title, full, footer="Sent by the purchasing system."),
         )
+    db.commit()
     return nid
 
 
@@ -77,6 +77,7 @@ def mark_read(db: Session, user_id: int, notification_id: int) -> None:
 
 @worker.register("send_email")
 def _send_email_job(ctx: worker.JobContext) -> None:
+    """Jobs queued before the outbox (11a.1) carried the whole mail; kept for one release to drain them (OP-5)."""
     html = ctx.payload.get("html")
     if html:
         mail.send_email(ctx.payload["to"], ctx.payload["subject"], ctx.payload["body"], html=html)

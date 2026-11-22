@@ -39,6 +39,7 @@ KINDS: dict[str, str] = {
     "order": "Orders nobody may approve",
     "demand": "Demand changes to act on",
     "late_supply": "Supply promised too late",
+    "ai_handover": "AI work handed to a person",
 }
 
 AP = ("AP", "invoice.match", "Ask the supplier for a corrected invoice")
@@ -286,6 +287,41 @@ def _late_supply(db: Session) -> Iterator[Stuck]:
         )  # fmt: skip
 
 
+NEXT_BY_KIND = {  # what the person does with work an AI capability handed over (11a.5)
+    "intake_email": "Read the email and raise the request by hand",
+    "read_supplier_reply": "Read the supplier's reply and enter the quote on the RFQ",
+    "supplier_message": "Read the supplier's email and act on the order",
+    "read_invoice_email": "Read the invoice email and enter the invoice by hand",
+}
+
+
+AI_ACTS = {  # who does a switched-off capability's work by hand: the permission of its owners
+    "intake": "rfq.create",
+    "planning": "stock.view",
+    "sourcing": "rfq.create",
+    "execution": "po.create",
+    "invoice_ap": "invoice.match",
+}
+
+
+def _ai_handover(db: Session) -> Iterator[Stuck]:
+    """Work a switched-off AI capability gave to a person: an email to read, a workflow or a recommendation to finish."""
+    rows = _rows(
+        db,
+        "select id, title, assignee, payload, created_at from task where kind = 'ai_handover' "
+        "and status in ('open', 'overdue') order by id",
+    )
+    for r in rows:
+        p, code = r["payload"] or {}, org_code_of(db, int(r["assignee"]))
+        yield Stuck(
+            "ai_handover", str(p.get("ref") or r["id"]), str(p.get("link") or "#/exceptions"), str(r["title"]),
+            name_of(db, code) if code else "Not assigned",
+            NEXT_BY_KIND.get(str(p.get("kind")), "Finish the work by hand, then close the task"), _day(r["created_at"]),
+            act=AI_ACTS.get(str(p.get("capability"))), people=frozenset({code}) if code else frozenset(),
+            see=("admin.settings", *((AI_ACTS[str(p.get("capability"))],) if str(p.get("capability")) in AI_ACTS else ())),
+        )  # fmt: skip
+
+
 def collect(db: Session, today: date, calendar: BusinessCalendar) -> list[Stuck]:
     """Every stuck case in the company, whoever must act."""
     return [
@@ -298,6 +334,7 @@ def collect(db: Session, today: date, calendar: BusinessCalendar) -> list[Stuck]
         *_orders(db),
         *_demand(db),
         *_late_supply(db),
+        *_ai_handover(db),
     ]
 
 

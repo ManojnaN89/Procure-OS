@@ -32,13 +32,32 @@ Rows = list[dict[str, Any]]
 
 
 @router.get("/agent-runs", dependencies=[Depends(require("audit.view"))])
-def agent_runs(db: Db, limit: int = 50) -> Rows:
+def agent_runs(
+    db: Db,
+    limit: int = 50,
+    capability: str | None = None,
+    user_id: int | None = None,
+    status: str | None = None,
+    workflow_id: int | None = None,
+) -> Rows:
     return _rows(
         db,
-        "select id, thread_id, agent, status, input, result, waiting_for, started_at, finished_at from agent_run "
-        "order by id desc limit :n",
+        "select id, thread_id, agent, capability, started_by, user_id, via, workflow_id, status, input, result, "
+        "waiting_for, started_at, finished_at from agent_run where (cast(:c as text) is null or capability = :c) "
+        "and (cast(:u as int) is null or user_id = :u) and (cast(:s as text) is null or status = :s) "
+        "and (cast(:w as int) is null or workflow_id = :w) order by id desc limit :n",
         n=min(limit, 200),
+        c=capability,
+        u=user_id,
+        s=status,
+        w=workflow_id,
     )
+
+
+CALL_COLUMNS = (
+    "id, at, step, provider, model, prompt_version, tokens_in, tokens_out, cost_usd, ms, attempts, outcome, error, "
+    "run_id, capability, user_id, workflow_id, entity, entity_id"
+)
 
 
 @router.get("/agent-runs/{run_id}", dependencies=[Depends(require("audit.view"))])
@@ -47,27 +66,49 @@ def agent_run(run_id: int, db: Db) -> dict[str, Any]:
     if not run:
         raise HTTPException(404, "Run not found")
     steps = _rows(db, "select id, at, kind, name, detail from agent_step where run_id = :i order by id", i=run_id)
-    calls = _rows(
-        db, "select * from audit_event where entity = 'tool' and at >= :s order by id", s=run[0]["started_at"]
+    calls = _rows(  # tool rows are linked by time and the agent that wrote them (audit_event is insert only)
+        db,
+        "select * from audit_event where entity = 'tool' and at >= :s and (cast(:f as timestamptz) is null or at <= :f) "
+        "and actor_id = :a order by id",
+        s=run[0]["started_at"],
+        f=run[0]["finished_at"],
+        a=run[0]["agent"],
     )
-    return {"run": run[0], "steps": steps, "tool_audit": calls}
+    model_calls = _rows(db, f"select {CALL_COLUMNS} from model_call where run_id = :i order by id", i=run_id)  # noqa: S608
+    recs = _rows(
+        db,
+        "select id, kind, business_key, summary, status, proposal_id from recommendation where run_id = :i",
+        i=run_id,
+    )
+    return {"run": run[0], "steps": steps, "tool_audit": calls, "model_calls": model_calls, "recommendations": recs}
 
 
 @router.get("/model-calls", dependencies=[Depends(require("audit.view"))])
-def model_calls(db: Db, step: str | None = None, limit: int = 100) -> dict[str, Any]:
-    where = "where step = :s" if step else ""
-    params: dict[str, Any] = {"n": min(limit, 500), **({"s": step} if step else {})}
+def model_calls(
+    db: Db,
+    step: str | None = None,
+    limit: int = 100,
+    run_id: int | None = None,
+    capability: str | None = None,
+    month: str | None = None,
+) -> dict[str, Any]:
+    where = (
+        "where (cast(:s as text) is null or step = :s) and (cast(:r as int) is null or run_id = :r) "
+        "and (cast(:c as text) is null or capability = :c) and (cast(:m as text) is null or to_char(at at time zone 'UTC', "
+        "'YYYY-MM') = :m)"
+    )
+    params: dict[str, Any] = {"s": step, "r": run_id, "c": capability, "m": month}
     calls = _rows(
         db,
-        f"select id, at, step, provider, model, prompt_version, tokens_in, tokens_out, cost_usd, ms, attempts, outcome, error "  # noqa: S608
-        f"from model_call {where} order by id desc limit :n",
+        f"select {CALL_COLUMNS} from model_call {where} order by id desc limit :n",  # noqa: S608 - fixed text
+        n=min(limit, 500),
         **params,
     )
     totals = _rows(
         db,
         f"select count(*) as calls, coalesce(sum(tokens_in), 0) as tokens_in, coalesce(sum(tokens_out), 0) as tokens_out, "  # noqa: S608
         f"coalesce(sum(cost_usd), 0) as cost_usd from model_call {where}",
-        **({"s": step} if step else {}),
+        **params,
     )[0]
     return {"calls": calls, "totals": totals}
 

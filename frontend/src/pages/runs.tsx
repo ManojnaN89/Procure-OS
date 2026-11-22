@@ -10,12 +10,28 @@ type Run = {
 	id: number;
 	thread_id: string;
 	agent: string;
+	capability: string | null;
+	started_by: string | null;
+	user_id: number | null;
 	status: string;
 	input: string | null;
 	result: string | null;
 	waiting_for: string | null;
 	started_at: string;
 	finished_at: string | null;
+};
+
+type RunCall = {
+	id: number;
+	step: string;
+	provider: string | null;
+	model: string | null;
+	tokens_in: number;
+	tokens_out: number;
+	cost_usd: string;
+	outcome: string;
+	entity: string | null;
+	entity_id: string | null;
 };
 
 type Step = {
@@ -43,6 +59,7 @@ export function RunsPage() {
 						<tr>
 							<Th>Started</Th>
 							<Th>Agent</Th>
+							<Th>Started by</Th>
 							<Th>Status</Th>
 							<Th>Task</Th>
 							<Th>Waiting for</Th>
@@ -55,7 +72,15 @@ export function RunsPage() {
 								<Td className="whitespace-nowrap">
 									{formatDateTime(r.started_at)}
 								</Td>
-								<Td>{r.agent}</Td>
+								<Td>
+									{r.agent}
+									{r.capability ? (
+										<div className="text-xs text-muted-foreground">
+											{r.capability}
+										</div>
+									) : null}
+								</Td>
+								<Td className="text-xs">{r.started_by}</Td>
 								<Td>
 									<Badge>{r.status}</Badge>
 								</Td>
@@ -88,7 +113,9 @@ export function RunDetailPage({ runId }: { runId: string }) {
 	const { data } = useQuery({
 		queryKey: ["run", runId],
 		queryFn: () =>
-			api<{ run: Run; steps: Step[] }>(`/api/admin/agent-runs/${runId}`),
+			api<{ run: Run; steps: Step[]; model_calls?: RunCall[] }>(
+				`/api/admin/agent-runs/${runId}`,
+			),
 	});
 	return (
 		<>
@@ -101,6 +128,11 @@ export function RunDetailPage({ runId }: { runId: string }) {
 						<CardBody className="space-y-1 text-sm">
 							<div>
 								<Badge>{data.run.status}</Badge>
+							</div>
+							<div className="text-xs text-muted-foreground">
+								Capability: {data.run.capability ?? "-"} · started by{" "}
+								{data.run.started_by ?? "-"}
+								{data.run.user_id ? ` · for login ${data.run.user_id}` : ""}
 							</div>
 							<div>
 								<span className="text-muted-foreground">Task: </span>
@@ -145,6 +177,20 @@ export function RunDetailPage({ runId }: { runId: string }) {
 							</li>
 						))}
 					</ol>
+					{data.model_calls?.length ? (
+						<Card>
+							<CardBody className="space-y-1 text-sm">
+								<div className="font-medium">Model calls of this run</div>
+								{data.model_calls.map((c) => (
+									<div key={c.id} className="text-xs">
+										{c.step} · {c.provider}/{c.model} · {c.tokens_in}/
+										{c.tokens_out} tokens · ${Number(c.cost_usd).toFixed(4)} ·{" "}
+										{c.outcome}
+									</div>
+								))}
+							</CardBody>
+						</Card>
+					) : null}
 				</div>
 			) : null}
 		</>

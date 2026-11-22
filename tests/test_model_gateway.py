@@ -1,6 +1,7 @@
 import json
 import uuid
 from collections.abc import Callable, Iterator
+from datetime import date
 from decimal import Decimal
 from typing import Any
 
@@ -10,6 +11,7 @@ from pydantic import BaseModel
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
+from p2p.ai_steps import costs
 from p2p.ai_steps.adapters import (
     AnthropicAdapter,
     BadRequest,
@@ -17,7 +19,7 @@ from p2p.ai_steps.adapters import (
     ModelRefusal,
     OpenAICompatAdapter,
 )
-from p2p.ai_steps.gateway import PRICE_PER_MTOK, Gateway
+from p2p.ai_steps.gateway import Gateway
 from p2p.platform import routing, tenants
 
 Handler = Callable[[httpx2.Request], httpx2.Response]
@@ -91,9 +93,10 @@ def test_a_call_returns_the_text_and_is_logged_with_tokens_and_outcome(db: Sessi
 def test_cost_comes_from_the_price_table_and_is_zero_for_free_tiers(
     db: Session, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setitem(PRICE_PER_MTOK, ("a", "model-a"), (Decimal("3"), Decimal("15")))
+    price = costs.Price("a", "model-a", date(2026, 1, 1), Decimal("3"), Decimal("15"))
+    monkeypatch.setattr(costs, "EXTRA", [price])  # the price file of ai_steps/costs.py, with a test row
     out = gateway({"a": adapter(lambda r: chat_ok("x", (1_000_000, 100_000)))}).complete("default", MSG, db=db)
-    assert str(out.cost_usd) == "4.5"  # 1M in x 3 + 0.1M out x 15, per million
+    assert out.cost_usd == Decimal("4.5")  # 1M in x 3 + 0.1M out x 15, per million
     free = gateway({"b": adapter(lambda r: chat_ok("x", (1_000_000, 1)))}, None)
     assert free.complete("default", MSG, db=db, use_cache=False).cost_usd == 0
 
