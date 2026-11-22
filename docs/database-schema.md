@@ -14,7 +14,7 @@ Reading a line: `name*` is part of the primary key, `name?` may be empty, then t
 
 **feature_flag** · id* int, tenant_id int, key text, enabled bool
 
-**job** · id* bigint, tenant_slug text, kind text, payload jsonb, run_at timestamptz, status text, attempts int, locked_at? timestamptz, last_error? text, created_at timestamptz, finished_at? timestamptz
+**job** · id* bigint, tenant_slug text, kind text, payload jsonb, run_at timestamptz, status text, attempts int, locked_at? timestamptz, last_error? text, created_at timestamptz, finished_at? timestamptz, dedupe_key? text
 
 **refresh_token** · id* int, user_id int, token_hash text, expires_at timestamptz, revoked_at? timestamptz, created_at timestamptz
 
@@ -31,15 +31,17 @@ Reading a line: `name*` is part of the primary key, `name?` may be empty, then t
 
 ## Tenant database (one per company)
 
-147 tables.
+156 tables.
 
 **advance** · payment_no* text, po_no text, gross num, taxable num, used_gross num, used_taxable num, paid_on? date
 
 **advance_adjustment** · id* bigint, advance_payment_no text, invoice_no text, amount num, taxable num
 
-**agent_run** · id* int, thread_id text, agent text, status text, input? text, result? text, waiting_for? text, started_at timestamptz, finished_at? timestamptz
+**agent_run** · id* int, thread_id text, agent text, status text, input? text, result? text, waiting_for? text, started_at timestamptz, finished_at? timestamptz, capability? text, started_by? text, user_id? int, via? text, workflow_id? int, event_id? bigint, job_id? bigint
 
 **agent_step** · id* bigint, run_id int, at timestamptz, kind text, name? text, detail? jsonb
+
+**ai_capability** · code* text, enabled bool, checks? jsonb, changed_at timestamptz, changed_by text
 
 **alert** · id* bigint, key text, rule text, subject_type text, subject_id text, severity text, title text, detail? text, link? text, roles text, status text, opened_at timestamptz, resolved_at? timestamptz, last_seen_at timestamptz, times_opened int
 
@@ -55,7 +57,7 @@ Reading a line: `name*` is part of the primary key, `name?` may be empty, then t
 
 **autonomy_global** · id* int, kill_switch bool
 
-**autonomy_outcome** · id* bigint, decision_type text, at timestamptz, auto bool, wrong bool, ref? text
+**autonomy_outcome** · id* bigint, decision_type text, at timestamptz, auto bool, wrong bool, ref? text, recommendation_id? int
 
 **autonomy_setting** · decision_type* text, level text, value_cap? num, min_confidence num, max_wrong_rate num, updated_by? int, updated_at timestamptz
 
@@ -65,9 +67,13 @@ Reading a line: `name*` is part of the primary key, `name?` may be empty, then t
 
 **bank_statement_line** · id* bigint, line_key text, row_no int, value_date? date, utr? text, narration? text, amount num, status text, payment_no? text, why? text, imported_by text, imported_at timestamptz, confirmed_by? text, confirmed_at? timestamptz
 
-**budget** · id* bigint, cost_centre_code? text, gl_code? text, project_code? text, period? text, amount? num, version? int, policy? text, location_code? text
+**budget** · id* bigint, cost_centre_code? text, gl_code? text, project_code? text, period? text, amount? num, version? int, policy? text, location_code? text, kind text, reason? text, proposal_id? bigint
 
-**budget_actual** · id* bigint, invoice_no text, cost_centre_code? text, gl_code? text, period text, amount num
+**budget_actual** · id* bigint, invoice_no? text, cost_centre_code? text, gl_code? text, period text, amount num, source text, gr_no? text, po_no? text, po_line_no? int, request_no? text, request_line_no? int, location_code? text, event_period? text, posted_at timestamptz
+
+**budget_period_lock** · period* text, locked_by text, locked_at timestamptz, reason text
+
+**budget_year_end** · fy* text, closed_by text, closed_at timestamptz, note? text, carried jsonb, totals jsonb
 
 **buying_route_rule** · id* bigint, category_code? text, version int, effective_from date, effective_to? date, agree_above? num, reorder_within_days? int, reorder_on_time_pct? num, reorder_below? num, reorder_price_pct? num, two_quotes_from? num, three_quotes_above? num, window_days? int, note? text, created_by? text, created_at timestamptz
 
@@ -111,9 +117,15 @@ Reading a line: `name*` is part of the primary key, `name?` may be empty, then t
 
 **document** · id* int, doc_type text, filename text, content_type text, size bigint, sha256 text, storage_key text, linked_type? text, linked_id? text, uploaded_by? int, created_at timestamptz
 
-**email_message** · id* int, message_id text, in_reply_to? text, direction text, from_addr? text, to_addr? text, subject? text, body_text? text, sent_at? timestamptz, plus_tag? text, linked_type? text, linked_id? text, case_id? int, raw_document_id? int, attachment_ids jsonb, created_at timestamptz
+**email_message** · id* int, message_id text, in_reply_to? text, direction text, from_addr? text, to_addr? text, subject? text, body_text? text, sent_at? timestamptz, plus_tag? text, linked_type? text, linked_id? text, case_id? int, raw_document_id? int, attachment_ids jsonb, created_at timestamptz, status? text, queued_at? timestamptz, attempts int, last_error? text, sealed? text, reply_to? text, sender? text, job_kind? text
 
 **erp_column_map** · kind* text, version* int, columns jsonb, created_by? text, created_at timestamptz
+
+**event** · id* bigint, type text, key text, source text, payload jsonb, occurred_at timestamptz, recorded_at timestamptz, status text, workflow_id? int, routed_at? timestamptz, note? text
+
+**forward_buy** · id* bigint, item_code text, location_code text, request_no? text, line_no? int, status text, rule_label text, evaluation_id? bigint, benchmark_id? bigint, price_now? num, trend_now? num, slope? num, dip_pct? num, avg_use? num, cover? num, qty_base? num, qty? num, est_price? num, uom? text, months jsonb, value? num, gross_saving? num, holding_cost? num, net_saving? num, limit_kind? text, explanation? text, explanation_source? text, created_at timestamptz, decided_by? text, decided_at? timestamptz, decision_reason? text, accepted_qty? num, accepted_net_saving? num, proposal_id? bigint, approved_by? text, approved_at? timestamptz, new_request_no? text, superseded_by? bigint, lapse_reason? text
+
+**forward_buy_rule** · id* bigint, version int, category_code? text, item_code? text, location_code? text, effective_from date, effective_to? date, enabled? bool, min_gap_pct? num, min_trend_months? int, max_cover_months? int, holding_cost_pct_month? num, min_net_saving_inr? num, shelf_life_months? int, storage_max_qty? num, note? text, entered_by? text, entered_at? timestamptz
 
 **gl_account** · code* text, name? text, type? text, is_capex? bool, is_tax_account? bool, parent_code? text
 
@@ -163,7 +175,7 @@ Reading a line: `name*` is part of the primary key, `name?` may be empty, then t
 
 **model_cache** · request_hash* text, response jsonb, created_at timestamptz
 
-**model_call** · id* bigint, at timestamptz, step text, provider? text, model? text, prompt_version? text, tokens_in int, tokens_out int, cost_usd num, ms int, attempts int, outcome text, error? text, request_hash? text, masked? jsonb
+**model_call** · id* bigint, at timestamptz, step text, provider? text, model? text, prompt_version? text, tokens_in int, tokens_out int, cost_usd num, ms int, attempts int, outcome text, error? text, request_hash? text, masked? jsonb, run_id? int, capability? text, user_id? int, workflow_id? int, entity? text, entity_id? text
 
 **notification** · id* bigint, user_id? int, kind text, title text, body? text, link? text, created_at timestamptz, read_at? timestamptz, severity text, related_type? text, related_id? text, resolved bool, resolved_at? timestamptz
 
@@ -189,11 +201,13 @@ Reading a line: `name*` is part of the primary key, `name?` may be empty, then t
 
 **planning_note** · id* bigint, mr_no text, run_id? int, status text, summary? text, lines? jsonb, snapshot jsonb, snapshot_hash text, reasons ARRAY, created_by text, created_at timestamptz
 
-**po** · no* text, po_type text, supplier_code text, supplier_gstin? text, buyer_gstin? text, ship_to_location text, buyer? text, request_no? text, rfq_no? text, contract_code? text, created_at timestamptz, approved_at? timestamptz, sent_at? timestamptz, payment_terms_code? text, delivery_terms? text, taxable num, cgst num, sgst num, igst num, total num, status text, cancel_reason? text, rule_code? text, rule_version? int, approval_round int, decision_reason? text, hold_reason? text, hold_proposal_id? bigint, sent_to? text, acknowledged_at? timestamptz, ack_note? text, version int, budget_accepted bool, closed_reason? text, closed_at? timestamptz, approval_tier? text, touchless bool, touchless_checks? jsonb, touchless_note? text, touchless_rule? text
+**po** · no* text, po_type text, supplier_code text, supplier_gstin? text, buyer_gstin? text, ship_to_location text, buyer? text, request_no? text, rfq_no? text, contract_code? text, created_at timestamptz, approved_at? timestamptz, sent_at? timestamptz, payment_terms_code? text, delivery_terms? text, taxable num, cgst num, sgst num, igst num, total num, status text, cancel_reason? text, rule_code? text, rule_version? int, approval_round int, decision_reason? text, hold_reason? text, hold_proposal_id? bigint, sent_to? text, acknowledged_at? timestamptz, ack_note? text, version int, budget_accepted bool, closed_reason? text, closed_at? timestamptz, approval_tier? text, touchless bool, touchless_checks? jsonb, touchless_note? text, touchless_rule? text, approved_version? int
 
-**po_approval_step** · id* bigint, po_no text, round int, step int, role text, approver text, delegate? text, status text, acted_by? text, acted_at? timestamptz, comment? text, task_id? bigint
+**po_approval_step** · id* bigint, po_no text, round int, step int, role text, approver text, delegate? text, status text, acted_by? text, acted_at? timestamptz, comment? text, task_id? bigint, version? int
 
-**po_change** · id* bigint, po_no text, po_line_no? int, kind text, old_value? text, new_value? text, reason? text, source text, email_id? bigint, status text, within_tolerance? bool, task_id? bigint, proposal_id? bigint, decided_by? text, decided_at? timestamptz, decision_note? text, version_made? int, created_at timestamptz
+**po_approved_version** · id* bigint, po_no text, version int, approved_at timestamptz, approved_by text, rule_code? text, rule_version? int, band_max? num, total num, snapshot jsonb
+
+**po_change** · id* bigint, po_no text, po_line_no? int, kind text, old_value? text, new_value? text, reason? text, source text, email_id? bigint, status text, within_tolerance? bool, task_id? bigint, proposal_id? bigint, decided_by? text, decided_at? timestamptz, decision_note? text, version_made? int, created_at timestamptz, base_value? text
 
 **po_charge** · id* bigint, po_no text, type text, amount num, gst_rate num, cgst num, sgst num, igst num
 
@@ -201,7 +215,7 @@ Reading a line: `name*` is part of the primary key, `name?` may be empty, then t
 
 **po_line** · po_no* text, line_no* int, request_no text, request_line_no int, item_code? text, description? text, qty num, uom? text, base_qty? num, unit_price num, est_price? num, gst_rate num, taxable num, cgst num, sgst num, igst num, need_by? date, promised_date? date, received_qty num, invoiced_qty num, gl_code? text, source text, source_ref? text, status text, short_closed_qty num, price_record_id? bigint
 
-**po_revision** · id* bigint, po_no text, version int, changed_by? text, changed_at timestamptz, reason text, changes jsonb, total_before num, total_after num, reapproval bool
+**po_revision** · id* bigint, po_no text, version int, changed_by? text, changed_at timestamptz, reason text, changes jsonb, total_before num, total_after num, reapproval bool, baseline_version? int, material jsonb
 
 **price_record** · id* bigint, supplier_code? text, item_code? text, contract_code? text, uom? text, price? num, min_qty? int, price_basis? text, freight_included? bool, valid_from? date, valid_to? date, lead_days? int, version int, status text, created_by? text, activated_by? text, activated_at? timestamptz, location_code? text, region_code? text
 
@@ -222,6 +236,8 @@ Reading a line: `name*` is part of the primary key, `name?` may be empty, then t
 **quote_draft** · id* bigint, rfq_no text, supplier_code? text, email_id bigint, intent? text, status text, reading? jsonb, proposal? jsonb, problems jsonb, assumptions jsonb, confidence? num, model? text, prompt_version? text, quote_no? text, created_at timestamptz, decided_by? text, decided_at? timestamptz, decision_note? text
 
 **quote_line** · quote_no* text, rfq_line_no* int, item_code? text, offered_brand? text, qty? num, moq? num, unit_price num, discount_pct num, gst_rate num, delivery_days? int, deviation? text
+
+**recommendation** · id* int, capability text, kind text, business_key text, workflow_id? int, run_id? int, event_id? bigint, summary text, evidence jsonb, engine_figures jsonb, rule_versions jsonb, basis_hash text, status text, proposal_id? int, created_by text, directed_by? int, decided_by? int, decided_at? timestamptz, decision_note? text, stale_reason? text, superseded_by? int, task_id? int, created_at timestamptz
 
 **ref_gst_rate** · id* int, kind text, code_prefix text, description? text, cgst num, sgst num, igst num, effective_from date, effective_to? date, reverse_charge bool, needs_review bool, source? text
 
@@ -251,7 +267,7 @@ Reading a line: `name*` is part of the primary key, `name?` may be empty, then t
 
 **rfq_line** · rfq_no* text, line_no* int, request_no text, request_line_no int, item_code? text, description? text, qty num, uom? text, need_by? date
 
-**rfq_supplier** · rfq_no* text, supplier_code* text, email? text, invited_at? timestamptz, send_error? text, reminders_sent int, responded_at? timestamptz, declined bool, decline_reason? text, last_reminded_at? timestamptz, invited_by? text
+**rfq_supplier** · rfq_no* text, supplier_code* text, email? text, invited_at? timestamptz, send_error? text, reminders_sent int, responded_at? timestamptz, declined bool, decline_reason? text, last_reminded_at? timestamptz, invited_by? text, message_id? text
 
 **role_permission** · role* text, action* text
 
@@ -326,3 +342,5 @@ Reading a line: `name*` is part of the primary key, `name?` may be empty, then t
 **vendor_statement** · id* bigint, supplier_code text, period_from date, period_to date, file_name? text, file_hash text, lines int, matched int, amount_differs int, only_theirs int, only_ours int, imported_by text, imported_at timestamptz
 
 **vendor_statement_line** · id* bigint, statement_id bigint, row_no? int, doc_date? date, doc_type text, doc_no? text, their_amount? num, our_ref? text, our_amount? num, difference? num, outcome text, reason text
+
+**workflow** · id* int, kind text, business_key text, capability text, status text, basis_hash? text, first_event_id? bigint, last_event_id? bigint, run_id? int, task_id? int, created_at timestamptz, updated_at timestamptz, closed_at? timestamptz, close_reason? text
