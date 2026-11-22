@@ -299,8 +299,16 @@ task, notification, alert, proposal, audit_event, agent_run, agent_step, model_c
 | vendor_statement | One supplier statement of account as imported (plan step 13): supplier, the period compared, the file's name and hash (the same file for the same supplier is imported once), how many lines, and how many came out matched, amount differs, only on their side, only on ours; who imported it and when |
 | vendor_statement_line | The result of matching a statement, one row per line of theirs (`row_no` is the file's line) and per item of ours in the period that is not on it (`row_no` empty): date, type (invoice, credit_note, debit_note, payment), their number, their amount, our number (PI-... or PAY-...) and amount, the difference (theirs less ours), the outcome and the reason in words |
 | bank_statement_line | Every debit line of an imported bank statement, kept once however often it is imported (`line_key` is a hash of date, bank reference, narration, amount and its count in the file): status `matched` (the run is paid, or was already), `waiting` (its payment is found, the rest of the run is not on a statement yet), `open` (no payment fitted; `why` says why) or `confirmed` (a person said which payment it is: `confirmed_by`, `confirmed_at`); `payment_no` once known |
+| cutover_import | One load of the open documents of the old system at cutover (task 7.4; dry runs are not kept): who, the files with their row counts, `loaded` and `already` per kind (po, goods_receipt, service_entry, invoice, advance, supplier_ytd), how many rows were left out, `control` per kind (the old system's count and total against what the company now holds from the files) and `control_ok` (readiness `cutover_import` needs the last load with nothing left out and control ok) |
+| cutover_supplier_ytd | What was bought from a supplier earlier in the financial year in the old system (`fy` like 2026-27, `taxable`): tax at source (194Q) counts it, and then leaves out the invoices loaded at cutover, which it already holds |
+| Cutover documents | An order loaded at cutover sits on a carrier request `CUT-<order>` (`channel` cutover, approved; its lines ordered, `est_source` cutover); its lines have `source` cutover; its receipts `posted_by` cutover and post no stock; its service confirmations `via` cutover; its invoices `channel` cutover, entered and matched by the platform's own rules; its advances in one paid run `CUT-<yyyymmdd>` |
 | alembic_version | The migration revision of the database |
 | tenant, tenant_database, tenant_setting, feature_flag, app_user, refresh_token | Control database: the companies, where each one's database is (the connection string is encrypted) and its migration revision, per-company settings, feature flags, logins (with failed-attempt lock) and refresh tokens |
+| tenant (state) | `state` setup, cutover, live or suspended (D-04; `company_state.py` is the only writer), `state_before_suspension` (where a resume goes back to), `state_changed_at`. A new company starts in setup; a demo reset ends live |
+| tenant_state_change | Every move of a company between states: from, to, when, by (`by_kind` user, operator or system, and who), `approved_by` (the second administrator of a go-live), `kind` of a suspension (commercial or security), reason. Insert only to the app |
+| tenant_archive | The setup database a cutover kept (D-05): its name (`<database>__setup_<yyyymmddHHMM>`), when, the operator and reason, its audit row count and last hashes of `audit_event` and `setup_change`. Only the owner reads it; the app login cannot connect |
+| app_user.provisioned_at | Set once the person's profile is written in the company's database (DF-36); until then the login cannot sign in. `p2p.cli user repair` finishes or removes logins a creation left half made |
+| job (cancelled) | A job of a company moved to cutover is `cancelled` (it pointed at test data); a company in cutover or suspended runs no job |
 
 ## D. Hidden truth (G, read only by tests)
 
@@ -332,6 +340,26 @@ receipt sent again after a rejection says so in `goods_receipt.remarks`. `approv
 quotes.jsonl · invoices.jsonl · credit_notes.jsonl · emails.jsonl · requests.jsonl · mismatch_cases.jsonl · assistant_questions.jsonl · certificates.jsonl · attacks.jsonl
 
 Each line holds: file, layout, hold_out, the true values, and for planted cases the true cause.
+
+## E2. Cutover files (G, in a dataset's `cutover/` folder; never loaded by a demo reset)
+
+The documents still open in the old system at the history's cutoff, for `p2p.cli company cutover-import` (or the upload on
+the Go-live tab), derived from `history/` by `datagen/generator/cutover.py`. Columns are those of `history/` so a legacy
+extract maps one to one; the templates are `GET /api/company/cutover/templates/<file>`. An order is open when a line is
+not fully received or invoiced, or an invoice on it is unpaid; what a paid invoice already settled stays in the old system
+(a line is carried with its open quantity, its receipts less what paid invoices covered). `cutover-bad/` (Apex) adds one
+planted row per check; `truth/truth_cutover.csv` (company, kind, key, expected loaded or left_out, reason_contains, amount)
+names every document and the totals (open payable, received not invoiced, advance balance; overall and per supplier).
+
+| File | Columns | Meaning |
+|---|---|---|
+| po.csv, po_line.csv | order: no, supplier, ship-to, created, payment terms, status (approved, sent, acknowledged, received), buyer, contract, terms, totals; line: item, qty, unit, price, GST rate, dates, cost centre, GL, received and invoiced | Open orders; totals are recomputed (Rs 1.00 tolerance) |
+| goods_receipt.csv, gr_line.csv | as history; `inspection_status` not_required, passed or failed (pending is refused) | What was received and accepted; no stock moves |
+| service_entry.csv | no, order line, period, amount accepted, by, on | Services confirmed in the old system (Brightwave) |
+| invoice.csv, invoice_line.csv | as history, plus `paid_amount` (a part-paid invoice is refused, OP-9) | Unpaid invoices: received, approved or blocked |
+| advance.csv | payment no, order, paid on, gross, taxable, tax at source, recovered gross and taxable, UTR | Advances paid and not fully recovered |
+| supplier_ytd.csv | supplier, fy, taxable | Bought this financial year in the old system |
+| control.csv | kind (po, invoice, advance), count, total | The old system's own totals |
 
 ## F. ERP input files (G, in a dataset's `inputs/` folder)
 

@@ -8,9 +8,9 @@ Reading a line: `name*` is part of the primary key, `name?` may be empty, then t
 
 ## Control database (one for the platform)
 
-7 tables.
+9 tables.
 
-**app_user** · id* int, tenant_id int, email text, password_hash text, active bool, failed_attempts int, locked_until? timestamptz, created_at timestamptz
+**app_user** · id* int, tenant_id int, email text, password_hash text, active bool, failed_attempts int, locked_until? timestamptz, created_at timestamptz, provisioned_at? timestamptz
 
 **feature_flag** · id* int, tenant_id int, key text, enabled bool
 
@@ -18,16 +18,20 @@ Reading a line: `name*` is part of the primary key, `name?` may be empty, then t
 
 **refresh_token** · id* int, user_id int, token_hash text, expires_at timestamptz, revoked_at? timestamptz, created_at timestamptz
 
-**tenant** · id* int, slug text, name text, active bool, created_at timestamptz
+**tenant** · id* int, slug text, name text, active bool, created_at timestamptz, state text, state_before_suspension? text, state_changed_at timestamptz
+
+**tenant_archive** · id* int, tenant_id int, database_name text, archived_at timestamptz, operator text, reason text, audit_rows int, audit_last_hash? text, setup_change_last_hash? text
 
 **tenant_database** · tenant_id* int, database_name text, connection_encrypted text, schema_revision? text, migrated_at? timestamptz
 
 **tenant_setting** · id* int, tenant_id int, key text, value json
 
+**tenant_state_change** · id* int, tenant_id int, from_state text, to_state text, at timestamptz, by_kind text, by_id text, approved_by? text, kind? text, reason text
+
 
 ## Tenant database (one per company)
 
-145 tables.
+147 tables.
 
 **advance** · payment_no* text, po_no text, gross num, taxable num, used_gross num, used_taxable num, paid_on? date
 
@@ -84,6 +88,10 @@ Reading a line: `name*` is part of the primary key, `name?` may be empty, then t
 **contract** · code* text, supplier_code? text, type? text, valid_from? date, valid_to? date, max_value? num, payment_terms_code? text, delivery_terms? text, freight_terms? text, warranty_months? text, sla_text? text, status? text, created_by? text
 
 **cost_centre** · code* text, name? text, department_code? text, location_code? text, owner_user? text, active? bool
+
+**cutover_import** · id* int, at timestamptz, imported_by int, files jsonb, dry_run bool, loaded jsonb, already jsonb, rejected int, control jsonb, control_ok bool
+
+**cutover_supplier_ytd** · supplier_code* text, fy* text, taxable num
 
 **delegation** · id* bigint, from_user? text, to_user? text, start_date? date, end_date? date, reason? text
 

@@ -85,6 +85,9 @@ class InvoiceIn:
     total: Decimal | None = None
     ref_invoice_no: str | None = None
     document_ref: str | None = None
+    no: str | None = (
+        None  # an invoice of the old system loaded at cutover keeps its number; else the platform numbers it
+    )
 
 
 @dataclass
@@ -130,8 +133,11 @@ def _supplier_state(sup: dict[str, Any]) -> str | None:
     return sup["state_code"] or (str(sup["gstin"])[:2] if sup["gstin"] else None)
 
 
-def enter_invoice(db: Session, data: InvoiceIn, user_id: int, *, as_of: date | None = None) -> Entered:
-    """Record an invoice or credit note, then match it. Returns where it stands."""
+def enter_invoice(
+    db: Session, data: InvoiceIn, user_id: int, *, as_of: date | None = None, commit: bool = True
+) -> Entered:
+    """Record an invoice or credit note, then match it. Returns where it stands. Without `commit` the caller commits
+    (the cutover import writes all its documents in one transaction)."""
     found = db.execute(text("select * from supplier where code = :c"), {"c": data.supplier_code}).mappings().first()
     if found is None:
         raise InvoiceError(f"supplier {data.supplier_code} does not exist")
@@ -211,7 +217,7 @@ def enter_invoice(db: Session, data: InvoiceIn, user_id: int, *, as_of: date | N
     # rounding to the rupee is all the rounding there is: a total that is further off than that is a problem to find
     round_off = data.round_off if data.round_off is not None else raw_total.quantize(D("1")) - raw_total
 
-    no = numbering.next_number(db, "invoice_booking", received_on)
+    no = data.no or numbering.next_number(db, "invoice_booking", received_on)
     db.execute(
         text(
             "insert into invoice (no, type, supplier_code, supplier_gstin, buyer_gstin, place_of_supply, supplier_invoice_no, "
@@ -259,13 +265,15 @@ def enter_invoice(db: Session, data: InvoiceIn, user_id: int, *, as_of: date | N
             {"o": twin, "why": f"The same invoice number is already on file as {twin}", "n": no},
         )
         audit.record(db, actor, "invoice.duplicate", "invoice", no, after={"duplicate_of": twin})
-        db.commit()
+        if commit:
+            db.commit()
         return Entered(no, "cancelled", None, ["duplicate"], twin)
     if data.type != "invoice":
         db.execute(text("update invoice set status = 'approved' where no = :n"), {"n": no})
-        db.commit()
+        if commit:
+            db.commit()
         return Entered(no, "approved", None)
-    return match_invoice(db, no, actor)
+    return match_invoice(db, no, actor, commit=commit)
 
 
 def _available(db: Session, po_no: str, line_no: int, received: Decimal, excluding: str) -> Decimal:
@@ -280,7 +288,7 @@ def _available(db: Session, po_no: str, line_no: int, received: Decimal, excludi
     return received - Decimal(taken)
 
 
-def match_invoice(db: Session, no: str, actor: Actor) -> Entered:
+def match_invoice(db: Session, no: str, actor: Actor, *, commit: bool = True) -> Entered:
     """Compare the invoice with the order and the goods received; block it or approve it for payment."""
     inv = db.execute(text("select * from invoice where no = :n for update"), {"n": no}).mappings().one()
     sup = db.execute(text("select * from supplier where code = :c"), {"c": inv["supplier_code"]}).mappings().one()
@@ -401,7 +409,8 @@ def match_invoice(db: Session, no: str, actor: Actor) -> Entered:
         rule_version=tol_set.label,
     )
     _refresh_invoiced(db, [(x["po_no"], x["po_line_no"]) for x in lines])
-    db.commit()
+    if commit:
+        db.commit()
     return Entered(no, status, result, [reason] if reason else [])
 
 

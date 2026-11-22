@@ -79,6 +79,14 @@ def guard(request: Request, kind: str) -> str:
     return key
 
 
+def open_company(slug: str) -> None:
+    """A company in cutover or suspended takes no action through a signed link (D-04)."""
+    from p2p.platform import company_state  # noqa: PLC0415 - company_state builds on the routing this page avoids
+
+    if company_state.is_closed(slug):
+        raise Refused(403, company_state.NOT_TAKING_ACTIONS)
+
+
 def bad_link(key: str, message: str) -> Refused:
     """Count a wrong link against the address and say why it cannot be used."""
     ratelimit.add(key)

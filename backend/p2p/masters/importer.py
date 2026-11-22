@@ -25,7 +25,7 @@ from p2p.formulas.gstin import is_valid_gstin, is_valid_pan, state_of_gstin
 from p2p.masters import upsert
 from p2p.masters.report import ImportReport, Problem, RowChange
 from p2p.masters.schema import TABLES, Table
-from p2p.platform import audit
+from p2p.platform import audit, company_state
 from p2p.platform.sod import Actor
 
 __all__ = ["ImportReport", "Problem", "RowChange", "import_masters", "read_table"]
@@ -280,8 +280,11 @@ def read_table(
 def import_masters(db: Session, dataset: Path, *, actor: Actor = audit.SYSTEM, dry_run: bool = False) -> ImportReport:
     """Load the company's masters from the files in `dataset`/master: the first import replaces them, a later one updates
     by key. Returns what loaded, what did not and why."""
+    company_state.require_state(db, "masters")
+    state = company_state.state_here(db)
     started = time.monotonic()
-    report = ImportReport(dry_run=dry_run, mode="first" if _first_import(db) else "update")
+    # the first import (every table replaced) only while the company is set up; after that, by key (D-02)
+    report = ImportReport(dry_run=dry_run, mode="first" if state == "setup" and _first_import(db) else "update")
     master_dir = dataset / "master"
 
     # the tables that others point at must be known before their children are checked, including self-references
@@ -308,7 +311,19 @@ def import_masters(db: Session, dataset: Path, *, actor: Actor = audit.SYSTEM, d
     report.loaded = {name: len(rows) for name, rows in accepted.items()}
 
     if company is not None:
-        upsert.apply(db, accepted, parsed, company, absent, report, actor=actor, dry_run=dry_run, dataset=dataset.name)
+        locked = upsert.LIVE_LOCKS if state == "live" else {}
+        upsert.apply(
+            db,
+            accepted,
+            parsed,
+            company,
+            absent,
+            report,
+            actor=actor,
+            dry_run=dry_run,
+            dataset=dataset.name,
+            locked=locked,
+        )
     else:
         report.added = dict(report.loaded)
         if not dry_run:

@@ -24,7 +24,7 @@ from p2p.agents import autonomy
 from p2p.config import REPO_ROOT
 from p2p.formulas.words import count
 from p2p.masters.importer import ImportReport, import_masters
-from p2p.platform import audit, routing, tenants, users
+from p2p.platform import audit, company_state, readiness, routing, tenants, users
 from p2p.receiving import stock
 from p2p.requests import jobs as request_jobs
 from p2p.requests.demand import DemandReport, import_demand
@@ -202,9 +202,18 @@ def require_local_database() -> None:
 
 
 def reset_company(
-    demo: DemoCompany, dataset: Path | None = None, *, credentials: Path | None = CREDENTIALS, slug: str | None = None
+    demo: DemoCompany,
+    dataset: Path | None = None,
+    *,
+    credentials: Path | None = CREDENTIALS,
+    slug: str | None = None,
+    state: str = "live",
 ) -> DemoResult:
-    """Make a demo company from nothing. Raises DemoError if the dataset does not load cleanly."""
+    """Make a demo company from nothing. Raises DemoError if the dataset does not load cleanly. It ends live, once
+    readiness finds no blocker (a demo company is a running company); `state="setup"` leaves it in setup for a go-live
+    rehearsal."""
+    if state not in ("setup", "live"):
+        raise DemoError("a demo company is made in setup or live")
     require_local_database()
     slug = slug or demo.slug
     folder = ensure_dataset(dataset or demo.dataset, demo)
@@ -252,4 +261,15 @@ def reset_company(
     if credentials is not None:
         _write_credentials(credentials, slug, written)
         result.credentials_file = credentials
+    if state == "live":
+        go_live(slug)
     return result
+
+
+def go_live(slug: str) -> None:
+    """A demo company made from its profile goes straight to live, when its setup is ready (D-04)."""
+    with Session(routing.engine_for(slug)) as db:
+        found = readiness.check(db, slug, group="setup")
+    if not found.ready:
+        raise DemoError(f"not ready: {', '.join(found.blockers)}")
+    company_state.move(slug, "live", actor=audit.SYSTEM, reason="demo company made from its profile", path="demo")

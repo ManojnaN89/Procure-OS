@@ -65,6 +65,8 @@ class ScratchControlDb:
         try:
             with engine.connect() as own:
                 names = [r[0] for r in own.execute(text("select database_name from tenant_database"))]
+                with contextlib.suppress(Exception):  # the setup archives a cutover kept (control 0005)
+                    names += [r[0] for r in own.execute(text("select database_name from tenant_archive"))]
         except Exception:  # noqa: BLE001 - never migrated: it lists no companies
             names = []
         finally:

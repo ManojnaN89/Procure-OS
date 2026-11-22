@@ -1,9 +1,12 @@
 """Creating users: the login row in the control database, the profile in the tenant database."""
 
+import contextlib
+from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
 from argon2 import PasswordHasher
-from sqlalchemy import select, text
+from sqlalchemy import delete, func, select, text, update
 from sqlalchemy.orm import Session
 
 from p2p.platform import audit, routing, tenants
@@ -15,6 +18,10 @@ MIN_PASSWORD_LENGTH = 10
 ROLES = ("Requester", "Approver", "Buyer", "Store", "AP", "Finance", "Admin")
 
 
+ADMIN_BY_SYSTEM_ONLY = "add the person with another role, then give the Admin role: another administrator approves it"
+REPAIR_AFTER = timedelta(minutes=10)  # a login without a profile younger than this may still be being made
+
+
 def create_user(
     tenant_slug: str,
     email: str,
@@ -24,6 +31,9 @@ def create_user(
     *,
     actor: Actor = audit.SYSTEM,
 ) -> int:
+    """A login (control database) and its profile (the company's), written so that a failure never leaves a usable login
+    without a profile (DF-36): the login is claimed unusable, the profile written, then the login made usable. If the
+    profile cannot be written the login is removed again; if the process dies in between, `repair` finishes the job."""
     email = email.strip().lower()
     if "@" not in email:
         raise ValueError("not an email address")
@@ -31,17 +41,19 @@ def create_user(
         raise ValueError(f"password must have at least {MIN_PASSWORD_LENGTH} characters")
     if role not in ROLES:
         raise ValueError(f"role must be one of {', '.join(ROLES)}")
-    engine = tenants.control_engine()
-    with Session(engine) as s:
+    if role == "Admin" and actor != audit.SYSTEM:
+        raise ValueError(ADMIN_BY_SYSTEM_ONLY)
+    with Session(tenants.control_engine()) as s:
         tenant = s.scalar(select(Tenant).where(Tenant.slug == tenant_slug, Tenant.active))
         if tenant is None:
             raise ValueError(f"unknown tenant '{tenant_slug}'")
         if s.scalar(select(AppUser.id).where(AppUser.email == email)):
             raise ValueError("a user with this email already exists")
-        user = AppUser(tenant_id=tenant.id, email=email, password_hash=hasher.hash(password))
+        user = AppUser(tenant_id=tenant.id, email=email, password_hash=hasher.hash(password), provisioned_at=None)
         s.add(user)
-        s.flush()
+        s.commit()
         user_id = user.id
+    try:
         with Session(routing.engine_for(tenant_slug)) as ts:
             ts.execute(
                 text("insert into user_profile (user_id, display_name, role) values (:i, :n, :r)"),
@@ -57,8 +69,67 @@ def create_user(
                 after={"email": email, "display_name": display_name, "role": role},
             )
             ts.commit()
+    except BaseException:
+        with (
+            contextlib.suppress(Exception),
+            Session(tenants.control_engine()) as s,
+        ):  # best effort: repair does the rest
+            s.execute(delete(AppUser).where(AppUser.id == user_id))
+            s.commit()
+        raise
+    with Session(tenants.control_engine()) as s:
+        s.execute(update(AppUser).where(AppUser.id == user_id).values(provisioned_at=func.now()))
         s.commit()
-        return user_id
+    return user_id
+
+
+@dataclass(frozen=True)
+class Fix:
+    user_id: int
+    email: str
+    fixed: str  # provisioned, login_removed, or profile_without_login (reported, never deleted)
+
+
+def repair(tenant_slug: str, *, now: datetime | None = None) -> list[Fix]:
+    """Finish what a user creation that stopped half way left (DF-36): a login with a profile becomes usable; a login
+    without a profile older than ten minutes is removed; a profile without a login is reported (the audit log points at
+    it, so it stays). Each fix is a `user.repair` audit row."""
+    now = now or datetime.now(UTC)
+    with Session(tenants.control_engine()) as s:
+        logins = {
+            int(r[0]): (str(r[1]), r[2], r[3])
+            for r in s.execute(
+                select(AppUser.id, AppUser.email, AppUser.provisioned_at, AppUser.created_at)
+                .join(Tenant, Tenant.id == AppUser.tenant_id)
+                .where(Tenant.slug == tenant_slug)
+            )
+        }
+    fixes: list[Fix] = []
+    with Session(routing.engine_for(tenant_slug)) as ts:
+        profiles = {int(r[0]) for r in ts.execute(text("select user_id from user_profile"))}
+        for uid, (email, provisioned, created) in sorted(logins.items()):
+            if provisioned is not None:
+                continue
+            if uid in profiles:
+                fixes.append(Fix(uid, email, "provisioned"))
+            elif created < now - REPAIR_AFTER:
+                fixes.append(Fix(uid, email, "login_removed"))
+        fixes += [Fix(uid, "", "profile_without_login") for uid in sorted(profiles - set(logins))]
+        with Session(tenants.control_engine()) as s:
+            for f in fixes:
+                if f.fixed == "provisioned":
+                    s.execute(update(AppUser).where(AppUser.id == f.user_id).values(provisioned_at=func.now()))
+                elif f.fixed == "login_removed":
+                    s.execute(text("delete from refresh_token where user_id = :u"), {"u": f.user_id})
+                    s.execute(delete(AppUser).where(AppUser.id == f.user_id))
+            s.commit()
+        for f in fixes:
+            if f.fixed != "profile_without_login":
+                audit.record(
+                    ts, audit.SYSTEM, "user.repair", "user", f.user_id, after={"fixed": f.fixed, "email": f.email}
+                )
+        ts.commit()
+    return fixes
 
 
 def user_id_by_email(tenant_slug: str, email: str) -> int | None:

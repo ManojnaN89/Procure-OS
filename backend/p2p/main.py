@@ -1,8 +1,8 @@
 import importlib
 from pathlib import Path
 
-from fastapi import FastAPI
-from fastapi.responses import FileResponse
+from fastapi import FastAPI, Request
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy.exc import SQLAlchemyError
 
@@ -13,6 +13,8 @@ from p2p.platform.agent_api import router as agent_router
 from p2p.platform.approval_link_api import router as approval_link_router
 from p2p.platform.auth import router as auth_router
 from p2p.platform.buying_rules_api import router as buying_rules_router
+from p2p.platform.company_api import router as company_router
+from p2p.platform.company_state import StateError
 from p2p.platform.demand_api import router as demand_router
 from p2p.platform.export_api import router as export_router
 from p2p.platform.files import router as files_router
@@ -39,7 +41,16 @@ app = FastAPI(title="P2P platform", version="0.0.1")
 logs.install(app)
 for _module in filter(None, (m.strip() for m in get_settings().extra_modules.split(","))):
     importlib.import_module(_module)
+
+
+@app.exception_handler(StateError)
+def _state_refused(_: Request, exc: StateError) -> JSONResponse:
+    """What the company's state does not allow (an import in the wrong state, D-02): 409 with the reason."""
+    return JSONResponse({"detail": str(exc)}, status_code=exc.status)
+
+
 app.include_router(auth_router)
+app.include_router(company_router)
 app.include_router(admin_router)
 app.include_router(files_router)
 app.include_router(export_router)

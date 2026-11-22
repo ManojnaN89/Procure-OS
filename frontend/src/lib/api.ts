@@ -113,3 +113,18 @@ export async function api<T>(
 	if (!res.ok) throw new ApiError(res.status, await detail(res));
 	return res.status === 204 ? (undefined as T) : ((await res.json()) as T);
 }
+
+/** A file the backend makes (a CSV template), saved by the browser under its name. */
+export async function download(path: string, filename: string) {
+	const headers = new Headers();
+	const token = read(sessionStorage, ACCESS);
+	if (token) headers.set("Authorization", `Bearer ${token}`);
+	const res = await fetch(path, { headers });
+	if (!res.ok) throw new ApiError(res.status, await detail(res));
+	const url = URL.createObjectURL(await res.blob());
+	const a = document.createElement("a");
+	a.href = url;
+	a.download = filename;
+	a.click();
+	URL.revokeObjectURL(url);
+}

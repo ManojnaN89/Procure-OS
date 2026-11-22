@@ -98,20 +98,40 @@ class _Table:
     counts: dict[str, int] = field(default_factory=lambda: {"added": 0, "changed": 0, "unchanged": 0})
 
 
+# tables a masters import may no longer add to or change once the company is live (D-02), and why
+LIVE_LOCKS = {
+    "stock_opening": "opening stock is locked after go-live; post a stock count instead",
+    "supplier_bank_account": "bank accounts are locked after go-live; use a bank change (a second person verifies it)",
+}
+
+
 class _Comparison:
     """Compares one table's accepted file rows with the company's rows, by the table's policy."""
 
-    def __init__(self, spec: Table, company: Company, absent: set[str], report: ImportReport, actor: Actor) -> None:
+    def __init__(
+        self,
+        spec: Table,
+        company: Company,
+        absent: set[str],
+        report: ImportReport,
+        actor: Actor,
+        lock: str | None = None,
+    ) -> None:
         self.spec, self.company, self.absent, self.report, self.actor = spec, company, absent, report, actor
         self.policy = rules.policy(spec.name)
         self.out = _Table(spec)
         self._warned: set[str] = set()  # suppliers already warned about (bank details, status history)
+        self.lock = lock  # live: the table takes no new row, and says why (0c already keeps the existing ones)
 
     def run(self, rows: Lines) -> _Table:
         index = self.company.index.get(self.spec.name, {})
         for line, row in rows:
             old = index.get(key_of(self.spec, row))
-            kind = self._new(line, row) if old is None else self._existing(line, row, old[0])
+            if self.lock and old is None:  # an existing row is kept by the table's policy, with its own warning
+                self._warn(line, key_text(self.spec, row), self.lock)
+                kind = "unchanged"
+            else:
+                kind = self._new(line, row) if old is None else self._existing(line, row, old[0])
             self.out.counts[kind] += 1
         return self.out
 
@@ -212,13 +232,17 @@ def apply(
     actor: Actor,
     dry_run: bool,
     dataset: str,
+    locked: dict[str, str] | None = None,
 ) -> None:
     """Compare every table, then (unless a dry run) write the rows and their audit in one transaction."""
     tables = []
     for spec in TABLES:
         if spec.name not in company.rows:
             continue  # a file the dataset may leave out: the table keeps its rows
-        compared = _Comparison(spec, company, absent.get(spec.name, set()), report, actor).run(accepted[spec.name])
+        lock = (locked or {}).get(spec.name)
+        compared = _Comparison(spec, company, absent.get(spec.name, set()), report, actor, lock).run(
+            accepted[spec.name]
+        )
         report.not_in_file[spec.name] = len(company.outside(spec, parsed[spec.name]))
         for kind, n in compared.counts.items():
             getattr(report, kind)[spec.name] = n

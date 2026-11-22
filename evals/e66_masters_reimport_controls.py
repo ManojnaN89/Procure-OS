@@ -535,7 +535,8 @@ def _run(ctx: lib.Ctx) -> Outcome:
     lib.capture_mail()
     slug = env.slug(PREFIX)
     folder = Path(tempfile.mkdtemp(prefix="e66_"))
-    demo.reset_company(demo.company("apex"), folder / "dataset", credentials=None, slug=slug)
+    # in setup: a live company also locks opening stock and bank accounts (block 0d, D-02), which E82 covers
+    demo.reset_company(demo.company("apex"), folder / "dataset", credentials=None, slug=slug, state="setup")
     who = {"admin": "Admin", "admin2": "Admin", "director": "Approver", "buyer": "Buyer", "planthead": "Approver",
            "production": "Requester"}  # fmt: skip
     uid = {k: int(users.user_id_by_email(slug, f"{k}@{DOMAIN}") or 0) for k in who}

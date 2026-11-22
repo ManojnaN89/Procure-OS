@@ -130,6 +130,15 @@ The data holds what these show; the screens come with the backend of block 0b.
 - **Hyderabad housekeeping (Brightwave).** The new Hyderabad office (region TS) opens in January 2027. Clean and Secure (SUP-005) and its contract CNT-0002 cover Karnataka only, so housekeeping for Hyderabad never uses CNT-0002; Deccan Facility Management (SUP-006) is the prospect registered to quote for it.
 - **Tolerance versions (Apex).** Version 2 from 1 Jul 2026 removed the quantity tolerance and cut the rupee tolerance to 300.00. Bearings invoiced 3% over what was accepted pass in June (version 1) and are blocked in August (version 2); a line Rs 400 over passes in March and is blocked in August.
 
+## Go-live (block 0d)
+
+`python -m p2p.cli demo reset apex --state setup` makes the company and leaves it in setup (a plain reset ends live).
+
+1. admin@ **Company setup** → **Go-live**: state setup, readiness with no blocker; warnings for the bank accounts verified by a file.
+2. Make some test data in setup (a request, an order). Then, as the platform team: `python -m p2p.cli company cutover apex --reason "go-live rehearsal" --operator "Your name"`. The setup database is kept as `..._apex__setup_<time>` (`company archives apex`); the test documents are gone from the company, numbers start again.
+3. store@ cannot sign in now ("Sign-in opens at go-live ..."); finance@ can. As finance@, on the Go-live tab, load the files of `data/datasets/apex-v1/cutover/` (dry run, then load): 31 orders, 45 receipts, 44 invoices (Rs 6,05,557; PI-2627-000247 blocked as in the old system), the advance on PO-CKN-2627-00202 and the control totals, all ok. `cutover-bad/` shows every refusal with its reason.
+4. admin@ proposes going live; admin2@ approves it. The company is live: everyone signs in, the jobs run, the first payment run takes the cutover invoices.
+
 ## Start with cases in flight
 
 `python -m p2p.cli demo populate apex --reset` (about 20 seconds, local database only) makes the company and then does what the people would do, through the real API, so every figure, email, notification and audit row is real:

@@ -34,6 +34,7 @@ from history_close import write as write_tables  # noqa: E402
 from history_money import Money  # noqa: E402
 from demand_scenarios import write_scenarios  # noqa: E402
 from stock_scenarios import write_stock  # noqa: E402
+import cutover  # noqa: E402
 from history_plan import mrp_results, production_lines  # noqa: E402
 from master_files import (  # noqa: E402
     EMPTY_TABLES,
@@ -631,6 +632,7 @@ def build(profile: CompanyProfile, out: Path) -> dict[str, dict[str, int]]:
     changes = write_scenarios(profile.data, out) if history else {}  # the oracle replays the stock history
     if history:
         write_stock(profile.data, out)  # held stock and the stock check scenarios, after the demand truth
+    opening = cutover.write(out, profile) if history and "cutover" in profile.data else {}
     manifest = {
         "dataset": profile.dataset,
         "profile": profile.name,
@@ -641,6 +643,7 @@ def build(profile: CompanyProfile, out: Path) -> dict[str, dict[str, int]]:
         "inputs": inputs,
         "history_rows": history,
         "demand_changes": changes,
+        "cutover": opening,
     }
     (out / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
     held = {"hold_out_suppliers": list(profile.data.get("hold_out_suppliers", []))}
@@ -870,6 +873,7 @@ def check(out: Path, profile: CompanyProfile | None = None) -> list[str]:
         problems += _profile_problems(profile, t, per_month)
         if "history" in profile.data and not problems:
             problems += history_problems(out, profile)
+            problems += cutover.problems(out)
     return problems
 
 

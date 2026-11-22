@@ -15,6 +15,7 @@ import {
 	SupplierSelection,
 	Touchless,
 } from "./setup-buying";
+import { GoLive } from "./setup-golive";
 import { History, Policies } from "./setup-policies";
 import { PendingChanges, type Shared, select, useChange } from "./setup-shared";
 
@@ -56,6 +57,11 @@ const TABS = [
 	{ id: "single", label: "Single-source items", need: ["admin.rules"] },
 	{ id: "policies", label: "Policies", need: ["admin.settings"] },
 	{ id: "history", label: "History", need: ["audit.view", "admin.settings"] },
+	{
+		id: "golive",
+		label: "Go-live",
+		need: ["admin.users", "admin.rules", "admin.settings", "audit.view"],
+	},
 ];
 
 export function SetupPage() {
@@ -124,6 +130,7 @@ export function SetupPage() {
 			{active === "single" ? <SingleSource {...shared} /> : null}
 			{active === "policies" ? <Policies {...shared} /> : null}
 			{active === "history" ? <History /> : null}
+			{active === "golive" ? <GoLive {...shared} /> : null}
 		</>
 	);
 }

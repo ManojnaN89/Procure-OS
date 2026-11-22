@@ -16,7 +16,7 @@ from p2p.formulas.calendar import business_today
 from p2p.formulas.material import earmarked, free_stock
 from p2p.masters.importer import ImportReport, Problem, read_table
 from p2p.masters.schema import Table
-from p2p.platform import audit
+from p2p.platform import audit, company_state
 from p2p.platform.sod import Actor, user
 
 MOVEMENT = Table(
@@ -194,7 +194,9 @@ def stock_levels(db: Session, *, location: str | None = None, item: str | None =
 
 
 def import_movements(db: Session, dataset: Path, *, actor: Actor = audit.SYSTEM, dry_run: bool = False) -> ImportReport:
-    """Replace the loaded stock history with history/stock_movement.csv. Movements the platform recorded stay."""
+    """Replace the loaded stock history with history/stock_movement.csv. Movements the platform recorded stay. Only
+    before go-live (D-02): after it, stock is corrected with a count."""
+    company_state.require_state(db, "stock")
     started = time.monotonic()
     report = ImportReport(dry_run=dry_run)
     items = {r[0] for r in db.execute(text("select code from item"))}

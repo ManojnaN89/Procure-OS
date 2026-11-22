@@ -12,7 +12,7 @@ from pydantic import BaseModel
 from sqlalchemy import select, text, update
 from sqlalchemy.orm import Session
 
-from p2p.platform import permissions, ratelimit, routing, tenants
+from p2p.platform import company_state, permissions, ratelimit, routing, tenants
 from p2p.platform.control_models import AppUser, RefreshToken, Tenant
 from p2p.platform.tokens import create_access_token
 from p2p.platform.users import hasher
@@ -47,6 +47,7 @@ class MeOut(BaseModel):
     role: str
     display_name: str
     permissions: list[str]
+    company_state: str
 
 
 def _hash(token: str) -> str:
@@ -76,7 +77,8 @@ def login(body: LoginIn, request: Request) -> TokensOut:
     ratelimit.check_login(address)
     with tenants.control_session() as s:
         user = s.scalar(select(AppUser).where(AppUser.email == body.email.strip().lower()))
-        if user is None or not user.active:
+        # a login whose profile was never written (DF-36) is refused exactly like a wrong password
+        if user is None or not user.active or user.provisioned_at is None:
             try:  # same work as a real check, so timing does not reveal which emails exist
                 hasher.verify(_DUMMY_HASH, body.password)
             except VerificationError:
@@ -99,6 +101,9 @@ def login(body: LoginIn, request: Request) -> TokensOut:
         slug = s.scalar(select(Tenant.slug).where(Tenant.id == user.tenant_id, Tenant.active))
         if slug is None:
             raise HTTPException(403, "Tenant is not active")
+        refused = company_state.allows_sign_in(slug, user.id)
+        if refused:
+            raise HTTPException(403, refused)
         user.failed_attempts = 0
         user.locked_until = None
         ratelimit.login_ok(address, body.email)
@@ -123,8 +128,11 @@ def refresh(body: RefreshIn) -> TokensOut:
             raise HTTPException(401, "Invalid or expired refresh token")
         user = s.get(AppUser, row.user_id)
         slug = s.scalar(select(Tenant.slug).where(Tenant.id == user.tenant_id, Tenant.active)) if user else None
-        if user is None or not user.active or slug is None:
+        if user is None or not user.active or user.provisioned_at is None or slug is None:
             raise HTTPException(401, "Invalid or expired refresh token")
+        refused = company_state.allows_sign_in(slug, user.id)
+        if refused:
+            raise HTTPException(403, refused)
         row.revoked_at = now
         return _issue(s, user, slug)
 
@@ -150,7 +158,8 @@ def me(
         raise HTTPException(404, "No profile")
     actions = permissions.granted(db, ctx.user_id)
     with tenants.control_session() as s:
-        tenant_name = s.scalar(select(Tenant.name).where(Tenant.slug == ctx.slug)) or ctx.slug
+        found = s.execute(select(Tenant.name, Tenant.state).where(Tenant.slug == ctx.slug)).first()
+    tenant_name, state = (str(found[0]), str(found[1])) if found else (ctx.slug, "live")
     return MeOut(
         user_id=ctx.user_id,
         tenant=ctx.slug,
@@ -158,4 +167,5 @@ def me(
         role=ctx.role,
         display_name=str(name),
         permissions=list(actions),
+        company_state=state,
     )

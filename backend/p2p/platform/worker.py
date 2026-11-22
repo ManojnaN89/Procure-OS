@@ -102,6 +102,8 @@ def _claim(now: datetime, limit: int, tenant: str | None = None) -> list[tuple[i
                 "select id, tenant_slug, kind, payload from job "
                 "where ((status = 'queued' and run_at <= :now) or (status = 'running' and locked_at < :stale)) "
                 "and (cast(:t as text) is null or tenant_slug = :t) "
+                # a company in cutover or suspended runs nothing: its jobs wait (D-04)
+                "and tenant_slug not in (select slug from tenant where state in ('cutover', 'suspended')) "
                 "order by run_at, id limit :n for update skip locked"
             ),
             {"now": now, "stale": now - LOCK_TIMEOUT, "n": limit, "t": tenant},

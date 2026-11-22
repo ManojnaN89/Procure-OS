@@ -53,10 +53,12 @@ def engine_for(slug: str) -> Engine:
         return engine
 
 
-def _tenant_is_active(slug: str) -> bool:
+def _tenant_state(slug: str) -> str | None:
+    """The company's state, or None when it is unknown or inactive."""
     engine = tenants.control_engine()
     with Session(engine) as s:
-        return bool(s.scalar(select(Tenant.active).where(Tenant.slug == slug)))
+        row = s.execute(select(Tenant.active, Tenant.state).where(Tenant.slug == slug)).first()
+    return str(row[1]) if row and row[0] else None
 
 
 def tenant_context(request: Request) -> TenantContext:
@@ -69,9 +71,17 @@ def tenant_context(request: Request) -> TenantContext:
     except jwt.PyJWTError:
         raise HTTPException(401, "Invalid or expired token") from None
     slug = str(claims["tenant"])
-    if not _tenant_is_active(slug):
+    state = _tenant_state(slug)
+    if state is None:
         raise HTTPException(403, "Unknown or inactive tenant")
-    return TenantContext(slug=slug, user_id=int(claims["sub"]), role=str(claims["role"]))
+    user_id = int(claims["sub"])
+    if state != "live":  # a token issued before a company was suspended or moved to cutover stops here (D-04)
+        from p2p.platform import company_state  # noqa: PLC0415 - it builds on this module
+
+        refused = company_state.allows_sign_in(slug, user_id, state=state)
+        if refused:
+            raise HTTPException(403, refused)
+    return TenantContext(slug=slug, user_id=user_id, role=str(claims["role"]))
 
 
 def tenant_session(ctx: Annotated[TenantContext, Depends(tenant_context)]) -> Iterator[Session]:

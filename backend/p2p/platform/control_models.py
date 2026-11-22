@@ -18,6 +18,43 @@ class Tenant(ControlBase):
     name: Mapped[str] = mapped_column(String(200))
     active: Mapped[bool] = mapped_column(Boolean, default=True, server_default="true")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    # setup, cutover, live or suspended (company_state.py is the only writer)
+    state: Mapped[str] = mapped_column(String(16), server_default="setup")
+    state_before_suspension: Mapped[str | None] = mapped_column(String(16))
+    state_changed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class TenantStateChange(ControlBase):
+    """One move of a company between states; insert only to the app."""
+
+    __tablename__ = "tenant_state_change"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    tenant_id: Mapped[int] = mapped_column(ForeignKey("tenant.id"))
+    from_state: Mapped[str] = mapped_column(Text)
+    to_state: Mapped[str] = mapped_column(Text)
+    at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    by_kind: Mapped[str] = mapped_column(Text)  # user, operator or system
+    by_id: Mapped[str] = mapped_column(Text)
+    approved_by: Mapped[str | None] = mapped_column(Text)
+    kind: Mapped[str | None] = mapped_column(Text)  # a suspension: commercial or security
+    reason: Mapped[str] = mapped_column(Text)
+
+
+class TenantArchive(ControlBase):
+    """The setup database a cutover kept: read only by the platform team as the owner."""
+
+    __tablename__ = "tenant_archive"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    tenant_id: Mapped[int] = mapped_column(ForeignKey("tenant.id"))
+    database_name: Mapped[str] = mapped_column(Text, unique=True)
+    archived_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    operator: Mapped[str] = mapped_column(Text)
+    reason: Mapped[str] = mapped_column(Text)
+    audit_rows: Mapped[int]
+    audit_last_hash: Mapped[str | None] = mapped_column(Text)
+    setup_change_last_hash: Mapped[str | None] = mapped_column(Text)
 
 
 class TenantDatabase(ControlBase):
@@ -64,6 +101,8 @@ class AppUser(ControlBase):
     failed_attempts: Mapped[int] = mapped_column(default=0, server_default="0")
     locked_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    # set once the profile is written in the company's database: until then the login cannot sign in (DF-36)
+    provisioned_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
 class RefreshToken(ControlBase):

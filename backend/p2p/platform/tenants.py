@@ -229,7 +229,7 @@ def drop_tenant(slug: str) -> bool:
     """Remove a company completely: its logins, jobs and flags in the control database, and its own database.
 
     Returns False when there was no such tenant. Only for a company that is made again from its data (the demo
-    company); there is no undo.
+    company); there is no undo. Its state history and the setup archives a cutover kept go with it.
     """
     with _owner_control_session() as s:
         tenant = s.scalar(select(Tenant).where(Tenant.slug == slug))
@@ -237,11 +237,22 @@ def drop_tenant(slug: str) -> bool:
             return False
         db_name = s.scalar(select(TenantDatabase.database_name).where(TenantDatabase.tenant_id == tenant.id))
         tid = tenant.id
+        archives = [
+            str(r[0])
+            for r in s.execute(text("select database_name from tenant_archive where tenant_id = :t"), {"t": tid})
+        ]
         s.execute(
             text("delete from refresh_token where user_id in (select id from app_user where tenant_id = :t)"),
             {"t": tid},
         )
-        for table in ("app_user", "feature_flag", "tenant_setting", "tenant_database"):
+        for table in (
+            "app_user",
+            "feature_flag",
+            "tenant_setting",
+            "tenant_database",
+            "tenant_state_change",
+            "tenant_archive",
+        ):
             s.execute(text(f"delete from {table} where tenant_id = :t"), {"t": tid})  # noqa: S608 - fixed table names
         s.execute(text("delete from job where tenant_slug = :s"), {"s": slug})
         s.execute(text("delete from tenant where id = :t"), {"t": tid})
@@ -249,9 +260,9 @@ def drop_tenant(slug: str) -> bool:
     from p2p.platform import routing
 
     routing.clear_engine_cache()
-    if db_name:
-        with _admin_connection() as conn:
-            conn.execute(text(f'drop database if exists "{db_name}" with (force)'))
+    with _admin_connection() as conn:
+        for name in ([db_name] if db_name else []) + archives:  # the company's database and its setup archives
+            conn.execute(text(f'drop database if exists "{name}" with (force)'))
     return True
 
 

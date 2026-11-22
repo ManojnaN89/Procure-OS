@@ -8,6 +8,7 @@ export type Me = {
 	role: string;
 	display_name: string;
 	permissions: string[];
+	company_state: string;
 };
 
 export function useMe() {

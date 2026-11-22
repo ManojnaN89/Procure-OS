@@ -528,6 +528,8 @@ def _owner_only_in_its_places(out: Outcome, check: Callable[..., bool]) -> None:
     """Only tenants.py, demo.py and cli.py use the owner's engine or session (spec 4.3, 6)."""
     root = env.ROOT / "backend" / "p2p"
     allowed = {root / "platform" / "tenants.py", root / "platform" / "demo.py", root / "cli.py"}
+    # block 0d (spec 9): the platform team's cutover, suspension, resume and archives run as the owner
+    allowed |= {root / "platform" / n for n in ("cutover.py", "company_cli.py", "company_state.py")}
     users = sorted(
         str(p.relative_to(root))
         for p in root.rglob("*.py")

@@ -3,6 +3,12 @@
  * admin app, so signing in to one signs in to the other. Every call to the API goes through Auth.fetch, which adds the token,
  * renews it once when it has expired, and shows the login screen when there is no valid session.
  */
+// shown under the company's name until it is live (the texts of block 0d, 4.1)
+const STATE_BANNERS = {
+  setup: "Setup: what you do here is test data. It is archived at cutover.",
+  cutover: "Cutover: loading open documents. Sign-in opens at go-live.",
+};
+
 const Auth = {
   ACCESS: "p2p.access",
   REFRESH: "p2p.refresh",
@@ -81,7 +87,13 @@ const Auth = {
     if (role) role.textContent = this.me.role;
     if (avatar) avatar.textContent = this.initials(this.me.display_name);
     const company = document.getElementById("companyName");
-    if (company) company.innerHTML = `<i class="ti ti-building" aria-hidden="true"></i>${escapeHtml(this.me.tenant_name || "")}`;
+    // a company not yet live says so under its name (D-04, D-05)
+    const banner = STATE_BANNERS[this.me.company_state];
+    if (company) {
+      company.innerHTML = `<i class="ti ti-building" aria-hidden="true"></i>${escapeHtml(this.me.tenant_name || "")}` +
+        (banner ? ` <small class="muted" role="status">${escapeHtml(banner)}</small>` : "");
+      company.title = banner || "Company";
+    }
     const admin = document.getElementById("adminLink");
     if (admin) admin.style.display = this.can("admin.users", "admin.rules", "audit.view", "request.approve", "po.approve", "invoice.approve", "payment.approve", "rfq.send", "supplier.activate") ? "" : "none";
     // the menu shows what this person's role can use, so each person sees their own flow
@@ -122,7 +134,10 @@ const Auth = {
             body: JSON.stringify({ email: form.email.value, password: form.password.value }),
           });
           if (!res.ok) {
-            error.textContent = res.status === 423 ? "Too many wrong passwords. Try again in 15 minutes." : "Wrong email or password.";
+            // a company in cutover or suspended says why nobody may sign in now
+            const said = res.status === 403 ? (await res.json().catch(() => ({}))).detail : "";
+            error.textContent = res.status === 423 ? "Too many wrong passwords. Try again in 15 minutes."
+              : said || "Wrong email or password.";
             return;
           }
           this.store(await res.json());

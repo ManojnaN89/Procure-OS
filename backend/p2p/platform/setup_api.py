@@ -93,6 +93,7 @@ PERMISSIONS: dict[str, str] = {
     "admin.rules": "Manage approval chains and approvers",
     "admin.settings": "Manage policies and automation",
     "audit.view": "See the audit log",
+    "company.cutover": "Load open documents at cutover",
 }
 ADMIN_ONLY = {"admin.users", "admin.rules", "admin.settings"}
 ADMIN_REQUIRED = ADMIN_ONLY | {"audit.view"}  # without these nobody could run the setup any more

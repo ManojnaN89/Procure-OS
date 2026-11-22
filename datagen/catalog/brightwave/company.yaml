@@ -59,7 +59,7 @@ departments:
   - [ENG, Engineering, U07]
   - [ITO, IT Operations, U08]
   - [ADM, Admin and Facilities, U09]
-  - [FIN, Finance, U05]
+  - [FIN, Finance, U09]  # the CFO heads Finance: a Finance request goes to someone who may approve it (block 0d readiness)
   - [MGT, Management, U09]
 
 # login is the part of the email before the @; roles are the jobs held in the organisation's own table
@@ -430,3 +430,9 @@ history:
     invoice_not_received: 1
     grni_month_end: 2
   closed_at_cutoff: []
+
+# The open documents moved to the platform at go-live (block 0d, task 7.4); see the same block in apex/company.yaml.
+cutover:
+  advance_terms: {PO-BLR-2627-00120: ADV30N30}  # the AC maintenance order was agreed with 30% in advance
+  advances:
+    - {payment_no: PAY-2627-000160, po_no: PO-BLR-2627-00120, paid_on: "2026-10-30", pct: "30", utr: HDFC26103000000160}

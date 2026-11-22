@@ -17,7 +17,7 @@ from sqlalchemy.orm import Session
 from p2p.approvals import email_links
 from p2p.platform import routing
 from p2p.platform.link_pages import Refused as _Refused
-from p2p.platform.link_pages import bad_link, guard, page, refuse
+from p2p.platform.link_pages import bad_link, guard, open_company, page, refuse
 
 router = APIRouter(tags=["approval links"])
 _page, _refuse = page, refuse
@@ -34,9 +34,11 @@ def _guard(request: Request) -> str:
 
 def _link(token: str, key: str) -> email_links.Link:
     try:
-        return email_links.read(token)
+        link = email_links.read(token)
     except email_links.LinkError as exc:
         raise bad_link(key, str(exc)) from None
+    open_company(link.tenant)
+    return link
 
 
 def _facts(token: str, request: Request) -> tuple[email_links.Link, dict[str, Any]]:

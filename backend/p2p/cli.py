@@ -38,6 +38,21 @@ python -m p2p.cli demo reset apex|brightwave [--dataset DIR]
         the logins go to .dev-credentials
 python -m p2p.cli demo populate [apex] [--reset]
         fills the demo company with cases at every stage of the flow (needs a company with no requests, or --reset)
+python -m p2p.cli demo reset apex --state setup
+        the same, left in setup (test data, archived at cutover) for a go-live rehearsal; a plain reset ends live
+python -m p2p.cli company state <slug> [setup --reason R --operator N]
+        the company's state and its history; or a company in cutover goes back to setup
+python -m p2p.cli company readiness <slug> [--group all|setup|cutover] [--json]
+        the readiness checks (exit 1 when a blocker fails)
+python -m p2p.cli company cutover <slug> --reason R --operator N [--dry-run]
+        setup to cutover: the setup database is kept as an archive and a clean one made with the configuration
+python -m p2p.cli company cutover-import <slug> <folder> --as EMAIL [--dry-run]
+        loads the open documents of the old system (cutover only); exit 1 when rows are left out or control fails
+python -m p2p.cli company suspend <slug> --kind commercial|security --reason R --operator N
+python -m p2p.cli company resume <slug> --reason R --operator N
+python -m p2p.cli company archives <slug>
+python -m p2p.cli user repair <tenant>
+        finishes logins a user creation left half made (DF-36)
 python -m p2p.cli worker      runs the job worker (timers, escalations, email, mailbox polling) until stopped
 """
 
@@ -51,7 +66,8 @@ from pathlib import Path
 from p2p.formulas.calendar import business_today
 from p2p.formulas.money import format_inr
 from p2p.formulas.words import count
-from p2p.platform import db_logins, routing, tenants, users, worker
+from p2p.platform import company_cli, db_logins, routing, tenants, users, worker
+from p2p.platform.company_state import StateError
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -70,6 +86,9 @@ def main(argv: list[str] | None = None) -> int:
     ucreate.add_argument("email")
     ucreate.add_argument("--name", required=True)
     ucreate.add_argument("--role", default="Requester", choices=users.ROLES)
+    urepair = user.add_parser("repair")
+    urepair.add_argument("tenant")
+    company_cli.add_parsers(sub)
     imp = sub.add_parser("import").add_subparsers(dest="cmd", required=True)
     for name in ("masters", "stock", "demand"):
         one = imp.add_parser(name)
@@ -114,12 +133,15 @@ def main(argv: list[str] | None = None) -> int:
     reset = demo.add_parser("reset")
     reset.add_argument("name", help="a company with a profile in datagen/catalog (apex, brightwave)")
     reset.add_argument("--dataset")
+    reset.add_argument("--state", choices=("setup", "live"), default="live", help="setup: for a go-live rehearsal")
     fill = demo.add_parser("populate")
     fill.add_argument("name", nargs="?", default="apex")
     fill.add_argument("--reset", action="store_true")
     sub.add_parser("worker")
     args = p.parse_args(argv)
 
+    if args.group == "company":
+        return company_cli.run(args)
     if args.group == "worker":
         print("worker running; stop with Ctrl-C")
         try:
@@ -149,7 +171,7 @@ def main(argv: list[str] | None = None) -> int:
                 return 1
             return 0
         try:
-            built = reset_company(company(args.name), Path(args.dataset) if args.dataset else None)
+            built = reset_company(company(args.name), Path(args.dataset) if args.dataset else None, state=args.state)
         except DemoError as exc:
             print(f"not built: {exc}")
             return 1
@@ -159,7 +181,7 @@ def main(argv: list[str] | None = None) -> int:
             moves += (
                 f", {built.demand.rows_loaded} demand rows ({len(built.demand.material_requests)} material requests)"
             )
-        print(f"company '{built.slug}' made: {loaded} master rows{moves}, {len(built.logins)} logins")
+        print(f"company '{built.slug}' made ({args.state}): {loaded} master rows{moves}, {len(built.logins)} logins")
         for email, role, designation in built.logins:
             print(f"  {email}  {role}  ({designation})")
         print(f"passwords are in {built.credentials_file}")
@@ -329,14 +351,18 @@ def main(argv: list[str] | None = None) -> int:
         from p2p.requests import demand
 
         report: ImportReport
-        with Session(routing.engine_for(args.tenant)) as db:
-            if args.cmd == "demand":
-                report = demand.import_demand(
-                    db, Path(args.dataset), dry_run=args.dry_run, kind=args.kind, tenant=args.tenant
-                )
-            else:
-                load = import_masters if args.cmd == "masters" else import_movements
-                report = load(db, Path(args.dataset), dry_run=args.dry_run)
+        try:
+            with Session(routing.engine_for(args.tenant)) as db:
+                if args.cmd == "demand":
+                    report = demand.import_demand(
+                        db, Path(args.dataset), dry_run=args.dry_run, kind=args.kind, tenant=args.tenant
+                    )
+                else:
+                    load = import_masters if args.cmd == "masters" else import_movements
+                    report = load(db, Path(args.dataset), dry_run=args.dry_run)
+        except StateError as exc:  # the company's state does not allow this import (D-02)
+            print(f"refused: {exc}")
+            return 2
         if isinstance(report, demand.DemandReport):
             print(f"{demand.summary(report)} ({report.seconds} s)")
             for kind, n in report.loaded.items():
@@ -361,6 +387,8 @@ def main(argv: list[str] | None = None) -> int:
         tenants.migrate_control()
         print(f"control database is up to date; app login {db_logins.app_role_name()} is ready")
         return 0
+    if args.group == "user" and args.cmd == "repair":
+        return company_cli.repair_users(args.tenant)
     if args.group == "user":
         password = os.environ.get("P2P_NEW_PASSWORD") or getpass.getpass("Password: ")
         try:

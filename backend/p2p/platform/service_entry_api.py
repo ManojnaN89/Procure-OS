@@ -16,7 +16,7 @@ from p2p.approvals.workflow import org_code_of
 from p2p.formulas.calendar import business_today
 from p2p.formulas.money import format_inr, format_qty
 from p2p.platform import permissions, proposals, ratelimit, routing
-from p2p.platform.link_pages import page
+from p2p.platform.link_pages import Refused, open_company, page
 from p2p.platform.permissions import can_anywhere, require
 from p2p.receiving import goods, service_links, services, unordered
 
@@ -172,10 +172,13 @@ def _form(token: str, line: dict[str, Any], note: str = "") -> HTMLResponse:
 def show_service_link(token: str, request: Request) -> HTMLResponse:
     try:
         link = _link(token, request)
+        open_company(link.tenant)
         with Session(routing.engine_for(link.tenant)) as db:
             return _form(token, service_links.summary(db, link))
     except LinkError as exc:
         return _refused(str(exc), 400)
+    except Refused as error:
+        return _refused(error.message, error.status)
 
 
 @router.post("/confirm-service/{token}", response_class=HTMLResponse)
@@ -188,6 +191,7 @@ def confirm_by_link(
 ) -> HTMLResponse:
     try:
         link = _link(token, request)
+        open_company(link.tenant)
         amount = Decimal(value.strip().replace(",", ""))
         with Session(routing.engine_for(link.tenant)) as db:
             no = service_links.confirm(db, link, basis, amount, remarks.strip()[:500] or None, as_of=business_today())
@@ -195,6 +199,8 @@ def confirm_by_link(
         return _refused("the value must be a number", 422)
     except LinkError as exc:
         return _refused(str(exc))
+    except Refused as error:
+        return _refused(error.message, error.status)
     return page(
         "Service confirmed", f"<p>Recorded as {escape(no)}. Thank you.</p><p class=muted>You can close this page.</p>"
     )

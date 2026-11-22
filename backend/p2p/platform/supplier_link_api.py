@@ -22,7 +22,7 @@ from p2p.formulas.calendar import business_today
 from p2p.formulas.money import format_inr, format_qty
 from p2p.orders import changes, confirmation, dispatch_notes, supplier_links
 from p2p.platform import routing
-from p2p.platform.link_pages import Refused, bad_link, guard, page, refuse
+from p2p.platform.link_pages import Refused, bad_link, guard, open_company, page, refuse
 
 router = APIRouter(tags=["supplier links"])
 
@@ -30,9 +30,11 @@ router = APIRouter(tags=["supplier links"])
 def _link(token: str, request: Request) -> supplier_links.Link:
     key = guard(request, "supplier-link")
     try:
-        return supplier_links.read(token)
+        link = supplier_links.read(token)
     except supplier_links.LinkError as exc:
         raise bad_link(key, str(exc)) from None
+    open_company(link.tenant)
+    return link
 
 
 def _order(db: Session, link: supplier_links.Link) -> tuple[dict[str, Any], list[dict[str, Any]]]:

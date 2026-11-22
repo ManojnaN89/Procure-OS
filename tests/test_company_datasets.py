@@ -21,7 +21,7 @@ from sqlalchemy.orm import Session
 
 from p2p.approvals import rules as approval_rules
 from p2p.masters.importer import import_masters
-from p2p.platform import demo, routing, tenants
+from p2p.platform import cutover_import, demo, routing, tenants
 from p2p.receiving import stock
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -106,6 +106,27 @@ def test_brightwave_joiners_are_planned_by_kit_and_have_no_production(datasets: 
         "KB-01",
         "SW-01",
     }
+
+
+@pytest.mark.parametrize(
+    ("name", "orders", "invoices", "payable"), [("apex", 31, 44, "605557.00"), ("brightwave", 22, 21, "2115400.00")]
+)
+def test_the_cutover_files_hold_the_open_documents_at_the_cutoff_with_their_control_totals(
+    datasets: dict[str, Path], name: str, orders: int, invoices: int, payable: str
+) -> None:
+    folder = datasets[name] / "cutover"
+    for file, columns in cutover_import.FILES.items():  # the files are the import's own templates
+        assert _header(folder / f"{file}.csv").strip() == ",".join(columns), file
+    control = {r["kind"]: r for r in _rows(folder / "control.csv")}
+    assert (int(control["po"]["count"]), int(control["invoice"]["count"]), control["invoice"]["total"]) == (
+        orders, invoices, payable,
+    )  # fmt: skip
+    assert gen.cutover.problems(datasets[name]) == []
+    truth = _rows(datasets[name] / "truth" / "truth_cutover.csv")
+    assert sum(t["kind"] == "po" and t["expected"] == "loaded" for t in truth) == orders
+    assert (datasets[name] / "cutover-bad").is_dir() == (name == "apex")
+    grni = next(t for t in truth if t["kind"] == "total" and t["key"] == "grni")
+    assert grni["amount"] == ("3600.00" if name == "apex" else "0.00")  # the planted receipt not yet invoiced
 
 
 @pytest.mark.parametrize("name", COMPANIES)

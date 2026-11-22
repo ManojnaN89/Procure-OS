@@ -29,7 +29,7 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from p2p.masters.importer import ImportReport, Problem, read_table
-from p2p.platform import audit, tenants
+from p2p.platform import audit, company_state, tenants
 from p2p.platform.sod import Actor
 from p2p.requests import material, reservation
 from p2p.requests.demand_changes import Applier, Change, classify
@@ -219,6 +219,7 @@ def import_demand(
     tenant: str | None = None,
 ) -> DemandReport:
     """Load the ERP demand in `source` (one file, or a dataset folder with an inputs/ folder) and report what happened."""
+    company_state.require_state(db, "demand")
     started = time.monotonic()
     report = DemandReport(dry_run=dry_run)
     try:

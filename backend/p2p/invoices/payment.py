@@ -113,15 +113,21 @@ def tds_rule(db: Session, on: date) -> rules.TdsRule:
 
 def _cumulative(db: Session, supplier: str, year: date, *, excluding: str | None = None) -> Decimal:
     """What has been bought from the supplier in the financial year on which tax at source was worked out: the taxable
-    value of its booked invoices (less what advances already counted) and of its advances."""
+    value of its booked invoices (less what advances already counted) and of its advances, plus what the old system
+    bought this year (loaded at cutover; it already holds the invoices still open at cutover, so those are not counted
+    twice)."""
     a, b = _fy_start(year), _fy_end(year)
+    old_system = db.execute(
+        text("select taxable from cutover_supplier_ytd where supplier_code = :s and fy = :f"),
+        {"s": supplier, "f": f"{a.year}-{(a.year + 1) % 100:02d}"},
+    ).scalar()
     invoices = db.execute(
         text(
             "select coalesce(sum(i.taxable - i.advance_taxable_used), 0) from invoice i join tds_entry t on t.invoice_no = i.no "
             "where i.supplier_code = :s and i.no <> coalesce(:n, '') and i.status <> 'cancelled' "
-            "and t.booked_on >= :a and t.booked_on <= :b"
+            "and t.booked_on >= :a and t.booked_on <= :b and (not :old or i.channel <> 'cutover')"
         ),
-        {"s": supplier, "n": excluding, "a": a, "b": b},
+        {"s": supplier, "n": excluding, "a": a, "b": b, "old": old_system is not None},
     ).scalar_one()
     advances = db.execute(
         text(
@@ -130,7 +136,7 @@ def _cumulative(db: Session, supplier: str, year: date, *, excluding: str | None
         ),
         {"s": supplier, "a": a, "b": b},
     ).scalar_one()
-    return D(invoices) + D(advances)
+    return D(invoices) + D(advances) + D(old_system or 0)
 
 
 def _use_advances(db: Session, inv: dict[str, Any]) -> tuple[Decimal, Decimal]:

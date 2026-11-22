@@ -188,7 +188,9 @@ def test_only_provisioning_code_uses_the_owner_login() -> None:
         for path in BACKEND.rglob("*.py")
         if re.search(r"\b(owner_engine|_owner_control_session)\b", path.read_text(encoding="utf-8"))
     }
-    assert users <= {"platform/tenants.py", "platform/demo.py", "cli.py"}
+    # block 0d: the platform team's moves of a company's state, its cutover and its archives also run as the owner
+    owner_steps = {"platform/company_state.py", "platform/cutover.py", "platform/company_cli.py"}
+    assert users <= {"platform/tenants.py", "platform/demo.py", "cli.py"} | owner_steps
 
 
 def test_the_health_check_says_the_app_is_restricted(control_db: str) -> None:

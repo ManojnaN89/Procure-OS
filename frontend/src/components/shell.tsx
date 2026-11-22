@@ -114,6 +114,12 @@ function NoAccess({ who, role }: { who: string; role?: string }) {
 	);
 }
 
+// What a company not yet live is told on every page (D-04, D-05).
+const BANNERS: Record<string, string> = {
+	setup: "Setup: what you do here is test data. It is archived at cutover.",
+	cutover: "Cutover: loading open documents. Sign-in opens at go-live.",
+};
+
 export function Shell() {
 	const me = useMe();
 	const navigate = useNavigate();
@@ -230,7 +236,17 @@ export function Shell() {
 					) : blocked ? (
 						<NoAccess who={blocked[2]} role={me.data?.role} />
 					) : (
-						<Outlet />
+						<>
+							{BANNERS[me.data.company_state] ? (
+								<p
+									role="status"
+									className="mb-3 rounded-md border border-[#f3d79c] bg-[#fff4de] px-3 py-2 text-sm text-[#5c3300]"
+								>
+									{BANNERS[me.data.company_state]}
+								</p>
+							) : null}
+							<Outlet />
+						</>
 					)}
 				</main>
 			</div>
