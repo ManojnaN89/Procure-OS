@@ -42,6 +42,7 @@ APPROVE = {
     "price_variance": "po.approve",
     "payment_run": "payment.approve",
     "supplier_activation": "supplier.activate",
+    "forward_buy": "sourcing.route_approve",  # block 3: requests/forward_buy.py checks this permission
 }
 ADMIN = ("admin.users", "admin.rules", "admin.settings")
 # the five duties of one case, each by a different person (FR32, sod.DUTIES)
