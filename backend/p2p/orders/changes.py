@@ -211,6 +211,7 @@ def cancel(
         why if not reorder else f"{why} The lines will be ordered again.",
         buyer=po["buyer"],
     )
+    _check_again(db, tenant, po_no, f"{po_no} was cancelled")
     return {"status": "cancelled", "supplier_told": told}
 
 
@@ -281,7 +282,15 @@ def close_balance(db: Session, tenant: str | None, po_no: str, user_id: int, rea
         f"We are closing the balance of order {po_no}; no further supply is expected on:\n" + "\n".join(closed) + f"\nReason: {why}",
     )  # fmt: skip
     tell_people(db, tenant, po_no, f"The balance of order {po_no} was closed", why, buyer=po["buyer"])
+    _check_again(db, tenant, po_no, f"the balance of {po_no} was closed")
     return {"status": "closed" if not still_open else po["status"], "closed": closed, "supplier_told": told}
+
+
+def _check_again(db: Session, tenant: str | None, po_no: str, why: str) -> None:
+    """Cover dropped or moved: the store check runs again for what the order bought for material requests (task 6.5)."""
+    from p2p.requests import material  # noqa: PLC0415 - material requests sit above orders
+
+    material.after_event(db, tenant, po_no=po_no, why=why)
 
 
 # ---- revise ---------------------------------------------------------------------------------------
@@ -495,6 +504,7 @@ def revise(
             f"Order {po_no} has been revised (version {version}). The revised order is attached. Reason: {why}{again}",
             [(f"{po_no}-v{version}.pdf", "application/pdf", document.order_document(db, po_no))],
         )
+    _check_again(db, tenant, po_no, f"{po_no} was revised")
     return {
         "version": version,
         "status": new_status,

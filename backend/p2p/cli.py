@@ -16,9 +16,12 @@ python -m p2p.cli import demand <tenant> <dataset folder or file> [--dry-run] [-
         the buyer or the store) and listed with what it did
 python -m p2p.cli material make <tenant>
         makes material requests for imported production orders that have none (the import does this by itself)
-python -m p2p.cli material check <tenant> [--no-submit]
+python -m p2p.cli material check <tenant> [--no-submit] [--schedule]
         the store check: sets free stock aside for open material requests, earliest need-by first, and sends what is
-        short for approval as purchase requests
+        short for approval as purchase requests; prints what is at risk (supply promised too late) and the cases;
+        --schedule queues the daily 05:30 run (which leaves its requests as drafts unless store_check_submit is on)
+python -m p2p.cli material explain <tenant> <MR-no>
+        the planning capability explains the request's short and at-risk lines (only when switched on)
 python -m p2p.cli replenish <tenant> [--dry-run] [--no-submit] [--schedule]
         creates purchase requests for stock at its reorder point and sends them for approval; --schedule queues the daily morning run
 python -m p2p.cli source <tenant> [--request NO] [--no-send]
@@ -40,6 +43,7 @@ python -m p2p.cli worker      runs the job worker (timers, escalations, email, m
 
 import argparse
 import getpass
+import json
 import os
 import sys
 from pathlib import Path
@@ -80,6 +84,10 @@ def main(argv: list[str] | None = None) -> int:
         one.add_argument("tenant")
         if name == "check":
             one.add_argument("--no-submit", action="store_true")
+            one.add_argument("--schedule", action="store_true")
+    explain = mat.add_parser("explain")
+    explain.add_argument("tenant")
+    explain.add_argument("mr_no")
     rep = sub.add_parser("replenish")
     rep.add_argument("tenant")
     rep.add_argument("--dry-run", action="store_true")
@@ -159,21 +167,42 @@ def main(argv: list[str] | None = None) -> int:
     if args.group == "material":
         from sqlalchemy.orm import Session
 
+        from p2p.requests import jobs as request_jobs
         from p2p.requests import material
 
+        if args.cmd == "check" and args.schedule:
+            request_jobs.schedule_check(args.tenant)
+            print(f"daily store check queued for {args.tenant}; it runs when the worker is running")
+            return 0
         with Session(routing.engine_for(args.tenant)) as db:
             if args.cmd == "make":
                 numbers = material.make_requests(db)
                 print(f"{count(len(numbers), 'material request')} made or added to: {', '.join(numbers) or '-'}")
                 return 0
+            if args.cmd == "explain":
+                from p2p.agents import planning
+                from p2p.ai_steps.gateway import Gateway
+
+                got = planning.explain(db, args.tenant, None, args.mr_no, Gateway())
+                print(f"{args.mr_no}: {got.status}" + (f" ({'; '.join(got.reasons)})" if got.reasons else ""))
+                if got.summary:
+                    print(got.summary)
+                for ln in got.lines or got.facts:
+                    print(f"  {json.dumps(ln, default=str)}")
+                return 0
             checked = material.store_check(db, tenant=args.tenant, submit=not args.no_submit)
         for c in checked.requests:
             short = ", ".join(f"{ln.item_code} {ln.short}" for ln in c.lines if ln.short) or "nothing"
+            risk = ", ".join(f"{ln.item_code} {ln.at_risk}" for ln in c.lines if ln.at_risk)
+            if risk:
+                short += f"; at risk {risk}"
             req = c.request
             bought = f"; {req.no} {req.total_value} {req.outcome or req.submit_error or 'draft'}" if req else ""
             print(f"  {c.mr_no} ({c.order_no}): short {short}{bought}")
             if c.unpriced:
                 print(f"    no price to estimate: {', '.join(c.unpriced)}")
+        for case in checked.cases:
+            print(f"  late-supply case {case['task_id']} for {case['assignee']}: {case['po_no']} ({case['mr_no']})")
         print(
             f"{count(len(checked.requests), 'material request')} checked, {count(len(checked.purchase_requests), 'purchase request')}"
         )
@@ -347,6 +376,13 @@ def main(argv: list[str] | None = None) -> int:
         except ValueError as exc:
             print(f"not created: {exc}")
             return 1
+        if res.ok:
+            from sqlalchemy.orm import Session
+
+            from p2p.requests import jobs as request_jobs
+
+            with Session(routing.engine_for(res.slug)) as db:
+                request_jobs.queue_daily_check(db, res.slug)
         outcome = f"created, revision {res.revision}" if res.ok else f"FAILED {res.error}"
         print(f"tenant {res.slug}: {outcome}")
         return 0 if res.ok else 1

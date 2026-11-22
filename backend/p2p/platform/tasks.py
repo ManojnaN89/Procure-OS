@@ -78,7 +78,8 @@ def create_task(
     return task_id
 
 
-def complete_task(db: Session, task_id: int, user_id: int, *, now: datetime | None = None) -> None:
+def complete_task(db: Session, task_id: int, user_id: int | None, *, now: datetime | None = None) -> None:
+    """The task is done (by the system when no login is given)."""
     now = now or datetime.now(UTC)
     updated = db.execute(
         text(
@@ -88,7 +89,9 @@ def complete_task(db: Session, task_id: int, user_id: int, *, now: datetime | No
         {"n": now, "u": user_id, "i": task_id},
     ).first()
     if updated:
-        audit.record(db, Actor("user", str(user_id)), "task.complete", "task", task_id)
+        audit.record(
+            db, Actor("user", str(user_id)) if user_id is not None else audit.SYSTEM, "task.complete", "task", task_id
+        )
     db.commit()
 
 

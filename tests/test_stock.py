@@ -192,7 +192,9 @@ def test_every_movement_in_the_file_is_loaded_and_the_balances_match_an_independ
 
     assert report.rejected == []
     movements = _csv(dataset, "history", "stock_movement")
-    assert loaded.execute(text("select count(*) from stock_movement")).scalar_one() == len(movements)
+    assert loaded.execute(text("select count(*) from stock_movement where quality = 'usable'")).scalar_one() == len(
+        movements
+    )  # held lots (history/stock_held.csv) are loaded beside them in their own quality
 
     expected = {(r["item_code"], r["location_code"]): D(r["qty"]) for r in _csv(dataset, "master", "stock_opening")}
     for m in movements:

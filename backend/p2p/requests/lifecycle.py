@@ -125,7 +125,14 @@ def withdraw(db: Session, tenant: str, no: str, user_id: int) -> str:
             f"Request {no} was withdrawn",
             "The requester took it back. Nothing is needed from you.",
         )
+    _check_again(db, tenant, no, f"{no} was withdrawn")
     return "draft"
+
+
+def _check_again(db: Session, tenant: str, no: str, why: str) -> None:
+    from p2p.requests import material  # noqa: PLC0415 - material requests use this module
+
+    material.after_event(db, tenant, request_no=no, why=why)
 
 
 def cancel(db: Session, tenant: str, no: str, user_id: int, reason: str | None) -> str:
@@ -160,6 +167,7 @@ def cancel(db: Session, tenant: str, no: str, user_id: int, reason: str | None) 
             f"Request {no} was cancelled",
             f"Nothing is needed from you. Reason: {reason.strip()}",
         )
+    _check_again(db, tenant, no, f"{no} was cancelled")
     return "cancelled"
 
 

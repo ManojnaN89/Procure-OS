@@ -434,8 +434,11 @@ def test_a_cancel_cuts_a_request_not_with_the_buyer_and_opens_a_case_for_one_tha
 
 
 def test_replenishment_counts_stock_set_aside_and_restocks_beside_a_shortfall_bought_for_an_order(apex: Apex) -> None:
-    # given V-belts planned min/max (reorder at 5, up to 15) with 12 on the shelf: nothing to order
+    # given V-belts planned min/max (reorder at 5, up to 15) with 12 on the shelf: nothing to order (no safety stock
+    # here: block 2 keeps it out of reach, test_stock_block2.py)
     _set_stock(apex, "SP-01", "12")
+    apex.db.execute(text("update item_location set safety_stock = null where item_code = 'SP-01'"))
+    apex.db.commit()
     planned, _ = replenishment.plan(apex.db, business_today())
     assert "SP-01" not in {ln.item_code for r in planned for ln in r.lines}
 
@@ -527,11 +530,13 @@ def test_the_store_works_its_material_requests_on_the_screen(apex: Apex) -> None
     lines = {
         ln["item_code"]: ln for ln in client.get("/api/material-requests", headers=store).json()["requests"][0]["lines"]
     }
-    assert (lines["RM-06"]["reserved_qty"], lines["RM-06"]["short"], lines["RM-06"]["requested_qty"]) == (
-        "40",
-        "60",
-        "60",
-    )
+    # short is what nothing covers (rule Q17, block 2): the 60 lacking are all on the purchase request
+    assert (
+        lines["RM-06"]["reserved_qty"],
+        lines["RM-06"]["lacking_qty"],
+        lines["RM-06"]["short"],
+        lines["RM-06"]["requested_qty"],
+    ) == ("40", "60", "0", "60")
     assert lines["RM-06"]["requests"] == [checked[0]["purchase_request"]["no"]]
 
     issued = client.post(f"/api/material-requests/{mr['no']}/issue", json={"lines": {"2": "50"}}, headers=store)

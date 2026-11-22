@@ -162,7 +162,14 @@ def send_po(db: Session, po_no: str, actor: Actor = SERVICE, *, tenant: str | No
 
 
 def acknowledge(
-    db: Session, po_no: str, actor: Actor, *, promised: date | None, note: str | None, today: date | None = None
+    db: Session,
+    po_no: str,
+    actor: Actor,
+    *,
+    promised: date | None,
+    note: str | None,
+    today: date | None = None,
+    tenant: str | None = None,
 ) -> list[str]:
     """Record that the supplier confirmed the order. Returns warnings (a promised date later than the need-by date)."""
     today = today or business_today()
@@ -202,6 +209,9 @@ def acknowledge(
         after={"status": "acknowledged", "promised": promised, "warnings": warnings},
     )
     db.commit()
+    from p2p.requests import material  # noqa: PLC0415 - material requests sit above orders
+
+    material.after_event(db, tenant, po_no=po_no, why=f"{po_no} was acknowledged")  # a promise may come too late
     return warnings
 
 

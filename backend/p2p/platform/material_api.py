@@ -7,8 +7,9 @@ from typing import Annotated, Any
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
+from p2p.agents import planning
 from p2p.formulas.money import format_inr, format_qty
-from p2p.platform import routing
+from p2p.platform import ratelimit, routing
 from p2p.platform.permissions import can_anywhere, require
 from p2p.platform.sod import user
 from p2p.receiving.stock import StockError
@@ -18,16 +19,36 @@ router = APIRouter(prefix="/api/material-requests", tags=["material requests"])
 Db = Annotated[Session, Depends(routing.tenant_session)]
 Viewer = Annotated[routing.TenantContext, Depends(require("stock.view"))]
 Store = Annotated[routing.TenantContext, Depends(require("material.manage"))]
-QTY_FIELDS = ("need_qty", "reserved_qty", "issued_qty", "requested_qty", "short")
+QTY_FIELDS = (
+    "need_qty",
+    "reserved_qty",
+    "issued_qty",
+    "requested_qty",
+    "short",
+    "lacking_qty",
+    "timely_qty",
+    "late_qty",
+    "at_risk_qty",
+)
+
+
+def _supply(parts: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [
+        {"doc_type": p["doc_type"], "doc_no": p["doc_no"], "line_no": p["line_no"], "qty": format_qty(p["qty"]),
+         "date": p["date"].isoformat(), "date_kind": p["date_kind"], "timely": p["timely"], "supplier": p["supplier"]}
+        for p in parts
+    ]  # fmt: skip
 
 
 def _shown(head: dict[str, Any]) -> dict[str, Any]:
     """Quantities as text (never a float on the way to the screen), dates as ISO."""
     lines = [
         {
-            **{k: v for k, v in ln.items() if k not in QTY_FIELDS and k != "need_by"},
+            **{k: v for k, v in ln.items() if k not in QTY_FIELDS and k not in ("need_by", "latest_arrival", "supply")},
             **{k: format_qty(ln[k]) for k in QTY_FIELDS},
             "need_by": ln["need_by"].isoformat(),
+            "latest_arrival": ln["latest_arrival"].isoformat() if ln["latest_arrival"] else None,
+            "supply": _supply(ln["supply"]),
         }
         for ln in head["lines"]
     ]
@@ -66,12 +87,16 @@ def check(db: Db, ctx: Store, payload: dict[str, Any] | None = None) -> dict[str
         submit=payload.get("submit", True) is not False,
     )
     return {
+        "cases": [
+            {k: c[k] for k in ("task_id", "po_no", "mr_no", "assignee", "due_at", "lines")} for c in result.cases
+        ],
         "checked": [
             {
                 "no": c.mr_no,
                 "order_no": c.order_no,
                 "reserved_now": {ln.item_code: format_qty(ln.reserved_now) for ln in c.lines if ln.reserved_now},
                 "short": {ln.item_code: format_qty(ln.short) for ln in c.lines if ln.short},
+                "at_risk": {ln.item_code: format_qty(ln.at_risk) for ln in c.lines if ln.at_risk},
                 "unpriced": c.unpriced,
                 "combined_into": c.combined,
                 "purchase_request": None
@@ -87,7 +112,7 @@ def check(db: Db, ctx: Store, payload: dict[str, Any] | None = None) -> dict[str
                 },
             }
             for c in result.requests
-        ]
+        ],
     }
 
 
@@ -123,3 +148,24 @@ def cancel(no: str, payload: dict[str, Any], db: Db, ctx: Store) -> dict[str, An
     except material.MaterialError as exc:
         raise HTTPException(404 if "there is no" in str(exc) else 409, str(exc)) from None
     return {"status": "cancelled", **done}
+
+
+@router.post("/{no}/explain", dependencies=[ratelimit.limited("model")])
+def explain(no: str, db: Db, ctx: Viewer) -> dict[str, Any]:
+    """The planning capability explains the request's short and at-risk lines from the engine's figures (or, switched
+    off or not trusted, only the figures)."""
+    try:
+        got = planning.explain(db, ctx.slug, ctx.user_id, no, planning_gateway())
+    except planning.UnknownRequest as exc:
+        raise HTTPException(404, str(exc)) from None
+    return {
+        "status": got.status, "note_id": got.note_id, "summary": got.summary, "lines": got.lines, "facts": got.facts,
+        "reasons": got.reasons, "run_id": got.run_id,
+    }  # fmt: skip
+
+
+def planning_gateway() -> Any:
+    """The process's model gateway (the assistant's: one set of rate limits)."""
+    from p2p.platform.ui_api import assistant_gateway  # noqa: PLC0415 - one gateway for the process
+
+    return assistant_gateway()

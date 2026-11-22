@@ -54,21 +54,21 @@ const ExceptionsView = {
     });
   },
 
-  // A case a change in the ERP's demand left: say what was done, then it is closed.
+  // A case for a person (a change in the ERP's demand, supply promised too late): say what was done, then it is closed.
   closeForm(button, row) {
-    const words = { reduced: "Order reduced", cancelled: "Order cancelled", kept_for_stock: "Kept for stock", expedited: "Supplier asked to deliver earlier", not_possible: "Not possible", returned_to_stock: "Returned to stock", kept_for_production: "Kept for production" };
+    const words = { reduced: "Order reduced", cancelled: "Order cancelled", kept_for_stock: "Kept for stock", expedited: "Supplier asked to deliver earlier", not_possible: "Not possible", returned_to_stock: "Returned to stock", kept_for_production: "Kept for production", accepted_late: "Accepted late", bought_elsewhere: "Bought elsewhere" };
     const tr = button.closest("tr");
     const panel = document.createElement("tr");
     panel.innerHTML = `<td colspan="6"><div class="panel" style="margin:4px 0;">
       <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
         <select id="excOutcome" aria-label="What was done" style="padding:6px;">${row.case.outcomes.map((o) => `<option value="${escapeHtml(o)}">${escapeHtml(words[o] || o)}</option>`).join("")}</select>
-        <input id="excNote" placeholder="Note (needed for kept for stock or not possible)" style="min-width:260px;padding:6px;">
+        <input id="excNote" placeholder="Note (needed for ${escapeHtml(row.case.note_needed.map((o) => (words[o] || o).toLowerCase()).join(" or "))})" style="min-width:260px;padding:6px;">
         <span class="btn btn-primary btn-sm" id="excSave">Close the case</span>
       </div><div id="excErr" style="font-size:12.5px;color:var(--warning-text);margin-top:8px;"></div></div></td>`;
     tr.after(panel);
     button.remove();
     document.getElementById("excSave").addEventListener("click", async () => {
-      const res = await API.postJSON(`/api/demand/cases/${encodeURIComponent(row.case.task_id)}/close`, {
+      const res = await API.postJSON(row.case.close_url || `/api/demand/cases/${encodeURIComponent(row.case.task_id)}/close`, {
         outcome: document.getElementById("excOutcome").value, note: document.getElementById("excNote").value,
       });
       if (!res.ok) { document.getElementById("excErr").textContent = res.data.detail || "That did not work."; return; }

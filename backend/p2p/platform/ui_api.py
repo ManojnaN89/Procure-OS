@@ -16,7 +16,7 @@ from typing import Annotated, Any
 import jwt
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, WebSocket, WebSocketDisconnect
 from fastapi.concurrency import run_in_threadpool
-from fastapi.responses import StreamingResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
@@ -44,7 +44,7 @@ from p2p.platform.rows import rows as _rows
 from p2p.platform.tokens import decode_access_token
 from p2p.receiving import goods
 from p2p.receiving.kinds import service_lines
-from p2p.receiving.stock import StockError, post_count, post_issue, stock_levels
+from p2p.receiving.stock import SafetyStockError, StockError, post_count, post_issue, stock_levels
 from p2p.requests import combining, duplicates, jobs, lifecycle, replenishment, reservation
 from p2p.sourcing import documents as supplier_documents
 from p2p.sourcing import prospects as rfq_prospects
@@ -487,6 +487,7 @@ def inventory(db: Db, ctx: Ctx, location: str | None = None, status: str | None 
         "summary": {"total": len(lines), "by_status": counts},
         "can_issue": can_anywhere(db, ctx.user_id, "stock.issue"),
         "can_adjust": can_anywhere(db, ctx.user_id, "stock.adjust"),
+        "can_hold": can_anywhere(db, ctx.user_id, "stock.quality"),
         "locations": _rows(db, "select code, name from location where is_stock_location order by code"),
         "lines": [
             {
@@ -499,6 +500,10 @@ def inventory(db: Db, ctx: Ctx, location: str | None = None, status: str | None 
                 "on_hand": _qty(line.on_hand),
                 "on_order": _qty(line.on_order),
                 "reserved": _qty(line.reserved),
+                "quarantine": _qty(line.quarantine),
+                "blocked": _qty(line.blocked),
+                "available": _qty(line.available),
+                "holds": line.holds,
                 "reorder_point": _qty(line.reorder_point),
                 "safety_stock": _qty(line.safety_stock),
                 "max_qty": _qty(line.max_qty),
@@ -514,6 +519,8 @@ def inventory(db: Db, ctx: Ctx, location: str | None = None, status: str | None 
 def _stock_post(call: Any) -> dict[str, Any]:
     try:
         movement = call()
+    except SafetyStockError:
+        raise  # the issue route answers it with what the store may ask for
     except StockError as exc:
         raise HTTPException(409, str(exc)) from None
     return {"movement": movement}
@@ -529,18 +536,26 @@ def _quantity(payload: dict[str, Any], key: str) -> Decimal:
     return value
 
 
-@router.post("/inventory/issue")
+@router.post("/inventory/issue", response_model=None)
 def issue_stock(
     payload: dict[str, Any], db: Db, ctx: Annotated[routing.TenantContext, Depends(require("stock.issue"))]
-) -> dict[str, Any]:
-    """Take stock out for use. The store person says what, where and how much; the books cannot go below zero."""
+) -> dict[str, Any] | JSONResponse:
+    """Take stock out for use. The store person says what, where and how much; the books cannot go below zero, and the
+    safety stock is not used without the manager's override (409 with `needs_override`)."""
     qty = _quantity(payload, "qty")
-    return _stock_post(
-        lambda: post_issue(
-            db, ctx.user_id, str(payload.get("item_code") or ""), str(payload.get("location") or ""), qty,
-            reference=str(payload.get("reference") or "") or None,
-        )
-    )  # fmt: skip
+    try:
+        return _stock_post(
+            lambda: post_issue(
+                db, ctx.user_id, str(payload.get("item_code") or ""), str(payload.get("location") or ""), qty,
+                reference=str(payload.get("reference") or "") or None,
+            )
+        )  # fmt: skip
+    except SafetyStockError as exc:  # the store may ask the manager to use the safety stock
+        return JSONResponse(
+            status_code=409,
+            content={"detail": str(exc), "needs_override": True, "available": format_qty(exc.available),
+                     "safety_stock": format_qty(exc.safety_stock)},
+        )  # fmt: skip
 
 
 @router.post("/inventory/count")

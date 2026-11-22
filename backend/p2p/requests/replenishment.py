@@ -59,28 +59,36 @@ class RunResult:
         return sum((r.total_value for r in self.requests), Decimal(0))
 
 
+# the part of a request line bought for stock: what it says, else its quantity less what it buys for material requests
+STOCK_PART = (
+    "coalesce(rl.stock_qty, coalesce(rl.base_qty, rl.qty) - (select coalesce(sum(b.qty), 0) "
+    "from material_request_buy b join material_request_line m on m.id = b.mr_line_id where m.status <> 'cancelled' "
+    "and b.request_no = rl.request_no and b.request_line_no = rl.line_no))"
+)
+
+
 def _open_requests(db: Session) -> dict[tuple[str, str], str]:
     """Item-locations that already have something on the way for stock: an open request line, or an order not yet fully
     received.
 
     An order that does not bring the position above the reorder point still counts: nothing more is asked for until it
-    has been received or cancelled, so repeating the run never buys the same shortfall twice. A request line counts only
-    by its stock part: one that buys only for material requests (each linked with its own quantity) does not stop the
-    restock, which judges the stock position without what is on order for them.
+    has been received or cancelled, so repeating the run never buys the same shortfall twice. A request line, and an
+    order line through its request line, counts only by its stock part: one that buys only for material requests (each
+    linked with its own quantity) does not stop the restock, which judges the stock position without what is on order
+    for them (DF-25).
     """
     found: dict[tuple[str, str], str] = {}
     for sql in (
-        "select rl.item_code, rl.delivery_location, min(rl.request_no) from request_line rl "
+        "select rl.item_code, rl.delivery_location, min(rl.request_no) from request_line rl "  # noqa: S608 - fixed SQL
         "join request r on r.no = rl.request_no "
         "where rl.status in ('open', 'sourcing') and r.status in ('draft', 'submitted', 'approved', 'returned') "
-        "and coalesce(rl.stock_qty, coalesce(rl.base_qty, rl.qty) - (select coalesce(sum(b.qty), 0) "
-        "from material_request_buy b join material_request_line m on m.id = b.mr_line_id where m.status <> 'cancelled' "
-        "and b.request_no = rl.request_no and b.request_line_no = rl.line_no)) > 0 "
-        "group by rl.item_code, rl.delivery_location",
-        "select pl.item_code, po.ship_to_location, min(po.no) from po_line pl join po on po.no = pl.po_no "
+        f"and {STOCK_PART} > 0 group by rl.item_code, rl.delivery_location",
+        # an order line counts by its request line's stock part; one with no request line (bought direct) counts fully
+        "select pl.item_code, po.ship_to_location, min(po.no) from po_line pl join po on po.no = pl.po_no "  # noqa: S608
+        "left join request_line rl on rl.request_no = pl.request_no and rl.line_no = pl.request_line_no "
         "where pl.status in ('open', 'part_received') "
         "and po.status in ('draft', 'submitted', 'approved', 'sent', 'acknowledged', 'part_received') "
-        "group by pl.item_code, po.ship_to_location",
+        f"and (rl.request_no is null or {STOCK_PART} > 0) group by pl.item_code, po.ship_to_location",
     ):
         found.update({(r[0], r[1]): r[2] for r in db.execute(text(sql))})
     return found

@@ -2,8 +2,10 @@
 
 A receipt is posted by a store person who is not the buyer, an approver or the requester of that order (segregation of
 duties). Over-delivery beyond the company's tolerance for the item's category is refused. An item that needs inspection
-waits: nothing counts and nothing goes into stock until the inspection says how much was accepted. What is accepted
-raises the received quantity of the order line (which the invoice match uses later) and, for stocked items, the stock.
+waits: a stocked one goes into stock as quarantine (receiving/quality.py), but nothing counts for the order until the
+inspection says how much was accepted; then the accepted part becomes usable and the rejected part blocked. What is
+accepted raises the received quantity of the order line (which the invoice match uses later) and, for stocked items,
+the usable stock.
 A service line is not received here: the requester confirms it (receiving/services.py). A serialised item needs one serial
 number per unit received, and a serial already on file for the item is refused.
 """
@@ -24,6 +26,7 @@ from p2p.formulas.money import format_qty
 from p2p.invoices import tolerances
 from p2p.platform import audit, notifications, numbering
 from p2p.platform.sod import user
+from p2p.receiving import quality
 from p2p.receiving.kinds import service_lines
 from p2p.requests import reservation
 
@@ -126,10 +129,23 @@ def _item(db: Session, item_code: str | None) -> dict[str, Any]:
     return dict(row) if row else none
 
 
+def _ratio(line: dict[str, Any]) -> Decimal:
+    """Stock units per unit of the order line."""
+    return Decimal(line["base_qty"]) / Decimal(line["qty"]) if line["base_qty"] else Decimal(1)
+
+
 def count_accepted(
-    db: Session, gr_no: str, po: dict[str, Any], line: dict[str, Any], accepted: Decimal, as_of: date
+    db: Session,
+    gr_no: str,
+    po: dict[str, Any],
+    line: dict[str, Any],
+    accepted: Decimal,
+    as_of: date,
+    *,
+    in_stock: bool = False,
 ) -> None:
-    """What was accepted (or confirmed, for a service) counts against the order line, and stocked goods go into stock."""
+    """What was accepted (or confirmed, for a service) counts against the order line, and stocked goods go into stock
+    (unless they are there already, in quarantine: `in_stock`)."""
     if accepted <= 0:
         return
     total = Decimal(line["received_qty"]) + accepted
@@ -138,8 +154,8 @@ def count_accepted(
         {"t": total, "s": rules.line_status(Decimal(line["qty"]), total), "p": po["no"], "l": line["line_no"]},
     )
     item = _item(db, line["item_code"])
-    if item["stocked"] and line["item_code"]:
-        ratio = Decimal(line["base_qty"]) / Decimal(line["qty"]) if line["base_qty"] else Decimal(1)
+    if item["stocked"] and line["item_code"] and not in_stock:
+        ratio = _ratio(line)
         db.execute(
             text(
                 "insert into stock_movement (id, item_code, location_code, date, type, qty, unit_cost, ref_doc, source) "
@@ -278,7 +294,8 @@ def post_receipt(db: Session, po_no: str, lines: list[LineIn], header: Header, u
                 {"i": order_lines[line_no]["item_code"], "s": serial, "g": gr_no, "p": po_no, "l": line_no},
             )
     accepted_by_line: dict[int, Decimal] = {}
-    for ln, row, _, result in plan:
+    quarantined: dict[int, str] = {}
+    for ln, row, item, result in plan:
         db.execute(
             text(
                 "insert into gr_line (gr_no, po_no, po_line_no, qty_received, qty_accepted, qty_rejected, reject_reason) "
@@ -297,6 +314,13 @@ def post_receipt(db: Session, po_no: str, lines: list[LineIn], header: Header, u
         if result is not None:
             accepted_by_line[ln.po_line_no] = result.accepted
             count_accepted(db, gr_no, po, row, result.accepted, as_of)
+        elif item["stocked"] and row["item_code"]:
+            qty = (ln.qty_received * _ratio(row)).quantize(rules.QTY)
+            cost = rules.stock_unit_cost(Decimal(row["unit_price"]), Decimal(row["qty"]), row["base_qty"])
+            quality.receive_into_quarantine(
+                db, gr_no, ln.po_line_no, row["item_code"], po["ship_to_location"], qty, cost, me, as_of
+            )
+            quarantined[ln.po_line_no] = str(qty)
     status = refresh_order(db, po_no)
     audit.record(
         db,
@@ -309,6 +333,7 @@ def post_receipt(db: Session, po_no: str, lines: list[LineIn], header: Header, u
             "lines": {ln.po_line_no: str(ln.qty_received) for ln in lines},
             "accepted": {k: str(v) for k, v in accepted_by_line.items()},
             "pending_inspection": pending,
+            "quarantine": quarantined,
             "po_status": status,
             **({"serials": serials} if serials else {}),
         },
@@ -350,6 +375,8 @@ def inspect(db: Session, gr_no: str, decisions: list[Decision], user_id: int, *,
             raise ReceiptError(f"line {line_no}: a reason is needed for the rejected quantity")
     total_rejected = Decimal(0)
     accepted_by_line: dict[int, Decimal] = {}
+    me = org_code_of(db, user_id) or f"user:{user_id}"
+    blocked: dict[int, int] = {}
     for line_no, d in given.items():
         db.execute(
             text(
@@ -365,7 +392,18 @@ def inspect(db: Session, gr_no: str, decisions: list[Decision], user_id: int, *,
         )
         total_rejected += d.qty_rejected
         accepted_by_line[line_no] = d.qty_accepted
-        count_accepted(db, gr_no, po, order_lines[line_no], d.qty_accepted, as_of)
+        ratio = _ratio(order_lines[line_no])
+        held = quality.inspect_hold(
+            db, gr_no, line_no, (d.qty_accepted * ratio).quantize(rules.QTY),
+            (d.qty_rejected * ratio).quantize(rules.QTY), d.reason, me, as_of,
+        )  # fmt: skip
+        if held is not None:
+            blocked[line_no] = held
+        in_stock = db.execute(
+            text("select 1 from stock_hold where source = 'receipt' and gr_no = :g and gr_line_no = :l"),
+            {"g": gr_no, "l": line_no},
+        ).first()
+        count_accepted(db, gr_no, po, order_lines[line_no], d.qty_accepted, as_of, in_stock=in_stock is not None)
     db.execute(
         text("update goods_receipt set inspection_status = :s, accepted_on = :d where no = :n"),
         {"s": "failed" if total_rejected > 0 else "passed", "d": as_of, "n": gr_no},
@@ -377,7 +415,12 @@ def inspect(db: Session, gr_no: str, decisions: list[Decision], user_id: int, *,
         "grn.inspect",
         "goods_receipt",
         gr_no,
-        after={"accepted": {k: str(v) for k, v in accepted_by_line.items()}, "rejected": str(total_rejected)},
+        after={
+            "accepted": {k: str(v) for k, v in accepted_by_line.items()},
+            "rejected": str(total_rejected),
+            "quarantine": "decided",
+            "blocked_holds": blocked,
+        },
     )
     db.commit()
     return Posted(gr_no, po["no"], status, [], accepted_by_line)
@@ -392,7 +435,7 @@ def reserve_arrived(db: Session, tenant: str, gr_no: str) -> None:
             for r in db.execute(
                 text(
                     "select distinct item_code, location_code from stock_movement "
-                    "where ref_doc = :g and type = 'receipt' and qty > 0"
+                    "where ref_doc = :g and type in ('receipt', 'requalify') and quality = 'usable' and qty > 0"
                 ),
                 {"g": gr_no},
             )

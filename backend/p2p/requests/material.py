@@ -15,6 +15,7 @@ The store check and issues hold the same per item-location lock as every stock p
 a time per company, so two people pressing at once cannot set aside the same stock twice.
 """
 
+import logging
 from dataclasses import dataclass, field
 from datetime import date
 from decimal import Decimal
@@ -28,11 +29,21 @@ from p2p.formulas.calendar import business_today
 from p2p.formulas.money import format_qty, round_money
 from p2p.formulas.replenishment import purchase_quantity
 from p2p.formulas.words import count
-from p2p.platform import audit, numbering, tenants
+from p2p.platform import audit, numbering, settings, tenants
 from p2p.platform.sod import Actor, user
 from p2p.receiving import stock
-from p2p.requests import combining, demand_changes, drafts, estimates, reservation
+from p2p.requests import (
+    combining,
+    demand_changes,
+    drafts,
+    estimates,
+    reservation,
+    shortfall,
+    supply_cases,
+    supply_dates,
+)
 
+log = logging.getLogger(__name__)
 QTY = Decimal("0.0001")
 
 
@@ -159,6 +170,8 @@ class LineView:
     issued: Decimal
     requested: Decimal
     reserved_now: Decimal = Decimal(0)  # set aside by this check
+    at_risk: Decimal = Decimal(0)  # what only late supply covers (rule Q17), after this check
+    last_rejected: str | None = None  # the line's latest purchase request was rejected: not bought again by itself
 
     @property
     def short(self) -> Decimal:
@@ -182,6 +195,7 @@ class Checked:
 class CheckResult:
     as_of: date
     requests: list[Checked] = field(default_factory=list)
+    cases: list[dict[str, Any]] = field(default_factory=list)  # late-supply cases opened by this check
 
     @property
     def purchase_requests(self) -> list[drafts.DraftRequest]:
@@ -278,10 +292,14 @@ def store_check(
     today: date | None = None,
     submit: bool = True,
     places: list[reservation.Place] | None = None,
+    automatic: bool = False,
 ) -> CheckResult:
     """Set free stock aside for every open material request line, earliest need-by first, and ask to buy what is still
     short. With submit (and the company), each new purchase request is sent into approval. With `places`, only the open
-    lines of those item-locations are checked (after a change in the ERP's demand)."""
+    lines of those item-locations are checked (after a change in the ERP's demand). An automatic check (the daily job,
+    an event) does not buy again for a line whose latest purchase request was rejected: a person decided that; the
+    button does. Then the late-supply cases are worked out (requests/supply_cases.py) and, when the planning capability
+    is on, the requests whose figures changed are queued for an explanation."""
     as_of = today or business_today()
     db.execute(text("select pg_advisory_xact_lock(hashtext('store_check'))"))  # one check at a time per company
     wanted = set(places) if places is not None else None
@@ -294,7 +312,8 @@ def store_check(
     if not rows:
         db.commit()
         return result
-    taken, cuts = reservation.reserve(db, actor, rows, reservation.lock(db, rows))
+    taken, cuts = reservation.reserve(db, actor, rows, reservation.lock(db, rows), today=as_of)
+    rejected = supply_dates.last_rejected(db, [r["id"] for r in rows])
     by_request: dict[str, Checked] = {}
     short: dict[str, list[tuple[dict[str, Any], Decimal]]] = {}
     for r in rows:
@@ -302,14 +321,15 @@ def store_check(
         checked.lines.append(
             LineView(
                 r["id"], r["line_no"], r["item_code"], r["uom"], r["need_qty"], r["reserved_qty"], r["issued_qty"],
-                r["requested_qty"], taken[r["id"]],
+                r["requested_qty"], taken[r["id"]], last_rejected=rejected.get(r["id"]),
             )
         )  # fmt: skip
         lacking = rules.still_short(r["need_qty"], r["issued_qty"], r["reserved_qty"], r["requested_qty"])
-        if lacking:
+        if lacking and not (automatic and r["id"] in rejected):
             short.setdefault(r["mr_no"], []).append((r, lacking))
     department = drafts.planning_department(db)
     window = combining.window_days(db)
+    safety = reservation.safety_stock(db, sorted({(r["item_code"], r["location_code"]) for r in rows}))
     written: dict[str, drafts.DraftRequest] = {}
     grown: set[str] = set()  # requests written in this check that later lines were combined into
     for mr_no, checked in by_request.items():
@@ -339,6 +359,10 @@ def store_check(
         added = dict(links) | checked.joined
         for line in checked.lines:
             line.requested += added.get(line.id, Decimal(0))
+        changed = checked.request or checked.combined or any(ln.reserved_now for ln in checked.lines)
+        if automatic and not changed:  # a run of the job that found nothing new writes nothing for this request
+            result.requests.append(checked)
+            continue
         audit.record(
             db,
             actor,
@@ -351,6 +375,14 @@ def store_check(
                 "purchase_request": checked.request.no if checked.request else None,
                 "combined_into": checked.combined,
                 "unpriced": checked.unpriced,
+                "not_bought_rejected": {
+                    ln.item_code: ln.last_rejected for ln in checked.lines if automatic and ln.last_rejected
+                },
+                "safety_stock": {
+                    f"{i}@{loc}": str(q)
+                    for (i, loc), q in safety.items()
+                    if i in {ln.item_code for ln in checked.lines}
+                },
             },
         )
         result.requests.append(checked)
@@ -360,7 +392,83 @@ def store_check(
     reservation.settle(db, tenant, cuts)
     if submit and tenant:
         drafts.submit(db, tenant, result.purchase_requests, actor, as_of)
+    if tenant:
+        _after_check(db, tenant, result, places, as_of)
     return result
+
+
+def _after_check(
+    db: Session, tenant: str, result: CheckResult, places: list[reservation.Place] | None, as_of: date
+) -> None:
+    """What is at risk now, the late-supply cases, and the explanations to write (when that capability is on)."""
+    found = supply_cases.evaluate(db, tenant, places, today=as_of)
+    result.cases = found.opened
+    for checked in result.requests:
+        for ln in checked.lines:
+            c = found.covers.get(ln.id)
+            ln.at_risk = c.at_risk if c else Decimal(0)
+    from p2p.agents import planning  # noqa: PLC0415 - the agent reads this module's results
+
+    planning.queue_changed(db, tenant, [c.mr_no for c in result.requests])
+
+
+def submit_setting(db: Session) -> bool:
+    """Whether an automatic check (job or event) sends what it makes into approval: off unless the company says so."""
+    return settings.value(db, "store_check_submit", "false") == "true"
+
+
+def check_after(db: Session, tenant: str | None, places: list[reservation.Place], *, why: str) -> CheckResult | None:
+    """After an event that drops or moves cover (an order closed, cancelled, revised or acknowledged; a request
+    rejected, cancelled or withdrawn; the buffer changed): the store check for those item-locations, by the system. Runs
+    after the caller's commit; a failure is logged and left to the daily job."""
+    if not tenant or not places:
+        return None
+    try:
+        return store_check(
+            db, audit.SYSTEM, tenant=tenant, places=sorted(set(places)), submit=submit_setting(db), automatic=True
+        )
+    except Exception:  # noqa: BLE001 - the event already happened; the job checks again tomorrow
+        db.rollback()
+        log.warning("store check after %s failed for %s", why, tenant, exc_info=True)
+        return None
+
+
+def after_event(
+    db: Session, tenant: str | None, *, po_no: str | None = None, request_no: str | None = None, why: str
+) -> CheckResult | None:
+    """An order or a purchase request changed in a way that drops or moves cover: check the item-locations of the
+    material request lines pegged to it again (`check_after`)."""
+    tenant = tenant or tenants.slug_of(str(db.get_bind().engine.url.database or ""))
+    try:
+        places = places_of(db, po_no=po_no, request_no=request_no)
+    except Exception:  # noqa: BLE001 - the event already happened; the job checks again tomorrow
+        db.rollback()
+        log.warning("could not read what %s touches", po_no or request_no, exc_info=True)
+        return None
+    return check_after(db, tenant, places, why=why)
+
+
+def all_places(db: Session) -> list[reservation.Place]:
+    """Every item-location with an open material request line."""
+    rows = db.execute(
+        text("select distinct item_code, location_code from material_request_line where status = 'open'")
+    ).all()
+    return sorted((str(r[0]), str(r[1])) for r in rows)
+
+
+def places_of(db: Session, *, po_no: str | None = None, request_no: str | None = None) -> list[reservation.Place]:
+    """The item-locations of the open material request lines pegged to an order or a purchase request."""
+    rows = db.execute(
+        text(
+            "select distinct m.item_code, m.location_code from material_request_buy b "
+            "join material_request_line m on m.id = b.mr_line_id "
+            "where m.status = 'open' and ((cast(:r as text) is not null and b.request_no = :r) or "
+            "(cast(:p as text) is not null and (b.request_no, b.request_line_no) in "
+            "(select request_no, request_line_no from po_line where po_no = :p)))"
+        ),
+        {"r": request_no, "p": po_no},
+    ).all()
+    return sorted((str(r[0]), str(r[1])) for r in rows)
 
 
 # ---- issue at production start, and cancelling ---------------------------------------------------
@@ -414,7 +522,9 @@ def _issue_line(db: Session, actor: Actor, mr_no: str, ln: dict[str, Any], qty: 
     )
     if done:
         db.execute(text("update material_requirement set status = 'issued' where id = :r"), {"r": ln["requirement_id"]})
-    stock.issue_movement(db, actor, ln["item_code"], ln["location_code"], qty, reference=mr_no, today=today)
+    stock.issue_movement(
+        db, actor, ln["item_code"], ln["location_code"], qty, reference=mr_no, today=today, keep_safety=False
+    )
 
 
 def issue(
@@ -558,6 +668,7 @@ def listing(db: Session, *, status: str | None = None) -> list[dict[str, Any]]:
     ):
         buys.setdefault(line_id, []).append(request_no)
     by_no: dict[str, list[dict[str, Any]]] = {}
+    figured = shortfall.figures(db, nos)
     for ln in db.execute(
         text(
             "select c.id, c.mr_no, c.line_no, c.item_code, i.name as item_name, c.uom, c.need_qty, c.reserved_qty, "
@@ -568,7 +679,17 @@ def listing(db: Session, *, status: str | None = None) -> list[dict[str, Any]]:
         {"n": nos},
     ).mappings():
         row = dict(ln)
-        row["short"] = max(row["need_qty"] - row["issued_qty"] - row["reserved_qty"], Decimal(0))
+        # lacking: what issue and stock do not cover; short (rule Q17, spec 4.1): what nothing covers, in time or late
+        row["lacking_qty"] = max(row["need_qty"] - row["issued_qty"] - row["reserved_qty"], Decimal(0))
+        found = figured.get(row["id"])
+        c = found["cover"] if found else None
+        row["short"] = c.short if c else Decimal(0)
+        row.update(
+            timely_qty=c.timely if c else Decimal(0), late_qty=c.late if c else Decimal(0),
+            at_risk_qty=c.at_risk if c else Decimal(0), latest_arrival=found["latest_arrival"] if found else None,
+            causes=found["causes"] if found else [], supply=found["supply"] if found else [],
+            last_rejected=found["last_rejected"] if found else None,
+        )  # fmt: skip
         row["requests"] = sorted(set(buys.get(row.pop("id"), [])))
         by_no.setdefault(row.pop("mr_no"), []).append(row)
     changes: dict[str, list[dict[str, Any]]] = {}
@@ -580,7 +701,26 @@ def listing(db: Session, *, status: str | None = None) -> list[dict[str, Any]]:
             {"id": c["id"], "at": c["applied_at"].isoformat(), "what": list(c["what"]), "before": c["before"],
              "after": c["after"]}
         )  # fmt: skip
+    notes = planning_notes(db, nos)
     for h in heads:
         h["lines"] = by_no.get(h["no"], [])
         h["changes"] = changes.get(h["no"], [])
+        h["at_risk"] = any(ln["at_risk_qty"] > 0 for ln in h["lines"])
+        h["explanation"] = notes.get(h["no"])
     return heads
+
+
+def planning_notes(db: Session, nos: list[str]) -> dict[str, dict[str, Any]]:
+    """The latest explanation of each material request, if any."""
+    rows = db.execute(
+        text(
+            "select distinct on (mr_no) mr_no, status, summary, lines, created_at, run_id from planning_note "
+            "where mr_no = any(:n) order by mr_no, id desc"
+        ),
+        {"n": nos},
+    ).mappings()
+    return {
+        r["mr_no"]: {"status": r["status"], "summary": r["summary"], "lines": r["lines"], "at": r["created_at"].isoformat(),
+                     "run_id": r["run_id"]}
+        for r in rows
+    }  # fmt: skip

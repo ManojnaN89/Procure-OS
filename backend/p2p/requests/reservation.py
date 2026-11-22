@@ -16,6 +16,7 @@ for stock: it is set aside only what arrived on what was bought for it.
 """
 
 from dataclasses import dataclass
+from datetime import date
 from decimal import Decimal
 from typing import Any
 
@@ -27,10 +28,11 @@ from p2p.formulas import material as rules
 from p2p.formulas.money import format_qty
 from p2p.platform import audit, notifications
 from p2p.platform.sod import Actor
-from p2p.requests import combining, lifecycle
+from p2p.requests import combining, lifecycle, supply_dates
 from p2p.requests.combining import LIVE_REQUEST
 
 Place = tuple[str, str]  # (item, location)
+ZERO = Decimal(0)
 
 _OPEN_LINES = """
     select l.id, l.mr_no, l.line_no, l.item_code, l.location_code, l.uom, l.need_qty, l.reserved_qty, l.issued_qty,
@@ -111,7 +113,24 @@ def lock(db: Session, rows: list[dict[str, Any]]) -> dict[Place, Decimal]:
             {"i": items},
         )
     }
-    return {p: on_hand.get(p, Decimal(0)) - held.get(p, Decimal(0)) for p in places}
+    safety = safety_stock(db, places)
+    return {p: rules.free_stock(on_hand.get(p, ZERO), held.get(p, ZERO), safety.get(p)) for p in places}
+
+
+def safety_stock(db: Session, places: list[Place]) -> dict[Place, Decimal]:
+    """The safety stock of each item-location (none recorded is none): free stock never reaches into it (C4)."""
+    items = sorted({i for i, _ in places})
+    found = {
+        (r[0], r[1]): Decimal(r[2])
+        for r in db.execute(
+            text(
+                "select item_code, location_code, safety_stock from item_location "
+                "where item_code = any(:i) and safety_stock is not null"
+            ),
+            {"i": items},
+        )
+    }
+    return {p: found[p] for p in places if p in found}
 
 
 def _cut_cover(db: Session, actor: Actor, row: dict[str, Any], qty: Decimal, why: str | None = None) -> list[Cut]:
@@ -140,12 +159,13 @@ def _cut_cover(db: Session, actor: Actor, row: dict[str, Any], qty: Decimal, why
 
 
 def reserve(
-    db: Session, actor: Actor, rows: list[dict[str, Any]], free: dict[Place, Decimal]
+    db: Session, actor: Actor, rows: list[dict[str, Any]], free: dict[Place, Decimal], *, today: date | None = None
 ) -> tuple[dict[int, Decimal], list[Cut]]:
     """Set free stock aside for the lines (from `open_lines`, locked with `lock`), as the module says. The rows are
     updated in place (set aside, still coming). The caller commits, then calls `settle`. Returns what each line took
     now, and the request lines cut."""
     ids = [r["id"] for r in rows]
+    dated = supply_dates.cover_by_date(db, [r for r in rows if r.get("basis") != "net"], today)
     open_cover: dict[int, Decimal] = {
         int(r[0]): Decimal(r[1]) for r in db.execute(text(_OPEN_COVER), {"ids": ids, "live": list(LIVE_REQUEST)})
     }
@@ -169,16 +189,7 @@ def reserve(
                 Decimal(0),
             )
             if r.get("basis") == "net"
-            else (
-                rules.still_short(r["need_qty"], r["issued_qty"], r["reserved_qty"], r["requested_qty"]),
-                rules.releasable(
-                    r["need_qty"],
-                    r["issued_qty"],
-                    r["reserved_qty"],
-                    r["requested_qty"],
-                    Decimal(open_cover.get(r["id"], 0)),
-                ),
-            )  # fmt: skip
+            else _wants(r, dated[r["id"]], Decimal(open_cover.get(r["id"], 0)))
             for r in lines
         ]
         for r, (take, over) in zip(lines, rules.allocate(wants, free.get(place, Decimal(0))), strict=True):
@@ -194,6 +205,45 @@ def reserve(
                 cuts += _cut_cover(db, actor, r, over)
                 r["requested_qty"] -= over
     return taken, cuts
+
+
+def _wants(row: dict[str, Any], dated: supply_dates.LineCover, open_cover: Decimal) -> tuple[Decimal, Decimal]:
+    """A line takes stock first for what nothing covers and what only late supply covers (stock now beats a late
+    order); then in place of cover not yet with the buyer, for what it still lacks."""
+    c = rules.cover(row["need_qty"], row["issued_qty"], row["reserved_qty"], dated.timely, dated.late)
+    return c.short + c.at_risk, rules.releasable_timed(c, open_cover)
+
+
+def release_latest(
+    db: Session, actor: Actor, item: str, location: str, qty: Decimal, why: str
+) -> dict[str, dict[str, Decimal]]:
+    """Give back `qty` of what is set aside at a place, from the lines needed latest first (the earliest order keeps its
+    stock). The caller holds the place's lock and commits. Returns per material request what it gave back."""
+    left = qty
+    given: dict[str, dict[str, Decimal]] = {}
+    for row in db.execute(
+        text(
+            "select l.id, l.mr_no, l.reserved_qty from material_request_line l join material_request m on m.no = l.mr_no "
+            "where l.status = 'open' and l.reserved_qty > 0 and l.item_code = :i and l.location_code = :l "
+            "order by l.need_by desc, m.created_at desc, l.mr_no desc, l.line_no desc for update of l"
+        ),
+        {"i": item, "l": location},
+    ).mappings():
+        if left <= 0:
+            break
+        take = min(Decimal(row["reserved_qty"]), left)
+        left -= take
+        db.execute(
+            text("update material_request_line set reserved_qty = reserved_qty - :q where id = :i"),
+            {"q": take, "i": row["id"]},
+        )
+        given.setdefault(row["mr_no"], {})[item] = given.get(row["mr_no"], {}).get(item, ZERO) + take
+    for mr_no, items in given.items():
+        audit.record(
+            db, actor, "material_request.release", "material_request", mr_no,
+            after={"released": {i: str(q) for i, q in items.items()}, "location": location}, reason=why,
+        )  # fmt: skip
+    return given
 
 
 def settle(
@@ -258,6 +308,7 @@ def stock_rose(db: Session, tenant: str | None, places: list[Place], *, why: str
         db.commit()
         return {}
     taken, cuts = reserve(db, audit.SYSTEM, rows, lock(db, rows))
+    safety = safety_stock(db, sorted(wanted))
     reserved: dict[str, dict[str, Decimal]] = {}
     orders: dict[str, str] = {}
     for r in rows:
@@ -270,6 +321,7 @@ def stock_rose(db: Session, tenant: str | None, places: list[Place], *, why: str
             after={
                 "reserved_now": {i: str(q) for i, q in items.items()},
                 "requests_cut": [f"{c.request_no}/{c.line_no}" for c in cuts if c.mr_no == mr_no],
+                "safety_stock": {f"{i}@{loc}": str(q) for (i, loc), q in safety.items()},
             },
             reason=why,
         )  # fmt: skip
@@ -277,4 +329,8 @@ def stock_rose(db: Session, tenant: str | None, places: list[Place], *, why: str
     settle(db, tenant, cuts)
     if reserved and tenant:
         _tell_store(db, tenant, reserved, orders, why)
+    if tenant:  # stock now covers what late supply did not: the late-supply cases there are worked out again
+        from p2p.requests import supply_cases  # noqa: PLC0415 - it reads the lines this module sets aside
+
+        supply_cases.evaluate(db, tenant, places=sorted(wanted))
     return reserved

@@ -194,7 +194,7 @@ categories:
   - {code: SRV, name: Services, kind: service, gl: 5240, stocked: false, approval_category: services, tds: 194J(a)}
 
 # gst: [rate before 22 Sep 2025, rate from then]; on_hand: opening stock at the plant (a stocked item);
-# reorder: [reorder point, order up to] (min-max planning). Services use the unit OTH.
+# reorder: [reorder point, order up to, safety stock] (min-max planning; safety stock 0 when not given). Services use the unit OTH.
 items:
   - {code: RM-01, name: Motor body casting 1 HP, description: Cast iron motor body for the 1 HP monoblock pump, category: RAW, unit: NOS, hsn: "850300", gst: [18, 18], price: "650.00", lead: 10, on_hand: 0}
   - {code: RM-02, name: Motor body casting 0.5 HP, description: Cast iron motor body for the 0.5 HP monoblock pump, category: RAW, unit: NOS, hsn: "850300", gst: [18, 18], price: "480.00", lead: 10, on_hand: 0}
@@ -208,9 +208,9 @@ items:
   - {code: RM-10, name: Terminal box, description: Motor terminal box with cover, category: RAW, unit: NOS, hsn: "850300", gst: [18, 18], price: "60.00", lead: 5, on_hand: 200}
   - {code: RM-11, name: Enamel paint, description: Synthetic enamel paint, blue, per litre, category: RAW, unit: LTR, hsn: "320810", gst: [18, 18], price: "350.00", lead: 5, on_hand: 30}
   - {code: PK-01, name: Export carton, description: 5 ply corrugated carton for one pump, category: PKG, unit: NOS, hsn: "481910", gst: [12, 5], price: "45.00", lead: 4, on_hand: 20}
-  - {code: SP-01, name: V-belt B-42, description: Classical V-belt section B, 42 inch, category: MRO, unit: NOS, hsn: "401032", gst: [18, 18], price: "210.00", lead: 5, on_hand: 4, reorder: [5, 15]}
-  - {code: SP-02, name: Lathe cutting insert, description: Carbide turning insert CNMG 120408, category: MRO, unit: NOS, hsn: "820900", gst: [18, 18], price: "140.00", lead: 5, on_hand: 30, reorder: [10, 40]}
-  - {code: SP-03, name: Hydraulic oil, description: Hydraulic oil ISO VG 68, per litre, category: MRO, unit: LTR, hsn: "271019", gst: [18, 18], price: "180.00", lead: 5, on_hand: 40, reorder: [20, 60]}
+  - {code: SP-01, name: V-belt B-42, description: Classical V-belt section B, 42 inch, category: MRO, unit: NOS, hsn: "401032", gst: [18, 18], price: "210.00", lead: 5, on_hand: 4, reorder: [5, 15, 2]}
+  - {code: SP-02, name: Lathe cutting insert, description: Carbide turning insert CNMG 120408, category: MRO, unit: NOS, hsn: "820900", gst: [18, 18], price: "140.00", lead: 5, on_hand: 30, reorder: [10, 40, 5]}
+  - {code: SP-03, name: Hydraulic oil, description: Hydraulic oil ISO VG 68, per litre, category: MRO, unit: LTR, hsn: "271019", gst: [18, 18], price: "180.00", lead: 5, on_hand: 40, reorder: [20, 60, 10]}
   - {code: SV-01, name: Test bench calibration, description: Calibration of the pump test bench with certificate, per job, category: SRV, kind: service, unit: OTH, hsn: "998346", gst: [18, 18], gst_confidence: SECONDARY, price: "12000.00", lead: 5}
 
 # hsn_digits follows turnover (6 digits above Rs 5 crore); agreed_days is the written MSME agreement
@@ -395,6 +395,107 @@ demand_changes:
       - [MO-2, FG-01, "100", "2026-12-15", DP-2026-12, PLT-CKN, ""]
       - [MO-9, FG-01, "10", "2026-12-20", "", PLT-CKN, cancelled]
       - [MO-2, FG-02, "100", "2026-12-18", DP-2026-12, PLT-CKN, ""]
+
+# Stock held back from use at the cutoff (task 4.1): history/stock_held.csv, loaded by `import stock` after the
+# movements. Quarantine waits for a quality decision, blocked waits for a return to the supplier or scrap; neither is
+# ever set aside, issued or counted. [id, item, location, date held, quality, qty, reason, reference]
+held:
+  - [H-APX-01, RM-07, PLT-CKN, "2026-10-29", quarantine, "20", "Gujarat Bearings and Seals lot, waiting for the seal face check", DC/GBS/2627/0412]
+  - [H-APX-02, RM-06, PLT-CKN, "2026-10-22", blocked, "8", "Rust spots after monsoon storage; kept for the supplier's inspection", Count 22 Oct]
+
+# Stock check scenarios (block 2: held stock, late supply by rule Q17, safety stock, the store check as a job and after
+# events, restock of what is bought for production). Each runs on the demo company from `base` (A0: demo reset and one
+# store check with the button; `reset`: the demo reset alone; a scenario name: all of its steps first), then its own
+# steps, each on a pinned business date (`on`) by a person (`who`). The generator writes them to
+# truth/stock_scenarios.json with the steps of the base spelled out, and works out truth/truth_stock_*.csv from the raw
+# files on its own (datagen/generator/stock_scenarios.py).
+stock_scenarios:
+  - name: A0
+    title: "Base: demo reset and one store check"
+    base: null
+    steps:
+      - {do: reset, who: U06, on: "2026-11-23", label: reset}
+      - {do: store_check, who: U02, on: "2026-11-23", args: {submit: true, button: true}, label: base}
+  - name: Q1-seals
+    title: Seal lot passed, six with a cut lip
+    base: A0
+    steps:
+      - {do: decide_hold, who: U02, on: "2026-11-23", args: {hold_id: H-APX-01, to_usable: "14", to_blocked: "6", reason: "Seal face check passed; six seals with a cut lip"}, label: after_decision}
+  - name: Q3-hold
+    title: Store finds 10 terminal boxes crushed
+    base: A0
+    steps:
+      - {do: hold, who: U02, on: "2026-11-23", args: {item_code: RM-10, location: PLT-CKN, qty: "10", quality: blocked, reason: "Crushed when a rack gave way; kept for scrap"}, label: after_hold}
+  - name: T1-late
+    title: Deccan Castings promises the motor bodies for 8 Dec
+    base: A0
+    steps:
+      - {do: approve_request, who: U07, on: "2026-11-23", args: {mr_order_no: MO-1}, label: after_approval}
+      - {do: source, who: U03, on: "2026-11-23", label: after_source}
+      - {do: acknowledge, who: U03, on: "2026-11-23", args: {item_code: RM-01, promised: "2026-12-08"}, label: after_ack}
+  - name: T1b-on-time
+    title: Promised on the day
+    base: A0
+    steps:
+      - {do: approve_request, who: U07, on: "2026-11-23", args: {mr_order_no: MO-1}, label: after_approval}
+      - {do: source, who: U03, on: "2026-11-23", label: after_source}
+      - {do: acknowledge, who: U03, on: "2026-11-23", args: {item_code: RM-01, promised: "2026-12-05"}, label: after_ack}
+  - name: T2-count-and-arrival
+    title: Twenty motor bodies found, then the late lot arrives
+    base: T1-late
+    steps:
+      - {do: count, who: U02, on: "2026-11-23", args: {item_code: RM-01, location: PLT-CKN, counted: "20", reason: "Twenty found behind the paint store"}, label: after_count}
+      - {do: receive, who: U02, on: "2026-12-08", args: {item_code: RM-01, qty: "50"}, label: after_receipt}
+  - name: T3-buffer
+    title: One working day to receive and check
+    base: T1b-on-time
+    steps:
+      - {do: set_setting, who: U06, on: "2026-11-23", args: {key: receiving_buffer_days, value: "1", approved_by: U10}, label: after_buffer}
+  - name: T4-overdue
+    title: Promised 3 Dec, nothing by Monday
+    base: A0
+    steps:
+      - {do: approve_request, who: U07, on: "2026-11-23", args: {mr_order_no: MO-1}, label: after_approval}
+      - {do: source, who: U03, on: "2026-11-23", label: after_source}
+      - {do: acknowledge, who: U03, on: "2026-11-23", args: {item_code: RM-01, promised: "2026-12-03"}, label: after_ack}
+      - {do: job, who: SYSTEM, on: "2026-12-04", label: after_job_4dec}
+      - {do: job, who: SYSTEM, on: "2026-12-07", label: after_job_7dec}
+  - name: S1-breakdown
+    title: Lathe 2 main drive needs three V-belts
+    base: reset
+    steps:
+      - {do: issue, who: U02, on: "2026-11-23", args: {item_code: SP-01, location: PLT-CKN, qty: "3", reference: Lathe 2 main drive}, label: issue_refused}
+      - {do: safety_override, who: U02, on: "2026-11-23", args: {kind: issue, item_code: SP-01, location: PLT-CKN, qty: "3", reference: Lathe 2 main drive, reason: "Lathe 2 is down; the belts cannot wait for the restock"}, label: override_asked}
+      - {do: approve_proposal, who: U07, on: "2026-11-23", label: after_override}
+      - {do: replenish, who: SYSTEM, on: "2026-11-23", label: after_replenish}
+  - name: S2-impeller-safety
+    title: Plant keeps 20 impellers as safety stock
+    base: reset
+    steps:
+      - {do: set_item_planning, who: U06, on: "2026-11-23", args: {item_code: RM-03, location: PLT-CKN, safety_stock: "20", reason: "Twenty impellers kept for rework and field returns", approved_by: U10}, label: after_safety}
+      - {do: store_check, who: U02, on: "2026-11-23", args: {submit: true, button: true}, label: after_check}
+      - {do: safety_override, who: U02, on: "2026-11-23", args: {kind: material, mr_order_no: MO-1, item_code: RM-03, qty: "10", reason: "MO-1 starts before the impellers come; use the safety stock"}, label: override_asked}
+      - {do: approve_proposal, who: U07, on: "2026-11-23", label: after_override}
+  - name: D1-restock
+    title: Motor bodies also planned min-max
+    base: T1-late
+    steps:
+      - {do: set_item_planning, who: U06, on: "2026-11-23", args: {item_code: RM-01, location: PLT-CKN, reorder_policy: minmax, reorder_point: "20", max_qty: "60", reason: "Keep motor bodies for urgent orders", approved_by: U10}, label: after_planning}
+      - {do: replenish, who: SYSTEM, on: "2026-11-23", label: after_replenish}
+      - {do: replenish, who: SYSTEM, on: "2026-11-23", label: after_second_run}
+  - name: E1-short-close
+    title: Deccan's furnace is down
+    base: T1-late
+    steps:
+      - {do: receive, who: U02, on: "2026-12-08", args: {item_code: RM-01, qty: "30"}, label: after_receipt}
+      - {do: close_balance, who: U03, on: "2026-12-08", args: {item_code: RM-01, reason: "Furnace down; the balance of 20 will not come"}, label: after_close}
+  - name: E2-rejected
+    title: Director rejects MO-2's request
+    base: A0
+    steps:
+      - {do: reject_request, who: U09, on: "2026-11-23", args: {mr_order_no: MO-2, reason: "Hold the 0.5 HP build until the dealer orders are firm"}, label: after_reject}
+      - {do: job, who: SYSTEM, on: "2026-11-24", label: after_job}
+      - {do: store_check, who: U02, on: "2026-11-24", args: {submit: true, button: true}, label: after_button}
 
 # Twelve months of history before the cutoff (decisions D36 and D37), read by datagen/generator/history.py. It ends at
 # the opening stock above, with nothing open for the materials of MO-1.

@@ -32,6 +32,7 @@ LABELS = {
     "invoice.read": "Enter an invoice read from a document",
     "supplier.change": "Apply a small change a supplier asks for",
     "supplier.remind": "Chase a supplier by email",
+    "planning.explain": "Explain a material request's shortages",
     "payment_run.approve": "Approve a payment run",
     "supplier.set_status": "Activate or block a supplier",
     "invoice.release_block": "Release a payment block on an invoice",

@@ -2,8 +2,8 @@
 
 Each row says what is stuck, why in plain words, who must act, what they do next, and for how many working days it has
 waited. The rows come from the services that already know each case (invoice blocks, goods received without an order,
-services to confirm, proposals, approvals past their reminder, the buyer's supplier alerts, and the cases a change in
-the ERP's demand left for the buyer or the store); nothing is written here.
+services to confirm, proposals, approvals past their reminder, the buyer's supplier alerts, the cases a change in
+the ERP's demand left for the buyer or the store, and supply promised too late for a need); nothing is written here.
 A person sees the rows their roles may see, and the ones where they are the person named; the administrator sees them all,
 read only.
 """
@@ -27,7 +27,7 @@ from p2p.orders.workflow import NO_APPROVER
 from p2p.platform import alerts, permissions
 from p2p.platform.rows import rows as _rows
 from p2p.receiving import goods, services, unordered
-from p2p.requests import demand_cases
+from p2p.requests import demand_cases, supply_cases
 
 KINDS: dict[str, str] = {
     "invoice": "Invoices blocked",
@@ -38,6 +38,7 @@ KINDS: dict[str, str] = {
     "supplier": "Suppliers to chase",
     "order": "Orders nobody may approve",
     "demand": "Demand changes to act on",
+    "late_supply": "Supply promised too late",
 }
 
 AP = ("AP", "invoice.match", "Ask the supplier for a corrected invoice")
@@ -268,6 +269,23 @@ def _demand(db: Session) -> Iterator[Stuck]:
         )  # fmt: skip
 
 
+def _late_supply(db: Session) -> Iterator[Stuck]:
+    """Orders that bring what a material request needs after it needs it (rule Q17): the buyer expedites or buys
+    elsewhere."""
+    for c in supply_cases.listing(db, status="open"):
+        code = org_code_of(db, int(c["assignee"]))
+        yield Stuck(
+            "late_supply", c["po_no"], f"#/purchase-orders/{c['po_no']}", str(c["title"]), f"Buyer: {name_of(db, code)}",
+            str((c["payload"] or {}).get("next_step", "")), demand_cases.since(c["created_at"]),
+            amount=supply_cases.amount(db, c), act=supply_cases.ACTS, people=frozenset({code}) if code else frozenset(),
+            see=(supply_cases.ACTS, "stock.view"),
+            case={
+                "task_id": c["task_id"], "owner_kind": "buyer", "outcomes": list(supply_cases.OUTCOMES),
+                "note_needed": list(supply_cases.NOTE_NEEDED), "close_url": f"/api/supply-risks/{c['task_id']}/close",
+            },
+        )  # fmt: skip
+
+
 def collect(db: Session, today: date, calendar: BusinessCalendar) -> list[Stuck]:
     """Every stuck case in the company, whoever must act."""
     return [
@@ -279,6 +297,7 @@ def collect(db: Session, today: date, calendar: BusinessCalendar) -> list[Stuck]
         *_suppliers(db, today, calendar),
         *_orders(db),
         *_demand(db),
+        *_late_supply(db),
     ]
 
 

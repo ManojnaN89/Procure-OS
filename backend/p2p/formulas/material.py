@@ -1,6 +1,11 @@
 """Setting stock aside for material requests and what is left to buy. Plain arithmetic in the item's base unit."""
 
+from dataclasses import dataclass
+from datetime import date, timedelta
 from decimal import Decimal
+from typing import Any
+
+from p2p.formulas.calendar import BusinessCalendar
 
 ZERO = Decimal(0)
 
@@ -60,3 +65,133 @@ def net_want(need: Decimal, issued: Decimal, reserved: Decimal, requested: Decim
     and is not yet set aside or issued, never more than it still lacks."""
     arrived = max(bought - requested, ZERO)
     return max(min(arrived - reserved - issued, still_short(need, issued, reserved, requested)), ZERO)
+
+
+# ---- safety stock (C4) ------------------------------------------------------------------------------
+
+
+def free_stock(on_hand: Decimal, reserved: Decimal, safety: Decimal | None) -> Decimal:
+    """What stock is free to set aside or issue: usable on hand less what is set aside and less the safety stock. It may be
+    negative (safety stock raised after stock was set aside); nothing is then taken from it."""
+    return on_hand - reserved - (safety or ZERO)
+
+
+# ---- time-phased cover (rule Q17) -------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class Part:
+    """Supply still to come on one document line, in the stock unit, dated as rule Q17 says."""
+
+    qty: Decimal
+    date: date
+    ref: Any = None  # what the caller needs to name it (document, line, kind of date)
+
+
+def latest_arrival(need_by: date, buffer_days: int, calendar: BusinessCalendar) -> date:
+    """The last day supply may arrive for a need: the need-by moved back `buffer_days` working days on the place's
+    calendar. A buffer of 0 is the need-by itself, whatever day it is."""
+    day = need_by
+    for _ in range(buffer_days):
+        day -= timedelta(days=1)
+        while not calendar.is_working_day(day):
+            day -= timedelta(days=1)
+    return day
+
+
+def supply_date(promised: date | None, asked: date, today: date) -> date:
+    """When a supply part is expected: the promise, else the date asked for; a date already passed with the goods not in
+    counts as today."""
+    return max(promised or asked, today)
+
+
+def time_phase(parts: list[Part], wants: list[Decimal]) -> list[list[Part]]:
+    """Share the parts still to come on one request line among the material request lines it buys for: earliest part
+    first, to the lines in their need-by order, each up to what is still coming for it (`wants`). Returns the parts per
+    line. A line wanting more than the parts hold gets nothing more here."""
+    queue = sorted(parts, key=lambda p: p.date)
+    left = [p.qty for p in queue]
+    out: list[list[Part]] = []
+    i = 0
+    for want in wants:
+        got: list[Part] = []
+        need = max(want, ZERO)
+        while need > 0 and i < len(queue):
+            take = min(need, left[i])
+            if take > 0:
+                got.append(Part(take, queue[i].date, queue[i].ref))
+                need -= take
+                left[i] -= take
+            if left[i] <= 0:
+                i += 1
+        out.append(got)
+    return out
+
+
+@dataclass(frozen=True)
+class Cover:
+    """A material request line's cover split by date (stock unit)."""
+
+    lacking: Decimal  # need less issued less set aside
+    timely: Decimal  # still coming by the latest arrival
+    late: Decimal  # still coming after it
+    at_risk: Decimal  # of what is lacking, what only late supply covers
+    short: Decimal  # of what is lacking, what nothing covers
+
+
+def cover(need: Decimal, issued: Decimal, reserved: Decimal, timely: Decimal, late: Decimal) -> Cover:
+    """Rule Q17 for one line: supply counts for the need only when it comes by the latest arrival; what only late supply
+    covers is at risk, and what nothing covers is short (it is bought; the late part is not bought again)."""
+    lacking = max(need - issued - reserved, ZERO)
+    at_risk = min(late, max(lacking - timely, ZERO))
+    short = max(lacking - timely - late, ZERO)
+    return Cover(lacking, timely, late, at_risk, short)
+
+
+def releasable_timed(c: Cover, open_cover: Decimal) -> Decimal:
+    """Of the cover requests not yet with the buyer bring, how much stock may take over once the line has what is short
+    and at risk: never more than the line still lacks after that."""
+    return max(min(open_cover, c.lacking - c.short - c.at_risk), ZERO)
+
+
+# ---- why a line is short (the planning capability explains these, it never works them out) --------
+
+
+CAUSES = ("covered", "held_for_earlier", "held_quality", "late_supply", "no_stock", "on_order", "safety_stock", "short")
+
+
+def causes(
+    c: Cover,
+    *,
+    need: Decimal,
+    issued: Decimal,
+    reserved: Decimal,
+    usable: Decimal,
+    set_aside_elsewhere: Decimal,
+    safety: Decimal,
+    held: Decimal,
+) -> list[str]:
+    """The engine's reasons for a line, sorted: covered (issued and set aside reach the need), on_order (timely supply),
+    late_supply (something at risk), short (nothing covers part of it); and, for a line still lacking, no_stock (no usable
+    stock at the place), held_for_earlier (usable stock there is set aside for other lines), safety_stock (stock is free
+    before the safety stock but not after it), held_quality (quarantine or blocked stock there)."""
+    found: set[str] = set()
+    if issued + reserved >= need:
+        found.add("covered")
+    if c.timely > 0:
+        found.add("on_order")
+    if c.at_risk > 0:
+        found.add("late_supply")
+    if c.short > 0:
+        found.add("short")
+    if c.lacking > 0:
+        free_before = usable - set_aside_elsewhere - reserved
+        if usable <= 0:
+            found.add("no_stock")
+        if set_aside_elsewhere > 0:
+            found.add("held_for_earlier")
+        if free_before > 0 and free_before - safety <= 0:
+            found.add("safety_stock")
+        if held > 0:
+            found.add("held_quality")
+    return sorted(found)

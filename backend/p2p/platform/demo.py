@@ -26,6 +26,7 @@ from p2p.formulas.words import count
 from p2p.masters.importer import ImportReport, import_masters
 from p2p.platform import audit, routing, tenants, users
 from p2p.receiving import stock
+from p2p.requests import jobs as request_jobs
 from p2p.requests.demand import DemandReport, import_demand
 from p2p.requests.demand_files import KINDS as DEMAND_KINDS
 
@@ -236,6 +237,7 @@ def reset_company(
                 )
         configure(db, demo, slug)
         configure_autonomy(db, demo)
+        request_jobs.queue_daily_check(db, slug)
         people = db.execute(text("select code, name, designation, email from org_user order by code")).all()
         held: dict[str, set[str]] = {}
         for code, role in db.execute(text("select user_code, role from org_user_role")):

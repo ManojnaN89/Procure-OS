@@ -45,7 +45,7 @@ def register(kind: str) -> Callable[[Handler], Handler]:
 
 def load_handlers() -> None:
     """Import the modules that register handlers."""
-    from p2p.agents import intake, supplier_comms  # noqa: F401, PLC0415 - the email jobs of the intake and supplier agents
+    from p2p.agents import intake, planning, supplier_comms  # noqa: F401, PLC0415 - agent jobs
     from p2p.approvals import chasing  # noqa: F401, PLC0415 - approval reminders
     from p2p.invoices import reading  # noqa: F401, PLC0415 - reads invoice mails into drafts
     from p2p.orders import jobs as order_jobs  # noqa: F401, PLC0415
@@ -70,17 +70,24 @@ def enqueue(tenant: str, kind: str, payload: dict[str, Any], run_at: datetime | 
 
 
 def enqueue_unique(
-    tenant: str, kind: str, payload: dict[str, Any], run_at: datetime, *, exclude_id: int | None = None
+    tenant: str,
+    kind: str,
+    payload: dict[str, Any],
+    run_at: datetime,
+    *,
+    exclude_id: int | None = None,
+    same_payload: bool = False,
 ) -> int | None:
-    """Queue a job unless the tenant already has one of this kind waiting (used for self-rescheduling polls)."""
+    """Queue a job unless the tenant already has one of this kind waiting (used for self-rescheduling polls); with
+    `same_payload`, one of this kind for the same payload (one job per business key)."""
     engine = tenants.control_engine()
     with engine.begin() as c:
         waiting = c.execute(
             text(
                 "select 1 from job where tenant_slug = :t and kind = :k and status in ('queued', 'running') "
-                "and id <> coalesce(:x, -1) limit 1"
+                "and id <> coalesce(:x, -1) and (not :same or payload = cast(:p as jsonb)) limit 1"
             ),
-            {"t": tenant, "k": kind, "x": exclude_id},
+            {"t": tenant, "k": kind, "x": exclude_id, "same": same_payload, "p": json.dumps(payload, default=str)},
         ).first()
         if waiting:
             return None

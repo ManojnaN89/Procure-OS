@@ -82,23 +82,33 @@ const MaterialRequestsView = {
     list.querySelectorAll("[data-mr]").forEach((b) => {
       b.addEventListener("click", () => this.act(b.dataset.mr, this.requests[Number(b.dataset.i)]));
     });
+    list.querySelectorAll("[data-explain]").forEach((b) => {
+      b.addEventListener("click", () => this.explain(this.requests[Number(b.dataset.explain)], b));
+    });
+    list.querySelectorAll("[data-safety]").forEach((b) => {
+      const [i, n] = b.dataset.safety.split(":");
+      b.addEventListener("click", () => this.useSafety(this.requests[Number(i)], Number(n), b));
+    });
   },
 
   card(r, i, canManage) {
     const anySetAside = r.lines.some((l) => l.reserved_qty !== "0");
-    const buttons = canManage && r.status === "open"
-      ? `${anySetAside ? `<span class="btn btn-sm" data-mr="issue" data-i="${i}">Issue for production</span>` : ""}
+    const lacking = r.lines.some((l) => l.status === "open" && (l.short !== "0" || l.at_risk_qty !== "0"));
+    const buttons = (r.status === "open" && lacking ? `<span class="btn btn-sm" data-explain="${i}">Explain</span>` : "")
+      + (canManage && r.status === "open"
+        ? `${anySetAside ? `<span class="btn btn-sm" data-mr="issue" data-i="${i}">Issue for production</span>` : ""}
          <span class="btn btn-sm" data-mr="cancel" data-i="${i}">Cancel</span>`
-      : "";
+        : "");
     return `
       <div class="panel" style="margin-bottom:12px;">
         <div style="display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap;align-items:center;">
           <div class="panel-title" style="margin:0;">${this.esc(r.no)} · ${this.esc(r.order_no)}${r.source_kind === "mrp" ? " · MRP plan" : ` (${this.esc(r.product_code)})`} · need by ${formatDate(r.need_by)}
-            <span class="badge ${this.BADGE[r.status] || ""}">${this.esc(this.STATUS[r.status] || r.status)}</span></div>
+            <span class="badge ${this.BADGE[r.status] || ""}">${this.esc(this.STATUS[r.status] || r.status)}</span>${r.at_risk ? ' <span class="badge badge-pending">at risk</span>' : ""}</div>
           <div style="white-space:nowrap;">${buttons}</div>
         </div>
         ${(r.changes || []).map((c) => `<p class="cell-muted" style="font-size:12.5px;margin:4px 0 0;">Changed on ${formatDate(c.at.slice(0, 10))}: ${this.changeWords(c)}</p>`).join("")}
         ${r.cancel_reason ? `<p class="cell-muted" style="font-size:12.5px;">Cancelled: ${this.esc(r.cancel_reason)}</p>` : ""}
+        <div id="mrExplain${i}">${r.explanation ? this.explanationHtml(r.explanation) : ""}</div>
         <div class="table-wrap" style="margin-top:8px;">
           <table class="data-table">
             <thead><tr><th>ITEM</th><th>NEEDED</th><th>SET ASIDE</th><th>ISSUED</th><th>SHORT</th><th>ASKED FOR</th></tr></thead>
@@ -109,13 +119,57 @@ const MaterialRequestsView = {
                   <td>${this.esc(l.need_qty)} <span class="cell-muted">${this.esc(l.uom)}${l.basis === "net" ? " net" : ""}</span></td>
                   <td>${this.esc(l.reserved_qty)}</td>
                   <td>${this.esc(l.issued_qty)}</td>
-                  <td>${l.short === "0" ? `<span class="cell-muted">0</span>` : `<strong>${this.esc(l.short)}</strong>`}</td>
-                  <td class="cell-muted">${l.requested_qty === "0" ? "—" : `${this.esc(l.requested_qty)} on ${l.requests.map((n) => `<a href="#/requisitions/${encodeURIComponent(n)}">${this.esc(n)}</a>`).join(", ")}`}</td>
+                  <td>${l.short === "0" ? `<span class="cell-muted">0</span>` : `<strong>${this.esc(l.short)}</strong>`}${l.at_risk_qty && l.at_risk_qty !== "0" ? ` <span class="badge badge-pending">at risk ${this.esc(l.at_risk_qty)}</span>` : ""}${canManage && r.status === "open" && (l.causes || []).includes("safety_stock") ? `<div><span class="btn btn-sm" data-safety="${i}:${l.line_no}" style="margin-top:4px;">Use safety stock</span></div>` : ""}</td>
+                  <td class="cell-muted">${this.askedFor(l)}${l.last_rejected ? `<div style="font-size:11px;">${this.esc(l.last_rejected)} was rejected: not bought again until the store check is run</div>` : ""}</td>
                 </tr>`).join("")}
             </tbody>
           </table>
         </div>
       </div>`;
+  },
+
+  // What is still coming for a line: each document with its date, and whether it comes in time.
+  askedFor(l) {
+    if (l.requested_qty === "0") return "—";
+    const link = (s) => s.doc_type === "po" ? `#/purchase-orders/${encodeURIComponent(s.doc_no)}`
+      : s.doc_type === "rfq" ? `#/rfqs/${encodeURIComponent(s.doc_no)}` : `#/requisitions/${encodeURIComponent(s.doc_no)}`;
+    const when = { promised: "promised", need_by: "due", today: "overdue, counted as" };
+    if (!(l.supply || []).length) {
+      return `${this.esc(l.requested_qty)} on ${l.requests.map((n) => `<a href="#/requisitions/${encodeURIComponent(n)}">${this.esc(n)}</a>`).join(", ")}`;
+    }
+    return l.supply.map((s) => `${this.esc(s.qty)} on <a href="${link(s)}">${this.esc(s.doc_no)}</a>, ${when[s.date_kind] || ""} ${formatDate(s.date)}${s.timely ? "" : " (late)"}`).join("<br>");
+  },
+
+  explanationHtml(e) {
+    if (e.status === "off") return `<p class="cell-muted" style="font-size:12.5px;">Explanations are switched off. The figures are in the table.</p>`;
+    if (e.status !== "accepted") {
+      const facts = (e.facts || []).map((f) => `${this.esc(f.item_code)}: needs ${this.esc(f.need)}, set aside ${this.esc(f.set_aside)}, in time ${this.esc(f.timely)}, late ${this.esc(f.late)}, at risk ${this.esc(f.at_risk)}, short ${this.esc(f.short)} (${(f.causes || []).map((c) => this.esc(c.replace(/_/g, " "))).join(", ")})`);
+      return `<div class="cell-muted" style="font-size:12.5px;margin-top:6px;">The figures, without an explanation:${facts.length ? `<br>${facts.join("<br>")}` : ""}</div>`;
+    }
+    return `<div style="font-size:12.5px;margin-top:6px;">${this.esc(e.summary)}${(e.lines || []).map((ln) => `<div class="cell-muted">Line ${this.esc(ln.line_no)}: ${this.esc(ln.text)}</div>`).join("")}</div>`;
+  },
+
+  async explain(r, button) {
+    const i = this.requests.indexOf(r);
+    const box = document.getElementById(`mrExplain${i}`);
+    button.textContent = "Explaining…";
+    const res = await API.postJSON(`/api/material-requests/${encodeURIComponent(r.no)}/explain`, {});
+    button.textContent = "Explain";
+    if (box) box.innerHTML = res.ok ? this.explanationHtml(res.data) : `<p class="cell-muted">${this.esc(res.data.detail || "That did not work.")}</p>`;
+  },
+
+  // A line short only because of safety stock: ask the manager to use it for this line.
+  useSafety(r, lineNo, button) {
+    const line = r.lines.find((l) => l.line_no === lineNo);
+    const cell = button.parentElement;
+    cell.innerHTML = `<input placeholder="Why (required)" style="width:140px;padding:4px;font-size:12px;"> <span class="btn btn-sm">Ask</span>`;
+    cell.querySelector(".btn").addEventListener("click", async () => {
+      const res = await API.postJSON("/api/inventory/safety-overrides", {
+        kind: "material", mr_no: r.no, line_no: lineNo, qty: line.lacking_qty,
+        reason: cell.querySelector("input").value,
+      });
+      cell.textContent = res.ok ? `Sent to ${res.data.approver_hint}` : res.data.detail || "That did not work.";
+    });
   },
 
   note(html) {

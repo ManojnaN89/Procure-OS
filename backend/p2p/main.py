@@ -28,6 +28,7 @@ from p2p.platform.prospect_api import router as prospect_router
 from p2p.platform.reconciliation_api import router as reconciliation_router
 from p2p.platform.service_entry_api import router as service_entry_router
 from p2p.platform.setup_api import router as setup_router
+from p2p.platform.stock_api import router as stock_router
 from p2p.platform.supplier_agent_api import router as supplier_agent_router
 from p2p.platform.supplier_link_api import router as supplier_link_router
 from p2p.platform.ui_api import router as ui_router
@@ -44,6 +45,7 @@ app.include_router(files_router)
 app.include_router(export_router)
 app.include_router(demand_router)
 app.include_router(material_router)
+app.include_router(stock_router)
 app.include_router(setup_router)
 app.include_router(buying_rules_router)
 app.include_router(ui_router)

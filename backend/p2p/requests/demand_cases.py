@@ -82,14 +82,19 @@ def owner(db: Session, tenant: str, case: Pending) -> int:
     """The login who acts: the document's buyer, else the category's, else the first buyer; or the first store person."""
     if case.owner_kind == "store":
         return _first_store(db)
-    for code in case.owners:
+    return buyer_login(db, tenant, case.owners)
+
+
+def buyer_login(db: Session, tenant: str, codes: list[str | None]) -> int:
+    """The first of these people (org codes) who has a login, else the first buyer."""
+    for code in codes:
         login = notifications.login_of(db, tenant, code)
         if login:
             return login
     return _first_buyer(db)
 
 
-def _chain(db: Session, tenant: str, login: int) -> list[int]:
+def chain(db: Session, tenant: str, login: int) -> list[int]:
     """Escalation goes to the owner's manager."""
     code = org_code_of(db, login)
     manager = db.execute(text("select manager_code from org_user where code = :c"), {"c": code}).scalar()
@@ -108,7 +113,7 @@ def open_case(db: Session, tenant: str, case: Pending) -> dict[str, Any]:
     }  # fmt: skip
     task_id = tasks.create_task(
         db, tenant, kind=KIND, title=case.title[:200], assignee=login, sla_hours=days * calendar.hours_per_day,
-        escalation_chain=_chain(db, tenant, login), payload=payload, calendar=calendar, email_note=case.next_step,
+        escalation_chain=chain(db, tenant, login), payload=payload, calendar=calendar, email_note=case.next_step,
     )  # fmt: skip
     db.execute(
         text(

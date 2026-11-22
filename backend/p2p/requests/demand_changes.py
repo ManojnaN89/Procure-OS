@@ -445,7 +445,7 @@ class Applier:
         ]  # fmt: skip
 
     def _earlier(self, change: Change, ln: dict[str, Any], need_by: date) -> None:
-        """Request lines not yet with the buyer take the earlier date; an order promised later is a case for the buyer."""
+        """Request lines not yet with the buyer take the earlier date; an order promised later becomes a late-supply case."""
         db = self.db
         for request_no, line_no, was in db.execute(
             text(
@@ -475,10 +475,8 @@ class Applier:
             change.need_by_moved.append(
                 {"request_no": request_no, "line_no": line_no, "from": was.isoformat(), "to": need_by.isoformat()}
             )
-        for link in self._links(ln):
-            doc = document(db, link)
-            if doc.doc_type == "po" and rules.late_for(doc.promised, doc.need_by, need_by):
-                self._add_case(change, ln, "buyer", doc, Decimal(link["qty"]), link, late=need_by)
+        # an order now promised after the earlier date is a late-supply case (rule Q17, requests/supply_cases.py): the
+        # store check that runs again for this place works it out (one late order, one case: OP-6 of block 2)
 
     def _links(self, ln: dict[str, Any]) -> list[dict[str, Any]]:
         return [dict(r) for r in self.db.execute(text(_BUYER_LINKS), {"l": ln["id"]}).mappings()]

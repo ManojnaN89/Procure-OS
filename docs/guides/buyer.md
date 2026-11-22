@@ -30,6 +30,10 @@ A price far below the other quotes or the last price paid shows "Ask the supplie
 
 The order email has a link where the supplier accepts the order, declines it or asks for a new date, quantity or price; it may also reply by email. Nothing changes by itself: the panel **Supplier's answer** on the order lists each change, old value to new. Click **Accept**, or write a reason and click **Reject** (the supplier gets a new link). An accepted change makes a new version of the order and the requester is told; a price rise above 2% goes on to the purchase manager; an accepted decline cancels the order and gives you a task to source the line again. The panel also shows what the supplier says it has shipped. Reminders about the delivery date go to the supplier by themselves.
 
+## Supply promised too late
+
+When an order brings what a production order needs after it needs it (the need-by less the receiving buffer), you get one case per order and material request on **Exceptions** ("Supply promised too late"): "PO-... brings 50 Motor body casting 1 HP on 8 Dec, after MO-1 needs them on 5 Dec", due in two working days. Ask the supplier to deliver in time, or buy elsewhere, then **Close** it: expedited, accepted late or bought elsewhere (a note for the last two). The case closes by itself when stock or an earlier delivery covers the need. The late part is never bought again by the store check.
+
 ## Change or end an order
 
 On the order page, the panel **Order document and changes** keeps the version and its history. Every change needs a reason.

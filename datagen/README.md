@@ -36,6 +36,7 @@ materials): `master/stock_opening.csv` is the stock on 1 Nov 2025, worked out ba
 | `generator/history_money.py` | Invoices with the planted problems, the expected match, blocks, TDS, due dates, weekly payment runs, bank lines, statements |
 | `generator/history_close.py` | The cutoff, statuses at the cutoff, answer keys, numbering in date order, the files |
 | `generator/history_check.py` | Checks from the files alone: references, GST, TDS (from `data/reference/tds_sections.csv`) and totals to the paisa, stock, working days, segregation of duties, every planted problem counted |
+| `generator/stock_scenarios.py` | Held stock at the cutoff (`held:` -> `history/stock_held.csv`) and the block 2 stock check scenarios (`stock_scenarios:` -> `truth/stock_scenarios.json` with every step spelled out from the reset, and `truth/truth_stock_check.csv`, `truth_stock_position.csv`, `truth_stock_requests.csv`, worked out by its own model of the rules: held stock never used, late supply by rule Q17, safety stock, restock of the stock part only) |
 
 A run that does not land on the profile's stock is drawn again (the attempt number is part of the seed). TDS rules, due
 dates, payment-run days and the numbering in date order are in `generator/finance.py`. `splits.json` names the suppliers

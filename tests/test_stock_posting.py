@@ -88,6 +88,8 @@ def test_an_issue_cannot_take_more_than_is_on_the_shelf_and_writes_nothing(shop:
 
 
 def test_an_issue_of_everything_that_is_left_is_allowed_and_one_more_is_not(shop: Session) -> None:  # noqa: F811
+    shop.execute(text("update item_location set safety_stock = null where item_code = 'A'"))  # C4 has its own tests
+    shop.commit()
     post_issue(shop, 1, "A", "WH", D("100"))
 
     assert _on_hand(shop) == D("0")

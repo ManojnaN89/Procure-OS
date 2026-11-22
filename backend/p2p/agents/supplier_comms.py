@@ -671,6 +671,9 @@ def _apply_date(
         before={"promised_date": current}, after={"promised_date": requested}, reason=detail,
     )  # fmt: skip
     autonomy.record_outcome(db, DECISION_CHANGE, auto=True, ref=f"po:{po_no}")
+    from p2p.requests import material  # noqa: PLC0415 - material requests sit above orders
+
+    material.after_event(db, None, po_no=po_no, why=f"{supplier} moved the delivery of {po_no}")
     draft = _draft_date_noted(db, po_no, contact, requested)
     _send(db, supplier, po_no, f"Delivery date noted: purchase order {po_no}", draft)
     return Handled(

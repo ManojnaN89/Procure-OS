@@ -33,6 +33,7 @@ from history_close import Closing  # noqa: E402
 from history_close import write as write_tables  # noqa: E402
 from history_money import Money  # noqa: E402
 from demand_scenarios import write_scenarios  # noqa: E402
+from stock_scenarios import write_stock  # noqa: E402
 from history_plan import mrp_results, production_lines  # noqa: E402
 from master_files import (  # noqa: E402
     EMPTY_TABLES,
@@ -373,14 +374,17 @@ class MasterWriter:
             )
             if not stocked:
                 continue
-            point, up_to = (_qty(Decimal(v)) for v in it["reorder"]) if "reorder" in it else ("", "")
+            # [reorder point, order up to, safety stock]: safety stock is 0 when only two are given
+            point, up_to, safety = (
+                (_qty(Decimal(str(v))) for v in [*it["reorder"], 0][:3]) if "reorder" in it else ("", "", "")
+            )
             plan.append(
                 {
                     "item_code": it["code"],
                     "location_code": plant,
                     "reorder_policy": "minmax" if "reorder" in it else "none",
                     "reorder_point": point,
-                    "safety_stock": _qty(Decimal(0)) if point else "",
+                    "safety_stock": safety,
                     "min_qty": point,
                     "max_qty": up_to,
                     "order_qty": "",
@@ -625,6 +629,8 @@ def build(profile: CompanyProfile, out: Path) -> dict[str, dict[str, int]]:
     inputs = write_inputs(profile, out)
     history = write_history(profile, out) if "history" in profile.data else {}
     changes = write_scenarios(profile.data, out) if history else {}  # the oracle replays the stock history
+    if history:
+        write_stock(profile.data, out)  # held stock and the stock check scenarios, after the demand truth
     manifest = {
         "dataset": profile.dataset,
         "profile": profile.name,
@@ -815,6 +821,22 @@ def check(out: Path, profile: CompanyProfile | None = None) -> list[str]:
             problems.append(
                 f"item {p['item_code']}: order up to {p['max_qty']} is not above the point {p['reorder_point']}"
             )
+        if p["safety_stock"] and p["reorder_point"] and Decimal(p["safety_stock"]) > Decimal(p["reorder_point"]):
+            problems.append(
+                f"item {p['item_code']}: safety stock {p['safety_stock']} is above the reorder point {p['reorder_point']}"
+            )
+    # held stock (quarantine or blocked) is of an item stocked at that location, with a quantity and a reason
+    held_file = out / "history" / "stock_held.csv"
+    places = {(r["item_code"], r["location_code"]) for r in t["item_location"]}
+    for h in read(held_file) if held_file.exists() else []:
+        if (h["item_code"], h["location_code"]) not in places:
+            problems.append(f"held stock {h['id']}: {h['item_code']} is not stocked at {h['location_code']}")
+        if h["quality"] not in ("quarantine", "blocked"):
+            problems.append(f"held stock {h['id']}: quality {h['quality']} is not quarantine or blocked")
+        if Decimal(h["qty"] or "0") <= 0:
+            problems.append(f"held stock {h['id']}: quantity {h['qty']} is not above zero")
+        if not h["reason"].strip():
+            problems.append(f"held stock {h['id']}: no reason")
 
     # prices: in the item's unit, from a supplier approved for its category, within the contract's dates
     item_of = {r["code"]: r for r in t["item"]}

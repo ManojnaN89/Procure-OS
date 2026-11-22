@@ -621,3 +621,47 @@ def test_two_receipts_at_the_same_moment_cannot_together_take_in_more_than_the_o
 
     assert sorted(outcomes) == ["ok", "refused"]
     assert _line(store)[0] == D("7") and store.execute(text("select count(*) from goods_receipt")).scalar_one() == 1
+
+
+# ---- block 2: goods waiting for inspection are in the store as quarantine (task 4.1) ------------------------------
+
+
+def _quality(shop: Session, item: str = "A") -> dict[str, Decimal]:
+    shop.expire_all()
+    return {
+        str(r[0]): D(r[1])
+        for r in shop.execute(text("select quality, qty from stock_quality_level where item_code = :i"), {"i": item})
+    }
+
+
+def test_inspection_receipt_waits_in_quarantine_and_is_not_invoiceable(store: Session, outbox: Outbox) -> None:  # noqa: F811
+    store.execute(text("update item set inspection_required = true, stocked = true where code = 'A'"))
+    store.commit()
+    po_no, _ = _sent(store)
+    done = _receive(store, po_no, "10")
+    assert _quality(store).get("quarantine") == D(10) and _on_hand(store) == D(0)
+    assert _line(store) == (D(0), "open")  # nothing received for the order, so nothing to invoice against
+    hold = store.execute(text("select source, gr_no, left_qty from stock_hold")).one()
+    assert hold == ("receipt", done.no, D(10))
+    after = store.execute(text("select after from audit_event where action = 'grn.post'")).scalar_one()
+    assert after["quarantine"] == {"1": "10.0000"}
+
+
+def test_rejected_at_inspection_goes_to_blocked(store: Session, outbox: Outbox) -> None:  # noqa: F811
+    store.execute(text("update item set inspection_required = true, stocked = true where code = 'A'"))
+    store.commit()
+    po_no, _ = _sent(store)
+    done = _receive(store, po_no, "10")
+    goods.inspect(store, done.no, [Decision(1, D("8"), D("2"), "Out of specification")], 1, as_of=TODAY)
+    assert _quality(store) == {"usable": D(8), "quarantine": D(0), "blocked": D(2)}
+    assert _line(store) == (D(8), "part_received")
+    holds = store.execute(text("select quality, left_qty, reason, closed_at is null from stock_hold order by id")).all()
+    assert [tuple(h) for h in holds] == [
+        ("quarantine", D(0), f"Waiting for the inspection of {done.no}", False),
+        ("blocked", D(2), "Out of specification", True),
+    ]
+    rows = store.execute(
+        text("select type, quality, qty from stock_movement where ref_doc = :g order by quality, qty"), {"g": done.no}
+    ).all()
+    assert {(r[0], r[1]) for r in rows} == {("receipt", "quarantine"), ("requalify", "quarantine"),
+                                          ("requalify", "usable"), ("requalify", "blocked")}  # fmt: skip

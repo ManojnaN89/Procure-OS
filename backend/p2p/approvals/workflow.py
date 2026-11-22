@@ -609,8 +609,13 @@ def _stop(
 def reject(
     db: Session, no: str, user_id: int, reason: str | None, *, tenant: str | None = None, via: str | None = None
 ) -> str:
-    """Refuse the request for good. Its lines stop counting as stock on the way. With the company's slug, the requester is told."""
-    return _stop(db, no, user_id, reason, status="rejected", action="request.reject", tenant=tenant, via=via)
+    """Refuse the request for good. Its lines stop counting as stock on the way. With the company's slug, the requester is
+    told, and the store check runs again for what it bought for material requests (it buys none of it again by itself)."""
+    status = _stop(db, no, user_id, reason, status="rejected", action="request.reject", tenant=tenant, via=via)
+    from p2p.requests import material  # noqa: PLC0415 - material requests sit above approvals
+
+    material.after_event(db, tenant, request_no=no, why=f"{no} was rejected")
+    return status
 
 
 def return_for_changes(

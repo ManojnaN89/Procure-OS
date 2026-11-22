@@ -82,6 +82,18 @@ Steps 1 to 3 of the flow, on their own (after `demo reset apex`; they add three 
 | 3 | store@ | **Inventory** | The impellers show 50 of 60 set aside for production; the free 10 are all that can be issued |
 | 4 | store@ | **Material requests** → MO-1 → **Issue for production** | Everything set aside is issued; what is short stays on the request until it arrives, and is set aside for MO-1 by itself when it does (the store gets a notice), then issue it |
 
+## Held stock, safety stock and late supply (block 2)
+
+After `demo reset apex` and **Run store check**. The scenarios and their expected figures are in `data/datasets/apex-v1/truth/stock_scenarios.json`.
+
+| # | Who | Where and what | You should see |
+|---|---|---|---|
+| 1 | store@ | **Inventory**, row Mechanical seal | "20 in quarantine" (the Gujarat lot waiting for the seal face check); bearings "8 blocked" (rust). Neither is ever set aside |
+| 2 | store@ | Seals → **Holds** → **Release** 14 to usable, 6 to blocked, "Seal face check passed; six with a cut lip" | 74 usable, 6 blocked. MO-2 gets the 14 at once: its request is cut 90 -> 76 seals (₹2,08,370) |
+| 3 | store@ | V-belt → **Issue** 3 ("Lathe 2 main drive") | "Only 2 is free; 2 is safety stock". **Ask to use safety stock** → "Sent to Vikram Joshi"; planthead@ approves on My work and the 3 are issued (1 left, below safety) |
+| 4 | planthead@, buyer@ | On a fresh reset and store check: approve MO-1's request, `python -m p2p.cli source apex`, then the castings order → **Record acknowledgement**, promised 8 Dec | MO-1's castings: "at risk 50", "50 on PO-..., promised 8 Dec (late)"; nothing bought again. buyer@ has "Supply promised too late" on **Exceptions**, due 26 Nov (24 Nov is a holiday), escalating to Sanjay Rao |
+| 5 | store@ | **Count** the castings: 20 | The 20 go to MO-1 (stock beats a late order): at risk 30, and the case says 30 |
+
 ## Demand changes from the ERP
 
 On a fresh reset, after the store check above. The files are in `data/datasets/apex-v1/changes/` (load them with **Material requests → Load from the ERP**, one kind at a time, headers first, or `python -m p2p.cli import demand apex data/datasets/apex-v1/changes/A1-cut`).

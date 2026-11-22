@@ -299,6 +299,8 @@ def test_cancelling_one_order_takes_its_part_off_the_combined_line(apex: Apex) -
 def test_a_restock_joins_a_draft_shortfall_and_replenishment_counts_only_the_stock_part(apex: Apex) -> None:
     # given V-belts (min-max 5 to 15) with 12 on the shelf, and an order needing 20 when a restock would arrive
     _set_stock(apex, "SP-01", "12")
+    apex.db.execute(text("update item_location set safety_stock = null where item_code = 'SP-01'"))  # see block 2
+    apex.db.commit()
     today = business_today()
     restock_by = reference.calendar_for(apex.db).add_working_days(today, 5)
     mrs = _orders(apex, {"MO-V": (restock_by + timedelta(days=2), [("SP-01", "20")], "PLT-CKN")})

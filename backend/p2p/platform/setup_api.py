@@ -22,7 +22,7 @@ from pydantic import BaseModel
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
-from p2p.agents import autonomy
+from p2p.agents import autonomy, planning
 from p2p.approvals.rules import chain_roles
 from p2p.formulas.calendar import business_today
 from p2p.invoices import tolerances as tolerance_versions
@@ -32,6 +32,8 @@ from p2p.platform.rows import rows as _rows
 from p2p.platform.setting_changes import Change
 from p2p.platform.sod import Actor
 from p2p.platform.sod import user as user_actor
+from p2p.requests import jobs as request_jobs
+from p2p.requests import material
 from p2p.sourcing import templates
 
 router = APIRouter(prefix="/api/setup", tags=["setup"])
@@ -75,6 +77,7 @@ PERMISSIONS: dict[str, str] = {
     "stock.view": "See stock",
     "stock.issue": "Issue stock for use",
     "stock.adjust": "Correct stock after a count",
+    "stock.quality": "Hold stock in quarantine or blocked, and decide on held stock",
     "replenishment.run": "Run automatic replenishment",
     "demand.import": "Load production orders and other demand from the ERP",
     "material.manage": "Run the store check, issue and cancel material requests",
@@ -478,6 +481,47 @@ POLICIES: dict[str, tuple[str, str, str, str, str, float | None, float | None, t
         None,
         (),
     ),
+    "receiving_buffer_days": (
+        "app",
+        "int",
+        "Receiving buffer (working days)",
+        "Supply counts for a need only when it is due this many working days before the need-by date (rule Q17)",
+        "0",
+        0,
+        10,
+        (),
+    ),
+    "late_supply_case_days": (
+        "app",
+        "int",
+        "Days to act on supply promised too late (working days)",
+        "A buyer's case for an order promised after the need is due this many working days after it opens",
+        "2",
+        1,
+        10,
+        (),
+    ),
+    "auto_store_check": (
+        "app",
+        "bool",
+        "Daily store check",
+        "Set stock aside and raise shortfall requests every morning at 05:30, before replenishment",
+        "true",
+        None,
+        None,
+        (),
+    ),
+    "store_check_submit": (
+        "app",
+        "bool",
+        "Send automatic shortfall requests for approval",
+        "Shortfall requests made by the daily store check or after an event go into approval at once; when off they "
+        "wait as drafts for the requester or planner to submit",
+        "false",
+        None,
+        None,
+        (),
+    ),
 }
 TOLERANCES: dict[str, tuple[str, str, float | None, float | None]] = {
     "price_pct": ("Invoice price above the order price (%)", "decimal", 0, 100),
@@ -502,6 +546,8 @@ _HELP = {
     "supplier.change": "Moves a promised date within the accepted days; quantities are only noted, prices always go to "
     "a buyer",
     "supplier.remind": "Reminds a supplier that has not acknowledged an order, or still owes part of a delivery",
+    "planning.explain": "Writes a plain-words explanation of a material request's shortages from the engine's figures "
+    "(Act within the limits turns it on; it never changes stock, requests or orders)",
 }
 DECISIONS: dict[str, tuple[str, str]] = {dt: (autonomy.LABELS[dt], help_) for dt, help_ in _HELP.items()}
 LOCKED_LABELS = {
@@ -1404,7 +1450,21 @@ def _policy(db: Session, actor: Actor, args: dict[str, Any], reason: str, apply:
         other = next(k for k in MAILBOXES if k != key)
         if _stored(db, "org", other) == value:
             raise _422(f"{label}: that address already receives {POLICIES[other][2].lower()}; use a different one")
-    return _write_policy(db, actor, key, store, value, default, reason, apply)
+    change = _write_policy(db, actor, key, store, value, default, reason, apply)
+    if apply:
+        _after_policy(db, key, value)
+    return change
+
+
+def _after_policy(db: Session, key: str, value: str) -> None:
+    """Settings the store check reads take effect at once: the daily job is queued, or the check runs again."""
+    tenant = tenants.slug_of(str(db.get_bind().engine.url.database or ""))
+    if tenant is None:
+        return
+    if key == "auto_store_check" and value == "true":
+        request_jobs.schedule_check(tenant)
+    elif key == "receiving_buffer_days":
+        material.check_after(db, tenant, material.all_places(db), why="the receiving buffer changed")
 
 
 def _write_policy(
@@ -1687,6 +1747,84 @@ def _automation(db: Session, actor: Actor, args: dict[str, Any], reason: str, ap
         max_wrong_rate=body.max_wrong_rate,
     )
     _log(db, actor, "automation", decision_type, before, after, reason)
+    db.commit()
+    if decision_type == "planning.explain" and body.level != "auto":  # switched off: nothing queued is left behind
+        planning.drop_queued(tenants.slug_of(str(db.get_bind().engine.url.database or "")) or "")
+    return change
+
+
+# ---- planning values of an item at a place (safety stock, reorder point, maximum) ---------------------
+
+
+class ItemPlanningBody(BaseModel):
+    item_code: str
+    location: str
+    safety_stock: Decimal | None = None
+    reorder_policy: str | None = None
+    reorder_point: Decimal | None = None
+    max_qty: Decimal | None = None
+    reason: str | None = None
+
+
+PLANNING_KEYS = ("safety_stock", "reorder_policy", "reorder_point", "max_qty")
+
+
+@router.post("/item-planning", status_code=202)
+def post_item_planning(payload: dict[str, Any], db: Db, ctx: SettingsAdmin) -> dict[str, Any]:
+    """Change an item's planning values at a place: waits for a second administrator (C4 is a control, D-22). Only the
+    keys given change."""
+    reason = need_reason(payload.get("reason"))
+    args = {k: payload[k] for k in ("item_code", "location", *PLANNING_KEYS) if k in payload}
+    return _submit(db, ctx, "item_planning", args, reason)
+
+
+@setting_changes.handler("item_planning", "admin.settings")
+def _item_planning(db: Session, actor: Actor, args: dict[str, Any], reason: str, apply: bool) -> Change:
+    body = ItemPlanningBody.model_validate(args)
+    if db.execute(text("select 1 from item where code = :c"), {"c": body.item_code}).first() is None:
+        raise HTTPException(404, f"there is no item {body.item_code}")
+    if db.execute(text("select 1 from location where code = :c"), {"c": body.location}).first() is None:
+        raise HTTPException(404, f"there is no place {body.location}")
+    given = {k: args[k] for k in PLANNING_KEYS if k in args}
+    if not given:
+        raise _422("say what changes: safety_stock, reorder_policy, reorder_point or max_qty")
+    if body.reorder_policy is not None and body.reorder_policy not in ("none", "minmax", "fixed"):
+        raise _422("reorder_policy is none, minmax or fixed")
+    old_row = (
+        db.execute(
+            text(
+                "select safety_stock, reorder_policy, reorder_point, max_qty from item_location "
+                "where item_code = :i and location_code = :l"
+            ),
+            {"i": body.item_code, "l": body.location},
+        )
+        .mappings()
+        .first()
+    )
+    old = {k: (old_row[k] if old_row else None) for k in PLANNING_KEYS}
+    new = {**old, **{k: getattr(body, k) for k in given}}
+    for k in ("safety_stock", "reorder_point", "max_qty"):
+        if new[k] is not None and D(new[k]) < 0:
+            raise _422(f"{k} cannot be negative")
+    if new["max_qty"] is not None and new["reorder_point"] is not None and D(new["max_qty"]) < D(new["reorder_point"]):
+        raise _422("the maximum cannot be below the reorder point")
+    key = f"{body.item_code}@{body.location}"
+    before, after = {k: old[k] for k in given}, {k: new[k] for k in given}
+    change = Change(
+        "item_planning", key, before, after, {"item_code": body.item_code, "location": body.location, **after}
+    )
+    if not apply:
+        return change
+    db.execute(
+        text(
+            "insert into item_location (item_code, location_code, safety_stock, reorder_policy, reorder_point, max_qty) "
+            "values (:i, :l, :s, :p, :r, :m) on conflict (item_code, location_code) do update set "
+            "safety_stock = :s, reorder_policy = :p, reorder_point = :r, max_qty = :m"
+        ),
+        {"i": body.item_code, "l": body.location, "s": new["safety_stock"], "p": new["reorder_policy"] or "none",
+         "r": new["reorder_point"], "m": new["max_qty"]},
+    )  # fmt: skip
+    _log(db, actor, "item_planning", key, before, after, reason)
     db.commit()
     return change
 

@@ -196,7 +196,7 @@ categories:
   - {code: FAC, name: Facility services, kind: service, gl: 5340, stocked: false, approval_category: services, tds: 194C}
 
 # gst: [rate before 22 Sep 2025, rate from then]; on_hand: opening stock at the office (a stocked item);
-# reorder: [reorder point, order up to] (min-max planning); gl overrides the category's account.
+# reorder: [reorder point, order up to, safety stock] (min-max planning; safety stock 0 when not given); gl overrides the category's account.
 items:
   - {code: LP-01, name: Standard laptop 14 inch, description: Business laptop 14 inch, 16 GB RAM, 512 GB SSD, category: ITH, unit: NOS, hsn: "847130", gst: [18, 18], price: "62000.00", lead: 5, capex: true, serialised: true, on_hand: 3}
   - {code: LP-02, name: Developer laptop 16 inch, description: Developer laptop 16 inch, 32 GB RAM, 1 TB SSD, category: ITH, unit: NOS, hsn: "847130", gst: [18, 18], price: "105000.00", lead: 5, capex: true, serialised: true, on_hand: 1}
@@ -208,9 +208,9 @@ items:
   - {code: SW-02, name: Design tool licence, description: Design tool licence, annual, category: SWS, kind: service, unit: OTH, hsn: "997331", gst: [18, 18], gst_confidence: SECONDARY, price: "32000.00", lead: 1}
   - {code: CL-01, name: Cloud hosting, description: Cloud hosting, monthly usage, category: SWS, kind: service, unit: OTH, hsn: "998315", gst: [18, 18], gst_confidence: SECONDARY, price: "120000.00", lead: 1}
   - {code: OS-01, name: A4 paper ream, description: A4 copier paper 75 GSM, ream of 500 sheets, category: OFS, unit: PAC, hsn: "480256", gst: [12, 18], price: "280.00", lead: 2, on_hand: 30, reorder: [40, 120]}
-  - {code: OS-02, name: Printer toner, description: Black toner cartridge for the office laser printer, category: OFS, unit: NOS, hsn: "844399", gst: [18, 18], price: "3200.00", lead: 2, on_hand: 2, reorder: [3, 10]}
+  - {code: OS-02, name: Printer toner, description: Black toner cartridge for the office laser printer, category: OFS, unit: NOS, hsn: "844399", gst: [18, 18], price: "3200.00", lead: 2, on_hand: 2, reorder: [3, 10, 1]}
   - {code: OS-03, name: Pantry coffee, description: Roasted coffee beans for the pantry, per kg, category: OFS, unit: KGS, hsn: "090121", gst: [5, 5], price: "900.00", lead: 2, on_hand: 6, reorder: [5, 15]}
-  - {code: OS-04, name: Drinking water jar 20 L, description: Packaged drinking water, 20 litre jar, category: OFS, unit: NOS, hsn: "220110", gst: [12, 5], price: "90.00", lead: 2, on_hand: 25, reorder: [20, 60]}
+  - {code: OS-04, name: Drinking water jar 20 L, description: Packaged drinking water, 20 litre jar, category: OFS, unit: NOS, hsn: "220110", gst: [12, 5], price: "90.00", lead: 2, on_hand: 25, reorder: [20, 60, 10]}
   - {code: SV-01, name: Housekeeping, description: Office housekeeping, per month, category: FAC, kind: service, unit: OTH, hsn: "998533", gst: [18, 18], gst_confidence: SECONDARY, price: "85000.00", lead: 1}
   - {code: SV-02, name: Security guard service, description: Security guards for the office, per month, category: FAC, kind: service, gl: 5350, unit: OTH, hsn: "998525", gst: [18, 18], gst_confidence: SECONDARY, price: "110000.00", lead: 1}
   - {code: SV-03, name: AC maintenance, description: Air conditioner maintenance, per quarter, category: FAC, kind: service, gl: 5260, unit: OTH, hsn: "998719", gst: [18, 18], gst_confidence: SECONDARY, price: "24000.00", lead: 1}
@@ -330,6 +330,43 @@ demand_changes:
       - [JP-2026-12, ADM, standard, "2", "2026-12-01", OFF-BLR, cancelled]
       - [JP-2026-12, ADM, standard, "2", "2026-11-30", OFF-BLR, ""]
     after: [store_check]
+
+# Stock held back from use at the cutoff (task 4.1); see datagen/catalog/apex/company.yaml.
+held:
+  - [H-BWT-01, MN-01, OFF-BLR, "2026-10-30", quarantine, "2", "Waiting for IT's burn-in test", DC 1187]
+  - [H-BWT-02, LP-01, OFF-BLR, "2026-10-27", blocked, "1", "Cracked screen; waiting for the vendor's RMA", RMA-5521]
+
+# Stock check scenarios (block 2); see datagen/catalog/apex/company.yaml. B0: demo reset and one store check.
+stock_scenarios:
+  - name: B0
+    title: "Base: demo reset and one store check"
+    base: null
+    steps:
+      - {do: reset, who: U06, on: "2026-11-23", label: reset}
+      - {do: store_check, who: U02, on: "2026-11-23", args: {submit: true, button: true}, label: base}
+  - name: Q2-monitors
+    title: Burn-in passed
+    base: B0
+    steps:
+      - {do: decide_hold, who: U02, on: "2026-11-23", args: {hold_id: H-BWT-01, to_usable: "2", to_blocked: "0", reason: Burn-in test passed}, label: after_decision}
+  - name: BT1-late
+    title: Laptops and screens promised for 3 Dec
+    base: B0
+    steps:
+      - {do: approve_request, who: chain, on: "2026-11-23", args: {mr_order_no: JP-2026-12/ENG}, label: after_approval}
+      - {do: source, who: U03, on: "2026-11-23", label: after_source}
+      - {do: issue_po, who: U03, on: "2026-11-23", args: {item_code: LP-02}, label: after_issue}
+      - {do: acknowledge, who: U03, on: "2026-11-23", args: {item_code: LP-02, promised: "2026-12-03"}, label: after_ack}
+      - {do: decide_hold, who: U02, on: "2026-11-23", args: {hold_id: H-BWT-01, to_usable: "2", to_blocked: "0", reason: Burn-in test passed}, label: after_decision}
+  - name: BT2-buffer
+    title: Saturday delivery, two-day buffer
+    base: B0
+    steps:
+      - {do: approve_request, who: chain, on: "2026-11-23", args: {mr_order_no: JP-2026-12/ENG}, label: after_approval}
+      - {do: source, who: U03, on: "2026-11-23", label: after_source}
+      - {do: issue_po, who: U03, on: "2026-11-23", args: {item_code: LP-02}, label: after_issue}
+      - {do: acknowledge, who: U03, on: "2026-11-23", args: {item_code: LP-02, promised: "2026-11-28"}, label: after_ack}
+      - {do: set_setting, who: U06, on: "2026-11-23", args: {key: receiving_buffer_days, value: "2", approved_by: U10}, label: after_buffer}
 
 # Twelve months of history before the cutoff (decision D37), read by datagen/generator/history.py. It ends at the
 # opening stock above. The settings mean what they mean in datagen/catalog/apex/company.yaml.

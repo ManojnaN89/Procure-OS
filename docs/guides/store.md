@@ -19,15 +19,21 @@ When the supplier has recorded a dispatch, the order says "On the way": what was
 
 ## Inspect
 
-Items marked for inspection wait. Open the receipt and click **Record inspection** with the result.
+Items marked for inspection wait. They are in the store as **quarantine** (Inventory shows "20 in quarantine"): never set aside or issued, and not yet received on the order. Open the receipt and click **Record inspection** with the result: what passed becomes usable and is set aside at once for the orders that need it; what was rejected stays **blocked** with your reason until it goes back to the supplier.
 
 ## Issue stock and count the shelf
 
 Open **Inventory**. On the row of the item click **Issue** to take stock out for use: enter the quantity and who it went to (a department, a machine or a job). You cannot issue more than the books show.
 
-After counting the shelf click **Count**: enter what you counted and why it differs. The system works out the difference and corrects the books. Both are kept in the audit log with your name.
+After counting the shelf click **Count**: enter what you counted and why it differs. The system works out the difference and corrects the books. Count only usable stock: held lots are counted by their hold. Both are kept in the audit log with your name.
+
+Safety stock is kept back: an issue that would use it is refused with "Only 2 is free; 2 is safety stock". Click **Ask to use safety stock** and say why; your manager (Vikram Joshi at Apex) approves it on My work, then the issue is posted. On **Material requests** a line short only because of safety stock has **Use safety stock** for the same request.
+
+**Hold** on an Inventory row puts usable stock in quarantine or blocked, with a reason (damage, expiry, a suspect lot). If that stock was set aside, the order needed last gives it back and the store check buys again for it. **Holds** lists the held lots: **Release** sends a quantity back to usable (set aside at once) or, from quarantine, to blocked. Every hold and decision needs a reason.
 
 ## Material requests for production orders
+
+The store check also runs by itself every morning at 05:30 and after an order is closed, cancelled, changed or acknowledged, or a request is rejected or cancelled; the requests it makes wait as drafts for you or the planner to submit (unless the company turns on sending them for approval). It does not buy again for a line whose last request was rejected: **Run store check** does. A supply promised after the need-by (less the receiving buffer) does not count for the order: the line shows "at risk 50" and "50 on PO-..., promised 8 Dec (late)", free stock goes to it first, it is never bought twice, and the buyer gets a case. **Explain** on a card writes why its lines are short, in plain words, when the company has switched explanations on; otherwise it shows the figures.
 
 Each production order (or each department's new joiners, with their kits, or each MRP plan per plant, shown as "MRP plan") imported from the ERP gets a material request: one line per material, with the quantity needed. An MRP line marked "net" was already netted by the ERP: no free stock is set aside for it, it is bought in full.
 

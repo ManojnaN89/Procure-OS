@@ -16,7 +16,8 @@ REQUIREMENT = (
     "free stock aside earliest need-by first and never more than is on the shelf; only the shortfall becomes a purchase "
     "request, priced at the contract price else the last price paid else the standard price, sent to the approver the "
     "rule table names; the plan's MO-1 example (Rs 72,930 for four items short) holds; issue at production start takes "
-    "exactly what was set aside; nothing is set aside or bought twice; only the store may do it"
+    "exactly what was set aside; nothing is set aside or bought twice; only the store may do it; supply counts for a "
+    "need only when due by its date (rule Q17): set aside plus timely coming never exceeds the need"
 )
 PLAN_EXAMPLE = {"RM-01": D(50), "RM-06": D(60), "RM-08": D(40), "PK-01": D(30)}  # casting, bearing, copper wire, carton
 PLAN_VALUE = D("72930.00")
@@ -53,7 +54,9 @@ def contract_price(item: str, on: date) -> Decimal | None:
     return min(prices) if prices else None
 
 
-def expected(on: date) -> tuple[dict[str, dict[str, tuple[Decimal, Decimal]]], dict[str, dict[str, tuple[Decimal, Decimal]]]]:
+def expected(
+    on: date,
+) -> tuple[dict[str, dict[str, tuple[Decimal, Decimal]]], dict[str, dict[str, tuple[Decimal, Decimal]]]]:
     """The oracle. Per order: item -> (set aside, short), and item -> (quantity, price) to buy. The materials come from the
     bill of materials times the order quantity; orders take stock earliest need-by first. No orders are loaded in this
     company, so there is no last price paid: an item without a contract price is estimated at its standard price."""
@@ -159,6 +162,27 @@ def run(ctx) -> Outcome:
     if over:
         out.find("high", f"more set aside than is on hand for {[r[0] for r in over]}")
 
+    # 4b. rule Q17 (WP-6, block 2): every line's cover is split by date, timely plus late is all that is coming, set aside
+    # plus timely coming never exceeds the need, and nothing is at risk before any supplier promised a date
+    listed = client.get("/api/material-requests", headers=store).json()["requests"]
+    phased = [ln | {"order": r["order_no"]} for r in listed for ln in r["lines"] if ln["status"] == "open"]
+    split_wrong = [
+        f"{ln['order']} {ln['item_code']}: timely {ln['timely_qty']} + late {ln['late_qty']} != {ln['requested_qty']}"
+        for ln in phased
+        if D(ln["timely_qty"]) + D(ln["late_qty"]) != D(ln["requested_qty"])
+    ]
+    over_need = [
+        f"{ln['order']} {ln['item_code']}" for ln in phased
+        if D(ln["reserved_qty"]) + D(ln["timely_qty"]) > D(ln["need_qty"])
+    ]  # fmt: skip
+    at_risk = [f"{ln['order']} {ln['item_code']}" for ln in phased if D(ln["at_risk_qty"]) != 0]
+    if split_wrong:
+        out.find("high", f"cover split by date does not add up for {len(split_wrong)} line(s); first: {split_wrong[0]}")
+    if over_need:
+        out.find("high", f"set aside plus timely coming is above the need for {over_need[:4]}")
+    if at_risk:
+        out.find("high", f"lines at risk with no promise from any supplier: {at_risk[:4]}")
+
     # 5. one purchase request per order for what is short, at the estimate, to the approver of the rule table
     values: dict[str, Decimal] = {}
     for order, want in buy_want.items():
@@ -262,5 +286,6 @@ def run(ctx) -> Outcome:
         "items short per order": {o: len(v) for o, v in buy_want.items()},
         "purchase request value per order": {o: str(v) for o, v in values.items()},
         "MO-1, the plan's four items": f"Rs {named_value}",
+        "lines with cover split by date (Q17)": len(phased),
     }
     return out

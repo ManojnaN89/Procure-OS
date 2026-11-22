@@ -6,7 +6,7 @@ the store checks them. Then MO-1 (needed first) is called off. An oracle written
 from the opening and the movement history, materials from `bom.csv` times the order quantity) says what each line held
 before, what the cancel frees, and what each later order holds after it, earliest need-by first, up to what it still
 lacks. Its shortfall was already on purchase requests not yet with the buyer, so the oracle also says by how much each
-request line must be cut: what the stock now covers. Set aside plus still requested never exceeds a line's need, and the
+request line must be cut: what the stock now covers. Set aside plus what comes in time (rule Q17) never exceeds a line's need, and the
 check after the cancel buys nothing. The planted order's quantity puts one item exactly on the edge (what is freed equals
 what it lacks) and the bearings fall short of it (freed less than lacking).
 """
@@ -27,7 +27,7 @@ REQUIREMENT = (
     "Plan P1-30 and step 2 of the flow: cancelling an order releases its reservation (a reason is needed; only the "
     "store; once); the freed stock is set aside at once for the open orders earliest need-by first, each up to what it "
     "still lacks, never more than is on the shelf; a purchase request still open for that shortfall is cut by as much "
-    "(set aside plus requested never exceeds the need) and the next check buys nothing; purchase requests made only for "
+    "(set aside plus timely coming never exceeds the need, rule Q17) and the next check buys nothing; purchase requests made only for "
     "the cancelled order and not yet with the buyer are cut and cancelled (Q21, 20 Nov); issue never moves more than is set "
     "aside; the cancel is audited"
 )
@@ -140,9 +140,17 @@ def run(ctx) -> Outcome:  # noqa: C901 - one scenario, step by step
             )
         ):
             got[order][item] = (D(need_qty), D(reserved), D(requested))
-        over = [f"{o} {i}" for o, items in got.items() for i, (n, r, q) in items.items() if r + q > n]
+        # rule Q17 (block 2): set aside plus what comes in time never exceeds the need (late supply may come on top)
+        timely: dict[tuple[str, str], Decimal] = {}
+        for r in client.get("/api/material-requests", headers=world.headers("Store")).json()["requests"]:
+            for ln in r["lines"]:
+                if ln["status"] == "open":
+                    timely[(r["order_no"], ln["item_code"])] = D(ln["timely_qty"])
+        over = [
+            f"{o} {i}" for o, items in got.items() for i, (n, r, _) in items.items() if r + timely.get((o, i), D(0)) > n
+        ]
         if over:
-            out.find("high", f"set aside plus requested is above the need for {over[:4]}: bought twice")
+            out.find("high", f"set aside plus timely coming is above the need for {over[:4]}: bought twice")
         wrong = [
             f"{o} {i}: {got.get(o, {}).get(i, (0, 0, 0))[2]} requested, expected {q}"
             for o in want
@@ -209,7 +217,10 @@ def run(ctx) -> Outcome:  # noqa: C901 - one scenario, step by step
         db.rollback()
         status = db.execute(text("select status from request where no = :n"), {"n": made[first_order]}).scalar()
         if status != "cancelled" or resp.json().get("requests_cancelled") != [made[first_order]]:
-            out.find("high", f"{made[first_order]} is {status} after the cancel; not yet with the buyer, it must be cancelled")
+            out.find(
+                "high",
+                f"{made[first_order]} is {status} after the cancel; not yet with the buyer, it must be cancelled",
+            )
     still = {i: q for i, q in held().get(first_order, {}).items() if q}
     if still:
         out.find("high", f"{first_order} still holds {still} after its cancel")
