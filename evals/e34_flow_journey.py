@@ -570,21 +570,28 @@ def _run(ctx: Any) -> Outcome:
                     expect(content).to_contain_text("Touchless: issued and sent without a buyer")
                     expect(content).to_contain_text("Sent to")
                     expect(page.locator("#poSend")).to_have_count(0)
-            for rfq_no in (belts_rfq, seal_rfq, copper_rfq):
-                with d.step("buyer", f"opens Dashboard: RFQs waiting to be sent includes {rfq_no}") as page:
-                    d.go("buyer", "dashboard")
-                    expect(page.locator("#myWork")).to_contain_text("RFQs waiting to be sent")
-                    page.locator("#myWork a", has_text=rfq_no).first.click()
-                    page.wait_for_load_state("networkidle")
-                with d.step("buyer", f"clicks Approve to send the quotation request {rfq_no}") as page:
-                    if "/admin/approvals" not in page.url:
-                        d.go_admin("buyer", "approvals")
-                    card = page.locator(".space-y-3", has_text=rfq_no).first
-                    expect(card).to_be_visible()
-                    card.get_by_role("button", name="Approve", exact=True).click()
-                    expect(page.locator(".space-y-3", has_text=rfq_no)).to_have_count(0)
-                d.sync()
-                work()
+            # D42 (block 5): the buyer confirms each new RFQ as buyer.md says, one from its page ("Confirm and send")
+            # and the others together from the list ("Confirm and send selected")
+            with d.step("buyer", f"opens Dashboard: RFQs waiting to be sent includes {belts_rfq}") as page:
+                d.go("buyer", "dashboard")
+                expect(page.locator("#myWork")).to_contain_text("RFQs waiting to be sent")
+                page.locator("#myWork a", has_text=belts_rfq).first.click()
+                page.wait_for_load_state("networkidle")
+            with d.step("buyer", f"opens {belts_rfq} and clicks Confirm and send") as page:
+                d.go("buyer", f"rfqs/{belts_rfq}")
+                page.locator("#confirmOne").click()
+                expect(page.locator("#appContent")).to_contain_text("Sending confirmed")
+            d.sync()
+            work()
+            with d.step("buyer", f"ticks {seal_rfq} and {copper_rfq} on Quotations and clicks Confirm and send selected") as page:
+                d.go("buyer", "rfqs")
+                for rfq_no in (seal_rfq, copper_rfq):
+                    page.locator(f".sendPick[value='{rfq_no}']").check()
+                page.locator("#confirmSelected").click()
+                expect(page.locator(f".sendPick[value='{seal_rfq}']")).to_have_count(0)
+                expect(page.locator(f".sendPick[value='{copper_rfq}']")).to_have_count(0)
+            d.sync()
+            work()
             invited = {
                 r: sorted(x[0] for x in q("select supplier_code from rfq_supplier where rfq_no = :n", n=r))
                 for r in (belts_rfq, seal_rfq, copper_rfq)
