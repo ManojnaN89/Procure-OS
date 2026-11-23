@@ -60,6 +60,9 @@ const Notifications = {
     } catch {
       return;
     }
+    // The server pushes only rows newer than those it saw when the socket opened; a row made between the first count
+    // and that moment would never arrive, so the count is read again once the socket is open.
+    this.socket.addEventListener("open", () => this.refreshUnreadCount());
     this.socket.addEventListener("message", (msg) => {
       try {
         const evt = JSON.parse(msg.data);

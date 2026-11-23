@@ -45,10 +45,11 @@ def create_task(
     task_id = int(
         db.execute(
             text(
-                "insert into task (case_id, kind, title, assignee, sla_hours, due_at, escalation_chain, payload) "
-                "values (:c, :k, :t, :a, :h, :d, cast(:ch as jsonb), cast(:p as jsonb)) returning id"
-            ),
+                "insert into task (case_id, kind, title, assignee, sla_hours, due_at, escalation_chain, payload, "
+                "created_at) values (:c, :k, :t, :a, :h, :d, cast(:ch as jsonb), cast(:p as jsonb), :n) returning id"
+            ),  # created_at is the moment the due time is counted from, not the transaction's start
             {
+                "n": now,
                 "c": case_id,
                 "k": kind,
                 "t": title,
