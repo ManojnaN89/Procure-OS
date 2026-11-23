@@ -151,6 +151,11 @@ def _v1(out: Outcome, check: b.Checker, co: s.Co6, oracle: s.Oracle6, m: k.Mutat
               f"reason answered {r.status_code} {r.text[:200]}; the spec says 409 (expired on 25 Nov 2026)")  # fmt: skip
         r = co.award6(rfq, "SUP-003", reason="eval: SUP-005's price expired, next valid quote")
         check(r.status_code == 200, f"V1: selecting SUP-003 with a reason answered {r.status_code} {r.text[:200]}")
+        waiting = r.json().get("proposal_id") if r.status_code == 200 else None
+        if waiting:  # two counting quotes of three on 4,87,500: the purchase manager agrees first (spec 2, rfq.award_short)
+            agreed = co.call(co.login("purchasemanager"), "POST", f"/api/admin/proposals/{waiting}/approve",
+                             {"note": "eval: agreed"})  # fmt: skip
+            check(agreed.status_code == 200, f"V1: the purchase manager agreeing answered {agreed.status_code}")
         co.work()
         orders = sorted({x["po_no"] for x in co.lines_ordered(req) if x["supplier_code"] == "SUP-003"})
         if not check(len(orders) == 1, f"V1: SUP-003's selection made orders {orders}; expected one"):

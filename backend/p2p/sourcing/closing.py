@@ -55,14 +55,16 @@ def extend(db: Session, rfq_no: str, user_id: int, new_date: date, reason: str, 
     """Move the closing date of an RFQ that is out to a later working day, and tell the suppliers. Commits."""
     if not (reason or "").strip():
         raise ClosingError("a reason is needed to extend the closing date")
-    rfq = db.execute(text("select status, due_date from rfq where no = :n for update"), {"n": rfq_no}).first()
+    rfq = db.execute(
+        text("select status, due_date, delivery_location from rfq where no = :n for update"), {"n": rfq_no}
+    ).first()
     if rfq is None:
         raise ClosingError(f"{rfq_no} does not exist", 404)
     if rfq[0] != "sent":
         raise ClosingError(f"{rfq_no} is {rfq[0]}; only an RFQ that is out with the suppliers can be extended", 409)
     if new_date <= today:
         raise ClosingError(f"the new closing date must be after today ({today:%d %b %Y})")
-    if not reference.calendar_for(db).is_working_day(new_date):
+    if not reference.calendar_for_location(db, rfq[2]).is_working_day(new_date):
         raise ClosingError(f"{new_date:%d %b %Y} is not a working day")
     if new_date <= rfq[1]:
         raise ClosingError(f"the new closing date must be after the current one ({rfq[1]:%d %b %Y})")
@@ -71,7 +73,7 @@ def extend(db: Session, rfq_no: str, user_id: int, new_date: date, reason: str, 
     actor = Actor("user", str(user_id))
     audit.record(
         db, actor, "rfq.extend", "rfq", rfq_no, before={"due_date": rfq[1]},
-        after={"due_date": new_date, "mailed": mailed}, reason=reason.strip(),
+        after={"from": rfq[1], "to": new_date, "due_date": new_date, "mailed": mailed}, reason=reason.strip(),
     )  # fmt: skip
     emails.commit_and_send(db)
     settle(db, rfq_no, "the closing date was extended")

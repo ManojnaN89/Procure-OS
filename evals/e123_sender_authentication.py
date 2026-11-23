@@ -118,7 +118,7 @@ def _verdict(value: Any) -> str | None:
 def _not_read(check: b.Checker, co: s.Co6, model: aif.Model, rfq: str, sender: str, words: str, label: str,
               auth: tuple[str, ...], notes: list[str], tasks_before: int) -> dict[str, Any]:  # fmt: skip
     calls0, mark = model.calls, co.model_mark()
-    eid, drafts = co.mail_in(rfq, sender, "Our rate is Rs 960 per kg, GST 18%, 5 days.", model, auth=auth, notes=notes)
+    eid, drafts = co.mail_in(rfq, sender, "Our rate for RM-08 is Rs 960 per kg, GST 18%, 5 days.", model, auth=auth, notes=notes)
     d = drafts[-1] if drafts else {}
     check(d.get("status") == "needs_person", f"{label}: the draft of the mail from {sender} is {d.get('status')!r} "
           f"(email {eid}); the spec says needs_person")  # fmt: skip
@@ -140,7 +140,7 @@ def _s1(out: Outcome, check: b.Checker, co: s.Co6, oracle: s.Oracle6, model: aif
     sender = oracle.contact_email("SUP-005")
     model.default = s.quote_answer(s.WIRE, "960.00")
     audit0 = co.last_audit_id()
-    eid, drafts = co.mail_in(rfq, sender, "Our rate is Rs 960 per kg, GST 18%, 5 days, valid to 31 Dec 2026.", model,
+    eid, drafts = co.mail_in(rfq, sender, "Our rate for RM-08 is Rs 960 per kg, GST 18%, 5 days, valid to 31 Dec 2026.", model,
                              auth=(_hdr(s.AUTHSERV, "pass"),), notes=notes)  # fmt: skip
     email = co.email_row(eid)
     check(_verdict(email.get("auth")) == "pass", f"S1: the email's auth {email.get('auth')}; the spec says verdict pass")
@@ -224,7 +224,7 @@ def _s3(out: Outcome, check: b.Checker, co: s.Co6, oracle: s.Oracle6, m: k.Mutat
     sender = oracle.contact_email("SUP-001")
     model.default = s.quote_answer(s.WIRE, "990.00")
     calls0 = model.calls
-    eid, drafts = co.mail_in(rfq, sender, "Our rate is Rs 990 per kg, GST 18%, 5 days, valid to 31 Dec 2026.", model,
+    eid, drafts = co.mail_in(rfq, sender, "Our rate for RM-08 is Rs 990 per kg, GST 18%, 5 days, valid to 31 Dec 2026.", model,
                              auth=("relay.other.example; dmarc=pass header.from=deccancastings.example",),
                              notes=notes)  # fmt: skip
     verdict = _verdict(co.email_row(eid).get("auth"))

@@ -118,7 +118,7 @@ def test_a_contract_line_above_the_market_waits_for_the_buyer_with_path_b_recomm
         "100.0000", "85.0000", "15.0000", "15.0000", "30000.00",
     )  # fmt: skip
     task = shop.execute(text("select title from task where kind = 'path_case'")).scalar_one()
-    assert task == f"Choose path A or B for {no} line 1 (A)"
+    assert task == f"Choose path A or B for {no} line 1 (Bearing)"
 
 
 def test_an_urgent_line_is_ordered_on_the_contract_as_before(shop: Session) -> None:  # noqa: F811
@@ -230,5 +230,5 @@ def test_another_company_cannot_decide_this_case(shop: Session) -> None:  # noqa
         headers=_headers(other, stranger, "Buyer"),
     )
 
-    assert res.status_code in (404, 409)
+    assert res.status_code == 404
     assert shop.execute(text("select path_case from sourcing_decision")).scalar_one() == "waiting"

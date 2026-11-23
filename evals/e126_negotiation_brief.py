@@ -99,6 +99,7 @@ def _run(ctx: Any) -> Outcome:
         check(not apex.supplier_mails(since), f"no outbound contact: {len(apex.supplier_mails(since))} supplier mail(s) "
               "went while quotes were ranked and briefs written")  # fmt: skip
         if r1 and n1:
+            old = apex.live_rec("negotiation_brief", f"{r1}/1")  # before the verification re-runs the briefs (6.4.6)
             bench = apex.verify_benchmark(check, s.WIRE, OCT, "N2")
             n2 = oracle.brief(("SUP-005", Decimal("960.00")), ("SUP-003", Decimal("975.00")), s.WIRE, s.LOC,
                               Decimal(500), s.TODAY, [bench] if bench else [])  # fmt: skip
@@ -106,7 +107,6 @@ def _run(ctx: Any) -> Outcome:
                 figs = s.brief_figures(n2)
                 s.self_check(check, "N2", figs)
                 s.compare_truth(check, apex, "N2", figs)
-                old = apex.live_rec("negotiation_brief", f"{r1}/1")
                 _brief(out, check, apex, oracle, m, r1, n2, "N2")
                 new = apex.live_rec("negotiation_brief", f"{r1}/1")
                 check(bool(new) and new.get("id") != old.get("id"), "N2: the brief was not superseded by a new record",

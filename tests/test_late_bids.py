@@ -111,6 +111,8 @@ def test_an_extension_moves_the_date_tells_every_supplier_not_declined_and_lets_
     assert _due(shop, rfq) == date(2026, 11, 20)
     row = shop.execute(text("select before, after, reason from audit_event where action = 'rfq.extend'")).one()
     assert row[0]["due_date"] == "2026-11-13" and row[1] == {
+        "from": "2026-11-13",
+        "to": "2026-11-20",
         "due_date": "2026-11-20",
         "mailed": 2,
     }
@@ -167,3 +169,12 @@ def test_the_first_sending_moves_a_closing_date_that_would_be_short(db: Session,
     assert after[0] == {"due_date": "2026-11-13"} and after[1]["due_date"] == "2026-11-18"
     assert service  # the mails carry the new date
     assert all("Please reply by: 18 Nov 2026" in m["body"] for m in outbox.sent)
+
+
+def test_the_closing_date_counts_the_working_days_of_the_place_the_goods_go_to(db: Session, outbox: Outbox) -> None:  # noqa: F811
+    db.execute(text("update location set working_days = 'Mon-Sat' where code = 'WH-BLR'"))
+    db.commit()
+
+    (rfq,) = _source(db, _request(db, "R-1", [("B", "5", None, "C1")])).rfqs
+
+    assert _due(db, rfq) == date(2026, 11, 12)  # Fri 6 Nov + 5 working days with Saturday a working day

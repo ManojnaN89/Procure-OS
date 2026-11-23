@@ -483,7 +483,7 @@ def _path_task(db: Session, tenant: str, request_no: str, outcome: LineOutcome) 
 
     return tasks.create_task(
         db, tenant, kind=PATH_TASK,
-        title=f"Choose path A or B for {request_no} line {outcome.line_no} ({outcome.item_code or outcome.name})",
+        title=f"Choose path A or B for {request_no} line {outcome.line_no} ({outcome.name or outcome.item_code})",
         assignee=price_review.buyer_for(db, tenant, outcome.item_code), sla_hours=PATH_SLA_HOURS,
         payload={"request_no": request_no, "line_no": outcome.line_no, "link": f"#/requisitions/{request_no}"},
         actor=SERVICE, email=False,
@@ -517,7 +517,10 @@ def decide_path(
         ),
         {"n": request_no, "l": line_no},
     ).first()
-    if row is None or row[0] != "waiting":
+    if row is None:
+        db.rollback()
+        raise PathError(f"line {line_no} of {request_no} was not found", 404)
+    if row[0] != "waiting":
         db.rollback()
         raise PathError(f"no A/B case waits on line {line_no} of {request_no}")
     rec_id = int(row[1])
@@ -646,7 +649,9 @@ def _quotation(
     invited = suppliers[:wanted]
 
     rfq_no = numbering.next_number(db, "rfq", as_of)
-    due = reference.calendar_for(db).add_working_days(as_of, int(_org_setting(db, "default_rfq_response_days", "5")))
+    due = reference.calendar_for_location(db, location).add_working_days(
+        as_of, int(_org_setting(db, "default_rfq_response_days", "5"))
+    )  # the working days of the place the goods go to (its week and its state's holidays)
     if invited and len(invited) < min_quotes:
         note = f"Only {count(len(invited), 'supplier')} {'is' if len(invited) == 1 else 'are'} approved for {category}; at least {min_quotes} quotes are wanted"
         result.notes.append(note)
@@ -1173,7 +1178,9 @@ def send_rfq(db: Session, rfq_no: str, actor: Actor = SERVICE) -> int:
     pending = [p for p in pending if str(p[0]) not in refused]
     if pending and rfq["sent_at"] is None:  # the first sending: suppliers get the full reply time (OP-6)
         days = int(_org_setting(db, "default_rfq_response_days", "5"))
-        rfq["due_date"] = first_send_due(rfq["due_date"], today, days, reference.calendar_for(db))
+        rfq["due_date"] = first_send_due(
+            rfq["due_date"], today, days, reference.calendar_for_location(db, rfq["delivery_location"])
+        )
         db.execute(text("update rfq set due_date = :d where no = :n"), {"d": rfq["due_date"], "n": rfq_no})
     subject = f"Request for quotation {rfq_no}" + (f": {category}" if category else "")
     template = rfq_template(db)

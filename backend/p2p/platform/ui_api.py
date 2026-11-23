@@ -709,6 +709,7 @@ def _forward_buy_of(db: Session, no: str, source_ref: str | None, user_id: int) 
     return {"forward_buy": shown, "forward_buy_of": made_by}
 
 
+@router.get("/requests/{no}")  # the same page by the name the block 6 interface uses
 @router.get("/requisitions/{no}")
 def get_requisition(no: str, db: Db, ctx: Ctx) -> dict[str, Any]:
     rows = _rows(

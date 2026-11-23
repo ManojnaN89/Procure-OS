@@ -203,10 +203,12 @@ def _phase3(out: Outcome, check: b.Checker, co: s.Co6, m: k.Mutations, model: ai
     check(r.status_code in (200, 202) and aif.enabled(co).get("sourcing") is False, f"phase 3: switching sourcing off "
           f"answered {r.status_code} {r.text[:150]}", "medium")  # fmt: skip
     co.work()
+    # a hand-over task names the record's kind and business key (a bare id would match any number in the payload)
+    keys = {(x["kind"], str(x["business_key"])) for x in open_info}
     handed = [t for t in aif.tasks(co, "ai_handover", None)
-              if any(str(x["id"]) in json_text(t["payload"]) for x in open_info)]  # fmt: skip
+              if (str((t["payload"] or {}).get("kind")), str((t["payload"] or {}).get("ref"))) in keys]  # fmt: skip
     check(not handed, f"phase 3: switch-off handed over {len(handed)} informational record(s) (ranking, brief, review "
-          "note) as tasks; the spec leaves them without model words")  # fmt: skip
+          f"note) as tasks; the spec leaves them without model words: {[t.get('payload') for t in handed][:2]}")  # fmt: skip
     mark, calls0, cmark = rec_mark(co), model.calls, co.model_mark()
     model.default = GOOD
     rfq = _r_with_quotes(check, co, "phase 3")

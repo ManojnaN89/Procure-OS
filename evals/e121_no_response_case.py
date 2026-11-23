@@ -71,10 +71,11 @@ def _run(ctx: Any) -> Outcome:
         _, r2 = apex.r_rfq(check, "C2")
         if r1 and r2:
             _apex(out, check, apex, oracle, m, r1, r2)
+        # the mail check covers only the window in which Apex alone acted: Brightwave's own C3 request mails its own people
+        s.f.tenant_check(check, apex, bw, [r1, r2], [], start)
         s.pin(s.TODAY)
         bw_rfq = _brightwave(out, check, bw)
         m.report(check, out, ["task_every_day", "automatic_extension_or_mail"])
-        s.f.tenant_check(check, apex, bw, [r1, r2], [], start)
         s.tenant_tasks(check, apex, bw, [r1, r2])
         s.tenant_tasks(check, bw, apex, [bw_rfq])
         apex_view = apex.call(apex.login("buyer"), "GET", "/api/exceptions").text
