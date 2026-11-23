@@ -109,7 +109,7 @@ const PurchaseOrdersView = {
     if (!["approved", "sent", "acknowledged", "part_received", "received", "closed"].includes(po.status) && !po.sent_at) return "";
     const sent = po.sent_at ? `Sent to ${this.esc(po.sent_to)} on ${formatDate(po.sent_at)}.` : "Approved, not sent to the supplier yet.";
     const ack = po.acknowledged_at
-      ? ` Acknowledged: version ${this.esc(po.acknowledged_version || po.version)} on ${formatDate(po.acknowledged_at)}${po.promised_date ? `, delivery promised by ${formatDate(po.promised_date)}` : ""}.${po.ack_note ? ` “${this.esc(po.ack_note)}”` : ""}`
+      ? ` Acknowledged on ${formatDate(po.acknowledged_at)} (version ${this.esc(po.acknowledged_version || po.version)})${po.promised_date ? `, delivery promised by ${formatDate(po.promised_date)}` : ""}.${po.ack_note ? ` “${this.esc(po.ack_note)}”` : ""}`
       : (po.sent_at ? ` Version ${this.esc(po.version)} not yet acknowledged.` : "")
         + (po.ack_overdue ? ' <span style="color:var(--warning-text);">The supplier is overdue.</span>' : "");
     return `
@@ -180,7 +180,6 @@ const PurchaseOrdersView = {
         <div class="panel-title">Order document and changes</div>
         <p style="margin:0 0 10px;font-size:12.5px;color:var(--text-secondary);">Version ${this.esc(c.version)}.
           <a href="#" id="poPdf" style="color:var(--accent-tint);">Open the order document (PDF)</a></p>
-        <div id="poVersionsBox"></div>
         <div style="display:flex;gap:8px;flex-wrap:wrap;">
           ${c.can_revise ? `<div class="btn btn-sm" id="poReviseOpen"><i class="ti ti-edit"></i>Change the order</div>` : ""}
           ${c.can_cancel ? `<div class="btn btn-sm" id="poCancelOpen"><i class="ti ti-x"></i>Cancel this order</div>` : ""}
@@ -248,7 +247,6 @@ const PurchaseOrdersView = {
         send("revise", { version: po.version, lines, ...(Object.keys(header).length ? { header } : {}) });
       });
     });
-    this.mountVersions(po);
     on("poCancelOpen", () => {
       show(`${reason}
         <label style="font-size:12.5px;display:block;margin-top:8px;"><input type="checkbox" id="poCancelAgain"> Order these lines again (a different supplier or price is wanted)</label>
@@ -276,31 +274,38 @@ const PurchaseOrdersView = {
     const rows = await res.json();
     if (!rows.length) { box.innerHTML = ""; return; }
     const options = (pick) => rows.map((v) => `<option value="${this.esc(v.version)}"${v.version === pick ? " selected" : ""}>Version ${this.esc(v.version)}</option>`).join("");
+    // by default the current version against the one last approved (what an approver needs), else the one before it
+    const current = rows[0].version;
+    const approved = po.approved_version && po.approved_version !== current ? po.approved_version : null;
+    const from = approved || (rows[1] ? rows[1].version : current);
     box.innerHTML = `
-      <div class="cell-muted" style="font-size:11.5px;margin:4px 0;">VERSIONS</div>
-      ${rows.map((v) => `
-        <div style="padding:6px 0;border-bottom:1px solid var(--border);font-size:12px;">
-          <b>Version ${this.esc(v.version)}</b>${v.current ? " (current)" : ""} · ${formatDate(v.made_at)} · ${this.esc(v.made_by_name)}
-          ${v.approval ? ` · ${this.esc(this.APPROVAL_LABEL[v.approval] || v.approval)}` : ""}
-          ${v.document ? ` · <a href="#" class="po-ver-pdf" data-version="${this.esc(v.version)}" style="color:var(--accent-tint);">PDF</a>` : ""}
-          <div class="cell-muted">${v.reason ? `${this.esc(v.reason)} · ` : ""}${v.sent_at ? `sent ${formatDate(v.sent_at)} to ${this.esc(v.sent_to)}` : "not sent"} · ${v.acknowledged_at ? `acknowledged ${this.esc(this.ACK_VIA[v.ack_via] || "")} on ${formatDate(v.acknowledged_at)}` : "not acknowledged"}${(v.material || []).length ? ` · material: ${this.esc(v.material.join("; "))}` : ""}</div>
-        </div>`).join("")}
-      ${rows.length > 1 ? `<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-top:8px;font-size:12.5px;">
-          Compare <select id="poCmpFrom" aria-label="Compare from version" style="padding:6px;">${options(rows[1].version)}</select>
-          with <select id="poCmpTo" aria-label="Compare with version" style="padding:6px;">${options(rows[0].version)}</select>
+      <div class="panel" style="margin-bottom:12px;">
+        <div class="panel-title">Versions</div>
+        ${rows.map((v) => `
+          <div style="padding:6px 0;border-bottom:1px solid var(--border);font-size:12px;">
+            <b>Version ${this.esc(v.version)}</b>${v.current ? " (current)" : ""} · ${formatDate(v.made_at)} · ${this.esc(v.made_by_name)}
+            ${v.approval ? ` · ${this.esc(this.APPROVAL_LABEL[v.approval] || v.approval)}` : ""}
+            ${v.document ? ` · <a href="#" class="po-ver-pdf" data-version="${this.esc(v.version)}" style="color:var(--accent-tint);">PDF</a>` : ""}
+            <div class="cell-muted">${v.reason ? `${this.esc(v.reason)} · ` : ""}${v.sent_at ? `sent ${formatDate(v.sent_at)} to ${this.esc(v.sent_to)}` : "not sent"} · ${v.acknowledged_at ? `acknowledged ${this.esc(this.ACK_VIA[v.ack_via] || "")} on ${formatDate(v.acknowledged_at)}` : "not acknowledged"}${(v.material || []).length ? ` · material: ${this.esc(v.material.join("; "))}` : ""}</div>
+          </div>`).join("")}
+        <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-top:8px;font-size:12.5px;">
+          <label for="poCmpFrom">Compare</label> <select id="poCmpFrom" style="padding:6px;">${options(from)}</select>
+          <label for="poCmpTo">with</label> <select id="poCmpTo" style="padding:6px;">${options(current)}</select>
           <div class="btn btn-sm" id="poCmpGo">Compare</div></div>
-        <div id="poCmpOut" style="margin-top:8px;"></div>` : ""}`;
+        <div id="poCmpOut" style="margin-top:8px;"></div>
+      </div>`;
     box.querySelectorAll(".po-ver-pdf").forEach((a) => a.addEventListener("click", async (e) => {
       e.preventDefault();
       const r = await Auth.fetch(`${API.base}/api/purchase-orders/${encodeURIComponent(po.id)}/versions/${a.dataset.version}/pdf`);
       if (r.ok) window.open(URL.createObjectURL(await r.blob()), "_blank");
     }));
-    const go = document.getElementById("poCmpGo");
-    if (go) {
-      const compare = () => this.showComparison(po, document.getElementById("poCmpFrom").value, document.getElementById("poCmpTo").value);
-      go.addEventListener("click", compare);
-      compare();
-    }
+    const compare = () => {
+      const a = document.getElementById("poCmpFrom").value, b = document.getElementById("poCmpTo").value;
+      if (a !== b) return this.showComparison(po, a, b);
+      document.getElementById("poCmpOut").innerHTML = `<div class="cell-muted" style="font-size:12px;">${rows.length > 1 ? "Pick two different versions." : "This is the only version so far: nothing to compare yet."}</div>`;
+    };
+    document.getElementById("poCmpGo").addEventListener("click", compare);
+    compare();
   },
 
   cmpValue(field, value) {
@@ -444,6 +449,7 @@ const PurchaseOrdersView = {
         ${dispatchActs ? "" : this.dispatchPanel(po)}
         ${this.touchlessPanel(po)}
         <div id="poChangesBox"></div>
+        <div id="poVersionsBox"></div>
         </div>
         </div>
         <div id="poTraceBox" style="margin-top:12px;"></div>
@@ -451,6 +457,7 @@ const PurchaseOrdersView = {
       this.wire(po);
       TracePanel.mount(document.getElementById("poTraceBox"), po.id);
       this.mountChanges(po);
+      this.mountVersions(po);
       if (po.sent_at) this.mountSupplierAnswer(po);
       if (po.sent_at) SupplierMessages.mount(document.getElementById("supplierMessagesBox"), "orders", po.id);
     } catch {

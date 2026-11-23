@@ -118,6 +118,14 @@ def test_a_buyer_opens_the_document_changes_cancels_and_closes_and_a_store_perso
         expect(buyer.locator("#appContent .page-header p")).to_contain_text(re.compile("closed", re.I))
         assert db.execute(text("select short_closed_qty from po_line where po_no = 'PO-OC-2'")).scalar_one() == 6
 
+        # an approver sees the versions and compares them before deciding, like anyone who opens the order (block 7)
+        approver = open_app(browser, LAPTOP)
+        sign_in(approver, company.emails["Approver"])
+        approver.goto(f"{URL}/#/purchase-orders/PO-OC-2")
+        expect(approver.locator("#poVersionsBox .panel-title")).to_have_text("Versions")
+        expect(approver.locator("#poCmpGo")).to_have_count(1)
+        expect(approver.locator("#poCmpOut")).to_contain_text("nothing to compare yet")  # one version so far
+
         # a store person may open the document but is offered no change
         store = open_app(browser, LAPTOP)
         sign_in(store, company.emails["Store"])
@@ -127,5 +135,6 @@ def test_a_buyer_opens_the_document_changes_cancels_and_closes_and_a_store_perso
             expect(store.locator(f"#{control}")).to_have_count(0)
         # the refusals asked for above (a missing reason) are the only failed requests
         assert [x for x in buyer.problems if "409" not in x] == [] and store.problems == []  # type: ignore[attr-defined]
+        assert approver.problems == []  # type: ignore[attr-defined]
     finally:
         clear_stock_and_approvals(company)
