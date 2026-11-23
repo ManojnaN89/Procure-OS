@@ -332,6 +332,7 @@ STOCK_TABLES = (
     "quote_line",
     "quote",
     "sourcing_decision",
+    "recommendation",  # block 6: the RFQ draft records point to their sending proposals
     "rfq_supplier",
     "rfq_line",
     "rfq",
@@ -893,8 +894,9 @@ def test_the_buyer_checks_a_reply_read_from_email_corrects_one_value_and_confirm
         assert db.execute(text("select unit_price from quote_line")).scalar_one() == 92.5
         assert buyer.problems == []  # type: ignore[attr-defined]
     finally:
+        clear_stock_and_approvals(company)  # the quote first: block 6 keeps the mail it came from (quote.email_id)
         db.execute(text("delete from email_message where message_id = '<ui-draft@x>'"))
-        clear_stock_and_approvals(company)
+        db.commit()
 
 
 def test_hostile_text_in_names_and_in_the_address_bar_is_shown_as_text_and_never_runs(
