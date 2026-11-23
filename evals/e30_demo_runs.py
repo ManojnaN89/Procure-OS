@@ -672,10 +672,12 @@ def send_and_acknowledge(d: Demo, c: Checks, po: str, supplier: str, total: Deci
         total,
     )
     promised = TODAY + timedelta(days=5)
-    with d.step("buyer", f"records the supplier's acknowledgement, delivery promised {promised}") as page:
-        page.locator("#poAckDate").fill(promised.isoformat())
+    with d.step("buyer", f"records the supplier's acknowledgement, delivery promised {promised} on each line") as page:
+        for box in page.locator(".po-ack-date").all():  # a date per line (block 8)
+            box.fill(promised.isoformat())
+        page.locator("#poAckNote").fill("Confirmed by phone")
         page.locator("#poAck").click()
-        expect(page.locator("#appContent")).to_contain_text("Acknowledged on")
+        expect(page.locator("#appContent")).to_contain_text("Acknowledged version")
     d.sync()
     c.same(
         "order status after the acknowledgement",

@@ -413,7 +413,7 @@ class Co7(s.Co6):
         return r
 
     def ack_app(self, no: str, version: int | None, by: str | None = None) -> Any:
-        body: dict[str, Any] = {"promised_date": NEED_BY.isoformat(), "note": "eval: acknowledged on the phone"}
+        body: dict[str, Any] = {"note": "eval: acknowledged on the phone"}  # each line on its date ordered (block 8)
         if version is not None:
             body["version"] = version
         r = self.call(by or self.buyer(), "POST", f"/api/purchase-orders/{no}/acknowledge", body)

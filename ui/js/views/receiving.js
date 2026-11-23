@@ -48,13 +48,20 @@ const ReceivingView = {
     }
   },
 
+  // The earliest line still due, and how many lines are late: each line has its own date (promised, else needed).
+  firstDue(o) {
+    const due = o.lines.map((l) => l.due).filter(Boolean).sort()[0];
+    const late = o.lines.filter((l) => l.late).length;
+    return `${due ? ` · first line due ${formatDate(due)}` : ""}${late ? ` · <span style="color:var(--warning-text);">${plural(late, "line")} late</span>` : ""}`;
+  },
+
   orderCard(o) {
     return `
       <div class="panel recv-card" style="margin-bottom:12px;">
         <div style="display:flex;justify-content:space-between;gap:12px;align-items:center;">
           <div>
             <a class="recv-po" href="#/purchase-orders/${this.esc(o.id)}">${this.esc(o.id)}</a>
-            <div class="cell-muted">${this.esc(o.supplier)} · deliver to ${this.esc(o.ship_to)}${o.promised_date ? ` · promised ${formatDate(o.promised_date)}` : ""}</div>
+            <div class="cell-muted">${this.esc(o.supplier)} · deliver to ${this.esc(o.ship_to)}${this.firstDue(o)}</div>
           </div>
           <div class="btn btn-primary recv-open" data-po="${this.esc(o.id)}"><i class="ti ti-package-import" aria-hidden="true"></i>Receive goods</div>
         </div>
@@ -64,7 +71,7 @@ const ReceivingView = {
           <table class="data-table"><thead><tr><th>ITEM</th><th>ORDERED</th><th>RECEIVED SO FAR</th><th>ARRIVED NOW</th><th>REJECTED</th><th>REASON FOR REJECTION</th></tr></thead><tbody>
             ${o.lines.map((l) => `
               <tr data-line="${this.esc(l.line_no)}">
-                <td>${this.esc(l.name)}<div class="cell-muted" style="font-size:11px;">${this.esc(l.item_code || "")}</div>${l.serialised ? `<input class="recv-serials" placeholder="Serial numbers, one per unit, commas between" aria-label="Serial numbers: ${this.esc(l.name)}" style="width:100%;margin-top:4px;">` : ""}</td>
+                <td>${this.esc(l.name)}<div class="cell-muted" style="font-size:11px;">${this.esc(l.item_code || "")}${l.due ? ` · due ${formatDate(l.due)} (${l.due_source === "promised" ? "promised" : "needed"})` : ""}${l.late ? ' · <span style="color:var(--warning-text);font-weight:600;">late</span>' : ""}</div>${l.serialised ? `<input class="recv-serials" placeholder="Serial numbers, one per unit, commas between" aria-label="Serial numbers: ${this.esc(l.name)}" style="width:100%;margin-top:4px;">` : ""}</td>
                 <td data-label="Ordered">${this.esc(l.ordered)} <span class="cell-muted">${this.esc(l.uom)}</span></td>
                 <td data-label="Received so far">${this.esc(l.received)}</td>
                 <td data-label="Arrived now"><input class="recv-qty" type="number" inputmode="decimal" min="0" step="any" aria-label="Arrived now: ${this.esc(l.name)}" style="width:100px;"></td>

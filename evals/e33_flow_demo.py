@@ -381,11 +381,11 @@ def _run(ctx: Any) -> Outcome:
     order_nos = [r[0] for r in orders.values()]
     for no in order_nos:
         if no in sent_alone:
-            call(BUYER, "POST", f"/api/purchase-orders/{no}/acknowledge", {"promised_date": "2026-11-12"})
+            call(BUYER, "POST", f"/api/purchase-orders/{no}/acknowledge", {"note": "Confirmed by phone"})
             continue
         refused(PURCHASE_MANAGER, "POST", f"/api/purchase-orders/{no}/send")  # the approver does not send
         call(BUYER, "POST", f"/api/purchase-orders/{no}/send")
-        call(BUYER, "POST", f"/api/purchase-orders/{no}/acknowledge", {"promised_date": "2026-11-12"})
+        call(BUYER, "POST", f"/api/purchase-orders/{no}/acknowledge", {"note": "Confirmed by phone"})
     check(all(r[0] == "acknowledged" for r in q("select status from po")), "every order should be acknowledged")
     check(
         sum(1 for m in box.sent if "PO-" in (m.get("subject") or "")) >= 4,

@@ -38,6 +38,8 @@ from period_scenarios import check as check_period  # noqa: E402
 from period_scenarios import write_period  # noqa: E402
 from quote_scenarios import check as check_quotes  # noqa: E402
 from quote_scenarios import write_quotes  # noqa: E402
+from confirmation_scenarios import check as check_confirmation  # noqa: E402
+from confirmation_scenarios import write_confirmation  # noqa: E402
 from version_scenarios import check as check_versions  # noqa: E402
 from version_scenarios import write_versions  # noqa: E402
 from demand_scenarios import write_scenarios  # noqa: E402
@@ -433,6 +435,12 @@ class MasterWriter:
             for s in self.p["suppliers"]
         ]
         tables = supplier_tables(specs)
+        tables["supplier_contact"] += [  # more registered contacts besides the primary (an order desk, block 8)
+            {"supplier_code": s["code"], "name": c["name"], "role": c["role"], "email": c["email"], "phone": c["phone"],
+             "is_primary": "false"}
+            for s in self.p["suppliers"]
+            for c in s.get("contacts") or []
+        ]  # fmt: skip
         for name, rows in tables.items():
             self.put(name, rows)
         self.put(
@@ -560,7 +568,7 @@ def prospect_flags(tables: dict[str, list[dict[str, object]]], profile: CompanyP
     another supplier (with a blocked one: blocked_match) or with a member of staff, the same address line and pincode as
     another supplier, the same email domain unless it is a public mail provider."""
     status = {str(s["code"]): str(s["status"]) for s in tables["supplier"]}
-    contact = {str(c["supplier_code"]): c for c in tables["supplier_contact"]}
+    contact = {str(c["supplier_code"]): c for c in tables["supplier_contact"] if c["is_primary"] == "true"}
     address = {str(a["supplier_code"]): a for a in tables["supplier_address"]}
     staff = [(u["code"], profile.email_of(u), f"+91 00000 {int(u['code'][1:]):05d}") for u in profile["people"]]
     flags: list[dict[str, object]] = []
@@ -629,6 +637,7 @@ def build(profile: CompanyProfile, out: Path) -> dict[str, dict[str, int]]:
     write_period(profile.data, out)  # the period RFQ scenarios of block 5: suggested quantities, awards, contracts
     write_quotes(profile.data, out)  # block 6: last prices paid, negotiation briefs, the A/B case, order totals
     write_versions(profile.data, out)  # block 7: every version of each order, its tax, approver and materiality
+    write_confirmation(profile.data, out)  # block 8: the supplier confirmation figures and dates
     manifest = {
         "dataset": profile.dataset,
         "profile": profile.name,
@@ -721,6 +730,7 @@ def _column(path: Path, column: str) -> set[str]:
 def check(out: Path, profile: CompanyProfile | None = None) -> list[str]:
     """What is wrong with the dataset, in plain words. Empty when it is as designed."""
     problems = common_problems(out) + check_approval(out) + check_period(out) + check_quotes(out) + check_versions(out)
+    problems += check_confirmation(out)
     if problems:
         return problems
     m = out / "master"

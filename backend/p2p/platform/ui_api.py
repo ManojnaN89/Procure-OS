@@ -27,6 +27,7 @@ from p2p.approvals import rules as approval_rules
 from p2p.approvals import workflow as approvals
 from p2p.formulas.calendar import business_today
 from p2p.formulas.contracts import ContractUse
+from p2p.formulas.deliveries import line_due
 from p2p.formulas.money import format_qty, round_money
 from p2p.formulas.scope import label as scope_label
 from p2p.formulas.scoring import risk_level
@@ -35,7 +36,7 @@ from p2p.formulas.words import count
 from p2p.masters import categories, regions, supplier_status
 from p2p.masters import prospects as prospect_rules
 from p2p.orders import contracts as contract_usage
-from p2p.orders import dispatch, dispatch_notes, quotes
+from p2p.orders import dispatch, dispatch_notes, quotes, supplier_links, versions
 from p2p.orders import service as orders  # noqa: F401 - registers the price-variance proposal executor
 from p2p.orders import workflow as po_workflow
 from p2p.platform import audit, quote_api, ratelimit, routing, sod
@@ -1595,9 +1596,23 @@ def get_purchase_order(no: str, db: Db, ctx: Ctx) -> dict[str, Any]:
         "acknowledged_version": r["acknowledged_version"],
         "ack_note": r["ack_note"],
         "promised_date": max(promised).isoformat() if promised else None,
-        "ack_overdue": r["status"] == "sent" and dispatch.ack_overdue(db, r["sent_at"], business_today()),
+        "ack_overdue": dispatch.ack_overdue(db, r, business_today()),
+        "ack_due_on": _day_iso(dispatch.ack_due_on(db, r)) if dispatch.waiting_ack(r) else None,
+        "chasers": [
+            {"version": c["po_version"], "number": n, "at": _iso(c["sent_at"]), "how": c["how"]}
+            for n, c in _numbered(
+                _rows(
+                    db,
+                    "select po_version, sent_at, how from supplier_chase where po_no = :n and kind = 'ack' "
+                    "order by po_version, sent_at",
+                    n=no,
+                )
+            )
+        ],  # fmt: skip
+        "ack": _ack_of(db, no, r["acknowledged_version"]),
         "can_send": can_dispatch and r["status"] == "approved" and not r["hold_reason"],
-        "can_acknowledge": can_dispatch and r["status"] == "sent",
+        "can_acknowledge": can_dispatch and dispatch.waiting_ack(r),
+        "can_resend_link": can_dispatch and r["status"] == "sent",
         "can_receive": r["status"] in goods.RECEIVABLE and can_anywhere(db, ctx.user_id, "grn.create"),
         "receipts": [
             {"id": g["no"], "inspection": g["inspection_status"], "at": _iso(g["gate_entry_at"])}
@@ -1639,6 +1654,7 @@ def get_purchase_order(no: str, db: Db, ctx: Ctx) -> dict[str, Any]:
                 "igst": _money(line["igst"]),
                 "need_by": line["need_by"].isoformat() if line["need_by"] else None,
                 "promised_date": line["promised_date"].isoformat() if line["promised_date"] else None,
+                **_due(line),
                 "received_qty": _qty(line["received_qty"]),
                 "source": line["source"],
                 "source_ref": line["source_ref"],
@@ -1692,6 +1708,47 @@ def get_purchase_order(no: str, db: Db, ctx: Ctx) -> dict[str, Any]:
     }
 
 
+def _ack_of(db: Session, po_no: str, version: int | None) -> dict[str, Any] | None:
+    """How the acknowledged version was acknowledged: by whom, how, with a code or not."""
+    if version is None:
+        return None
+    row = db.execute(
+        text(
+            "select ack_via, ack_address, ack_code_id is not null, acknowledged_by from po_version "
+            "where po_no = :p and version = :v"
+        ),
+        {"p": po_no, "v": version},
+    ).first()
+    if row is None or row[0] is None:
+        return None
+    return {
+        "via": row[0],
+        "address": row[1],
+        "with_code": bool(row[2]),
+        "by": versions.maker_name(db, str(row[3] or "")),
+    }
+
+
+def _day_iso(day: date | None) -> str | None:
+    return day.isoformat() if day else None
+
+
+def _numbered(rows: list[dict[str, Any]]) -> list[tuple[int, dict[str, Any]]]:
+    """Chasers numbered from 1 within each version."""
+    out: list[tuple[int, dict[str, Any]]] = []
+    seen: dict[Any, int] = {}
+    for r in rows:
+        seen[r["po_version"]] = seen.get(r["po_version"], 0) + 1
+        out.append((seen[r["po_version"]], r))
+    return out
+
+
+def _due(line: dict[str, Any]) -> dict[str, Any]:
+    """A line's due date (promised, else needed) and where it comes from (formulas/deliveries.line_due)."""
+    due, source = line_due(line["promised_date"], line["need_by"])
+    return {"due": due.isoformat() if due else None, "due_source": source}
+
+
 def _po_action(call: Any) -> dict[str, str]:
     try:
         return {"status": call()}
@@ -1713,6 +1770,12 @@ def _receipt_error(call: Callable[[], dict[str, Any]]) -> dict[str, Any]:
         raise HTTPException(403 if message.startswith("segregation") else 409, message) from None
 
 
+def _late(line: dict[str, Any], today: date) -> bool:
+    """Still to receive and its due date has passed."""
+    due, _ = line_due(line["promised_date"], line["need_by"])
+    return due is not None and due < today and Decimal(line["received_qty"]) < Decimal(line["qty"])
+
+
 @router.get("/receiving/waiting")
 def goods_waiting(db: Db, ctx: Ctx) -> list[dict[str, Any]]:
     """Orders sent to suppliers that still have goods to come."""
@@ -1725,11 +1788,12 @@ def goods_waiting(db: Db, ctx: Ctx) -> list[dict[str, Any]]:
         st=list(goods.RECEIVABLE),
     )
     out: list[dict[str, Any]] = []
+    today = business_today()
     for o in orders_:
         lines = _rows(
             db,
-            "select l.line_no, l.description, l.item_code, l.qty, l.uom, l.received_qty, coalesce(i.serialised, false) "
-            "as serialised from po_line l left join item i on i.code = l.item_code "
+            "select l.line_no, l.description, l.item_code, l.qty, l.uom, l.received_qty, l.promised_date, l.need_by, "
+            "coalesce(i.serialised, false) as serialised from po_line l left join item i on i.code = l.item_code "
             "where l.po_no = :n and l.status in ('open', 'part_received') order by l.line_no",
             n=o["no"],
         )
@@ -1754,12 +1818,15 @@ def goods_waiting(db: Db, ctx: Ctx) -> list[dict[str, Any]]:
                         "received": _qty(ln["received_qty"]),
                         "uom": ln["uom"],
                         "serialised": bool(ln["serialised"]),
+                        **_due(ln),
+                        "late": _late(ln, today),
                     }
                     for ln in lines
                 ],
             }
         )
-    return out
+    # the order whose earliest open line is due first comes first; an order with no date at all last
+    return sorted(out, key=lambda o: min((ln["due"] for ln in o["lines"] if ln["due"]), default="9999-12-31"))
 
 
 @router.get("/receipts")
@@ -1923,22 +1990,53 @@ def send_purchase_order(
 def acknowledge_purchase_order(
     no: str, payload: dict[str, Any], db: Db, ctx: Annotated[routing.TenantContext, Depends(require("po.send"))]
 ) -> dict[str, Any]:
-    raw = payload.get("promised_date")
+    """The buyer records the supplier's acknowledgement of a version (on the phone, in a letter): a date per line and a
+    note of how the supplier confirmed (OP-16)."""
+    note = str(payload.get("note") or "").strip()
+    if not note:
+        raise HTTPException(422, "say how the supplier confirmed the order (a note is needed)")
+    raw = payload.get("lines") or {}
+    if not isinstance(raw, dict):
+        raise HTTPException(422, "lines must map each line number to a date")
     try:
-        promised = date.fromisoformat(str(raw)) if raw else None
+        lines = {int(k): date.fromisoformat(str(v)) if v else None for k, v in raw.items()}
     except ValueError:
-        raise HTTPException(422, "promised_date must be a date like 2026-11-20") from None
+        raise HTTPException(422, "each line's date must be like 2026-12-07") from None
+    email = payload.get("email_id")
+    if email is not None and (isinstance(email, bool) or not str(email).isdigit()):
+        raise HTTPException(422, "email_id must be a whole number")
     seen = _seen_version(payload)  # the version on the buyer's screen (OP-9); omitted: the current one, recorded
     current = db.execute(text("select version from po where no = :n"), {"n": no}).scalar()
-    return _dispatch_action(
-        lambda: {
-            "status": "acknowledged",
-            "version": seen if seen is not None else current,
-            "warnings": dispatch.acknowledge(
-                db, no, sod.user(ctx.user_id), version=seen, via="app", promised=promised, note=payload.get("note")
-            ),
-        }
-    )
+    try:
+        warnings = dispatch.acknowledge(
+            db, no, sod.user(ctx.user_id), version=seen, via="app", promised=lines, note=note, tenant=ctx.slug,
+            detail=dispatch.AckDetail(email_id=int(email) if email is not None else None),
+        )  # fmt: skip
+    except dispatch.DispatchError as exc:
+        raise HTTPException(exc.status, str(exc)) from None
+    return {"status": "acknowledged", "version": seen if seen is not None else current, "warnings": warnings}
+
+
+@router.post("/purchase-orders/{no}/resend-link")
+def resend_purchase_order_link(
+    no: str, db: Db, ctx: Annotated[routing.TenantContext, Depends(require("po.send"))]
+) -> dict[str, Any]:
+    """Send the order again: a new respond link for the current version to the supplier's order contact (a contact
+    removed or changed)."""
+    status = db.execute(text("select status from po where no = :n"), {"n": no}).scalar()
+    if status is None:
+        raise HTTPException(404, f"{no} does not exist")
+    if status != "sent":
+        raise HTTPException(
+            409, f"{no} is {status}; only an order with the supplier and not yet acknowledged is sent again"
+        )
+    try:
+        to, version = supplier_links.mail_current(
+            db, ctx.slug, no, why="sent again by the buyer", actor=sod.user(ctx.user_id)
+        )
+    except supplier_links.LinkError as exc:
+        raise HTTPException(409, str(exc)) from None
+    return {"sent_to": to, "version": version}
 
 
 @router.post("/purchase-orders/{no}/approve")

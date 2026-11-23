@@ -237,7 +237,24 @@ class _Run:
     def send_order(self, po: str, *, acknowledge: bool = True) -> None:
         self.call(BUYER, "POST", f"/api/purchase-orders/{po}/send")
         if acknowledge:
-            self.call(BUYER, "POST", f"/api/purchase-orders/{po}/acknowledge", {"promised_date": self.day(3)})
+            self.acknowledge(po)
+
+    def acknowledge(self, po: str) -> None:
+        """The buyer records the supplier's acknowledgement of the version it was sent, by phone: each line on the date
+        ordered (a date per line, block 8)."""
+        version = int(self.q("select version from po where no = :n", n=po)[0][0])
+        lines = {
+            str(n): (promised or need_by).isoformat()
+            for n, promised, need_by in self.q(
+                "select line_no, promised_date, need_by from po_line where po_no = :n and status = 'open' "
+                "and coalesce(promised_date, need_by) is not null order by line_no",
+                n=po,
+            )
+        }
+        self.call(
+            BUYER, "POST", f"/api/purchase-orders/{po}/acknowledge",
+            {"version": version, "lines": lines, "note": "Confirmed by phone with the supplier's sales desk"},
+        )  # fmt: skip
 
     def receive(self, po: str, fraction: Decimal = Decimal(1)) -> None:
         lines = self.q("select line_no, qty from po_line where po_no = :n order by line_no", n=po)
@@ -401,7 +418,7 @@ def _later(run: _Run) -> None:
         BUYER, "POST", f"/api/purchase-orders/{po}/revise",
         {"reason": "We collect from the foundry this time", "version": 1, "header": {"delivery_terms": "ex_works"}},
     )  # fmt: skip
-    run.call(BUYER, "POST", f"/api/purchase-orders/{po}/acknowledge", {"version": 2, "promised_date": run.day(3)})
+    run.acknowledge(po)  # version 2
     _stage(run, LATER[2], po)
 
     _, po = run.contract_order("RM-04", 20, "Impellers for the 0.5 HP pumps")

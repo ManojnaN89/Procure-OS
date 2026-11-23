@@ -44,6 +44,9 @@ KINDS: dict[str, str] = {
     "quote_sender_check": "Supplier replies not read",
     "quote_expired": "Quotes expired before the order",
     "path_case": "Contract above the market: path A or B",
+    "po_ack_overdue": "Orders not acknowledged after the reminders",
+    "supplier_ack_confirm": "Acknowledgements to record",
+    "supplier_sender_check": "Supplier order emails not read",
 }
 SOURCING_NEXT: dict[str, tuple[str, str]] = {  # task kind (block 6): the permission that acts, next step
     "rfq_no_response": (
@@ -56,6 +59,20 @@ SOURCING_NEXT: dict[str, tuple[str, str]] = {  # task kind (block 6): the permis
     ),
     "quote_expired": ("rfq.create", "Ask for a renewed price, or select another valid quote with a reason"),
     "path_case": ("rfq.create", "Choose path A (buy on the contract, with a reason) or B (ask for quotes)"),
+}
+ORDER_NEXT: dict[str, tuple[str, str]] = {  # task kind (block 8): the permission that acts, next step
+    "po_ack_overdue": (
+        "po.send",
+        "Call the supplier, record its acknowledgement with a note, send the order again, or cancel it",
+    ),
+    "supplier_ack_confirm": (
+        "po.send",
+        "Read the supplier's email and record its acknowledgement of that version, or ask it to accept from the link",
+    ),
+    "supplier_sender_check": (
+        "po.send",
+        "Ask the supplier to write from its registered address, or register the contact through supplier records",
+    ),
 }
 
 AP = ("AP", "invoice.match", "Ask the supplier for a corrected invoice")
@@ -338,19 +355,24 @@ def _ai_handover(db: Session) -> Iterator[Stuck]:
         )  # fmt: skip
 
 
-def _sourcing_cases(db: Session) -> Iterator[Stuck]:
-    """The sourcing cases of block 6: an RFQ closed short, a reply not read, a quote expired before its order, a
-    contract line held for path A or B. Each is an open task of its buyer."""
+def _sourcing_cases(db: Session, nexts: dict[str, tuple[str, str]] = SOURCING_NEXT) -> Iterator[Stuck]:
+    """The sourcing cases of block 6 (an RFQ closed short, a reply not read, a quote expired before its order, a
+    contract line held for path A or B) and the order cases of block 8 (an order not acknowledged after the reminders,
+    an acknowledgement by email to record, an order email not read). Each is an open task of its buyer."""
     rows = _rows(
         db,
         "select id, kind, title, assignee, payload, created_at from task where kind = any(:k) "
         "and status in ('open', 'overdue') order by id",
-        k=list(SOURCING_NEXT),
+        k=list(nexts),
     )
     for r in rows:
         p, code = r["payload"] or {}, org_code_of(db, int(r["assignee"]))
-        act, step = SOURCING_NEXT[str(r["kind"])]
-        ref = str(p.get("rfq_no") or (f"{p.get('request_no')}/{p.get('line_no')}" if p.get("request_no") else r["id"]))
+        act, step = nexts[str(r["kind"])]
+        ref = str(
+            p.get("rfq_no")
+            or p.get("po_no")
+            or (f"{p.get('request_no')}/{p.get('line_no')}" if p.get("request_no") else r["id"])
+        )
         yield Stuck(
             str(r["kind"]), ref, str(p.get("link") or "#/exceptions"), str(r["title"]),
             name_of(db, code) if code else "Not assigned", step, _day(r["created_at"]), act=act,
@@ -372,6 +394,7 @@ def collect(db: Session, today: date, calendar: BusinessCalendar) -> list[Stuck]
         *_late_supply(db),
         *_ai_handover(db),
         *_sourcing_cases(db),
+        *_sourcing_cases(db, ORDER_NEXT),
     ]
 
 

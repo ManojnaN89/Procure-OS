@@ -125,6 +125,8 @@ settings:
   - [default_rfq_response_days, "5", Working days suppliers get to respond to an RFQ]
   - [rfq_reminder_after_days, "2", Working days after which a silent supplier is reminded]
   - [supplier_ack_due_days, "2", Working days within which a PO acknowledgement is expected]
+  - [supplier_chase_days, "3", Working days between reminders to acknowledge an order]
+  - [supplier_chase_max, "3", Reminders to acknowledge one version of an order at most]
   - [delivery_reminder_before_days, "2", Working days before the promised date a supplier is reminded (once)]
   - [delivery_overdue_after_days, "1", Working days after a missed promised date the first reminder goes while nothing has arrived]
   - [delivery_overdue_every_days, "3", Working days between further reminders about a missed delivery]
@@ -224,7 +226,7 @@ items:
 # hsn_digits follows turnover (6 digits above Rs 5 crore); agreed_days is the written MSME agreement
 suppliers:
   - {code: SUP-001, name: Bangalore IT Distributors Pvt Ltd, form: pvt_ltd, pan: BANCB0000D, state: "29", city: Bengaluru, pincode: "560058", e_invoice: true, hsn_digits: "6", msme: none, terms: NET30, turnover: 20-100cr, bank: HDFC, domain: bangaloreit, categories: [ITH]}
-  - {code: SUP-002, name: Chennai Tech Resellers Pvt Ltd, form: pvt_ltd, pan: CHECC0000R, state: "33", city: Chennai, pincode: "600032", e_invoice: false, hsn_digits: "6", msme: none, terms: NET30, turnover: 5-20cr, bank: CANARA, domain: chennaitech, categories: [ITH]}
+  - {code: SUP-002, name: Chennai Tech Resellers Pvt Ltd, form: pvt_ltd, pan: CHECC0000R, state: "33", city: Chennai, pincode: "600032", e_invoice: false, hsn_digits: "6", msme: none, terms: NET30, turnover: 5-20cr, bank: CANARA, domain: chennaitech, categories: [ITH], contacts: [{name: Order Desk, role: orders, email: orders@chennaitech.example, phone: "+91 00000 90012"}]}
   - {code: SUP-003, name: Cloudline Software Pvt Ltd, form: pvt_ltd, pan: CLOCC0000S, state: "29", city: Bengaluru, pincode: "560037", e_invoice: false, hsn_digits: "6", msme: none, terms: NET30, turnover: 5-20cr, bank: ICICI, domain: cloudline, categories: [SWS], tds: 194J(a)}
   - {code: SUP-004, name: Sri Office Supplies, form: proprietorship, pan: SRIPS0000O, state: "29", city: Bengaluru, pincode: "560068", e_invoice: false, hsn_digits: "4", msme: micro, udyam: UDYAM-KR-00-1000004, agreed_days: 45, terms: NET45, turnover: 1.5-5cr, bank: SBI, domain: srioffice, categories: [OFS], scopes: {OFS: [KA]}}  # a Bengaluru shop
   - {code: SUP-005, name: Clean and Secure Facility Services Pvt Ltd, form: pvt_ltd, pan: CLECC0000F, state: "29", city: Bengaluru, pincode: "560100", e_invoice: false, hsn_digits: "6", msme: none, terms: NET30, turnover: 5-20cr, bank: AXIS, domain: cleansecure, categories: [FAC], tds: 194C, scopes: {FAC: [KA]}}  # local crews

@@ -509,7 +509,7 @@ def supplier_mail_section(state: Any, results: list[Result], seen: list[Obeyer])
             )
         ]
         if all(promised):
-            dispatch.acknowledge(db, no, buyer, promised=max(promised), note=None, today=lib.TODAY)
+            dispatch.acknowledge(db, no, buyer, promised=None, note=None, today=lib.TODAY)  # each line its own date
             pos.append(no)
     if not pos:
         results.append(Result("supplier email", "setup", ["the pipeline made no order that could be sent"]))

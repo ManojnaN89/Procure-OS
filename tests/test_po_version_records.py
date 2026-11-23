@@ -11,6 +11,7 @@ from fastapi.testclient import TestClient
 from po_versions_support import audits, order, rows, sent_order, versions
 from sqlalchemy import text
 from sqlalchemy.orm import Session
+from supplier_answer_support import service_code
 from test_dispatch import _approved_order
 from test_orders import _headers, _logins, shop  # noqa: F401 - fixtures
 from test_sourcing import Outbox, db, outbox  # noqa: F401 - fixtures
@@ -69,7 +70,8 @@ def test_each_revision_is_a_new_row_by_its_maker_with_its_reason_and_the_older_r
 def test_an_acknowledgement_is_of_one_version_and_a_revision_voids_it(shop: Session, outbox: Outbox) -> None:  # noqa: F811
     # given an order sent with its link (version 1) and accepted from it
     po_no, logins, token = sent_order(shop, outbox)
-    confirmation.accept_by_link(shop, shop.info["slug"], supplier_links.read(token), None, None)
+    code = service_code(shop, outbox.sent, token)  # D53: the code the contact got
+    confirmation.accept_by_link(shop, shop.info["slug"], supplier_links.read(token), None, None, code)
     assert order(shop, po_no)["acknowledged_version"] == 1
     v1 = versions(shop, po_no)[0]
     assert (v1["ack_via"], v1["acknowledged_by"], v1["acknowledged_at"] is not None) == (
@@ -101,13 +103,15 @@ def test_an_acknowledgement_is_of_one_version_and_a_revision_voids_it(shop: Sess
 
     # and the buyer recording version 2 in the app binds it to version 2
     head = _headers(shop.info["slug"], logins["buyer"], "Buyer")
-    got = client.post(f"/api/purchase-orders/{po_no}/acknowledge", json={"version": 2}, headers=head)
+    got = client.post(f"/api/purchase-orders/{po_no}/acknowledge", json={"version": 2, "note": "phone"}, headers=head)
     assert got.status_code == 200 and got.json()["version"] == 2
     assert order(shop, po_no)["acknowledged_version"] == 2
     assert versions(shop, po_no)[1]["ack_via"] == "app"
-    assert audits(shop, "po.acknowledge", po_no)[-1] == {
-        "status": "acknowledged", "promised": None, "warnings": [], "version": 2, "via": "app",
+    last = audits(shop, "po.acknowledge", po_no)[-1]
+    assert {k: last[k] for k in ("status", "warnings", "version", "via", "by")} == {
+        "status": "acknowledged", "warnings": [], "version": 2, "via": "app", "by": f"user:{logins['buyer']}",
     }  # fmt: skip
+    assert last["lines"] == {"1": "2026-11-20"}  # each line on its date ordered (block 8)
 
 
 def test_the_app_refuses_an_acknowledgement_of_a_version_not_on_screen_and_records_the_current_one_when_omitted(
@@ -117,13 +121,16 @@ def test_the_app_refuses_an_acknowledgement_of_a_version_not_on_screen_and_recor
     po_no, logins, _ = sent_order(shop, outbox)
     head = _headers(shop.info["slug"], logins["buyer"], "Buyer")
 
-    stale = client.post(f"/api/purchase-orders/{po_no}/acknowledge", json={"version": 3}, headers=head)
+    stale = client.post(f"/api/purchase-orders/{po_no}/acknowledge", json={"version": 3, "note": "x"}, headers=head)
     assert stale.status_code == 409 and "it is now version 1" in stale.json()["detail"]
     assert (
-        client.post(f"/api/purchase-orders/{po_no}/acknowledge", json={"version": "x"}, headers=head).status_code == 422
+        client.post(
+            f"/api/purchase-orders/{po_no}/acknowledge", json={"version": "x", "note": "x"}, headers=head
+        ).status_code
+        == 422
     )
 
-    omitted = client.post(f"/api/purchase-orders/{po_no}/acknowledge", json={}, headers=head)
+    omitted = client.post(f"/api/purchase-orders/{po_no}/acknowledge", json={"note": "phone"}, headers=head)
     assert omitted.status_code == 200 and omitted.json()["version"] == 1
     assert order(shop, po_no)["acknowledged_version"] == 1
 

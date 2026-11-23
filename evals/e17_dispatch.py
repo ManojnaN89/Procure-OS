@@ -14,8 +14,10 @@ from sqlalchemy import text
 ID = "E17"
 TITLE = "Orders are sent to the right supplier with the right amounts, only when approved, and acknowledged on time"
 REQUIREMENT = (
-    "Plan: an approved order goes to the supplier by email; nothing else does; the supplier's promised date is checked "
-    "against the date the goods are needed; an order with no acknowledgement in two working days is overdue"
+    "Plan: an approved order goes to the supplier by email; nothing else does; each line's promised date is checked "
+    "against the date ordered (block 8: up to 3 days later accepted and flagged, later refused, never in the past or "
+    "on a day the delivery place is closed); an order whose version has no acknowledgement in two working days of the "
+    "delivery place is overdue"
 )
 
 
@@ -23,12 +25,22 @@ def money(text_value: str) -> Decimal:
     return Decimal(re.sub(r"[^\d.]", "", text_value))
 
 
-def working_days_after(start: date, n: int) -> date:
+def working_days_after(start: date, n: int, week: int = 5) -> date:
+    """n working days after start, counted by hand: Monday to Friday (week 5) or to Saturday (week 6), no holidays."""
     day, left = start, n
     while left:
         day += timedelta(days=1)
-        left -= day.weekday() < 5
+        left -= day.weekday() < week
     return day
+
+
+def week_of(db, po_no: str) -> int:
+    """The delivery place's working week, from its record: 6 for Monday to Saturday, else 5."""
+    days = db.execute(
+        text("select l.working_days from po join location l on l.code = po.ship_to_location where po.no = :n"),
+        {"n": po_no},
+    ).scalar()
+    return 6 if "sat" in str(days or "").lower() else 5
 
 
 def run(ctx) -> Outcome:
@@ -130,67 +142,98 @@ def run(ctx) -> Outcome:
     if twice:
         out.find("high", f"orders sent more than once: {twice[:2]}")
 
-    # 3. acknowledgement: promised dates against need-by dates, counted by hand
+    # 3. acknowledgement: a date per line against the date ordered, counted by hand (block 8, 8.5)
     sent_orders = [
         no
         for no in by_status.get("approved", [])
         if db.execute(text("select status from po where no = :n"), {"n": no}).scalar_one() == "sent"
     ]
-    ack_wrong, flagged = [], 0
+    ack_wrong, flagged, refused = [], 0, 0
+    today = lib.TODAY
     for i, no in enumerate(sent_orders[:25]):
-        need = [
-            r["need_by"]
+        lines = [
+            (int(r["line_no"]), r["need_by"])
             for r in db.execute(
-                text("select need_by from po_line where po_no = :n and status = 'open'"), {"n": no}
+                text("select line_no, need_by from po_line where po_no = :n and status = 'open' order by line_no"),
+                {"n": no},
             ).mappings()
-            if r["need_by"]
         ]
-        if not need:
+        if not lines or not all(d for _, d in lines):
             continue
-        offset = [0, 3, 4, -5][i % 4]
-        promised = min(need) + timedelta(days=offset)
-        r = client.post(
-            f"/api/purchase-orders/{no}/acknowledge", json={"promised_date": promised.isoformat()}, headers=buyer
-        )
-        if r.status_code != 200:
-            ack_wrong.append(f"{no}: acknowledge answered {r.status_code}")
-            continue
-        want = sorted(
-            n
-            for n, d in enumerate(
-                db.execute(
-                    text("select line_no, need_by from po_line where po_no = :n and status = 'open' order by line_no"),
-                    {"n": no},
-                ).all(),
-                start=1,
+        week = week_of(db, no)
+        # tries, in turn, until one is accepted: 4 days later (beyond the 3 accepted), a year back (the past), then
+        # 3 days later or 1 earlier (accepted, the later lines flagged) or the dates ordered
+        for offset in ([4, -400, 3, -1, 0] if i % 2 == 0 else [4, -400, 0]):
+            given = {n: d + timedelta(days=offset) for n, d in lines}
+            bad = [
+                n
+                for n, d in given.items()
+                if d != dict(lines)[n] and (d < today or d.weekday() >= week or (d - dict(lines)[n]).days > 3)
+            ]
+            later = [n for n, d in given.items() if d > dict(lines)[n] and n not in bad]
+            db.commit()
+            r = client.post(
+                f"/api/purchase-orders/{no}/acknowledge",
+                json={"lines": {str(n): d.isoformat() for n, d in given.items()}, "note": "eval: by phone"},
+                headers=buyer,
             )
-            if d[1] and promised > d[1] + timedelta(days=3)
-        )
-        got = len(r.json()["warnings"])
-        flagged += got > 0
-        if got != len(want):
-            ack_wrong.append(f"{no}: {got} warning(s), expected {len(want)} (promised {promised})")
-        after = db.execute(text("select status from po where no = :n"), {"n": no}).scalar_one()
-        if after != "acknowledged":
-            ack_wrong.append(f"{no}: status {after}")
-        if client.post(f"/api/purchase-orders/{no}/acknowledge", json={}, headers=buyer).status_code != 409:
-            ack_wrong.append(f"{no}: acknowledged twice")
+            after = db.execute(text("select status from po where no = :n"), {"n": no}).scalar_one()
+            db.commit()
+            if bad:
+                refused += 1
+                if r.status_code != 422 or after != "sent":
+                    ack_wrong.append(f"{no}: dates {given} should be refused, answered {r.status_code}, status {after}")
+                continue
+            if r.status_code != 200:
+                ack_wrong.append(f"{no}: acknowledge answered {r.status_code} {r.text[:120]}")
+                break
+            got = len(r.json()["warnings"])
+            flagged += got > 0
+            if got != len(later):
+                ack_wrong.append(f"{no}: {got} warning(s), expected {len(later)} (offset {offset})")
+            if after != "acknowledged":
+                ack_wrong.append(f"{no}: status {after}")
+            promised = dict(
+                db.execute(
+                    text("select line_no, promised_date from po_line where po_no = :n and status = 'open'"), {"n": no}
+                ).all()
+            )
+            db.commit()
+            if promised != given:
+                ack_wrong.append(f"{no}: promised {promised}, given {given} (one date per line)")
+            again = client.post(f"/api/purchase-orders/{no}/acknowledge", json={"note": "again"}, headers=buyer)
+            if again.status_code != 409:
+                ack_wrong.append(f"{no}: acknowledged twice")
+            break
     out.metrics["acknowledged"] = min(len(sent_orders), 25)
-    out.metrics["late promises flagged"] = flagged
+    out.metrics["later dates flagged / refused acknowledgements"] = f"{flagged} / {refused}"
     if ack_wrong:
         out.find("high", f"{len(ack_wrong)} acknowledgement(s) differ from the rule; first: {ack_wrong[0]}")
 
-    # 4. overdue acknowledgement, over many days, against a hand-counted calendar (Monday to Friday, no holidays loaded)
+    # 4. overdue acknowledgement, over many days, against a hand-counted calendar of the delivery place (its working
+    # week, no holidays loaded), from when the current version was sent
     from p2p.orders import dispatch
 
     bad_overdue = []
-    for start in (date(2026, 11, 6), date(2026, 11, 9), date(2026, 11, 13), date(2026, 12, 31)):
-        sent_at = datetime(start.year, start.month, start.day, 10, 0, tzinfo=UTC)
-        deadline = working_days_after(start, 2)
-        for offset in range(0, 12):
-            day = start + timedelta(days=offset)
-            if dispatch.ack_overdue(db, sent_at, day) != (day > deadline):
-                bad_overdue.append(f"sent {start}, checked {day}: platform {not (day > deadline)}")
+    probe = next(iter(sent_orders), None)
+    if probe is not None:
+        week = week_of(db, probe)
+        for start in (date(2026, 11, 6), date(2026, 11, 9), date(2026, 11, 13), date(2026, 12, 31)):
+            sent_at = datetime(start.year, start.month, start.day, 10, 0, tzinfo=UTC)
+            db.execute(text("update po set status = 'sent', acknowledged_version = null where no = :n"), {"n": probe})
+            db.execute(
+                text(
+                    "update po_version set sent_at = :t where po_no = :n and version = (select version from po where no = :n)"
+                ),
+                {"t": sent_at, "n": probe},
+            )
+            po = dict(db.execute(text("select * from po where no = :n"), {"n": probe}).mappings().one())
+            deadline = working_days_after(start, 2, week)
+            for offset in range(0, 12):
+                day = start + timedelta(days=offset)
+                if dispatch.ack_overdue(db, po, day) != (day > deadline):
+                    bad_overdue.append(f"sent {start}, checked {day}: platform {not (day > deadline)}")
+        db.rollback()
     out.metrics["overdue day-checks"] = 4 * 12
     if bad_overdue:
         out.find(

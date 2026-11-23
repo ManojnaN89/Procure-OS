@@ -16,6 +16,7 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import text
 from sqlalchemy.orm import Session
+from supplier_answer_support import answer
 from test_orders import _headers, _logins, shop  # noqa: F401 - fixtures
 from test_po_tiers import _gate, _order, tiers  # noqa: F401 - fixtures
 from test_receiving import _sent, store  # noqa: F401 - fixtures
@@ -221,8 +222,8 @@ def test_a_quantity_back_up_to_the_approved_one_carries_the_approval(store: Sess
 # ---- V4: price rises add up from the first approved price (DF-08) -------------------------------------------------
 
 
-def _ask_price(db: Session, token: str, price: str) -> tuple[int, bool, str]:
-    client.post(f"/supplier/{token}", data={"action": "change", "price_1": price})
+def _ask_price(db: Session, outbox: Outbox, token: str, price: str) -> tuple[int, bool, str]:
+    answer(client, outbox.sent, token, {"action": "change", "price_1": price})  # with the code, as a supplier does
     db.rollback()
     row = db.execute(
         text("select id, within_tolerance, base_value from po_change where status = 'proposed' order by id desc")
@@ -243,7 +244,7 @@ def test_price_rises_are_judged_from_the_first_approved_price_and_the_variance_c
     buyer, manager = _headers(slug, logins["buyer"], "Buyer"), _headers(slug, logins["procurement"], "Approver")
 
     # a rise of 1.5% from 100: the buyer's to accept; the order is approved again at 101.50 and sent
-    change, within, base = _ask_price(shop, token, "101.50")
+    change, within, base = _ask_price(shop, outbox, token, "101.50")
     assert (within, base) == (True, "100")
     assert (
         client.post(f"/api/supplier-changes/{change}/decide", json={"accept": True}, headers=buyer).status_code == 200
@@ -254,7 +255,7 @@ def test_price_rises_are_judged_from_the_first_approved_price_and_the_variance_c
     token = _token(outbox.sent[-1]["body"])
 
     # 102.50 is 0.99% above the current 101.50 but 2.5% above the first approved 100: not the buyer's
-    change, within, base = _ask_price(shop, token, "102.50")
+    change, within, base = _ask_price(shop, outbox, token, "102.50")
     assert (within, base) == (False, "100")
     shown = client.get(f"/api/purchase-orders/{po_no}/supplier-answer", headers=buyer).json()["changes"][0]
     assert (shown["base_value"], shown["rise_pct"]) == ("100", "2.50")

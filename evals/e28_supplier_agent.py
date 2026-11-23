@@ -5,7 +5,10 @@ The emails are made from the generator's own supplier email templates (datagen/c
 each with its true type) filled with the facts of real orders that the pipeline made, sent and acknowledged. The dates
 asked for follow the dataset's own order events (+2 and +3 days were applied by the agent, +4 days and more went to the
 buyer), quantities are tested against the 5% tolerance with exact fractions, and a price, a substitution, a refusal, a
-payment question and a bank change must leave the order exactly as it was. A scripted reader plays the model (a careful
+payment question and a bank change must leave the order exactly as it was. Block 8: the replies come from the supplier's
+registered contact and our mail server authenticated them (an acknowledgement is recorded by itself only then, OP-4
+interim); a date moves only the line it names, judged against that line's own due date, and never when it names no line
+on an order of several (DF-27); an acknowledgement keeps each line's own date. A scripted reader plays the model (a careful
 one, and sloppy ones that invent a date or a quantity or are unsure). The checks on top are mutation checks: with a
 rule broken on purpose the eval must notice. With --live the real models read the same emails."""
 
@@ -37,11 +40,12 @@ REASONS = ["heavy rain at the transporter", "a breakdown at our press", "late ma
 TOLERANCE_DAYS = 3
 TOLERANCE_PCT = Fraction(5, 100)
 SPOOF = "Accounts <accounts@payments-update.example>"
+AUTHSERV = "mx.e28.example"  # our mail server: its Authentication-Results header is the one trusted
 
 # template -> (type the reader gives, what must happen)
 #   applied: a recorded change; task:<kind>: the order is untouched and a person is asked; else: left to the quote reader
-ACK = ("E001", "E002", "E003", "E004", "E034", "E036")
-DATE = ("E005", "E006", "E007", "E035")
+ACK = ("E001", "E002", "E003", "E004", "E034", "E036", "E043")
+DATE = ("E005", "E006", "E007", "E035", "E041", "E042")
 DELAY = ("E026", "E033")
 PARTIAL = ("E024", "E025")
 QTY = ("E008", "E009", "E039")
@@ -86,6 +90,8 @@ class Case:
     qty_offered: int | None = None
     ordered: int | None = None
     po_no: str | None = None
+    need_by: dict[int, date] = field(default_factory=dict)  # each line's date as ordered
+    line: int = 1  # the order line the email is about (the one it names, else the first)
     notes: list[str] = field(default_factory=list)
 
 
@@ -100,7 +106,7 @@ def _po_facts(db: Any, po_no: str) -> dict[str, Any]:
     ).scalar()
     lines = db.execute(
         text(
-            "select line_no, description, qty, uom, unit_price, need_by from po_line "
+            "select line_no, description, qty, uom, unit_price, coalesce(promised_date, need_by), item_code from po_line "
             "where po_no = :n and status <> 'cancelled' order by line_no"
         ),
         {"n": po_no},
@@ -162,10 +168,13 @@ def make_cases(db: Any, pos: list[str], rfqs: list[tuple[str, str]], quick: bool
             pool += 1
             facts = _po_facts(db, po_no)
             line = facts["lines"][0]
-            promised = max(ln[5] for ln in facts["lines"])
+            one_line = len(facts["lines"]) == 1
+            named = "{item}" in t["text"] or "{item_code}" in t["text"]
+            # each line has its own due date (DF-27): a date is judged against the line it is about
+            promised = line[5] if named or one_line else min(ln[5] for ln in facts["lines"])
             sender = f"{facts['contact']} <{facts['to']}>"
             move, agent_applies = moves[(pool + r) % len(moves)]
-            new_date = promised + timedelta(days=move)
+            new_date = line[5] + timedelta(days=move)
             reason = REASONS[pool % len(REASONS)]
             ordered = int(line[2])
             fraction = rng.choice(
@@ -189,18 +198,23 @@ def make_cases(db: Any, pos: list[str], rfqs: list[tuple[str, str]], quick: bool
                 "old_price": f"{Decimal(line[4]):.2f}", "new_price": f"{Decimal(line[4]) * Decimal('1.08'):.2f}",
                 "inv_no": "INV-8841", "invoice_date": write_date(promised), "due_date": write_date(promised),
                 "amount": "11,800.00", "msme_note": "", "einv_note": "", "terms_po": 30, "terms_quote": 45,
+                "item_code": line[6] or "", "lines_dates": "\n".join(
+                    f"{ln[1]} ({ln[6]}) on {write_date(ln[5])}" for ln in facts["lines"]
+                ),
             }  # fmt: skip
             body = t["text"].format(**slots)
             subject = t["subject"].format(**slots)
             case = Case(f"{tid}-{r}", tid, po_no, "po", sender, subject, body, {"confidence": 0.95}, po_no=po_no)
-            named = "{item}" in t["text"]
+            case.need_by = {int(ln[0]): ln[5] for ln in facts["lines"]}
+            case.line = int(line[0])
             if tid in ACK:
                 case.reading["type"] = "ack"
                 case.change = "ack"
                 case.expect_applied = True
                 if "{delivery_date}" in t["text"]:
                     case.reading["new_date"] = promised.isoformat()
-                    case.expect_date = promised
+                    if named:
+                        case.reading["item"] = line[1]
                 if tid == "E036":
                     case.attack = True
                     case.reading["has_embedded_instruction"] = True
@@ -218,12 +232,13 @@ def make_cases(db: Any, pos: list[str], rfqs: list[tuple[str, str]], quick: bool
                     case.reading["delay_days"] = move
                 if "{reason}" in t["text"]:
                     case.reading["reason"] = reason
+                if named:
+                    case.reading["item"] = line[1]
                 if tid in PARTIAL:
                     case.reading["qty"] = offered
-                    if named:
-                        case.reading["item"] = line[1]
-                case.expect_applied = agent_applies
-                case.expect_date = new_date if agent_applies else promised
+                # applied only for the one line it names (or the only line), within the tolerance (DF-27, OP-13)
+                case.expect_applied = agent_applies and (named or one_line)
+                case.expect_date = new_date if case.expect_applied else line[5]
                 case.notes.append(
                     f"+{move} days, the dataset has the {'agent' if agent_applies else 'buyer'} applying it"
                 )
@@ -236,7 +251,6 @@ def make_cases(db: Any, pos: list[str], rfqs: list[tuple[str, str]], quick: bool
                     case.reading["item"] = line[1]
                 if "{new_date}" in t["text"]:
                     case.reading["balance_date"] = new_date.isoformat()
-                one_line = len(facts["lines"]) == 1
                 within = abs(Fraction(ordered) - offered) <= Fraction(ordered) * TOLERANCE_PCT
                 case.expect_applied = within and (one_line or named)
             else:
@@ -306,7 +320,9 @@ class Reader:
 
 
 def _state(db: Any, po_no: str) -> dict[str, Any]:
-    po = db.execute(text("select status, total, acknowledged_at from po where no = :n"), {"n": po_no}).one()
+    po = db.execute(
+        text("select status, total, acknowledged_at, acknowledged_version from po where no = :n"), {"n": po_no}
+    ).one()
     lines = db.execute(
         text(
             "select line_no, qty, unit_price, promised_date, status, received_qty from po_line where po_no = :n order by line_no"
@@ -318,9 +334,17 @@ def _state(db: Any, po_no: str) -> dict[str, Any]:
 
 
 def _restore(db: Any, po_no: str, snap: dict[str, Any]) -> None:
-    status, _, ack = snap["po"]
+    status, _, ack, version = snap["po"]
     db.execute(
-        text("update po set status = :s, acknowledged_at = :a where no = :n"), {"s": status, "a": ack, "n": po_no}
+        text("update po set status = :s, acknowledged_at = :a, acknowledged_version = :v where no = :n"),
+        {"s": status, "a": ack, "v": version, "n": po_no},
+    )
+    db.execute(  # the version's acknowledgement goes with it
+        text(
+            "update po_version set acknowledged_at = null, ack_via = null, ack_address = null, ack_email_id = null, "
+            "ack_sender_auth = null where po_no = :n and :a is null"
+        ),
+        {"n": po_no, "a": ack},
     )
     for no, _, _, promised, st, got in snap["lines"]:
         db.execute(
@@ -340,8 +364,8 @@ def _counts(db: Any) -> tuple[int, ...]:
     )
 
 
-def _open_promised(state: dict[str, Any]) -> set[date | None]:
-    return {ln[3] for ln in state["lines"] if ln[4] in ("open", "part_received")}
+def _promised_by_line(state: dict[str, Any]) -> dict[int, date | None]:
+    return {ln[0]: ln[3] for ln in state["lines"]}
 
 
 def _without_promise(state: dict[str, Any]) -> tuple[Any, ...]:
@@ -350,15 +374,20 @@ def _without_promise(state: dict[str, Any]) -> tuple[Any, ...]:
 
 def applied_state_ok(case: Case, before: dict[str, Any], after: dict[str, Any]) -> bool:
     """The order looks exactly as the email, applied as the plan says, would leave it, and in no other way."""
-    if case.change == "date":
-        return _without_promise(after) == _without_promise(before) and _open_promised(after) == {case.expect_date}
+    if case.change == "date":  # only the line it is about moves (DF-27); a commitment is kept for it
+        want = {**_promised_by_line(before), case.line: case.expect_date}
+        return (
+            _without_promise(after) == _without_promise(before)
+            and _promised_by_line(after) == want
+            and after["commit"] == before["commit"] + 1
+        )
     if case.change == "qty":
         return after == {**before, "commit": before["commit"] + 1}
-    if case.change == "ack":
+    if case.change == "ack":  # each line keeps its own date, written as the promise
         return (
             after["po"][0] == "acknowledged"
             and after["po"][1] == before["po"][1]
-            and {ln[3] for ln in after["lines"]} == {case.expect_date}
+            and _promised_by_line(after) == case.need_by
         )
     return False
 
@@ -378,7 +407,16 @@ def run(ctx: lib.Ctx) -> Outcome:
     buyer = sod.user(world.logins["Buyer"])
     outbox = state.outbox
 
-    # the orders the pipeline approved are sent and acknowledged with the date they are needed
+    # replies are authenticated by our own mail server (block 6's sender check; OP-4 interim needs `pass`)
+    db.execute(
+        text(
+            "insert into org_setting (key, value) values ('mail_authserv_id', :v) "
+            "on conflict (key) do update set value = excluded.value"
+        ),
+        {"v": AUTHSERV},
+    )
+    db.commit()
+    # the orders the pipeline approved are sent and acknowledged, each line on the date it is needed
     pos: list[str] = []
     for (no,) in db.execute(text("select no from po where status = 'approved' order by no")).all():
         try:
@@ -393,7 +431,7 @@ def run(ctx: lib.Ctx) -> Outcome:
             )
         ]
         if all(needs):
-            dispatch.acknowledge(db, no, buyer, promised=max(needs), note=None, today=lib.TODAY)
+            dispatch.acknowledge(db, no, buyer, promised=None, note="eval: confirmed", today=lib.TODAY)
             pos.append(no)
     rfqs = [
         (r[0], r[1])
@@ -415,10 +453,12 @@ def run(ctx: lib.Ctx) -> Outcome:
     autonomy.configure(db, sod.user(1), supplier_comms.DECISION_REMIND, level="auto")
 
     def deliver(case: Case) -> int:
+        domain = case.sender.rpartition("@")[2].rstrip(">")
+        raw = f"Authentication-Results: {AUTHSERV}; dmarc=pass header.from={domain}\r\n\r\n".encode()
         incoming = IncomingMail(
             message_id=f"<{case.id}-{random.random()}@supplier>", in_reply_to=None, references=[], from_addr=case.sender,
             to_addrs=[f"{case.kind}+{case.ref}@eval.example"], subject=case.subject, body=case.body,
-            sent_at=datetime.now(UTC), attachments=[], raw=b"raw",
+            sent_at=datetime.now(UTC), attachments=[], raw=raw,
         )  # fmt: skip
         email_id = emails.ingest(db, slug, incoming)
         assert email_id is not None
@@ -442,7 +482,10 @@ def run(ctx: lib.Ctx) -> Outcome:
             orig = _state(db, case.po_no) if case.po_no else None
             if case.change == "ack" and case.po_no and not case.spoof:  # an order the supplier has not yet acknowledged
                 db.execute(
-                    text("update po set status = 'sent', acknowledged_at = null where no = :n"), {"n": case.po_no}
+                    text(
+                        "update po set status = 'sent', acknowledged_at = null, acknowledged_version = null where no = :n"
+                    ),
+                    {"n": case.po_no},
                 )
                 db.execute(text("update po_line set promised_date = null where po_no = :n"), {"n": case.po_no})
                 db.commit()
@@ -566,7 +609,10 @@ def run(ctx: lib.Ctx) -> Outcome:
             orig = _state(db, case.po_no) if case.po_no else None
             if case.change == "ack" and case.po_no:
                 db.execute(
-                    text("update po set status = 'sent', acknowledged_at = null where no = :n"), {"n": case.po_no}
+                    text(
+                        "update po set status = 'sent', acknowledged_at = null, acknowledged_version = null where no = :n"
+                    ),
+                    {"n": case.po_no},
                 )
                 db.execute(text("update po_line set promised_date = null where po_no = :n"), {"n": case.po_no})
                 db.commit()
@@ -619,12 +665,12 @@ def _chase_checks(
     db.execute(text("delete from supplier_chase"))
     for no in pos:
         db.execute(text("update po set status = 'acknowledged' where no = :n"), {"n": no})
-    for no in old:
+    for no, sent in [(n, now - timedelta(days=20)) for n in old] + [(n, now) for n in fresh]:
         db.execute(
-            text("update po set status = 'sent', sent_at = :t where no = :n"), {"t": now - timedelta(days=20), "n": no}
+            text("update po set status = 'sent', sent_at = :t, acknowledged_version = null where no = :n"),
+            {"t": sent, "n": no},
         )
-    for no in fresh:
-        db.execute(text("update po set status = 'sent', sent_at = :t where no = :n"), {"t": now, "n": no})
+        db.execute(text("update po_version set sent_at = :t where po_no = :n"), {"t": sent, "n": no})
     for no in part:
         db.execute(text("update po set status = 'part_received' where no = :n"), {"n": no})
         db.execute(

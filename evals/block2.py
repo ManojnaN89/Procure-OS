@@ -595,9 +595,14 @@ class Co(b.Company):
         return self.po_status(no)
 
     def acknowledge(self, no: str, promised: date, on: date) -> Any:
+        """The buyer records the supplier's promise: the date for each open line (block 8: a date per line)."""
+        lines = [
+            r[0]
+            for r in self.q("select line_no from po_line where po_no = :n and status = 'open' order by line_no", n=no)
+        ]
         with b.on_day(on):
             return self.call(self.role("buyer"), "POST", f"/api/purchase-orders/{no}/acknowledge",
-                             {"promised_date": promised.isoformat(), "note": "eval"})  # fmt: skip
+                             {"lines": {str(n): promised.isoformat() for n in lines}, "note": "eval"})  # fmt: skip
 
     def receive(self, no: str, line_no: int, qty: Any, on: date, rejected: Any = None) -> Any:
         line: dict[str, Any] = {"line_no": line_no, "qty_received": str(qty)}

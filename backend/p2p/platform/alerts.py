@@ -16,6 +16,7 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from p2p.formulas.calendar import IST, BusinessCalendar, business_today
+from p2p.formulas.deliveries import line_due
 from p2p.formulas.fy import fy_bounds
 from p2p.formulas.kpis import working_days_between
 from p2p.formulas.money import format_inr
@@ -110,41 +111,62 @@ def rfqs_without_quotes(c: Context) -> list[Finding]:
 
 
 def orders_not_acknowledged(c: Context) -> list[Finding]:
+    """Orders whose current version the supplier has not acknowledged by its due day (ship-to calendar), from the day
+    after it fell due."""
     out = []
-    for no, sent_at, supplier in c.db.execute(
+    for row in c.db.execute(
         text(
-            "select p.no, p.sent_at, coalesce(s.trade_name, s.legal_name) from po p join supplier s on s.code = p.supplier_code "
-            "where p.status = 'sent'"
+            "select p.no, p.version, p.status, p.acknowledged_version, p.ship_to_location, "
+            "coalesce(s.trade_name, s.legal_name) as supplier, v.sent_at, "
+            "(select count(*) from supplier_chase k where k.po_no = p.no and k.kind = 'ack' and k.po_version = p.version) "
+            "as chasers from po p join supplier s on s.code = p.supplier_code "
+            "left join po_version v on v.po_no = p.no and v.version = p.version where p.status = 'sent'"
         )
-    ):
-        if dispatch.ack_overdue(c.db, sent_at, c.today):
-            out.append(
-                Finding(
-                    "po_not_acknowledged", "po", no, "medium", f"{no} has not been acknowledged by {supplier}",
-                    f"Sent on {sent_at.astimezone(IST):%d %b %Y}.", f"#/purchase-orders/{no}", ("Buyer",),
-                    sent_at.astimezone(IST).date(),
-                )
-            )  # fmt: skip
+    ).mappings():
+        po = dict(row)
+        due = dispatch.ack_due_on(c.db, po)
+        if due is None or not dispatch.waiting_ack(po) or c.today <= due:
+            continue
+        no, sent = po["no"], po["sent_at"].astimezone(IST).date()
+        out.append(
+            Finding(
+                "po_not_acknowledged", "po", no, "medium",
+                f"{no} version {po['version']} has not been acknowledged by {po['supplier']}",
+                f"Sent on {sent:%d %b %Y}; {count(int(po['chasers']), 'reminder')}.", f"#/purchase-orders/{no}",
+                ("Buyer",), due + timedelta(days=1),
+            )
+        )  # fmt: skip
     return out
 
 
 def late_deliveries(c: Context) -> list[Finding]:
+    """Orders with lines past their due date (promised, else needed) and not all received: one finding per order."""
     rows = c.db.execute(
         text(
-            "select l.po_no, min(l.promised_date) as oldest, count(*) as lines from po_line l join po on po.no = l.po_no "
-            "where l.promised_date < :d and l.status in ('open', 'part_received') and l.received_qty < l.qty "
-            "and po.status in ('sent', 'acknowledged', 'part_received') group by l.po_no"
+            "select l.po_no, l.line_no, l.description, l.promised_date, l.need_by from po_line l join po on po.no = l.po_no "
+            "where coalesce(l.promised_date, l.need_by) < :d and l.status in ('open', 'part_received') "
+            "and l.received_qty < l.qty and po.status in ('sent', 'acknowledged', 'part_received') "
+            "order by l.po_no, l.line_no"
         ),
         {"d": c.today},
-    )
+    ).all()
+    by_order: dict[str, list[tuple[int, str, date, str]]] = {}
+    for no, line_no, description, promised, need_by in rows:
+        due, source = line_due(promised, need_by)
+        if due is not None:
+            by_order.setdefault(no, []).append((int(line_no), str(description), due, str(source)))
     out = []
-    for no, oldest, lines in rows:
+    for no, lines in by_order.items():
+        oldest = min(ln[2] for ln in lines)
         late = (c.today - oldest).days
+        listed = ", ".join(
+            f"line {n} ({what}) due {due:%d %b %Y} ({'promised' if source == 'promised' else 'needed'})"
+            for n, what, due, source in lines
+        )
         out.append(
             Finding(
                 "late_delivery", "po", no, "high" if late > 7 else "medium", f"Goods on {no} are {count(late, 'day')} late",
-                f"{count(lines, 'line')} {'was' if lines == 1 else 'were'} promised by {oldest:%d %b %Y} and are not all received.", f"#/purchase-orders/{no}", ("Buyer",),
-                oldest,
+                f"{count(len(lines), 'line')} late: {listed}", f"#/purchase-orders/{no}", ("Buyer",), oldest,
             )
         )  # fmt: skip
     return out

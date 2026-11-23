@@ -78,7 +78,8 @@ def made_by(actor: Actor) -> str:
 
 
 def _made_at() -> datetime:
-    """Now, on the business date (a pinned date in a scenario): the version's date on its document."""
+    """Now, on the business date (a pinned date in a scenario): when a version was made, mailed or acknowledged, so the
+    days counted from it (acknowledgement due, chasers, scoring) are business days."""
     return datetime.combine(business_today(), datetime.now(IST).timetz())
 
 
@@ -172,18 +173,36 @@ def issued_on(db: Session, po_no: str, before: int) -> datetime | None:
     return found if isinstance(found, datetime) else None
 
 
-def mark_acknowledged(db: Session, po_no: str, version: int, by: Actor, via: str) -> None:
-    """The supplier acknowledged this version, by its link, to a buyer in the app, or by email (the caller commits)."""
+def mail_carries(db: Session, message_id: str, version: int) -> None:
+    """An outbound order mail carried this version: a reply to it answers this version (OP-12). The caller commits."""
+    db.execute(text("update email_message set po_version = :v where message_id = :m"), {"v": version, "m": message_id})
+
+
+def mark_acknowledged(
+    db: Session, po_no: str, version: int, by: Actor, via: str, *, detail: Any = None, note: str | None = None
+) -> int:
+    """The supplier acknowledged this version, by its link, to a buyer in the app, or by email, with how it came
+    (`detail`: dispatch.AckDetail). Only orders/dispatch.acknowledge calls this (the caller commits). Returns the row's
+    id."""
     if via not in VIA:
         raise ValueError(f"an acknowledgement comes by {', '.join(VIA)}, not {via}")
     _ensure(db, po_no, version)
-    db.execute(
-        text(
-            "update po_version set acknowledged_at = now(), acknowledged_by = :b, ack_via = :w "
-            "where po_no = :p and version = :v"
-        ),
-        {"b": made_by(by), "w": via, "p": po_no, "v": version},
-    )
+    return int(
+        db.execute(
+            text(
+                "update po_version set acknowledged_at = :at, acknowledged_by = :b, ack_via = :w, ack_address = :a, "
+                "ack_link_id = :l, ack_code_id = :c, ack_email_id = :e, ack_sender_auth = cast(:auth as jsonb), "
+                "ack_change_ids = :ch, ack_note = :n where po_no = :p and version = :v returning id"
+            ),
+            {
+                "b": made_by(by), "w": via, "p": po_no, "v": version, "n": note, "at": _made_at(),
+                "a": getattr(detail, "address", None), "l": getattr(detail, "link_id", None),
+                "c": getattr(detail, "code_id", None), "e": getattr(detail, "email_id", None),
+                "auth": json.dumps(detail.sender_auth) if getattr(detail, "sender_auth", None) else None,
+                "ch": list(detail.change_ids) if getattr(detail, "change_ids", None) else None,
+            },
+        ).scalar_one()
+    )  # fmt: skip
 
 
 def stored_pdf(db: Session, tenant: str, po_no: str, version: int) -> bytes | None:
@@ -256,11 +275,36 @@ def listing(db: Session, po_no: str) -> list[dict[str, Any]]:
                 "acknowledged_at": r["acknowledged_at"].isoformat() if r["acknowledged_at"] else None,
                 "acknowledged_by": r["acknowledged_by"],
                 "ack_via": r["ack_via"],
+                "ack_address": r["ack_address"],
+                "ack_with_code": r["ack_code_id"] is not None,
+                "ack_note": r["ack_note"],
+                "ack_email_id": r["ack_email_id"],
+                "ack_changes": list(r["ack_change_ids"] or []),
+                "ack_lines": _ack_lines(db, po_no, int(r["version"])) if r["acknowledged_at"] else {},
                 "document": {"id": r["document_id"], "sha256": r["sha256"]} if r["document_id"] else None,
                 "current": int(r["version"]) == int(po["version"]),
             }
         )
     return out
+
+
+def _ack_lines(db: Session, po_no: str, version: int) -> dict[str, str]:
+    """The line dates the acknowledgement of a version recorded."""
+    return {
+        str(r[0]): r[1].isoformat()
+        for r in db.execute(
+            text(
+                "select c.po_line_no, c.promised_date from po_commitment c join po_version v on v.id = c.acknowledgement_id "
+                "where v.po_no = :p and v.version = :v and c.po_line_no is not null order by c.po_line_no"
+            ),
+            {"p": po_no, "v": version},
+        )
+    }
+
+
+def maker_name(db: Session, by: str) -> str:
+    """Who made or acknowledged a version, in words."""
+    return _name(db, by)
 
 
 def _name(db: Session, by: str) -> str:

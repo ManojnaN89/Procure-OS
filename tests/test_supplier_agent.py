@@ -74,7 +74,7 @@ def _placed(shop: Session, qty: str = "10", promised: date | None = PROMISED) ->
     buyer = sod.user(logins["buyer"])
     dispatch.send_po(shop, po_no, buyer)
     if promised:
-        dispatch.acknowledge(shop, po_no, buyer, promised=promised, note=None)
+        dispatch.acknowledge(shop, po_no, buyer, promised={1: promised}, note=None)
     return po_no
 
 
@@ -89,12 +89,36 @@ def _gateway(*cheap: str, strong: tuple[str, ...] = ()) -> tuple[Gateway, Script
     return Gateway({"fake": provider}, routes, sleep=lambda s: None), provider
 
 
+AUTHSERV = "mx.cbcpl.example"
+
+
+def _authenticated(shop: Session) -> bytes:
+    """Our mail server's own Authentication-Results header saying the sender passed (block 6's sender check)."""
+    shop.execute(
+        text(
+            "insert into org_setting (key, value) values ('mail_authserv_id', :v) "
+            "on conflict (key) do update set value = excluded.value"
+        ),
+        {"v": AUTHSERV},
+    )
+    shop.commit()
+    return f"Authentication-Results: {AUTHSERV}; dmarc=pass header.from=supplier.example\r\n\r\nbody".encode()
+
+
 def _mail(
-    shop: Session, ref: str, body: str, *, sender: str = SELLER, kind: str = "po", subject: str = "Re: order"
+    shop: Session,
+    ref: str,
+    body: str,
+    *,
+    sender: str = SELLER,
+    kind: str = "po",
+    subject: str = "Re: order",
+    raw: bytes = b"raw",
+    in_reply_to: str | None = None,
 ) -> int:
     incoming = IncomingMail(
         message_id=f"<{uuid.uuid4().hex}@supplier>",
-        in_reply_to=None,
+        in_reply_to=in_reply_to,
         references=[],
         from_addr=sender,
         to_addrs=[f"{kind}+{ref}@cbcpl.example"],
@@ -102,7 +126,7 @@ def _mail(
         body=body,
         sent_at=None,  # type: ignore[arg-type]
         attachments=[],
-        raw=b"raw",
+        raw=raw,
     )
     email_id = emails.ingest(shop, shop.info["slug"], incoming)
     assert email_id is not None
@@ -111,12 +135,21 @@ def _mail(
 
 
 def _handle(
-    shop: Session, po_no: str, body: str, answer: str, *, sender: str = SELLER, auto: bool = True
+    shop: Session,
+    po_no: str,
+    body: str,
+    answer: str,
+    *,
+    sender: str = SELLER,
+    auto: bool = True,
+    authenticated: bool = False,
+    in_reply_to: str | None = None,
 ) -> tuple[supplier_comms.Handled | None, Scripted]:
     if auto:
         autonomy.configure(shop, sod.user(1), supplier_comms.DECISION_CHANGE, level="auto")
     gw, provider = _gateway(answer)
-    email_id = _mail(shop, po_no, body, sender=sender)
+    raw = _authenticated(shop) if authenticated else b"raw"
+    email_id = _mail(shop, po_no, body, sender=sender, raw=raw, in_reply_to=in_reply_to)
     return supplier_comms.handle_email(shop, shop.info["slug"], email_id, gw, as_of=TODAY), provider
 
 
@@ -146,7 +179,11 @@ def test_an_acknowledgement_with_a_date_is_recorded_when_the_gate_allows(shop: S
     po_no = _placed(shop, promised=None)
 
     done, _ = _handle(
-        shop, po_no, "Order confirmed. We will deliver by 19 Nov 2026.", _reading("ack", new_date=date(2026, 11, 19))
+        shop,
+        po_no,
+        "Order confirmed. We will deliver by 19 Nov 2026.",
+        _reading("ack", new_date=date(2026, 11, 19)),
+        authenticated=True,  # OP-4 interim: only an authenticated sender's acknowledgement is recorded by itself
     )
 
     assert done is not None and done.status == "applied"
@@ -154,7 +191,7 @@ def test_an_acknowledgement_with_a_date_is_recorded_when_the_gate_allows(shop: S
     assert _promised(shop) == date(2026, 11, 19)
     actors = shop.execute(text("select actor_type, actor_id from audit_event where action = 'po.acknowledge'")).all()
     assert actors == [("agent", "supplier_comms")]
-    # the version the order is now, by email (block 7, OP-8: block 8 binds it to the version read from the reply)
+    # the version the reply answers: version 1, the only one the order has had (OP-12)
     assert shop.execute(text("select acknowledged_version from po")).scalar_one() == 1
     assert shop.execute(text("select ack_via, acknowledged_by from po_version")).one() == (
         "email",
@@ -211,8 +248,8 @@ def test_a_date_within_the_tolerance_moves_the_promised_date_and_the_supplier_is
     audit = shop.execute(
         text("select actor_id, before, after from audit_event where action = 'po.promised_date_change'")
     ).one()
-    assert audit[0] == "supplier_comms" and audit[1] == {"promised_date": "2026-11-20"}
-    assert audit[2] == {"promised_date": "2026-11-23"}
+    assert audit[0] == "supplier_comms" and audit[1] == {"line": 1, "promised_date": "2026-11-20"}
+    assert audit[2] == {"line": 1, "promised_date": "2026-11-23", "version": 1}
     (mail,) = outbox.sent
     assert mail["to"] == "s1@supplier.example" and "23 Nov 2026" in mail["body"]
     assert shop.execute(text("select status from supplier_message")).scalar_one() == "applied"
@@ -306,7 +343,9 @@ def test_a_quantity_within_tolerance_is_recorded_as_a_commitment_and_the_order_i
     )
 
     assert done is not None and done.status == "applied"
-    assert shop.execute(text("select po_line_no, promised_qty from po_commitment")).one() == (1, D("96"))
+    assert shop.execute(
+        text("select po_line_no, promised_qty, po_version from po_commitment where source = 'agent_qty'")
+    ).one() == (1, D("96"), 1)
     assert shop.execute(text("select qty from po_line")).scalar_one() == D("100")
     assert _total(shop) == before
 
@@ -317,7 +356,7 @@ def test_a_quantity_outside_tolerance_is_for_a_buyer(shop: Session, outbox: Outb
     done, _ = _handle(shop, po_no, "We can supply only 90 nos.", _reading("qty_change", qty=D(90)))
 
     assert done is not None and done.status == "task"
-    assert shop.execute(text("select count(*) from po_commitment")).scalar_one() == 0
+    assert shop.execute(text("select count(*) from po_commitment where source = 'agent_qty'")).scalar_one() == 0
 
 
 def test_a_price_change_is_always_a_task_even_when_everything_is_automatic(shop: Session, outbox: Outbox) -> None:  # noqa: F811
@@ -505,8 +544,10 @@ NOW = datetime(2026, 11, 12, 10, 0, tzinfo=UTC)
 
 
 def _unacknowledged(shop: Session) -> str:
+    """Sent on Monday 2 Nov: due two working days later (Wed 4 Nov), overdue from Thursday."""
     po_no = _placed(shop, promised=None)
     shop.execute(text("update po set sent_at = '2026-11-02 10:00+00'"))
+    shop.execute(text("update po_version set sent_at = '2026-11-02 10:00+00'"))
     shop.commit()
     return po_no
 
@@ -520,7 +561,8 @@ def test_an_unacknowledged_order_is_chased_by_email_when_the_gate_allows(shop: S
 
     assert done.emailed == [(po_no, "ack")] and done.tasks == []
     (mail,) = outbox.sent
-    assert mail["to"] == "s1@supplier.example" and "acknowledge" in mail["body"] and po_no in mail["subject"]
+    assert mail["to"] == "s1@supplier.example" and "have not received your acceptance" in mail["body"]
+    assert po_no in mail["subject"] and "/supplier/" in mail["body"]  # a fresh link to answer, with a code
     assert shop.execute(text("select how from supplier_chase")).scalar_one() == "email"
     assert shop.execute(text("select count(*) from audit_event where action = 'supplier.chase'")).scalar_one() == 1
 
@@ -550,20 +592,25 @@ def test_a_chaser_is_not_repeated_too_soon_and_stops_after_the_maximum(shop: Ses
     run = supplier_comms.chase_run
     slug = shop.info["slug"]
 
-    assert run(shop, slug, as_of=LATER, now=NOW).emailed == [(po_no, "ack")]
-    assert run(shop, slug, as_of=LATER, now=NOW + timedelta(days=1)).emailed == []  # too soon
-    assert run(shop, slug, as_of=LATER, now=NOW + timedelta(days=3)).emailed == [(po_no, "ack")]
-    assert run(shop, slug, as_of=LATER, now=NOW + timedelta(days=6)).emailed == [(po_no, "ack")]
-    third = run(shop, slug, as_of=LATER, now=NOW + timedelta(days=9))
+    def on(day: date) -> supplier_comms.ChaseResult:
+        return run(shop, slug, as_of=day, now=datetime(day.year, day.month, day.day, 4, 30, tzinfo=UTC))
+
+    assert on(LATER).emailed == [(po_no, "ack")]  # Thursday 12 Nov
+    assert on(date(2026, 11, 16)).emailed == []  # too soon: two working days later
+    assert on(date(2026, 11, 17)).emailed == [(po_no, "ack")]  # three working days (Mon-Fri)
+    assert on(date(2026, 11, 20)).emailed == [(po_no, "ack")]
+    third = on(date(2026, 11, 24))
 
     assert third.emailed == [] and third.skipped == [f"{po_no}:ack"]  # three is the most
     assert shop.execute(text("select count(*) from supplier_chase")).scalar_one() == 3
+    handed = on(date(2026, 11, 25))  # the day a fourth would be due: the buyer gets one task
+    assert handed.overdue == [po_no] and on(date(2026, 11, 26)).overdue == []
 
 
 def test_the_open_balance_of_a_late_part_delivery_is_chased_with_the_quantities(shop: Session, outbox: Outbox) -> None:  # noqa: F811
-    po_no = _placed(shop, qty="10", promised=date(2026, 11, 5))
+    po_no = _placed(shop, qty="10", promised=None)
     shop.execute(text("update po set status = 'part_received'"))
-    shop.execute(text("update po_line set status = 'part_received', received_qty = 4"))
+    shop.execute(text("update po_line set status = 'part_received', received_qty = 4, promised_date = '2026-11-05'"))
     shop.commit()
     autonomy.configure(shop, sod.user(1), supplier_comms.DECISION_REMIND, level="auto")
     outbox.sent.clear()

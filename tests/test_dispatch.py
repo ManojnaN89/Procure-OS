@@ -140,18 +140,21 @@ def test_the_supplier_acknowledges_with_a_date_and_a_late_promise_is_flagged(sho
     with pytest.raises(dispatch.DispatchError, match="does not exist"):
         dispatch.acknowledge(shop, "NOPE", sod.user(1), promised=None, note=None)
 
-    # the line is needed by 20 Nov; 23 Nov is within the 3 days the company accepts, 24 Nov is not
+    # the line is needed by 20 Nov; 23 Nov is within the 3 days the company accepts (flagged), 24 Nov is not (refused)
+    with pytest.raises(dispatch.DispatchError, match="24 Nov 2026 is 4 days after the date ordered"):
+        dispatch.acknowledge(shop, po_no, sod.user(logins["buyer"]), promised={1: date(2026, 11, 24)}, note="x")
+    assert shop.execute(text("select status from po")).scalar_one() == "sent"  # nothing written
     warnings = dispatch.acknowledge(
-        shop, po_no, sod.user(logins["buyer"]), promised=date(2026, 11, 24), note="Dispatch Monday"
+        shop, po_no, sod.user(logins["buyer"]), promised={1: date(2026, 11, 23)}, note="Dispatch Monday"
     )
 
-    assert len(warnings) == 1 and "promised 24 Nov 2026, needed by 20 Nov 2026" in warnings[0]
+    assert warnings == ["line 1 (Bearing): 23 Nov 2026, 3 days later than ordered (20 Nov 2026)"]
     assert shop.execute(text("select status, ack_note, acknowledged_at is not null from po")).one() == (
         "acknowledged",
         "Dispatch Monday",
         True,
     )
-    assert shop.execute(text("select promised_date from po_line")).scalar_one() == date(2026, 11, 24)
+    assert shop.execute(text("select promised_date from po_line")).scalar_one() == date(2026, 11, 23)
     with pytest.raises(dispatch.DispatchError, match="only a sent order"):
         dispatch.acknowledge(shop, po_no, sod.user(1), promised=None, note=None)
 
@@ -160,15 +163,21 @@ def test_a_promise_within_the_accepted_slip_is_not_flagged(shop: Session, outbox
     po_no = _approved_order(shop, _logins(shop))
     dispatch.send_po(shop, po_no)
 
-    assert dispatch.acknowledge(shop, po_no, sod.user(1), promised=date(2026, 11, 23), note=None) == []
+    assert dispatch.acknowledge(shop, po_no, sod.user(1), promised={1: date(2026, 11, 19)}, note=None) == []
 
 
-def test_an_order_not_acknowledged_in_two_working_days_is_overdue(shop: Session) -> None:  # noqa: F811
-    friday = datetime(2026, 11, 6, 10, 0, tzinfo=UTC)
+def test_an_order_not_acknowledged_in_two_working_days_is_overdue(shop: Session, outbox: Outbox) -> None:  # noqa: F811
+    po_no = _approved_order(shop, _logins(shop))
+    dispatch.send_po(shop, po_no)
+    shop.execute(text("update po_version set sent_at = :t"), {"t": datetime(2026, 11, 6, 10, 0, tzinfo=UTC)})  # Friday
+    shop.commit()
+    po = dict(shop.execute(text("select * from po")).mappings().one())
 
-    assert dispatch.ack_overdue(shop, friday, date(2026, 11, 10)) is False  # Tuesday is the second working day
-    assert dispatch.ack_overdue(shop, friday, date(2026, 11, 11)) is True
-    assert dispatch.ack_overdue(shop, None, date(2026, 11, 11)) is False
+    assert dispatch.ack_overdue(shop, po, date(2026, 11, 10)) is False  # Tuesday is the second working day
+    assert dispatch.ack_overdue(shop, po, date(2026, 11, 11)) is True
+    shop.execute(text("update po_version set sent_at = null"))
+    shop.commit()
+    assert dispatch.ack_overdue(shop, po, date(2026, 11, 11)) is False  # not mailed: no clock
 
 
 def _queued_sends(slug: str) -> int:
@@ -234,12 +243,12 @@ def test_the_order_page_offers_send_and_acknowledge_to_a_buyer_only_at_the_right
 
     assert (
         client.post(
-            f"/api/purchase-orders/{po_no}/acknowledge", json={"promised_date": "not a date"}, headers=buyer
+            f"/api/purchase-orders/{po_no}/acknowledge", json={"lines": {"1": "not a date"}, "note": "x"}, headers=buyer
         ).status_code
         == 422
     )
     acked = client.post(
-        f"/api/purchase-orders/{po_no}/acknowledge", json={"promised_date": "2026-11-19"}, headers=buyer
+        f"/api/purchase-orders/{po_no}/acknowledge", json={"lines": {"1": "2026-11-19"}, "note": "phone"}, headers=buyer
     )
     assert acked.status_code == 200 and acked.json()["warnings"] == []
     page = client.get(f"/api/purchase-orders/{po_no}", headers=buyer).json()

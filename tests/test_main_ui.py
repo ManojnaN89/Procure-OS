@@ -740,9 +740,9 @@ def test_the_buyer_compares_quotes_and_awards_and_the_approver_signs_the_purchas
         buyer.goto(f"{URL}/#/purchase-orders/{po_no}")
         buyer.locator("#poSend").click()  # the buyer sends the approved order
         expect(buyer.locator("#appContent")).to_contain_text("Sent to s1@supplier.example")
-        buyer.locator("#poAckDate").fill(today.replace(year=today.year + 1).isoformat())
+        buyer.locator("#poAckNote").fill("Confirmed by phone")  # each line on the date ordered; how it confirmed
         buyer.locator("#poAck").click()
-        expect(buyer.locator("#appContent")).to_contain_text("Acknowledged on")
+        expect(buyer.locator("#appContent")).to_contain_text("Acknowledged version 1")
 
         # the supplier wrote about the order and the agent left it for a person: the buyer sees it on the order and in My work
         email_id = db.execute(

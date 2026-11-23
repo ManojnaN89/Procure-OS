@@ -9,6 +9,7 @@ from fastapi.testclient import TestClient
 from po_versions_support import audits, buyer, order, revise, rows, second_place, sent_order, versions
 from sqlalchemy import text
 from sqlalchemy.orm import Session
+from supplier_answer_support import service_code
 from test_dispatch import _approved_order
 from test_order_changes import _pdf_text
 from test_orders import _headers, _logins, shop  # noqa: F401 - fixtures
@@ -273,7 +274,9 @@ def test_delivery_terms_are_a_minor_change_the_approval_carries_and_the_supplier
     page = _pdf_text(order_versions.stored_pdf(shop, shop.info["slug"], po_no, 2) or b"")
     assert "Delivery terms: ex_works" in page
     # the supplier accepts version 2 from the new link
-    confirmation.accept_by_link(shop, shop.info["slug"], supplier_links.read(_token(mail["body"])), None, None)
+    token = _token(mail["body"])
+    code = service_code(shop, outbox.sent, token)
+    confirmation.accept_by_link(shop, shop.info["slug"], supplier_links.read(token), None, None, code)
     assert order(shop, po_no)["acknowledged_version"] == 2
 
 

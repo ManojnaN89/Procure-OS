@@ -127,3 +127,14 @@ templates:
   - {id: E040, type: ack, style: chatty, expect: {type: ack, applies_change: false, has_hidden_condition: true},
      subject: "RE: PO {po_no}",
      text: "Hi, thanks for the PO. Confirmed - but only if payment is released 100 percent in advance (as discussed). {contact}"}
+  # block 8 (DF-27): a date for one line of several, a date for no line in particular, and an acknowledgement with a
+  # date per line. {item_code} is the line's item code; {lines_dates} lists "item (code) on date" per line.
+  - {id: E041, type: date_change, style: terse, expect: {type: date_change, names_line: true},
+     subject: "RE: Purchase order {po_no}",
+     text: "The {item} ({item_code}) will come on {new_date}; the rest as ordered.\n{contact}"}
+  - {id: E042, type: date_change, style: formal, expect: {type: date_change, names_line: false, applies_change: false},
+     subject: "RE: Purchase order {po_no}",
+     text: "Dear {buyer},\n\nAll goods against {po_no} will be delivered on {new_date}.\n\nRegards,\n{contact}\n{supplier}"}
+  - {id: E043, type: ack, style: templated, expect: {type: ack, applies_change: false, dates_per_line: true},
+     subject: "RE: Purchase order {po_no}",
+     text: "We confirm purchase order {po_no}. Delivery:\n{lines_dates}\n{contact}\n{supplier}"}

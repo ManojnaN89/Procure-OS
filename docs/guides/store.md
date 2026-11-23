@@ -8,7 +8,7 @@ You receive the goods and say what is wrong with them.
 
 ## Receive goods
 
-1. Open **Goods receipt**. The orders waiting for goods are listed.
+1. Open **Goods receipt**. The orders waiting for goods are listed, the one whose first line is due soonest first. Each line shows its due date: the date the supplier promised, else the date it is needed ("needed"); a line past its date and not all received is marked late.
 2. Click **Receive goods** on the order that arrived.
 3. For each line enter the quantity received, the quantity rejected and why. Add the delivery challan number and the supplier invoice number. The person who asked for the goods and the buyer are told what arrived, and what was rejected.
 4. Click **Post receipt**. Stock goes up by the accepted quantity.

@@ -358,3 +358,48 @@ def verify_bank(
     )  # fmt: skip
     db.commit()
     return {"verified": True, "method": method, "evidence": saved.id}
+
+
+# ---- the supplier's registered contacts (D53) ------------------------------------------------------------------------
+
+
+def order_contact(db: Session, supplier_code: str) -> tuple[str, str | None] | None:
+    """The contact orders, revisions, chasers and reminders go to: the primary contact, else the first with an email.
+    Address and name; None when the supplier has no address on file."""
+    row = db.execute(
+        text(
+            "select email, name from supplier_contact where supplier_code = :c and email is not null "
+            "order by is_primary desc nulls last, id limit 1"
+        ),
+        {"c": supplier_code},
+    ).first()
+    return (str(row[0]), row[1]) if row else None
+
+
+def is_contact(db: Session, supplier_code: str, address: str | None) -> bool:
+    """The address is a current registered contact of the supplier."""
+    return bool(address) and bool(
+        db.execute(
+            text("select 1 from supplier_contact where supplier_code = :c and lower(email) = lower(:a)"),
+            {"c": supplier_code, "a": str(address).strip()},
+        ).first()
+    )
+
+
+def registered_sender(
+    db: Session, address: str, supplier_codes: list[str], statuses: tuple[str, ...] | None = None
+) -> list[tuple[str, int]]:
+    """The suppliers among `supplier_codes` (of the given statuses) that have `address` as a registered contact, with
+    the contact's id; the address a mail was sent to identifies nobody by itself (D53). Empty when none."""
+    if not address or not supplier_codes:
+        return []
+    rows = db.execute(
+        text(
+            "select c.supplier_code, min(c.id) from supplier_contact c join supplier s on s.code = c.supplier_code "
+            "where lower(c.email) = :a and c.supplier_code = any(:codes) "
+            "and (cast(:st as text[]) is null or s.status = any(cast(:st as text[]))) "
+            "group by c.supplier_code order by c.supplier_code"
+        ),
+        {"a": address.strip().lower(), "codes": list(supplier_codes), "st": list(statuses) if statuses else None},
+    ).all()
+    return [(str(r[0]), int(r[1])) for r in rows]

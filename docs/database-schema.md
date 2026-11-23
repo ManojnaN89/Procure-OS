@@ -123,7 +123,7 @@ Reading a line: `name*` is part of the primary key, `name?` may be empty, then t
 
 **document** · id* int, doc_type text, filename text, content_type text, size bigint, sha256 text, storage_key text, linked_type? text, linked_id? text, uploaded_by? int, created_at timestamptz
 
-**email_message** · id* int, message_id text, in_reply_to? text, direction text, from_addr? text, to_addr? text, subject? text, body_text? text, sent_at? timestamptz, plus_tag? text, linked_type? text, linked_id? text, case_id? int, raw_document_id? int, attachment_ids jsonb, created_at timestamptz, status? text, queued_at? timestamptz, attempts int, last_error? text, sealed? text, reply_to? text, sender? text, job_kind? text, received_on? date, auth? jsonb
+**email_message** · id* int, message_id text, in_reply_to? text, direction text, from_addr? text, to_addr? text, subject? text, body_text? text, sent_at? timestamptz, plus_tag? text, linked_type? text, linked_id? text, case_id? int, raw_document_id? int, attachment_ids jsonb, created_at timestamptz, status? text, queued_at? timestamptz, attempts int, last_error? text, sealed? text, reply_to? text, sender? text, job_kind? text, received_on? date, auth? jsonb, po_version? int
 
 **erp_column_map** · kind* text, version* int, columns jsonb, created_by? text, created_at timestamptz
 
@@ -217,17 +217,17 @@ Reading a line: `name*` is part of the primary key, `name?` may be empty, then t
 
 **po_approved_version** · id* bigint, po_no text, version int, approved_at timestamptz, approved_by text, rule_code? text, rule_version? int, band_max? num, total num, snapshot jsonb
 
-**po_change** · id* bigint, po_no text, po_line_no? int, kind text, old_value? text, new_value? text, reason? text, source text, email_id? bigint, status text, within_tolerance? bool, task_id? bigint, proposal_id? bigint, decided_by? text, decided_at? timestamptz, decision_note? text, version_made? int, created_at timestamptz, base_value? text
+**po_change** · id* bigint, po_no text, po_line_no? int, kind text, old_value? text, new_value? text, reason? text, source text, email_id? bigint, status text, within_tolerance? bool, task_id? bigint, proposal_id? bigint, decided_by? text, decided_at? timestamptz, decision_note? text, version_made? int, created_at timestamptz, base_value? text, po_version? int
 
 **po_charge** · id* bigint, po_no text, type text, amount num, gst_rate num, cgst num, sgst num, igst num
 
-**po_commitment** · id* bigint, po_no text, po_line_no? int, promised_qty? num, promised_date? date, email_id? bigint, note? text, created_at timestamptz
+**po_commitment** · id* bigint, po_no text, po_line_no? int, promised_qty? num, promised_date? date, email_id? bigint, note? text, created_at timestamptz, po_version? int, source? text, acknowledgement_id? bigint
 
 **po_line** · po_no* text, line_no* int, request_no text, request_line_no int, item_code? text, description? text, qty num, uom? text, base_qty? num, unit_price num, est_price? num, gst_rate num, taxable num, cgst num, sgst num, igst num, need_by? date, promised_date? date, received_qty num, invoiced_qty num, gl_code? text, source text, source_ref? text, status text, short_closed_qty num, price_record_id? bigint
 
 **po_revision** · id* bigint, po_no text, version int, changed_by? text, changed_at timestamptz, reason text, changes jsonb, total_before num, total_after num, reapproval bool, baseline_version? int, material jsonb
 
-**po_version** · id* bigint, po_no text, version int, made_at timestamptz, made_by text, reason? text, snapshot jsonb, document_id? int, sent_at? timestamptz, sent_to? text, acknowledged_at? timestamptz, acknowledged_by? text, ack_via? text
+**po_version** · id* bigint, po_no text, version int, made_at timestamptz, made_by text, reason? text, snapshot jsonb, document_id? int, sent_at? timestamptz, sent_to? text, acknowledged_at? timestamptz, acknowledged_by? text, ack_via? text, ack_address? text, ack_link_id? bigint, ack_code_id? bigint, ack_email_id? int, ack_sender_auth? jsonb, ack_change_ids? ARRAY, ack_note? text
 
 **price_record** · id* bigint, supplier_code? text, item_code? text, contract_code? text, uom? text, price? num, min_qty? int, price_basis? text, freight_included? bool, valid_from? date, valid_to? date, lead_days? int, version int, status text, created_by? text, activated_by? text, activated_at? timestamptz, location_code? text, region_code? text
 
@@ -313,7 +313,7 @@ Reading a line: `name*` is part of the primary key, `name?` may be empty, then t
 
 **supplier_category_scope** · id* bigint, supplier_code text, category_code text, location_code? text, region_code? text
 
-**supplier_chase** · id* bigint, po_no text, kind text, how text, sent_at timestamptz, task_id? bigint
+**supplier_chase** · id* bigint, po_no text, kind text, how text, sent_at timestamptz, task_id? bigint, po_version? int
 
 **supplier_contact** · id* bigint, supplier_code? text, name? text, role? text, email? text, phone? text, is_primary? bool
 
@@ -321,7 +321,7 @@ Reading a line: `name*` is part of the primary key, `name?` may be empty, then t
 
 **supplier_flag** · id* bigint, supplier_code text, kind text, other_ref? text, detail? text, raised_at timestamptz, cleared_by? text, cleared_at? timestamptz, clear_reason? text
 
-**supplier_link** · id* bigint, po_no text, supplier_code text, purpose text, po_version int, issued_at timestamptz, expires_at timestamptz, used_at? timestamptz, used_for? text
+**supplier_link** · id* bigint, po_no text, supplier_code text, purpose text, po_version int, issued_at timestamptz, expires_at timestamptz, used_at? timestamptz, used_for? text, sent_to? text
 
 **supplier_message** · id* bigint, email_id bigint, linked_type text, linked_ref text, supplier_code? text, kind? text, status text, reading? jsonb, action? text, task_id? bigint, reply_draft? text, confidence? num, model? text, prompt_version? text, created_at timestamptz
 

@@ -252,7 +252,9 @@ def _run(ctx: Any) -> Outcome:  # noqa: C901 - one story, step by step
                             page.get_by_role("button", name="Email me a code").click()
                             expect(page.locator("body")).to_contain_text("A code was sent to")
                             coded = [m for m in mails_to(f"{key}@{DOMAIN}") if "code is " in m["body"]]
-                            page.locator("input[name=code]").fill(coded[-1]["body"].split("code is ")[1][:6] if coded else "")
+                            page.locator("input[name=code]").fill(
+                                coded[-1]["body"].split("code is ")[1][:6] if coded else ""
+                            )
                             page.get_by_role("button", name="Approve").click()
                             expect(page.locator("body")).to_contain_text("Approved")
                         d.mark(4)
@@ -265,13 +267,16 @@ def _run(ctx: Any) -> Outcome:  # noqa: C901 - one story, step by step
                             page.wait_for_load_state("networkidle")
                             # wait until the click is saved before looking up the next approver (bounded)
                             for _ in range(40):
-                                if one(
-                                    "select count(*) from approval_step s join request r on r.no = s.request_no "
-                                    "and s.round = r.approval_round where s.request_no = :n and s.status = 'pending' "
-                                    "and coalesce(s.delegate, s.approver) = :who",
-                                    n=no,
-                                    who=pending[0][0],
-                                ) == 0:
+                                if (
+                                    one(
+                                        "select count(*) from approval_step s join request r on r.no = s.request_no "
+                                        "and s.round = r.approval_round where s.request_no = :n and s.status = 'pending' "
+                                        "and coalesce(s.delegate, s.approver) = :who",
+                                        n=no,
+                                        who=pending[0][0],
+                                    )
+                                    == 0
+                                ):
                                     break
                                 time.sleep(0.5)
                     who_approved.append(key)
@@ -430,19 +435,38 @@ def _run(ctx: Any) -> Outcome:  # noqa: C901 - one story, step by step
                     url = re.search(r"https?://\S+/supplier/[\w.\-]+", mail["body"]).group(0)  # type: ignore[union-attr]
                     d.visitor("supplier", f"{suppliers[supplier]['trade_name']} (supplier, no login)")
                     with d.step(
-                        "supplier", f"opens the link in the order email for {no} and clicks Accept the order"
+                        "supplier",
+                        f"opens the link in the order email for {no}, clicks Email me a code, types the code from its "
+                        "mail and clicks Accept the order (each line on the date ordered)",
                     ) as page:
                         page.goto(url)
-                        page.locator("#promised").fill(promised.isoformat())
+                        before = len(box.sent)
+                        page.get_by_role("button", name="Email me a code").first.click()
+                        expect(page.locator("body")).to_contain_text("A code was sent to")
+                        coded = [  # D53: the code goes only to the address the order went to
+                            m for m in box.sent[before:] if no in m["subject"] and "one-time code is " in m["body"]
+                        ]
+                        c.true(
+                            f"{no}: the code went to the order's contact",
+                            [m["to"].lower() for m in coded] == [contacts[supplier]],
+                        )
+                        accept = page.locator("form", has=page.locator("button[value=accept]"))
+                        accept.locator("input[name=code]").fill(
+                            coded[-1]["body"].split("code is ")[1][:6] if coded else ""
+                        )
                         page.get_by_role("button", name="Accept the order").click()
                         expect(page.locator("body")).to_contain_text("accepted")
                     d.mark(8)
                 else:
-                    with d.step("buyer", f"clicks Record acknowledgement on {no}") as page:
+                    with d.step(
+                        "buyer",
+                        f"clicks Record acknowledgement on {no}: each line on the date ordered, and how the "
+                        "supplier confirmed",
+                    ) as page:
                         d.go("buyer", f"purchase-orders/{no}")
-                        page.locator("#poAckDate").fill(promised.isoformat())
+                        page.locator("#poAckNote").fill(f"Confirmed by phone, {promised:%d %b}")
                         page.locator("#poAck").click()
-                        expect(page.locator("#appContent")).to_contain_text("Acknowledged on")
+                        expect(page.locator("#appContent")).to_contain_text("Acknowledged version")
                 d.sync()
             c.same("every order is acknowledged", sorted({r[0] for r in q("select status from po")}), ["acknowledged"])
 

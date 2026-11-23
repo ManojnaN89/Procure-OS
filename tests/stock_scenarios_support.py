@@ -173,9 +173,12 @@ class Run:
 
     def _acknowledge(self, who: str, args: dict[str, Any]) -> None:
         po_no, _ = self.po_of(args["item_code"])
-        dispatch.acknowledge(
-            self.s, po_no, user(self.uid(who)), promised=date.fromisoformat(args["promised"]), note=None,
-            tenant=self.slug,
+        promised = date.fromisoformat(args["promised"])
+        lines = self.s.execute(
+            text("select line_no from po_line where po_no = :n and status = 'open'"), {"n": po_no}
+        ).scalars()
+        dispatch.acknowledge(  # the scenario's promise is for the whole order: each open line on that date
+            self.s, po_no, user(self.uid(who)), promised={int(n): promised for n in lines}, note=None, tenant=self.slug,
         )  # fmt: skip
 
     def _count(self, who: str, args: dict[str, Any]) -> None:

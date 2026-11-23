@@ -1,12 +1,18 @@
 """The supplier communication agent (AG02): reads what suppliers write about orders, acts on what is small, hands over the rest.
 
-An email linked to a purchase order (or an RFQ) from one of the supplier's known addresses is read by an AI step that
-only classifies it and copies the dates, quantities and prices it states (ai_steps/supplier_message.py). Code does
-the rest:
+An email linked to a purchase order (or an RFQ) from a registered contact of the supplier (D53: the address the order
+went to identifies nobody by itself) is read by an AI step that only classifies it and copies the dates, quantities and
+prices it states (ai_steps/supplier_message.py). A mail whose sender authentication failed is not read: the buyer gets
+a task. Code does the rest:
 
-- an acknowledgement is recorded, and a later promised date is taken only within the company's tolerance;
-- a change of delivery date or a delay within 'supplier_date_days' moves the promised date, and a quantity within
-  'supplier_change_pct' is noted as a commitment: the order itself, and so its value, is never changed here;
+- an acknowledgement answers the version of the order mail it replies to (OP-12); it is recorded for that version only
+  when the sender was authenticated and the gate allows it (OP-4 interim, `EMAIL_ACK`); otherwise a buyer records it
+  with one click. A reply to an older version is answered with the current version's document;
+- a change of delivery date or a delay is judged against the due date of the one line it is about (DF-27): within
+  'supplier_date_days', with the gate's leave and no stock effect (it would not come after a material request's need,
+  rule Q17), only that line's promised date moves. A date naming no line on an order of several lines is never applied;
+  each line is proposed to the buyer. A quantity within 'supplier_change_pct' is noted as a commitment: the order
+  itself, and so its value, is never changed here;
 - a price change, a substitution, a rejection, a question, a larger change, a request to change bank details: a task
   for the right person with a drafted reply, and nothing applied. A bank change is never applied by anything;
 - a date, quantity or price change and a refusal that are not applied also become proposed changes, old value to new,
@@ -15,8 +21,10 @@ the rest:
   what is still to ship.
 
 Applying a small change and sending a reminder go through the autonomy gate ('supplier.change', 'supplier.remind'); when
-the gate says no, the same thing becomes a task for a buyer. Mail from anyone but a known contact of the supplier is not
-shown to a model. A daily job chases suppliers that have not acknowledged an order and the balance of part deliveries.
+the gate says no, the same thing becomes a task for a buyer. Mail from anyone but a registered contact of the supplier
+is not shown to a model. A daily job chases suppliers that have not acknowledged the current version of an order (on the
+working days of the place it delivers to, with a fresh link each time, at most 'supplier_chase_max' per version, then a
+task for the buyer) and the balance of part deliveries.
 """
 
 import re
@@ -32,12 +40,16 @@ from sqlalchemy.orm import Session
 from p2p.agents import autonomy
 from p2p.ai_steps import supplier_message as step
 from p2p.ai_steps.runner import run_step
+from p2p.formulas import deliveries, sender_auth
+from p2p.formulas import material as material_rules
 from p2p.formulas import supplier_changes as rules
 from p2p.formulas.calendar import IST, business_today
 from p2p.formulas.money import format_inr, format_qty
+from p2p.formulas.words import count
 from p2p.invoices import tolerances
-from p2p.orders import confirmation, dispatch, dispatch_notes
-from p2p.platform import audit, emails, routing, tasks, users, worker
+from p2p.masters import suppliers as supplier_records
+from p2p.orders import confirmation, dispatch, dispatch_notes, supplier_links, versions
+from p2p.platform import audit, emails, reference, routing, settings, tasks, users, worker
 from p2p.platform.sod import Actor
 
 AGENT = Actor("agent", "supplier_comms")
@@ -46,6 +58,13 @@ DECISION_REMIND = "supplier.remind"
 JOB = "supplier_chase"
 RUN_AT = time(9, 45)  # India time
 ACTIVE = ("sent", "acknowledged", "part_received")
+SENDER_TASK = "supplier_sender_check"
+ACK_TASK = "supplier_ack_confirm"
+OVERDUE_TASK = "po_ack_overdue"
+OVERDUE_SLA_HOURS = 18  # two working days
+# OP-4 (NEEDS OWNER; interim): what an emailed acknowledgement does, by the sender authentication of the mail. 'record':
+# the agent records it when the gate allows; 'confirm': a buyer records it with one click; 'not_read': never read.
+EMAIL_ACK = {sender_auth.PASS: "record", sender_auth.NONE: "confirm", sender_auth.FAIL: "not_read"}
 
 
 @dataclass
@@ -104,13 +123,12 @@ def _order(db: Session, po_no: str) -> dict[str, Any] | None:
     return out
 
 
-def _current_promised(order: dict[str, Any]) -> date | None:
-    open_lines = [ln for ln in order["lines"] if ln["status"] in ("open", "part_received")]
-    promised: list[date] = [ln["promised_date"] for ln in open_lines if ln["promised_date"]]
-    if promised:
-        return max(promised)
-    needed: list[date] = [ln["need_by"] for ln in open_lines if ln["need_by"]]
-    return max(needed) if needed else None
+def _open_lines(order: dict[str, Any]) -> list[dict[str, Any]]:
+    return [ln for ln in order["lines"] if ln["status"] in ("open", "part_received")]
+
+
+def _due(line: dict[str, Any]) -> date | None:
+    return deliveries.line_due(line["promised_date"], line["need_by"])[0]
 
 
 def _norm(value: str) -> str:
@@ -134,40 +152,58 @@ def _line_for(order: dict[str, Any], item: str | None) -> dict[str, Any] | None:
 
 
 def _supplier_of(db: Session, linked_type: str, ref: str, from_addr: str) -> tuple[str | None, str | None]:
-    """The supplier whose known address the email came from (and that supplier's name), or None for anyone else."""
+    """The supplier the email is from (and its name): the From address must be a registered contact of the order's
+    supplier, or of a supplier invited to the RFQ (D53; masters/suppliers.registered_sender). None for anyone else."""
     address = parseaddr(from_addr)[1].strip().lower()
     if not address:
         return None, None
     if linked_type == "po":
-        row = db.execute(
-            text(
-                "select po.supplier_code, coalesce(s.trade_name, s.legal_name) from po join supplier s on s.code = po.supplier_code "
-                "where po.no = :r and (lower(coalesce(po.sent_to, '')) = :a or exists (select 1 from supplier_contact c "
-                "where c.supplier_code = po.supplier_code and lower(c.email) = :a))"
-            ),
-            {"r": ref, "a": address},
-        ).first()
+        codes = [str(c) for c in db.execute(text("select supplier_code from po where no = :r"), {"r": ref}).scalars()]
     else:
-        row = db.execute(
-            text(
-                "select rs.supplier_code, coalesce(s.trade_name, s.legal_name) from rfq_supplier rs join supplier s on s.code = rs.supplier_code "
-                "where rs.rfq_no = :r and (lower(coalesce(rs.email, '')) = :a or exists (select 1 from supplier_contact c "
-                "where c.supplier_code = rs.supplier_code and lower(c.email) = :a))"
-            ),
-            {"r": ref, "a": address},
-        ).first()
-    return (str(row[0]), str(row[1])) if row else (None, None)
+        codes = [
+            str(c)
+            for c in db.execute(text("select supplier_code from rfq_supplier where rfq_no = :r"), {"r": ref}).scalars()
+        ]
+    found = supplier_records.registered_sender(db, address, codes)
+    if len(found) != 1:  # nobody, or an address registered for two suppliers: neither
+        return None, None
+    name = db.execute(
+        text("select coalesce(trade_name, legal_name) from supplier where code = :c"), {"c": found[0][0]}
+    ).scalar()
+    return found[0][0], str(name or found[0][0])
 
 
 def _contact(db: Session, supplier: str) -> tuple[str, str | None] | None:
-    row = db.execute(
-        text(
-            "select email, name from supplier_contact where supplier_code = :c and email is not null "
-            "order by is_primary desc nulls last, id limit 1"
-        ),
-        {"c": supplier},
-    ).first()
-    return (str(row[0]), row[1]) if row else None
+    return supplier_records.order_contact(db, supplier)
+
+
+def reply_version(db: Session, mail: Any, order: dict[str, Any]) -> int | None:
+    """The version an emailed reply answers (OP-12): the one of our mail it threads to; with no thread, version 1 if the
+    order never had another; else unknown (None)."""
+    if mail.get("in_reply_to"):
+        found = db.execute(
+            text(
+                "select po_version from email_message where direction = 'out' and message_id = :m "
+                "and linked_id = :p and po_version is not null"
+            ),
+            {"m": mail["in_reply_to"], "p": order["no"]},
+        ).scalar()
+        if found is not None:
+            return int(found)
+    return 1 if int(order["version"]) == 1 else None
+
+
+def _task_po(
+    db: Session, tenant: str, kind: str, title: str, po: dict[str, Any], sla: int, payload: dict[str, Any]
+) -> int:
+    """A task about an order for its buyer (else the first buyer), with a link to the order."""
+    from p2p.platform import notifications  # noqa: PLC0415 - logins live in the control database
+
+    who = notifications.login_of(db, tenant, po.get("buyer")) if po.get("buyer") else None
+    return tasks.create_task(
+        db, tenant, kind=kind, title=title[:200], assignee=who or users.first_with_role(db, "Buyer"), sla_hours=sla,
+        payload={"po_no": po["no"], "link": f"#/purchase-orders/{po['no']}", **payload}, actor=AGENT,
+    )  # fmt: skip
 
 
 # ---- the words of the replies -----------------------------------------------------------------
@@ -261,7 +297,7 @@ def handle_email(db: Session, tenant: str, email_id: int, gateway: Any, *, as_of
     mail = (
         db.execute(
             text(
-                "select id, from_addr, subject, body_text, linked_type, linked_id from email_message "
+                "select id, from_addr, subject, body_text, linked_type, linked_id, in_reply_to, auth from email_message "
                 "where id = :i and direction = 'in'"
             ),
             {"i": email_id},
@@ -280,28 +316,9 @@ def handle_email(db: Session, tenant: str, email_id: int, gateway: Any, *, as_of
     if exists is None:
         return None
     supplier, supplier_name = _supplier_of(db, linked_type, ref, mail["from_addr"] or "")
-    if supplier is None:
-        # an email from someone who is not a known contact of the supplier is never shown to a model
-        _store(
-            db,
-            email_id,
-            linked_type,
-            ref,
-            None,
-            None,
-            "ignored",
-            action="the sender is not a known contact of the supplier",
-        )
-        audit.record(
-            db,
-            AGENT,
-            "supplier_message.ignored",
-            "email",
-            email_id,
-            reason=f"sender {mail['from_addr']} is not a contact for {ref}",
-        )
-        db.commit()
-        return Handled("ignored", None, "the sender is not a known contact of the supplier, so the email was not read")
+    verdict = str((mail["auth"] or {}).get("verdict") or sender_auth.NONE)
+    if supplier is None or (linked_type == "po" and EMAIL_ACK.get(verdict) == "not_read"):
+        return _not_read(db, tenant, email_id, linked_type, ref, supplier, dict(mail), verdict)
 
     source = f"Subject: {mail['subject'] or ''}\n\n{mail['body_text'] or ''}"
     outcome = run_step(
@@ -392,6 +409,35 @@ def handle_email(db: Session, tenant: str, email_id: int, gateway: Any, *, as_of
     )  # fmt: skip
     emails.commit_and_send(db)
     return handled
+
+
+def _not_read(
+    db: Session, tenant: str, email_id: int, linked_type: str, ref: str, supplier: str | None, mail: dict[str, Any],
+    verdict: str,
+) -> Handled:  # fmt: skip
+    """An email from someone who is not a registered contact of the supplier, or whose sender authentication failed, is
+    never shown to a model (D53); about an order, the buyer gets a task to sort it out."""
+    address = parseaddr(mail["from_addr"] or "")[1].strip().lower() or str(mail["from_addr"])
+    if supplier is None:
+        what = "order" if linked_type == "po" else "RFQ"
+        problem = (
+            f"the sender {address} is not a registered contact of the supplier of {what} {ref}: the email was not read"
+        )
+    else:
+        failed = (mail.get("auth") or {}).get("failed") or "fail"
+        problem = f"sender authentication failed ({failed}) for {address}: the email was not read"
+    _store(db, email_id, linked_type, ref, supplier, None, "ignored", action=problem)
+    audit.record(db, AGENT, "supplier_message.ignored", "email", email_id, after={"verdict": verdict}, reason=problem)
+    db.commit()
+    if linked_type == "po":
+        po = dict(db.execute(text("select * from po where no = :n"), {"n": ref}).mappings().one())
+        _task_po(
+            db, tenant, SENDER_TASK, f"{ref}: a supplier email was not read ({problem})", po, 24,
+            {"email_id": email_id, "problem": problem,
+             "next": "Ask the supplier to write from its registered address, or register the contact through supplier "
+             "records; nothing is read again automatically"},
+        )  # fmt: skip
+    return Handled("ignored", None, problem)
 
 
 def _store(
@@ -571,29 +617,99 @@ def _ack(
     mail: Any,
     as_of: date,
 ) -> Handled:
+    """An acknowledgement by email: for the version the reply answers; recorded by the agent only from an authenticated
+    registered sender with the gate's leave (EMAIL_ACK, OP-4), else a buyer records it with one click."""
     po_no = order["no"]
     if order["status"] != "sent":
         return Handled("noted", "ack", f"{po_no} is already {order['status']}")
-    allowed = _gate(db, DECISION_CHANGE, order, reading)
-    if not allowed.allowed:
-        task = _task(
-            db, tenant, "supplier_change", f"{supplier} acknowledged {po_no}: record it", ("Buyer",), 24,
-            {"po_no": po_no, "email_id": int(mail["id"]), "promised": reading.new_date, "why_not_automatic": allowed.reason},
-        )  # fmt: skip
-        return Handled("task", "ack", f"not recorded automatically: {allowed.reason}", task)
-    # the version the order is now, by email (OP-8: block 8 passes the version read from the reply)
-    warnings = dispatch.acknowledge(
-        db, po_no, AGENT, version=int(order["version"]), via="email", promised=reading.new_date,
-        note="acknowledged by email", today=as_of,
+    answers, now = reply_version(db, mail, order), int(order["version"])
+    if answers is not None and answers < now:
+        return _old_version(db, tenant, order, supplier, answers)
+    address = parseaddr(mail["from_addr"] or "")[1].strip().lower()
+    verdict = str((mail["auth"] or {}).get("verdict") or sender_auth.NONE)
+    dates, why = _ack_dates(order, reading)
+    if answers is None:
+        why = f"the email does not say which version it answers (the order is version {now})"
+    elif why is None and EMAIL_ACK.get(verdict) != "record":
+        why = "the sender was not authenticated by our mail server"
+    elif why is None:
+        allowed = _gate(db, DECISION_CHANGE, order, reading)
+        why = None if allowed.allowed else f"not recorded automatically: {allowed.reason}"
+    if why is None:
+        try:
+            warnings = dispatch.acknowledge(
+                db, po_no, AGENT, version=answers, via="email", promised=dates, note="acknowledged by email",
+                today=as_of, tenant=tenant,
+                detail=dispatch.AckDetail(address=address, email_id=int(mail["id"]), sender_auth=dict(mail["auth"] or {})),
+            )  # fmt: skip
+        except dispatch.DispatchError as exc:
+            db.rollback()
+            why = str(exc)
+        else:
+            autonomy.record_outcome(db, DECISION_CHANGE, auto=True, ref=f"po:{po_no}")
+            if warnings:
+                _task(
+                    db, tenant, "supplier_change", f"{supplier} acknowledged {po_no} with a later date: {warnings[0]}",
+                    ("Buyer",), 24, {"po_no": po_no, "warnings": warnings},
+                )  # fmt: skip
+            return Handled("applied", "ack", f"acknowledgement of version {answers} recorded")
+    shown = answers or now
+    task = _task_po(
+        db, tenant, ACK_TASK,
+        f"Record {_supplier_name(db, supplier)}'s acknowledgement of {po_no} version {shown} (email from {address})",
+        order, 24,
+        {"version": answers, "email_id": int(mail["id"]), "from": address, "verdict": verdict, "why": why,
+         "lines": {str(k): v for k, v in (dates or {}).items()},
+         "next": "Read the email and record the acknowledgement of that version with one click, or ask the supplier to "
+         "accept from the link"},
     )  # fmt: skip
-    autonomy.record_outcome(db, DECISION_CHANGE, auto=True, ref=f"po:{po_no}")
-    if warnings:
-        task = _task(
-            db, tenant, "supplier_change", f"{supplier} acknowledged {po_no} with a late date: {warnings[0]}"[:200], ("Buyer",), 24,
-            {"po_no": po_no, "warnings": warnings},
-        )  # fmt: skip
-        return Handled("applied", "ack", "acknowledgement recorded; the promised date is later than needed", task)
-    return Handled("applied", "ack", "acknowledgement recorded")
+    return Handled("task", "ack", f"not recorded: {why}; a buyer records it", task)
+
+
+def _ack_dates(
+    order: dict[str, Any], reading: step.SupplierMessage
+) -> tuple[dict[int, date | None] | None, str | None]:
+    """The line dates an emailed acknowledgement gives: a date for the line it names (or the only line); no date, the
+    order's own dates. One date for no line in particular on an order of several lines is not spread over them (DF-27):
+    a person looks unless it is on or before every line's due date."""
+    if reading.new_date is None:
+        return None, None
+    line = _line_for(order, reading.item)
+    if line is not None:
+        return {int(line["line_no"]): reading.new_date}, None
+    if all(_due(ln) is None or reading.new_date <= _due(ln) for ln in _open_lines(order)):  # type: ignore[operator]
+        return None, None
+    return None, f"the email gives {reading.new_date:%d %b %Y} for no line in particular"
+
+
+def _old_version(db: Session, tenant: str, order: dict[str, Any], supplier: str, answers: int) -> Handled:
+    """A reply to an older version records nothing: the supplier is sent the current version's document."""
+    po_no, now = order["no"], int(order["version"])
+    sent = db.execute(
+        text("select sent_at from po_version where po_no = :p and version = :v"), {"p": po_no, "v": now}
+    ).scalar()
+    when = f", sent on {sent.astimezone(IST):%d %b %Y}" if sent else ""
+    body = (
+        _greeting(_contact_name(db, supplier))
+        + f"Order {po_no} has been revised (version {now}{when}). Please accept that version from the link in our email.\n"
+        + _sign(db)
+    )
+    stored = versions.issue_document(db, tenant, po_no) if sent else None
+    _send(db, supplier, po_no, f"Purchase order {po_no} (version {now})", body,
+          document_ids=[stored.document_id] if stored else None, po_version=now)  # fmt: skip
+    return Handled("noted", "ack", f"answers version {answers}; the order is now version {now}")
+
+
+def _supplier_name(db: Session, code: str) -> str:
+    name = db.execute(
+        text("select coalesce(trade_name, legal_name) from supplier where code = :c"), {"c": code}
+    ).scalar()
+    return str(name or code)
+
+
+def _contact_name(db: Session, supplier: str) -> str | None:
+    contact = _contact(db, supplier)
+    return contact[1] if contact else None
 
 
 def _date(
@@ -605,19 +721,31 @@ def _date(
     reading: step.SupplierMessage,
     mail: Any,
 ) -> Handled:
+    """A new delivery date, judged against the due date of the one line it is about (DF-27)."""
     po_no = order["no"]
     date_days, _ = _tolerance(db)
-    current = _current_promised(order)
-    requested = rules.requested_date(current, reading.new_date or reading.balance_date, reading.delay_days)
-    verdict = rules.judge_date(current, requested, date_days)
-    latest = current + timedelta(days=date_days) if current else None
-    if verdict.ok and requested is not None:
-        allowed = _gate(db, DECISION_CHANGE, order, reading)
-        if allowed.allowed:
-            return _apply_date(db, order, supplier, contact, requested, current, verdict.detail, mail)
-        why = f"within tolerance, but not applied automatically: {allowed.reason}"
+    open_lines = _open_lines(order)
+    line = _line_for(order, reading.item)
+    asked = reading.new_date or reading.balance_date
+    current = _due(line) if line else None
+    requested = rules.requested_date(current, asked, reading.delay_days) if line else asked
+    if line is None:
+        verdict = rules.Verdict(
+            rules.OUT, f"the email names no line of the {count(len(open_lines), 'line')} on the order"
+        )
     else:
-        why = verdict.detail
+        verdict = rules.judge_date(current, requested, date_days)
+    why = verdict.detail
+    if verdict.ok and line is not None and requested is not None:
+        late = _stock_effect(db, order, line, requested)
+        allowed = _gate(db, DECISION_CHANGE, order, reading)
+        if late is None and allowed.allowed:
+            return _apply_date(db, order, supplier, contact, line, requested, current, verdict.detail, mail)
+        why = (
+            f"within tolerance, but {late}" if late
+            else f"within tolerance, but not applied automatically: {allowed.reason}"
+        )  # fmt: skip
+    latest = current + timedelta(days=date_days) if current else None
     draft = (
         _draft_date_noted(db, po_no, contact, requested)
         if verdict.ok and requested
@@ -626,17 +754,37 @@ def _date(
     task = _task(
         db, tenant, "supplier_change", f"{supplier} asks to move the delivery of {po_no}: {why}"[:200], ("Buyer",), 24,
         {
-            "po_no": po_no, "email_id": int(mail["id"]), "current": current, "requested": requested, "kind": reading.type,
-            "within_tolerance": verdict.ok, "reply_draft": draft,
+            "po_no": po_no, "email_id": int(mail["id"]), "line": line["line_no"] if line else None, "current": current,
+            "requested": requested, "kind": reading.type, "within_tolerance": verdict.ok, "reply_draft": draft,
         },
     )  # fmt: skip
-    if requested is not None:
-        line = _line_for(order, reading.item)
-        lines = [line] if line else [ln for ln in order["lines"] if ln["status"] in ("open", "part_received")]
-        moved = [ln for ln in lines if (ln["promised_date"] or ln["need_by"]) != requested]
-        asked = [confirmation.Proposed("date", ln["line_no"], requested.isoformat()) for ln in moved]
-        _propose(db, tenant, order, asked, reading, mail, task)
+    proposed = []
+    for ln in [line] if line else open_lines:
+        new = requested if line else rules.requested_date(_due(ln), asked, reading.delay_days)
+        if new is not None and new != _due(ln):
+            proposed.append(confirmation.Proposed("date", ln["line_no"], new.isoformat()))
+    _propose(db, tenant, order, proposed, reading, mail, task)
     return Handled("task", reading.type, f"not applied: {why}", task, draft)
+
+
+def _stock_effect(db: Session, order: dict[str, Any], line: dict[str, Any], new: date) -> str | None:
+    """Why the new date would hurt stock: it comes after the latest arrival of an open material requirement the line
+    buys for (rule Q17); None when it would not."""
+    from p2p.requests import supply_dates  # noqa: PLC0415 - material requests sit above orders
+
+    buffer = supply_dates.buffer_days(db)
+    for mr, need_by, place in db.execute(
+        text(
+            "select m.mr_no, m.need_by, m.location_code from material_request_line m "
+            "join material_request_buy b on b.mr_line_id = m.id where m.status = 'open' "
+            "and b.request_no = :r and b.request_line_no = :l order by m.need_by"
+        ),
+        {"r": line["request_no"], "l": line["request_line_no"]},
+    ):
+        latest = material_rules.latest_arrival(need_by, buffer, reference.calendar_for_location(db, place))
+        if new > latest:
+            return f"it would come after {mr} needs it ({need_by:%d %b %Y})"
+    return None
 
 
 def _apply_date(
@@ -644,23 +792,29 @@ def _apply_date(
     order: dict[str, Any],
     supplier: str,
     contact: str | None,
+    line: dict[str, Any],
     requested: date,
     current: date | None,
     detail: str,
     mail: Any,
 ) -> Handled:
-    po_no = order["no"]
+    """Move the promised date of that one line, and keep it as a commitment of the order's version."""
+    po_no, line_no = order["no"], int(line["line_no"])
     db.execute(
-        text("update po_line set promised_date = :d where po_no = :p and status in ('open', 'part_received')"),
-        {"d": requested, "p": po_no},
+        text("update po_line set promised_date = :d where po_no = :p and line_no = :l"),
+        {"d": requested, "p": po_no, "l": line_no},
     )
     db.execute(
-        text("insert into po_commitment (po_no, promised_date, email_id, note) values (:p, :d, :e, :n)"),
-        {"p": po_no, "d": requested, "e": int(mail["id"]), "n": detail},
+        text(
+            "insert into po_commitment (po_no, po_line_no, promised_date, email_id, note, po_version, source) "
+            "values (:p, :l, :d, :e, :n, :v, 'agent_date')"
+        ),
+        {"p": po_no, "l": line_no, "d": requested, "e": int(mail["id"]), "n": detail, "v": order["version"]},
     )
     audit.record(
         db, AGENT, "po.promised_date_change", "po", po_no,
-        before={"promised_date": current}, after={"promised_date": requested}, reason=detail,
+        before={"line": line_no, "promised_date": current},
+        after={"line": line_no, "promised_date": requested, "version": order["version"]}, reason=detail,
     )  # fmt: skip
     autonomy.record_outcome(db, DECISION_CHANGE, auto=True, ref=f"po:{po_no}")
     from p2p.requests import material  # noqa: PLC0415 - material requests sit above orders
@@ -669,8 +823,9 @@ def _apply_date(
     draft = _draft_date_noted(db, po_no, contact, requested)
     _send(db, supplier, po_no, f"Delivery date noted: purchase order {po_no}", draft)
     return Handled(
-        "applied", "date_change", f"promised date moved to {requested:%d %b %Y} ({detail})", reply_draft=draft
-    )
+        "applied", "date_change",
+        f"line {line_no}: promised date moved to {requested:%d %b %Y} ({detail})", reply_draft=draft,
+    )  # fmt: skip
 
 
 def _quantity(
@@ -695,7 +850,8 @@ def _quantity(
         if allowed.allowed:
             db.execute(
                 text(
-                    "insert into po_commitment (po_no, po_line_no, promised_qty, promised_date, email_id, note) values (:p, :l, :q, :d, :e, :n)"
+                    "insert into po_commitment (po_no, po_line_no, promised_qty, promised_date, email_id, note, "
+                    "po_version, source) values (:p, :l, :q, :d, :e, :n, :v, 'agent_qty')"
                 ),
                 {
                     "p": po_no,
@@ -704,6 +860,7 @@ def _quantity(
                     "d": reading.balance_date or reading.new_date,
                     "e": int(mail["id"]),
                     "n": verdict.detail,
+                    "v": order["version"],
                 },
             )
             audit.record(
@@ -782,11 +939,18 @@ def _dispatched(
     return Handled("task", "dispatch", said, task)
 
 
-def _send(db: Session, supplier: str, po_no: str, subject: str, body: str) -> bool:
+def _send(
+    db: Session, supplier: str, po_no: str, subject: str, body: str, *, document_ids: list[int] | None = None,
+    po_version: int | None = None,
+) -> bool:  # fmt: skip
     contact = _contact(db, supplier)
     if contact is None:
         return False
-    emails.send_linked_email(db, contact[0], subject, body, linked_type="po", linked_ref=po_no)  # sent after the commit
+    message_id = emails.send_linked_email(
+        db, contact[0], subject, body, linked_type="po", linked_ref=po_no, document_ids=document_ids
+    )  # sent after the commit
+    if po_version is not None:
+        versions.mail_carries(db, message_id, po_version)
     return True
 
 
@@ -798,14 +962,19 @@ class ChaseResult:
     emailed: list[tuple[str, str]] = field(default_factory=list)  # (po_no, kind)
     tasks: list[tuple[str, str]] = field(default_factory=list)
     skipped: list[str] = field(default_factory=list)
+    overdue: list[str] = field(default_factory=list)  # orders handed to the buyer after the last chaser
 
 
-def _last_chase(db: Session, po_no: str, kind: str) -> tuple[datetime | None, int]:
-    row = db.execute(
-        text("select max(sent_at), count(*) from supplier_chase where po_no = :p and kind = :k"),
-        {"p": po_no, "k": kind},
-    ).one()
-    return row[0], int(row[1])
+def _chasers(db: Session, po_no: str, kind: str, version: int | None) -> list[date]:
+    """The days the chasers of this kind went (of this version, for an acknowledgement), oldest first."""
+    rows = db.execute(
+        text(
+            "select sent_at from supplier_chase where po_no = :p and kind = :k "
+            "and (cast(:v as integer) is null or po_version = :v) order by sent_at"
+        ),
+        {"p": po_no, "k": kind, "v": version},
+    ).scalars()
+    return [r.astimezone(IST).date() for r in rows]
 
 
 def _balance_lines(db: Session, po_no: str) -> list[tuple[str, Decimal, Decimal]]:
@@ -819,79 +988,175 @@ def _balance_lines(db: Session, po_no: str) -> list[tuple[str, Decimal, Decimal]
     return [(r[0], Decimal(r[1]), Decimal(r[2])) for r in rows]
 
 
-def chase_run(db: Session, tenant: str, *, as_of: date, now: datetime | None = None) -> ChaseResult:
-    """Chase suppliers that have not acknowledged an order, and for the balance of part deliveries that are late.
+def _balance_late(db: Session, po_no: str, as_of: date) -> bool:
+    """A part delivery whose balance is past its due date (or has none)."""
+    dues = [
+        deliveries.line_due(r[0], r[1])[0]
+        for r in db.execute(
+            text(
+                "select promised_date, need_by from po_line where po_no = :p and status in ('open', 'part_received') "
+                "and received_qty < qty"
+            ),
+            {"p": po_no},
+        )
+    ]
+    return bool(dues) and any(d is None or d < as_of for d in dues)
 
-    Each chase is an email through the autonomy gate ('supplier.remind'); when the gate says no, a buyer gets a task to
-    send it. A chaser is not repeated before 'supplier_chase_days' and there are at most 'supplier_chase_max' of each kind.
+
+def chase_run(db: Session, tenant: str, *, as_of: date, now: datetime | None = None) -> ChaseResult:
+    """Chase suppliers that have not acknowledged the current version of an order, and for the balance of part
+    deliveries that are late, on the working days of the place each order delivers to.
+
+    The first chaser goes once the acknowledgement is overdue, then one every 'supplier_chase_days' working days, at most
+    'supplier_chase_max' per version (a new version starts again). On the day the next would be due after the last, the
+    order's buyer gets one task (`po_ack_overdue`); nothing else happens by itself. Each chase is an email through the
+    autonomy gate ('supplier.remind'); when the gate says no, a buyer gets a task to send it.
     """
-    now = now or datetime.now(UTC)
+    now = datetime.combine(as_of, (now or datetime.now(UTC)).astimezone(IST).timetz())  # on the business date
     result = ChaseResult()
-    every = timedelta(days=int(_setting(db, "supplier_chase_days", "3")))
-    most = int(_setting(db, "supplier_chase_max", "3"))
-    for po in db.execute(
+    every = int(settings.number(db, "supplier_chase_days", "3"))
+    most = int(settings.number(db, "supplier_chase_max", "3"))
+    for row in db.execute(
         text(
-            "select no, supplier_code, status, sent_at, total from po where status in ('sent', 'part_received') order by no"
+            "select no, supplier_code, status, version, acknowledged_version, ship_to_location, total, buyer from po "
+            "where status in ('sent', 'part_received') order by no"
         )
     ).mappings():
-        po_no, supplier = str(po["no"]), str(po["supplier_code"])
-        if po["status"] == "sent":
-            kind = "ack"
-            due = po["sent_at"] is not None and dispatch.ack_overdue(db, po["sent_at"], as_of)
-        else:
-            kind = "balance"
-            order = _order(db, po_no)
-            promised = _current_promised(order) if order else None
-            due = bool(_balance_lines(db, po_no)) and (promised is None or promised < as_of)
-        if not due:
+        po = dict(row)
+        po_no = str(po["no"])
+        calendar = reference.calendar_for_location(db, po["ship_to_location"])
+        if not calendar.is_working_day(as_of):
             continue
-        last, count = _last_chase(db, po_no, kind)
-        if count >= most or (last is not None and now - last < every):
+        if po["status"] == "sent":
+            kind, version = "ack", int(po["version"])
+            due_on = dispatch.ack_due_on(db, po)
+            if not dispatch.waiting_ack(po) or due_on is None or as_of <= due_on:
+                continue
+        else:
+            kind, version = "balance", int(po["version"])
+            if not _balance_late(db, po_no, as_of):
+                continue
+        sent = _chasers(db, po_no, kind, version if kind == "ack" else None)
+        if sent and as_of < calendar.add_working_days(sent[-1], every):
             result.skipped.append(f"{po_no}:{kind}")
             continue
-        contact = _contact(db, supplier)
-        body = _chaser_text(db, po_no, kind, contact[1] if contact else None, po["sent_at"])
-        subject = (
-            f"Reminder: please acknowledge purchase order {po_no}"
-            if kind == "ack"
-            else f"Balance of purchase order {po_no}"
-        )
-        allowed = autonomy.gate(db, DECISION_REMIND, value=Decimal(po["total"]), confidence=1.0)
-        if allowed.allowed and contact is not None and _send(db, supplier, po_no, subject, body):
-            db.execute(
-                text("insert into supplier_chase (po_no, kind, how, sent_at) values (:p, :k, 'email', :n)"),
-                {"p": po_no, "k": kind, "n": now},
-            )
-            audit.record(
-                db, AGENT, "supplier.chase", "po", po_no, after={"kind": kind, "how": "email", "number": count + 1}
-            )
-            autonomy.record_outcome(db, DECISION_REMIND, auto=True, ref=f"{po_no}:{kind}")
-            result.emailed.append((po_no, kind))
+        if len(sent) >= most:
+            if kind == "ack" and _overdue_task(db, tenant, po, len(sent)):
+                result.overdue.append(po_no)
+            else:
+                result.skipped.append(f"{po_no}:{kind}")
             continue
-        why = allowed.reason if not allowed.allowed else "the supplier has no email address on file"
-        task = _task(
-            db, tenant, "supplier_chase", f"Chase {supplier} about {po_no}: {'no acknowledgement yet' if kind == 'ack' else 'the balance is late'}",
-            ("Buyer",), 24, {"po_no": po_no, "kind": kind, "draft": body, "why_not_automatic": why},
-        )  # fmt: skip
-        db.execute(
-            text("insert into supplier_chase (po_no, kind, how, sent_at, task_id) values (:p, :k, 'task', :n, :t)"),
-            {"p": po_no, "k": kind, "n": now, "t": task},
-        )
-        audit.record(
-            db, AGENT, "supplier.chase", "po", po_no, after={"kind": kind, "how": "task", "task": task}, reason=why
-        )
-        result.tasks.append((po_no, kind))
+        _chase(db, tenant, po, kind, version, len(sent) + 1, now, result)
     emails.commit_and_send(db)
     return result
 
 
-def _chaser_text(db: Session, po_no: str, kind: str, contact: str | None, sent_at: datetime | None) -> str:
+def _chase(
+    db: Session, tenant: str, po: dict[str, Any], kind: str, version: int, number: int, now: datetime,
+    result: ChaseResult,
+) -> None:  # fmt: skip
+    """One chaser: an email with a fresh link and the version's document, or a task when the gate says no."""
+    po_no, supplier = str(po["no"]), str(po["supplier_code"])
+    contact = _contact(db, supplier)
+    allowed = autonomy.gate(db, DECISION_REMIND, value=Decimal(po["total"]), confidence=1.0)
+    link = None
+    if allowed.allowed and contact is not None and kind == "ack":
+        link = supplier_links.url(supplier_links.issue(db, tenant, po_no, "respond", sent_to=contact[0]))
+    body = _chaser_text(db, po_no, kind, contact[1] if contact else None, version, link)
+    subject = (
+        f"Reminder: please accept purchase order {po_no}" + (f" (version {version})" if version > 1 else "")
+        if kind == "ack"
+        else f"Balance of purchase order {po_no}"
+    )
+    if allowed.allowed and contact is not None:
+        stored = versions.issue_document(db, tenant, po_no) if kind == "ack" else None
+        _send(db, supplier, po_no, subject, body, document_ids=[stored.document_id] if stored else None,
+              po_version=version)  # fmt: skip
+        db.execute(
+            text("insert into supplier_chase (po_no, kind, how, sent_at, po_version) values (:p, :k, 'email', :n, :v)"),
+            {"p": po_no, "k": kind, "n": now, "v": version},
+        )
+        audit.record(
+            db, AGENT, "supplier.chase", "po", po_no,
+            after={"kind": kind, "how": "email", "number": number, "version": version, "to": contact[0]},
+        )  # fmt: skip
+        autonomy.record_outcome(db, DECISION_REMIND, auto=True, ref=f"{po_no}:{kind}")
+        result.emailed.append((po_no, kind))
+        return
+    why = allowed.reason if not allowed.allowed else "the supplier has no email address on file"
+    task = _task(
+        db, tenant, "supplier_chase", f"Chase {supplier} about {po_no}: {'no acknowledgement yet' if kind == 'ack' else 'the balance is late'}",
+        ("Buyer",), 24, {"po_no": po_no, "kind": kind, "version": version, "draft": body, "why_not_automatic": why},
+    )  # fmt: skip
+    db.execute(
+        text(
+            "insert into supplier_chase (po_no, kind, how, sent_at, task_id, po_version) "
+            "values (:p, :k, 'task', :n, :t, :v)"
+        ),
+        {"p": po_no, "k": kind, "n": now, "t": task, "v": version},
+    )
+    audit.record(
+        db, AGENT, "supplier.chase", "po", po_no,
+        after={"kind": kind, "how": "task", "task": task, "number": number, "version": version}, reason=why,
+    )  # fmt: skip
+    result.tasks.append((po_no, kind))
+
+
+def _overdue_task(db: Session, tenant: str, po: dict[str, Any], chasers: int) -> bool:
+    """After the last chaser: one task for the order's buyer, escalating to the first active purchase manager, once per
+    version (OP-14). True when it was made now."""
+    po_no, version = str(po["no"]), int(po["version"])
+    if db.execute(
+        text("select 1 from task where kind = :k and payload->>'po_no' = :p and (payload->>'version')::int = :v"),
+        {"k": OVERDUE_TASK, "p": po_no, "v": version},
+    ).first():
+        return False
+    supplier = _supplier_name(db, str(po["supplier_code"]))
+    sent = db.execute(
+        text("select sent_at from po_version where po_no = :p and version = :v"), {"p": po_no, "v": version}
+    ).scalar()
+    from p2p.platform import notifications  # noqa: PLC0415 - logins live in the control database
+
+    manager_code = db.execute(
+        text("select code from org_user where designation = 'Purchase Manager' and active order by code limit 1")
+    ).scalar()
+    manager = notifications.login_of(db, tenant, str(manager_code)) if manager_code else None
+    buyer = notifications.login_of(db, tenant, po.get("buyer")) if po.get("buyer") else None
+    audit.record(
+        db, AGENT, "po.ack_overdue", "po", po_no, after={"version": version, "chasers": chasers},
+        reason=f"{supplier} has not acknowledged version {version} after {count(chasers, 'reminder')}",
+    )  # fmt: skip
+    tasks.create_task(
+        db, tenant, kind=OVERDUE_TASK,
+        title=f"{supplier} has not acknowledged {po_no} version {version} after {count(chasers, 'reminder')}"[:200],
+        assignee=buyer or users.first_with_role(db, "Buyer"), sla_hours=OVERDUE_SLA_HOURS,
+        escalation_chain=[int(manager)] if manager else None,
+        calendar=reference.calendar_for_location(db, po["ship_to_location"]),
+        payload={
+            "po_no": po_no, "version": version, "sent_on": sent.astimezone(IST).date() if sent else None,
+            "chasers": chasers, "link": f"#/purchase-orders/{po_no}",
+            "next": "Call the supplier, record its acknowledgement with a note, send the order again, or cancel it",
+        },
+        actor=AGENT,
+    )  # fmt: skip
+    return True
+
+
+def _chaser_text(db: Session, po_no: str, kind: str, contact: str | None, version: int, link: str | None) -> str:
     if kind == "ack":
-        when = f" on {sent_at.astimezone(IST):%d %b %Y}" if sent_at else ""
+        sent = db.execute(
+            text("select sent_at from po_version where po_no = :p and version = :v"), {"p": po_no, "v": version}
+        ).scalar()
+        when = f" on {sent.astimezone(IST):%d %b %Y}" if sent else ""
+        here = (
+            f", here (the link works once and asks for a code we email to you): {link}"
+            if link
+            else " by replying to this email"
+        )
         return (
             _greeting(contact)
-            + f"We sent you purchase order {po_no}{when} and have not received your acknowledgement. Please reply to this email, "
-            + "keeping the subject line, with the date you will deliver.\n"
+            + f"We sent you purchase order {po_no} (version {version}){when} and have not received your acceptance. "
+            + f"Please accept it, or tell us what you can do{here}\n"
             + _sign(db)
         )
     lines = "\n".join(

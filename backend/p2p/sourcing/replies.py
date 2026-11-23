@@ -26,6 +26,7 @@ from p2p.formulas.calendar import business_today
 from p2p.formulas.money import format_qty
 from p2p.formulas.orders import current_gst_rate
 from p2p.formulas.sourcing import is_late
+from p2p.masters.suppliers import registered_sender
 from p2p.orders import quotes
 from p2p.platform import audit, tasks
 from p2p.platform.sod import Actor
@@ -70,19 +71,10 @@ def sender_of(db: Session, rfq_no: str, from_addr: str) -> Sender:
     active or a prospect (D53). The address an RFQ was mailed to is a copy and identifies nobody; an address registered
     for two invited suppliers identifies neither."""
     address = parseaddr(from_addr)[1].strip().lower()
-    rows = (
-        db.execute(
-            text(
-                "select c.supplier_code, min(c.id) from supplier_contact c join rfq_supplier rs on rs.rfq_no = :r "
-                "and rs.supplier_code = c.supplier_code join supplier s on s.code = c.supplier_code "
-                "where lower(c.email) = :a and s.status in ('active', 'prospect') group by c.supplier_code "
-                "order by c.supplier_code"
-            ),
-            {"r": rfq_no, "a": address},
-        ).all()
-        if address
-        else []
-    )
+    invited = [
+        str(r[0]) for r in db.execute(text("select supplier_code from rfq_supplier where rfq_no = :r"), {"r": rfq_no})
+    ]
+    rows = registered_sender(db, address, invited, ("active", "prospect"))
     if not rows:
         return Sender(
             address,

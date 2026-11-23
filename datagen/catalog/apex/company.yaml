@@ -123,6 +123,8 @@ settings:
   - [default_rfq_response_days, "5", Working days suppliers get to respond to an RFQ]
   - [rfq_reminder_after_days, "2", Working days after which a silent supplier is reminded]
   - [supplier_ack_due_days, "2", Working days within which a PO acknowledgement is expected]
+  - [supplier_chase_days, "3", Working days between reminders to acknowledge an order]
+  - [supplier_chase_max, "3", Reminders to acknowledge one version of an order at most]
   - [delivery_reminder_before_days, "2", Working days before the promised date a supplier is reminded (once)]
   - [delivery_overdue_after_days, "1", Working days after a missed promised date the first reminder goes while nothing has arrived]
   - [delivery_overdue_every_days, "3", Working days between further reminders about a missed delivery]
@@ -221,7 +223,7 @@ items:
 
 # hsn_digits follows turnover (6 digits above Rs 5 crore); agreed_days is the written MSME agreement
 suppliers:
-  - {code: SUP-001, name: Deccan Castings Pvt Ltd, form: pvt_ltd, pan: DECCD0000C, state: "27", city: Pune, pincode: "411026", e_invoice: false, hsn_digits: "4", msme: none, terms: NET30, turnover: 1.5-5cr, bank: ICICI, domain: deccancastings, categories: [RAW], scopes: {RAW: [MH]}}  # castings delivered to Chakan
+  - {code: SUP-001, name: Deccan Castings Pvt Ltd, form: pvt_ltd, pan: DECCD0000C, state: "27", city: Pune, pincode: "411026", e_invoice: false, hsn_digits: "4", msme: none, terms: NET30, turnover: 1.5-5cr, bank: ICICI, domain: deccancastings, categories: [RAW], scopes: {RAW: [MH]}, contacts: [{name: Order Desk, role: orders, email: orders@deccancastings.example, phone: "+91 00000 90011"}]}  # castings delivered to Chakan; a second registered contact (block 8)
   - {code: SUP-002, name: Gujarat Bearings and Seals, form: partnership, pan: GUJFG0000B, state: "24", city: Ahmedabad, pincode: "380015", e_invoice: false, hsn_digits: "4", msme: micro, udyam: UDYAM-GJ-00-1000002, agreed_days: 45, terms: NET45, turnover: 1.5-5cr, bank: SBI, domain: gujaratbearings, categories: [RAW]}
   - {code: SUP-003, name: Shree Wires and Electricals Pvt Ltd, form: pvt_ltd, pan: SHRCS0000W, state: "27", city: Pune, pincode: "411018", e_invoice: true, hsn_digits: "6", msme: none, terms: NET30, turnover: 20-100cr, bank: HDFC, domain: shreewires, categories: [RAW]}
   - {code: SUP-004, name: Western Packaging Pvt Ltd, form: pvt_ltd, pan: WESCW0000P, state: "27", city: Pune, pincode: "411019", e_invoice: true, hsn_digits: "6", msme: none, terms: NET30, turnover: 5-20cr, bank: AXIS, domain: westernpackaging, categories: [PKG], scopes: {PKG: [MH]}}  # cartons are bulky: local supply
@@ -747,6 +749,25 @@ version_scenarios:
   - {name: P7, title: A respond link per version, item: RM-08, supplier: SUP-005, gst: "18", need_by: "2026-12-14", versions: [{location: PLT-CKN, qty: "120", price: "905.00", terms: NET45}, {need_by: "2026-12-19"}, {delivery_terms: ex_works}]}
   - {name: P8, title: The order keeps its contract price version, item: RM-01, supplier: SUP-001, gst: "18", need_by: "2027-01-15", versions: [{location: PLT-CKN, qty: "200", price: "650.00", price_record_version: "1", terms: NET30}, {price: "672.00", price_record_version: "2"}]}
   - {name: P8-new, title: A new order after version 2 starts, item: RM-01, supplier: SUP-001, gst: "18", need_by: "2027-01-15", versions: [{location: PLT-CKN, qty: "200", price: "672.00", price_record_version: "2", terms: NET30}]}
+
+# Block 8 (supplier confirmation): the figures and dates the truth file works out (generator/confirmation_scenarios.py).
+# P: one order to SUP-001 on CNT-0001 at Chakan, sent on Mon 23 Nov 2026; K3 revises line 3; K4 accepts with a date per
+# line and tries refused dates first; K7 is P sent on Thu 26 Nov and never acknowledged; K7b revises it on 8 Dec; K9
+# receives line 1 and looks on 10 Dec; Q is a one-line order needed by 3 Dec, looked at on 4 Dec.
+confirmation_scenarios:
+  supplier: SUP-001
+  location: PLT-CKN
+  sent_on: "2026-11-23"
+  lines:
+    - {item: RM-02, qty: "100", price: "480.00", gst: "18", need_by: "2026-12-07"}
+    - {item: RM-03, qty: "200", price: "220.00", gst: "5", need_by: "2026-12-07"}
+    - {item: RM-05, qty: "150", price: "180.00", gst: "5", need_by: "2026-12-14"}
+  k3: {revised_on: "2026-11-25", line: 3, qty: "140", acknowledged_on: "2026-11-26"}
+  k4: {today: "2026-11-23", dates: {2: "2026-12-09"}, tries: [[2, "2026-12-11"], [3, "2026-12-13"], [1, "2026-11-20"], [2, "2026-12-09"], [2, "2026-12-10"]]}
+  k7: {sent_on: "2026-11-26", until: "2026-12-12"}
+  k7b: {revised_on: "2026-12-08"}
+  k9: {today: "2026-12-10", received_lines: [1]}
+  q: {need_by: "2026-12-03", today: "2026-12-04"}
 
 # Block 6 (quotes and supplier selection): the figures the truth file works out (generator/quote_scenarios.py)
 quote_scenarios:

@@ -11,6 +11,7 @@ from fastapi.testclient import TestClient
 from outbox_support import sent_mail
 from sqlalchemy import text
 from sqlalchemy.orm import Session
+from supplier_answer_support import answer
 from test_dispatch import _approved_order
 from test_orders import PASSWORD, _headers, _logins, shop  # noqa: F401 - fixtures
 from test_sourcing import Outbox, db, outbox  # noqa: F401 - fixtures
@@ -110,7 +111,7 @@ def test_the_supplier_accepts_from_the_link_once_and_gets_a_link_for_the_dispatc
     assert _audit(shop, "po.acknowledge") == 0  # opening the page changes nothing
 
     # when the supplier accepts with a date
-    done = client.post(f"/supplier/{token}", data={"action": "accept", "promised": "2026-11-19"})
+    done = answer(client, outbox.sent, token, {"action": "accept", "date_1": "2026-11-19"})
 
     # then the order is acknowledged with the promised date, the link is used up, and a dispatch link is emailed
     assert done.status_code == 200 and "accepted" in done.text
@@ -118,7 +119,7 @@ def test_the_supplier_accepts_from_the_link_once_and_gets_a_link_for_the_dispatc
     assert shop.execute(text("select status from po")).scalar_one() == "acknowledged"
     assert shop.execute(text("select promised_date from po_line")).scalar_one() == date(2026, 11, 19)
     assert _audit(shop, "po.acknowledge") == 1
-    again = client.post(f"/supplier/{token}", data={"action": "accept"})
+    again = answer(client, outbox.sent, token, {"action": "accept"})
     assert again.status_code == 409 and "works once" in again.text
     assert "record what you sent" in outbox.sent[-1]["body"] and "/supplier/" in outbox.sent[-1]["body"]
 
@@ -183,7 +184,7 @@ def test_after_a_material_change_an_old_link_says_the_order_changed_never_its_st
     assert shop.execute(text("select status from po")).scalar_one() == "submitted"
 
     shown = client.get(f"/supplier/{token}")
-    answered = client.post(f"/supplier/{token}", data={"action": "accept"})
+    answered = answer(client, outbox.sent, token, {"action": "accept"})
 
     for got in (shown, answered):
         assert got.status_code == 409
@@ -197,9 +198,7 @@ def test_after_a_material_change_an_old_link_says_the_order_changed_never_its_st
 def test_a_date_change_from_the_link_makes_version_2_and_tells_the_requester(shop: Session, outbox: Outbox) -> None:  # noqa: F811
     # given the bearing order, needed by 20 Nov, and the supplier asks to move it to 6 Dec
     po_no, logins, token = _sent(shop, outbox)
-    asked = client.post(
-        f"/supplier/{token}", data={"action": "change", "date_1": "2026-12-06", "reason": "casting delay"}
-    )
+    asked = answer(client, outbox.sent, token, {"action": "change", "date_1": "2026-12-06", "reason": "casting delay"})
     assert asked.status_code == 200
     shop.rollback()
     assert shop.execute(text("select version, status from po")).one() == (1, "sent")  # nothing moved yet
@@ -232,7 +231,7 @@ def test_a_date_change_from_the_link_makes_version_2_and_tells_the_requester(sho
 
 def test_a_rejected_change_leaves_the_order_and_gives_the_supplier_a_new_link(shop: Session, outbox: Outbox) -> None:  # noqa: F811
     po_no, logins, token = _sent(shop, outbox)
-    client.post(f"/supplier/{token}", data={"action": "change", "qty_1": "8"})
+    answer(client, outbox.sent, token, {"action": "change", "qty_1": "8"})
     shop.rollback()
     change_id = shop.execute(text("select id from po_change")).scalar_one()
     buyer = _headers(shop.info["slug"], logins["buyer"], "Buyer")
@@ -254,7 +253,7 @@ def test_a_rejected_change_leaves_the_order_and_gives_the_supplier_a_new_link(sh
 
 def test_a_requester_cannot_decide_a_suppliers_change(shop: Session, outbox: Outbox) -> None:  # noqa: F811
     po_no, logins, token = _sent(shop, outbox)
-    client.post(f"/supplier/{token}", data={"action": "change", "date_1": "2026-12-06"})
+    answer(client, outbox.sent, token, {"action": "change", "date_1": "2026-12-06"})
     shop.rollback()
     change_id = shop.execute(text("select id from po_change")).scalar_one()
 
@@ -285,7 +284,7 @@ def _price_rule(shop: Session) -> None:
 
 def test_a_price_rise_within_the_tolerance_is_accepted_by_the_buyer(shop: Session, outbox: Outbox) -> None:  # noqa: F811
     po_no, logins, token = _sent(shop, outbox)
-    client.post(f"/supplier/{token}", data={"action": "change", "price_1": "102.00"})  # 2% on 100: the edge, inside
+    answer(client, outbox.sent, token, {"action": "change", "price_1": "102.00"})  # 2% on 100: the edge, inside
     shop.rollback()
     change_id, within = shop.execute(text("select id, within_tolerance from po_change")).one()
     buyer = _headers(shop.info["slug"], logins["buyer"], "Buyer")
@@ -314,7 +313,7 @@ def test_a_price_rise_within_the_tolerance_on_the_buyers_own_order_goes_to_the_p
     )
     shop.execute(text("update po set buyer = 'U9'"))
     shop.commit()
-    client.post(f"/supplier/{token}", data={"action": "change", "price_1": "101.00"})  # 1%: inside the tolerance
+    answer(client, outbox.sent, token, {"action": "change", "price_1": "101.00"})  # 1%: inside the tolerance
     shop.rollback()
     change_id, within = shop.execute(text("select id, within_tolerance from po_change")).one()
 
@@ -333,7 +332,7 @@ def test_a_price_rise_within_the_tolerance_on_the_buyers_own_order_goes_to_the_p
 def test_a_price_rise_just_above_the_tolerance_needs_the_purchase_manager(shop: Session, outbox: Outbox) -> None:  # noqa: F811
     _price_rule(shop)
     po_no, logins, token = _sent(shop, outbox)
-    client.post(f"/supplier/{token}", data={"action": "change", "price_1": "102.01", "reason": "steel price"})
+    answer(client, outbox.sent, token, {"action": "change", "price_1": "102.01", "reason": "steel price"})
     shop.rollback()
     change_id, within = shop.execute(text("select id, within_tolerance from po_change")).one()
     slug = shop.info["slug"]
@@ -372,7 +371,7 @@ def test_a_price_rise_just_above_the_tolerance_needs_the_purchase_manager(shop: 
 def test_the_purchase_manager_may_reject_a_price_rise(shop: Session, outbox: Outbox) -> None:  # noqa: F811
     _price_rule(shop)
     po_no, logins, token = _sent(shop, outbox)
-    client.post(f"/supplier/{token}", data={"action": "change", "price_1": "130"})
+    answer(client, outbox.sent, token, {"action": "change", "price_1": "130"})
     shop.rollback()
     change_id = shop.execute(text("select id from po_change")).scalar_one()
     slug = shop.info["slug"]
@@ -400,9 +399,9 @@ def test_the_purchase_manager_may_reject_a_price_rise(shop: Session, outbox: Out
 
 def test_a_decline_accepted_cancels_the_order_and_returns_the_line_to_the_buyer(shop: Session, outbox: Outbox) -> None:  # noqa: F811
     po_no, logins, token = _sent(shop, outbox)
-    no_reason = client.post(f"/supplier/{token}", data={"action": "decline", "reason": " "})
+    no_reason = answer(client, outbox.sent, token, {"action": "decline", "reason": " "})
     assert no_reason.status_code == 409  # a reason is needed, and the link still works
-    declined = client.post(f"/supplier/{token}", data={"action": "decline", "reason": "plant shut for a month"})
+    declined = answer(client, outbox.sent, token, {"action": "decline", "reason": "plant shut for a month"})
     assert declined.status_code == 200
     shop.rollback()
     assert shop.execute(text("select status from po")).scalar_one() == "sent"
@@ -431,7 +430,7 @@ def test_a_decline_accepted_cancels_the_order_and_returns_the_line_to_the_buyer(
 
 def test_a_dispatch_note_for_part_of_the_quantity_leaves_the_rest_to_ship(shop: Session, outbox: Outbox) -> None:  # noqa: F811
     po_no, logins, token = _sent(shop, outbox)
-    client.post(f"/supplier/{token}", data={"action": "accept"})
+    answer(client, outbox.sent, token, {"action": "accept"})
     dispatch_token = _token(outbox.sent[-1]["body"])
 
     too_many = client.post(f"/supplier/{dispatch_token}", data={"action": "dispatch", "ship_1": "11"})
@@ -510,7 +509,7 @@ def test_delivery_reminders_go_once_before_and_after_the_date_while_nothing_has_
     shop: Session,
     outbox: Outbox,  # noqa: F811
 ) -> None:
-    po_no = _placed(shop, promised=date(2026, 11, 10))  # a Tuesday
+    po_no = _placed(shop, promised=date(2026, 11, 10))  # a Tuesday, earlier than ordered
     slug = shop.info["slug"]
 
     def run(day: date) -> list[tuple[str, str, int]]:
@@ -568,7 +567,7 @@ def test_the_kill_switch_stops_delivery_reminders(shop: Session, outbox: Outbox)
 
 def test_another_company_cannot_see_or_decide_a_suppliers_change(shop: Session, outbox: Outbox) -> None:  # noqa: F811
     po_no, _, token = _sent(shop, outbox)
-    client.post(f"/supplier/{token}", data={"action": "change", "date_1": "2026-12-06"})
+    answer(client, outbox.sent, token, {"action": "change", "date_1": "2026-12-06"})
     shop.rollback()
     change_id = shop.execute(text("select id from po_change")).scalar_one()
     link_id = supplier_links.read(token).id

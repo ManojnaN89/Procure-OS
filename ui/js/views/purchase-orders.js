@@ -108,18 +108,26 @@ const PurchaseOrdersView = {
   dispatchPanel(po) {
     if (!["approved", "sent", "acknowledged", "part_received", "received", "closed"].includes(po.status) && !po.sent_at) return "";
     const sent = po.sent_at ? `Sent to ${this.esc(po.sent_to)} on ${formatDate(po.sent_at)}.` : "Approved, not sent to the supplier yet.";
-    const ack = po.acknowledged_at
-      ? ` Acknowledged on ${formatDate(po.acknowledged_at)} (version ${this.esc(po.acknowledged_version || po.version)})${po.promised_date ? `, delivery promised by ${formatDate(po.promised_date)}` : ""}.${po.ack_note ? ` “${this.esc(po.ack_note)}”` : ""}`
-      : (po.sent_at ? ` Version ${this.esc(po.version)} not yet acknowledged.` : "")
+    const chasers = (po.chasers || []).filter((c) => c.version === po.version).length;
+    const ack = po.acknowledged_at && po.acknowledged_version === po.version
+      ? ` Acknowledged version ${this.esc(po.acknowledged_version)}${po.ack ? ` by ${this.esc(po.ack.address || po.ack.by)} (${this.esc(po.ack.via === "app" ? "recorded in the app" : po.ack.via)}${po.ack.with_code ? ", with a code" : ""})` : ""} on ${formatDate(po.acknowledged_at)}${po.promised_date ? `, last line due ${formatDate(po.promised_date)}` : ""}.${po.ack_note ? ` “${this.esc(po.ack_note)}”` : ""}`
+      : (po.sent_at && po.status === "sent"
+          ? ` Waiting for acknowledgement of version ${this.esc(po.version)}${po.ack_due_on ? `, due ${formatDate(po.ack_due_on)}` : ""}, ${plural(chasers, "reminder")}.`
+          : "")
         + (po.ack_overdue ? ' <span style="color:var(--warning-text);">The supplier is overdue.</span>' : "");
+    const open = (po.lines || []).filter((l) => ["open", "part_received"].includes(l.status || "open"));
+    const dates = open.map((l) => `
+      <label>Line ${this.esc(l.line_no)}: ${this.esc(l.name)}<input class="po-ack-date" data-line="${this.esc(l.line_no)}" type="date" value="${this.esc(l.due || "")}"></label>`).join("");
     return `
       <div class="panel" style="margin-bottom:12px;">
         <div class="panel-title">Supplier</div>
         <p style="margin:0 0 10px;font-size:12.5px;color:var(--text-secondary);">${sent}${ack}</p>
         ${po.can_send ? `<div class="btn btn-primary" id="poSend"><i class="ti ti-send"></i>Send to supplier</div>` : ""}
-        ${po.can_acknowledge ? `<div id="poAckBox" class="form-grid" style="grid-template-columns:minmax(160px,200px) minmax(180px,1fr) auto;">
-            <label>Delivery date the supplier promised<input id="poAckDate" type="date"></label>
-            <label>Note (optional)<input id="poAckNote" placeholder="For example: confirmed by phone"></label>
+        ${po.can_resend_link ? `<div class="btn btn-sm" id="poResend" style="margin-bottom:8px;"><i class="ti ti-mail-forward"></i>Send the order again</div>` : ""}
+        ${po.can_acknowledge ? `<div id="poAckBox" class="form-grid" style="grid-template-columns:repeat(auto-fit,minmax(180px,1fr));">
+            <div class="cell-muted" style="grid-column:1/-1;font-size:12px;">Record version ${this.esc(po.version)}'s acknowledgement: the delivery date of each line the supplier confirmed, and how it confirmed.</div>
+            ${dates}
+            <label style="grid-column:1/-1;">How the supplier confirmed (required)<input id="poAckNote" placeholder="For example: confirmed by phone with Mr Rao"></label>
             <div class="btn btn-primary" id="poAck">Record acknowledgement</div></div>` : ""}
         <div id="poDispatchNote" style="font-size:12px;color:var(--warning-text);margin-top:8px;"></div>
       </div>`;
@@ -146,14 +154,21 @@ const PurchaseOrdersView = {
     });
     on("poSend", () => act("send", {}));
     on("poAck", async () => {
+      const lines = {};
+      document.querySelectorAll(".po-ack-date").forEach((el) => { if (el.value) lines[el.dataset.line] = el.value; });
       const res = await API.postJSON(`/api/purchase-orders/${encodeURIComponent(po.id)}/acknowledge`, {
         version: po.version, // the version on screen: a later one is refused, never acknowledged unseen
-        promised_date: document.getElementById("poAckDate").value || null,
+        lines,
         note: document.getElementById("poAckNote").value,
       });
       if (res.ok && !(res.data.warnings || []).length) return this.renderDetail(document.getElementById("appContent"), po.id);
       const note = document.getElementById("poDispatchNote");
-      if (note) note.textContent = res.ok ? `Recorded. Later than needed: ${res.data.warnings.join("; ")}` : (res.data.detail || "That did not work.");
+      if (note) note.textContent = res.ok ? `Recorded. Later than ordered: ${res.data.warnings.join("; ")}` : (res.data.detail || "That did not work.");
+    });
+    on("poResend", async () => {
+      const res = await API.postJSON(`/api/purchase-orders/${encodeURIComponent(po.id)}/resend-link`, {});
+      const note = document.getElementById("poDispatchNote");
+      if (note) note.textContent = res.ok ? `Version ${res.data.version} sent again to ${res.data.sent_to}.` : (res.data.detail || "That did not work.");
     });
     on("poReject", () => { document.getElementById("poReasonBox").style.display = "block"; document.getElementById("poReason").focus(); });
     on("poReasonCancel", () => { document.getElementById("poReasonBox").style.display = "none"; });
@@ -287,7 +302,7 @@ const PurchaseOrdersView = {
             <b>Version ${this.esc(v.version)}</b>${v.current ? " (current)" : ""} · ${formatDate(v.made_at)} · ${this.esc(v.made_by_name)}
             ${v.approval ? ` · ${this.esc(this.APPROVAL_LABEL[v.approval] || v.approval)}` : ""}
             ${v.document ? ` · <a href="#" class="po-ver-pdf" data-version="${this.esc(v.version)}" style="color:var(--accent-tint);">PDF</a>` : ""}
-            <div class="cell-muted">${v.reason ? `${this.esc(v.reason)} · ` : ""}${v.sent_at ? `sent ${formatDate(v.sent_at)} to ${this.esc(v.sent_to)}` : "not sent"} · ${v.acknowledged_at ? `acknowledged ${this.esc(this.ACK_VIA[v.ack_via] || "")} on ${formatDate(v.acknowledged_at)}` : "not acknowledged"}${(v.material || []).length ? ` · material: ${this.esc(v.material.join("; "))}` : ""}</div>
+            <div class="cell-muted">${v.reason ? `${this.esc(v.reason)} · ` : ""}${v.sent_at ? `sent ${formatDate(v.sent_at)} to ${this.esc(v.sent_to)}` : "not sent"} · ${v.acknowledged_at ? `acknowledged ${this.esc(this.ACK_VIA[v.ack_via] || "")}${v.ack_with_code ? " with a code" : ""}${v.ack_address ? ` by ${this.esc(v.ack_address)}` : ""} on ${formatDate(v.acknowledged_at)}${Object.keys(v.ack_lines || {}).length ? ` (${Object.entries(v.ack_lines).map(([n, d]) => `line ${this.esc(n)} ${formatDate(d)}`).join(", ")})` : ""}${v.ack_note ? ` “${this.esc(v.ack_note)}”` : ""}` : "not acknowledged"}${(v.material || []).length ? ` · material: ${this.esc(v.material.join("; "))}` : ""}</div>
           </div>`).join("")}
         <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-top:8px;font-size:12.5px;">
           <label for="poCmpFrom">Compare</label> <select id="poCmpFrom" style="padding:6px;">${options(from)}</select>
@@ -334,7 +349,7 @@ const PurchaseOrdersView = {
       : '<div class="cell-muted" style="font-size:12px;">Nothing on the order differs between these versions.</div>';
   },
 
-  CHANGE_STATUS: { proposed: "To decide", waiting_approval: "Waiting", accepted: "Accepted", rejected: "Rejected", withdrawn: "Withdrawn" },
+  CHANGE_STATUS: { proposed: "To decide", waiting_approval: "Waiting", accepted: "Accepted", rejected: "Rejected", withdrawn: "Withdrawn", stale: "Stale: the order changed since" },
 
   // What the supplier asked for (old value to new, a buyer accepts or rejects) and what it says it has shipped.
   async mountSupplierAnswer(po) {
@@ -418,7 +433,7 @@ const PurchaseOrdersView = {
               ${po.lines.map((l) => `
                 <tr>
                   <td>${this.esc(l.name)}<div class="cell-muted" style="font-size:11px;">${this.esc(l.item_code || "")} · ${l.source === "contract" ? `contract ${this.esc(l.source_ref)}${l.contract ? ` version ${this.esc(l.contract.version)}` : ""}` : l.source === "direct" ? `direct buy (${this.esc(String(l.source_ref || "").replace("_", " "))})` : `quote ${this.esc(l.source_ref)}`}</div></td>
-                  <td>${this.esc(l.qty)} <span class="cell-muted">${this.esc(l.uom)}</span></td>
+                  <td>${this.esc(l.qty)} <span class="cell-muted">${this.esc(l.uom)}</span>${l.due ? `<div class="cell-muted" style="font-size:11px;">due ${formatDate(l.due)} (${l.due_source === "promised" ? "promised" : "needed"})</div>` : ""}</td>
                   <td>${formatCurrency(l.unit_price)}${l.est_price ? `<div class="cell-muted" style="font-size:11px;">estimate ${formatCurrency(l.est_price)}</div>` : ""}</td>
                   <td class="cell-muted">${this.esc(l.gst_rate)}%</td>
                   <td>${formatCurrency(l.taxable)}</td>

@@ -60,6 +60,19 @@ def render(results: list[dict], live: bool) -> str:
     return "\n".join(lines)
 
 
+def keep_live(results: list[dict]) -> None:
+    """A live run is kept in evals/results/live.json and live.md (plan 11b.7, D54 check 3): each eval's latest live
+    result replaces its earlier one; the others stay."""
+    path = HERE / "results" / "live"
+    kept = (
+        json.loads(path.with_suffix(".json").read_text(encoding="utf-8")) if path.with_suffix(".json").exists() else []
+    )
+    ran = {r["id"] for r in results}
+    merged = sorted([r for r in kept if r["id"] not in ran] + results, key=lambda r: int(str(r["id"])[1:]))
+    path.with_suffix(".json").write_text(json.dumps(merged, indent=2, default=str), encoding="utf-8")
+    path.with_suffix(".md").write_text(render(merged, True), encoding="utf-8")
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--live", action="store_true")
@@ -116,6 +129,8 @@ def main() -> int:
     out.parent.mkdir(parents=True, exist_ok=True)
     out.with_suffix(".json").write_text(json.dumps(results, indent=2, default=str), encoding="utf-8")
     out.with_suffix(".md").write_text(render(results, args.live), encoding="utf-8")
+    if args.live:
+        keep_live(results)
     failed = [r for r in results if r["status"] == "FAIL"]
     print(f"\n{len(results) - len(failed)} of {len(results)} passed; report in {out.with_suffix('.md')}")
     return 1 if failed else 0

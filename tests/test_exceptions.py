@@ -201,12 +201,15 @@ def test_given_an_order_the_supplier_has_not_acknowledged_then_the_buyer_is_to_c
     svc: Session, outbox: Outbox
 ) -> None:  # noqa: F811
     po_no, logins = _sent(svc)
-    sent = svc.execute(text("select sent_at from po")).scalar_one().astimezone(IST).date()
+    sent = svc.execute(text("select sent_at from po_version")).scalar_one().astimezone(IST).date()
 
-    row = _one(svc, logins["buyer"], "supplier", today=sent + timedelta(days=14))
+    rows = [r for r in _rows(svc, logins["buyer"], today=sent + timedelta(days=14)) if r["kind"] == "supplier"]
+    (row,) = [r for r in rows if r["next_step"] == "Ask the supplier to acknowledge the order"]
 
+    # sent on Friday 6 Nov, due two working days later (Tue 10 Nov): shown from the day after it fell due (block 8)
     assert (row["ref"], row["owner"], row["mine"]) == (po_no, "Buyer", True)
-    assert row["next_step"] == "Ask the supplier to acknowledge the order" and row["since"] == sent.isoformat()
+    assert sent == date(2026, 11, 6) and row["since"] == "2026-11-11"
+    assert f"{po_no} version 1 has not been acknowledged by" in row["reason"]
 
 
 def test_rows_come_oldest_first_and_filter_by_kind_and_by_mine(svc: Session, outbox: Outbox) -> None:  # noqa: F811

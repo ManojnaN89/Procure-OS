@@ -543,7 +543,7 @@ def test_flow(co: Company, when: str, wrong: list[str], qty: Decimal = Decimal(2
         elif status == "approved":
             co.call(buyer, "POST", f"/api/purchase-orders/{po}/send")
         elif status == "sent":
-            co.call(buyer, "POST", f"/api/purchase-orders/{po}/acknowledge", {"promised_date": lib.TODAY.isoformat()})
+            co.call(buyer, "POST", f"/api/purchase-orders/{po}/acknowledge", {"note": "eval: confirmed by phone"})
     lines = co.q("select line_no, qty, unit_price from po_line where po_no = :n order by line_no", n=po)
     store = co.holders("store")[0]
     got = co.call(

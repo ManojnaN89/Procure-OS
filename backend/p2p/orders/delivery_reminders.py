@@ -1,7 +1,7 @@
 """Reminders to suppliers about a delivery date: one before it, and after it while nothing has arrived.
 
-For each order with something still to come, the open lines are grouped by their date (the date the supplier promised,
-else the date needed). A group is reminded once 'delivery_reminder_before_days' working days before its date (not if the
+For each order with something still to come, the open lines are grouped by their due date (the date the supplier
+promised, else the date needed: formulas/deliveries.line_due); working days are those of the place the order delivers to. A group is reminded once 'delivery_reminder_before_days' working days before its date (not if the
 supplier has already said it shipped everything), and when the date has passed and nothing of the group has arrived,
 'delivery_overdue_after_days' working days after it and then every 'delivery_overdue_every_days' working days, at most
 'delivery_overdue_max' times. A part delivery is chased for its balance by the supplier agent instead. Each reminder is a
@@ -21,6 +21,7 @@ from sqlalchemy.orm import Session
 from p2p.formulas import deliveries
 from p2p.formulas.calendar import IST
 from p2p.formulas.money import format_qty
+from p2p.masters import suppliers as supplier_records
 from p2p.orders import supplier_links
 from p2p.platform import audit, emails, reference, routing, worker
 from p2p.platform.sod import Actor
@@ -46,7 +47,8 @@ def _setting(db: Session, key: str, default: str) -> int:
 def _groups(db: Session) -> dict[tuple[str, date], list[dict[str, Any]]]:
     rows = db.execute(
         text(
-            "select l.po_no, l.line_no, l.description, l.uom, l.qty, l.received_qty, coalesce(l.promised_date, l.need_by) as due, "
+            "select l.po_no, p.ship_to_location, l.line_no, l.description, l.uom, l.qty, l.received_qty, l.promised_date, "
+            "l.need_by, "
             "coalesce((select sum(d.qty) from dispatch_note_line d join dispatch_note n on n.id = d.note_id "
             "where n.po_no = l.po_no and d.po_line_no = l.line_no), 0) as shipped "
             "from po_line l join po p on p.no = l.po_no where p.status in ('sent', 'acknowledged', 'part_received') "
@@ -56,7 +58,9 @@ def _groups(db: Session) -> dict[tuple[str, date], list[dict[str, Any]]]:
     ).mappings()
     groups: dict[tuple[str, date], list[dict[str, Any]]] = {}
     for r in rows:
-        groups.setdefault((str(r["po_no"]), r["due"]), []).append(dict(r))
+        due, _ = deliveries.line_due(r["promised_date"], r["need_by"])
+        if due is not None:
+            groups.setdefault((str(r["po_no"]), due), []).append(dict(r))
     return groups
 
 
@@ -71,7 +75,7 @@ def _sent(db: Session, po_no: str, kind: str, due: date) -> int:
 
 def due_reminders(db: Session, as_of: date) -> list[tuple[str, date, str, int, list[dict[str, Any]]]]:
     """What is due today: (order, date, kind, number, lines)."""
-    calendar = reference.calendar_for(db)
+    calendars: dict[str, Any] = {}
     before = _setting(db, "delivery_reminder_before_days", "2")
     after, every, most = (
         _setting(db, "delivery_overdue_after_days", "1"),
@@ -80,6 +84,10 @@ def due_reminders(db: Session, as_of: date) -> list[tuple[str, date, str, int, l
     )
     due: list[tuple[str, date, str, int, list[dict[str, Any]]]] = []
     for (po_no, when), lines in _groups(db).items():
+        place = str(lines[0]["ship_to_location"])
+        if place not in calendars:
+            calendars[place] = reference.calendar_for_location(db, place)
+        calendar = calendars[place]
         all_shipped = all(Decimal(ln["shipped"]) + Decimal(ln["received_qty"]) >= Decimal(ln["qty"]) for ln in lines)
         if not all_shipped and deliveries.before_reminder_due(when, before, as_of, calendar):
             if _sent(db, po_no, "before", when) == 0:
@@ -127,13 +135,8 @@ def run(
         if dry_run:
             result.sent.append((po_no, kind, number))
             continue
-        contact = db.execute(
-            text(
-                "select c.email, c.name from po join supplier_contact c on c.supplier_code = po.supplier_code "
-                "where po.no = :p and c.email is not null order by c.is_primary desc nulls last, c.id limit 1"
-            ),
-            {"p": po_no},
-        ).first()
+        supplier = db.execute(text("select supplier_code from po where no = :p"), {"p": po_no}).scalar_one()
+        contact = supplier_records.order_contact(db, str(supplier))
         if contact is None:
             result.failed.append((po_no, kind))
             continue

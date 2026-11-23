@@ -173,6 +173,7 @@ def test_an_order_not_acknowledged_in_time_and_goods_later_than_promised_alert_t
     slug = store.info["slug"]
     po_no, _ = _sent(store)
     store.execute(text("update po set sent_at = '2026-11-02 10:00+05:30'"))
+    store.execute(text("update po_version set sent_at = '2026-11-02 10:00+05:30'"))  # the version's clock (block 8)
     store.execute(text("update po_line set promised_date = '2026-11-03'"))
     store.commit()
 

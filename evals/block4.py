@@ -540,8 +540,22 @@ class Co(s2.Co):
         return None
 
     def supplier(self, token: str, **data: str) -> Any:
+        """The supplier answers from its link. Since block 8 (D53) an answer needs the one-time code: asked for on the
+        page and read from the mail it went to, as a supplier does; a dispatch needs none."""
         self.db.rollback()
+        codes: dict[str, str] = self.__dict__.setdefault("_link_codes", {})  # a code not used yet stays good
+        if data.get("action") not in (None, "dispatch") and "code" not in data:
+            if token not in codes:
+                before = len(self.box.sent)
+                self.client.post(f"/supplier/{token}/code")
+                coded = [m for m in self.box.sent[before:] if "one-time code is " in str(m.get("body") or "")]
+                if coded:
+                    codes[token] = str(coded[-1]["body"]).split("one-time code is ")[1][:6]
+            if token in codes:
+                data = {**data, "code": codes[token]}
         r = self.client.post(f"/supplier/{token}", data=data)
+        if r.status_code == 200:
+            codes.pop(token, None)
         self.db.rollback()
         return r
 

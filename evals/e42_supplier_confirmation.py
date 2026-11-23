@@ -8,14 +8,18 @@ first is the buyer's, the second waits for the person the dataset's price varian
 and approver role, and only that person can accept it. A decline cancels the order and the line goes back to the buyer;
 nothing orders it again by itself. A part dispatch leaves exactly the rest to ship. Links reused, expired, altered, for
 another supplier's order or signed for another purpose are refused. Delivery reminders are walked day by day over a
-holiday Monday and checked against an independent working-day count from the dataset's settings. Every change is
-audited. Two rules are broken on purpose and the eval must notice each.
+holiday Monday and checked against an independent working-day count from the dataset's settings and the delivery
+place's working week in its raw location file (block 8: Chakan works Monday to Saturday). Every change is audited. Two
+rules are broken on purpose and the eval must notice each. Since block 8 every answer from a link is given the way a
+supplier does it: **Email me a code** on the page, the code read from the mail it went to, then the answer with it.
 """
 
 from datetime import date, timedelta
 from decimal import ROUND_FLOOR, Decimal
 from fractions import Fraction
 from typing import Any
+
+import re
 
 import lib
 import pipeline
@@ -58,23 +62,29 @@ def price_approver() -> str:
     return next(u["code"] for u in rows("master", "user") if u["designation"] == value)
 
 
-def working(d: date) -> bool:
-    return d.weekday() < 5 and d != HOLIDAY
+def week_of(place: str) -> int:
+    """The delivery place's working week from the raw location file: 6 days for Monday to Saturday, else 5."""
+    days = next(r["working_days"] for r in rows("master", "location") if r["code"] == place)
+    return 6 if "sat" in str(days).lower() else 5
 
 
-def step(d: date, n: int, direction: int) -> date:
+def working(d: date, week: int) -> bool:
+    return d.weekday() < week and d != HOLIDAY
+
+
+def step(d: date, n: int, direction: int, week: int) -> date:
     while n:
         d += timedelta(days=direction)
-        n -= working(d)
+        n -= working(d, week)
     return d
 
 
-def reminder_oracle(start: date, end: date) -> list[tuple[date, str, int]]:
-    """Which reminder goes on which day, with nothing ever arriving."""
+def reminder_oracle(start: date, end: date, week: int) -> list[tuple[date, str, int]]:
+    """Which reminder goes on which day, with nothing ever arriving, on the delivery place's working days."""
     before, after = setting("delivery_reminder_before_days", "2"), setting("delivery_overdue_after_days", "1")
     every, most = setting("delivery_overdue_every_days", "3"), setting("delivery_overdue_max", "3")
-    out = [(step(PROMISED, before, -1), "before", 1)]
-    out += [(step(PROMISED, after + n * every, 1), "overdue", n + 1) for n in range(most)]
+    out = [(step(PROMISED, before, -1, week), "before", 1)]
+    out += [(step(PROMISED, after + n * every, 1, week), "overdue", n + 1) for n in range(most)]
     return [x for x in out if start <= x[0] <= end]
 
 
@@ -170,8 +180,24 @@ def run(ctx: lib.Ctx) -> Outcome:  # noqa: C901 - one scenario, step by step
         db.rollback()
         return int(db.execute(text("select count(*) from audit_event where action = :a"), {"a": action}).scalar_one())
 
+    codes: dict[str, str] = {}
+
     def post(token: str, **data: str) -> Any:
-        return client.post(f"/supplier/{token}", data=data)
+        """An answer as a supplier gives it: a dispatch as it is; any other with the one-time code, asked for on the page
+        and read from the mail it went to (D53)."""
+        if data.get("action") == "dispatch":
+            return client.post(f"/supplier/{token}", data=data)
+        if token not in codes:
+            before = len(box.sent)
+            client.post(f"/supplier/{token}/code")
+            mailed = [m for m in box.sent[before:] if re.search(r"one-time code is (\d{6})", str(m["body"]))]
+            if not mailed:  # no code for a link that cannot be used: the answer is refused without one
+                return client.post(f"/supplier/{token}", data=data)
+            codes[token] = re.search(r"one-time code is (\d{6})", str(mailed[-1]["body"])).group(1)  # type: ignore[union-attr]
+        got = client.post(f"/supplier/{token}", data={**data, "code": codes[token]})
+        if got.status_code == 200:
+            codes.pop(token)
+        return got
 
     def one_change(po_no: str) -> dict[str, Any]:
         changes = client.get(f"/api/purchase-orders/{po_no}/supplier-answer", headers=buyer).json()["changes"]
@@ -372,6 +398,9 @@ def run(ctx: lib.Ctx) -> Outcome:  # noqa: C901 - one scenario, step by step
         db.execute(text("delete from delivery_reminder where po_no = :n"), {"n": target})
         db.commit()
         start, end = date(2026, 11, 5), date(2026, 12, 10)
+        week = week_of(
+            str(db.execute(text("select ship_to_location from po where no = :n"), {"n": target}).scalar_one())
+        )
         got: list[tuple[date, str, int]] = []
         day = start
         while day <= end:
@@ -380,7 +409,7 @@ def run(ctx: lib.Ctx) -> Outcome:  # noqa: C901 - one scenario, step by step
                     got.append((day, kind, n))
             delivery_reminders.run(db, slug, as_of=day)  # the same day again sends nothing more
             day += timedelta(days=1)
-        want = reminder_oracle(start, end)
+        want = reminder_oracle(start, end, week)
         stored = db.execute(text("select count(*) from delivery_reminder where po_no = :n"), {"n": target}).scalar_one()
         out.metrics["reminders (platform / oracle)"] = (
             f"{[f'{d:%d %b} {k} {n}' for d, k, n in got]} / {len(want)} expected"

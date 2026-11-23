@@ -36,7 +36,8 @@ from p2p.formulas.sourcing import pick_contract_price
 from p2p.formulas.touchless import PRICE_LIST
 from p2p.invoices import tolerances
 from p2p.masters import regions
-from p2p.orders import approved_versions, document, service, supplier_links, versions, workflow
+from p2p.masters import suppliers as supplier_records
+from p2p.orders import approved_versions, dispatch, document, service, supplier_links, versions, workflow
 from p2p.platform import audit, emails, notifications, outbox, proposals, tasks
 from p2p.platform.sod import Actor, user
 from p2p.sourcing import service as sourcing
@@ -94,15 +95,8 @@ def _reason(reason: str | None) -> str:
 
 
 def supplier_contact(db: Session, supplier_code: str) -> tuple[str, str | None] | None:
-    """The supplier's main contact: address and name."""
-    row = db.execute(
-        text(
-            "select email, name from supplier_contact where supplier_code = :c and email is not null "
-            "order by is_primary desc nulls last, id limit 1"
-        ),
-        {"c": supplier_code},
-    ).first()
-    return (str(row[0]), row[1]) if row else None
+    """The supplier's order contact: address and name (masters/suppliers.order_contact)."""
+    return supplier_records.order_contact(db, supplier_code)
 
 
 def tell_supplier(
@@ -113,15 +107,17 @@ def tell_supplier(
     attachments: list[tuple[str, str, bytes]] | None = None,
     *,
     document_ids: list[int] | None = None,
+    po_version: int | None = None,
 ) -> bool:
     """Email the supplier's main contact: commits the mail and sends it (the change itself is already committed). False
     when there is no address; a refused mail stays queued for the email job and never undoes the change. `document_ids`
-    are stored files attached as they are (a version's document)."""
+    are stored files attached as they are (a version's document); `po_version` is the version the mail carries, so a
+    reply to it answers that version (OP-12)."""
     contact = supplier_contact(db, po["supplier_code"])
     if contact is None:
         return False
     company = db.execute(text("select coalesce(short_name, legal_name) from company limit 1")).scalar() or "Our company"
-    emails.send_linked_email(
+    message_id = emails.send_linked_email(
         db,
         contact[0],
         subject,
@@ -131,6 +127,8 @@ def tell_supplier(
         attachments=attachments,
         document_ids=document_ids,
     )
+    if po_version is not None:
+        versions.mail_carries(db, message_id, po_version)
     emails.commit_and_send(db)
     return True
 
@@ -232,6 +230,7 @@ def cancel(
     )  # fmt: skip
     db.commit()
     _drop_open_decisions(db, po, user_id, f"{po_no} was cancelled")
+    dispatch.close_ack_tasks(db, po_no, "cancelled")
     told = False
     if was in WITH_SUPPLIER:
         told = tell_supplier(
@@ -768,6 +767,7 @@ def _after_revision(
     if was in WITH_SUPPLIER and not reapprove:
         told = _mail_version(db, tenant, po, version, why, supplier_asked)
     _check_again(db, tenant, po_no, f"{po_no} was revised")
+    dispatch.close_ack_tasks(db, po_no, f"revised to version {version}")
     return {
         "version": version,
         "status": new_status,
@@ -788,10 +788,14 @@ def _mail_version(
     (none for a change the supplier itself asked for: accepting it settles the order)."""
     po_no = po["no"]
     issued = versions.issue_document(db, tenant or outbox.tenant_of(db), po_no)
+    contact = supplier_contact(db, po["supplier_code"])
     again = ""
-    if tenant and not supplier_asked:
-        token = supplier_links.issue(db, tenant, po_no, "respond")
-        again = f"\n\nPlease accept this version of the order, or tell us what you can do, here:\n{supplier_links.url(token)}"
+    if tenant and not supplier_asked and contact:
+        token = supplier_links.issue(db, tenant, po_no, "respond", sent_to=contact[0])
+        again = (
+            "\n\nPlease accept this version of the order, or tell us what you can do, here (the link works once and "
+            f"asks for a code we email to you):\n{supplier_links.url(token)}"
+        )
     db.commit()
     told = tell_supplier(
         db,
@@ -799,8 +803,8 @@ def _mail_version(
         f"Purchase order {po_no} (version {version}): revised",
         f"Order {po_no} has been revised (version {version}). The revised order is attached. Reason: {why}{again}",
         document_ids=[issued.document_id] if issued else None,
+        po_version=version,
     )
-    contact = supplier_contact(db, po["supplier_code"])
     if told and contact:
         versions.mark_sent(db, po_no, version, contact[0])
         db.commit()

@@ -12,6 +12,11 @@ nothing on the order moves before that:
 * an accepted decline cancels the order and gives its lines back to the buyer to source again.
 
 The supplier is told the outcome; a rejected change comes with a fresh link to answer the order as it stands.
+
+From the link every answer needs the one-time code emailed to the address the link went to (D53); without the right
+code nothing is written. Accepting gives a date per open line. A change is asked on one version: when the order has since
+changed in another way, the buyer cannot decide it and it becomes stale (OP-11). An answer made only of changes, all
+accepted, whose last version carried its approval, is the supplier's acknowledgement of that version (OP-10); not before.
 """
 
 import logging
@@ -195,20 +200,24 @@ def propose(
                 db.execute(
                     text(
                         "insert into po_change (po_no, po_line_no, kind, old_value, new_value, reason, source, email_id, "
-                        "within_tolerance, task_id, base_value) values (:p, :l, :k, :o, :n, :r, :s, :e, :w, :t, :b) "
-                        "returning id"
+                        "within_tolerance, task_id, base_value, po_version) values (:p, :l, :k, :o, :n, :r, :s, :e, :w, "
+                        ":t, :b, :v) returning id"
                     ),
                     {
                         "p": po_no, "l": r["line"], "k": r["kind"], "o": r["old"], "n": r["new"],
                         "r": (reason or "").strip()[:500] or None, "s": source, "e": email_id, "w": r["within"], "t": task_id,
-                        "b": r.get("base"),
+                        "b": r.get("base"), "v": po["version"],
                     },
                 ).scalar_one()
             )
         )  # fmt: skip
     audit.record(
         db, actor, "po.change_proposed", "po", po_no,
-        after={"changes": [{"id": i, **r} for i, r in zip(ids, rows, strict=True)], "source": source}, reason=reason,
+        after={
+            "changes": [{"id": i, **r} for i, r in zip(ids, rows, strict=True)], "source": source,
+            "po_version": po["version"],
+        },
+        reason=reason,
     )  # fmt: skip
     db.commit()
     return ids
@@ -225,11 +234,17 @@ def _supplier_name(db: Session, code: str) -> str:
 
 
 def accept_by_link(
-    db: Session, tenant: str, link: supplier_links.Link, promised: date | None, note: str | None
+    db: Session,
+    tenant: str,
+    link: supplier_links.Link,
+    dates: dict[int, date | None] | None,
+    note: str | None,
+    code: str | None,
 ) -> tuple[str, list[str]]:
-    """The supplier accepts the order from its link. Returns a link to record the dispatch (also emailed to the supplier)
-    and the warnings of the acknowledgement (a promised date later than needed)."""
-    row = supplier_links.check(db, link, lock=True)
+    """The supplier accepts the order from its link with the code sent to the link's address, and a date per line (none
+    given: the line's date). Returns a link to record the dispatch (also emailed to the supplier) and the lines later
+    than ordered. A wrong code or a date refused writes nothing and leaves the code open."""
+    row = supplier_links.verify(db, link, code)
     supplier_links.use(db, link, "accept")
     try:
         warnings = dispatch.acknowledge(
@@ -238,8 +253,10 @@ def accept_by_link(
             supplier_actor(link.supplier_code),
             version=int(row["po_version"]),  # the version this link was mailed with (the check made sure it is current)
             via="link",
-            promised=promised,
+            promised=dates,
             note=(note or "").strip()[:500] or "accepted by link",
+            tenant=tenant,
+            detail=dispatch.AckDetail(address=row["address"], link_id=link.id, code_id=row["code_id"]),
         )
     except dispatch.DispatchError as exc:
         db.rollback()
@@ -252,19 +269,20 @@ def accept_by_link(
         f"Thank you for accepting order {link.po_no}. When you ship, please record what you sent (quantities, vehicle or "
         f"LR/AWB number) here, so that our store expects it:\n{supplier_links.url(token)}",
     )  # fmt: skip
-    _tell_buyer(db, tenant, link.po_no, f"{link.po_no} was accepted by the supplier", "; ".join(warnings))
+    later = f"Later than ordered: {'; '.join(warnings)}." if warnings else ""
+    _tell_buyer(db, tenant, link.po_no, f"{link.po_no} was accepted by the supplier", later)
     return token, warnings
 
 
 def answer_by_link(
-    db: Session, tenant: str, link: supplier_links.Link, asked: list[Proposed], reason: str | None
+    db: Session, tenant: str, link: supplier_links.Link, asked: list[Proposed], reason: str | None, code: str | None
 ) -> list[int]:
-    """The supplier declines or asks for changes from its link: proposed changes for the buyer."""
-    supplier_links.check(db, link, lock=True)
-    supplier_links.use(db, link, "decline" if any(a.kind == "decline" for a in asked) else "change")
+    """The supplier declines or asks for changes from its link, with the code sent to the link's address: proposed
+    changes for the buyer. A wrong code or a change refused writes nothing and leaves the code open."""
     if any(a.kind == "decline" for a in asked) and not (reason or "").strip():
-        db.rollback()
         raise ConfirmationError("please say why the order cannot be supplied")
+    supplier_links.verify(db, link, code)
+    supplier_links.use(db, link, "decline" if any(a.kind == "decline" for a in asked) else "change")
     return propose(
         db, tenant, link.po_no, asked, source="link", reason=reason, actor=supplier_actor(link.supplier_code)
     )
@@ -317,6 +335,7 @@ def decide(
     if not permissions.can_anywhere(db, user_id, "po.create"):
         db.rollback()
         raise permissions.PermissionDenied("only a buyer decides a supplier's change")
+    _refuse_stale(db, ch, user_id)
     if not accept:
         why = (note or "").strip()
         if not why:
@@ -328,6 +347,41 @@ def decide(
     if ch["kind"] == "decline":
         return _accept_decline(db, tenant, ch, user_id, note)
     return _apply(db, tenant, ch, user_id, note)
+
+
+def stale_since(db: Session, ch: dict[str, Any]) -> int | None:
+    """The order's version, when it has changed since the supplier asked other than by changes of the same answer
+    (OP-11); None while the change still answers the order as it stands."""
+    now = int(db.execute(text("select version from po where no = :n"), {"n": ch["po_no"]}).scalar_one())
+    asked_on = ch["po_version"]
+    if asked_on is None or int(asked_on) == now:
+        return None
+    siblings = {
+        int(v)
+        for (v,) in db.execute(
+            text("select version_made from po_change where task_id = :t and version_made is not null"),
+            {"t": ch["task_id"]},
+        )
+    } if ch["task_id"] else set()  # fmt: skip
+    return None if set(range(int(asked_on) + 1, now + 1)) <= siblings else now
+
+
+def _refuse_stale(db: Session, ch: dict[str, Any], user_id: int) -> None:
+    """A change asked on terms that no longer stand cannot be decided: it becomes stale; the supplier holds the current
+    version's link already."""
+    now = stale_since(db, ch)
+    if now is None:
+        return
+    why = (
+        f"the order changed since the supplier asked (version {ch['po_version']}, now version {now}): "
+        "ask the supplier again"
+    )
+    audit.record(
+        db, user(user_id), "po.change_stale", "po", ch["po_no"],
+        after={"change": ch["id"], "po_version": ch["po_version"], "now": now}, reason=why,
+    )  # fmt: skip
+    _finish(db, ch, "stale", user_id, why, None)
+    raise ConfirmationError(why)
 
 
 def _finish(db: Session, ch: dict[str, Any], status: str, user_id: int, note: str | None, version: int | None) -> None:
@@ -356,16 +410,19 @@ def _reject(db: Session, tenant: str, ch: dict[str, Any], user_id: int, why: str
     )  # fmt: skip
     _finish(db, ch, "rejected", user_id, why, None)
     again = ""
-    if po["status"] == "sent":  # the supplier has not accepted yet: a fresh link to answer the order as it stands
-        token = supplier_links.issue(db, tenant, ch["po_no"], "respond")
+    contact = changes.supplier_contact(db, po["supplier_code"])
+    if dispatch.waiting_ack(po) and contact:  # not acknowledged at its version: a fresh link to answer it as it stands
+        token = supplier_links.issue(db, tenant, ch["po_no"], "respond", sent_to=contact[0])
         db.commit()
         again = (
-            f"\n\nPlease accept the order as it stands, or tell us what you can do, here:\n{supplier_links.url(token)}"
+            "\n\nPlease accept the order as it stands, or tell us what you can do, here (the link works once and asks "
+            f"for a code we email to you):\n{supplier_links.url(token)}"
         )
     told = changes.tell_supplier(
         db, po, f"Purchase order {ch['po_no']}: change not accepted",
         f"We cannot accept the change you asked for on order {ch['po_no']} ({_describe(ch, db)}). Reason: {why}\n"
         f"The order stands as placed.{again}",
+        po_version=int(po["version"]),
     )  # fmt: skip
     return {"status": "rejected", "supplier_told": told}
 
@@ -395,19 +452,44 @@ def _apply(db: Session, tenant: str, ch: dict[str, Any], user_id: int, note: str
         reason=note,
     )  # fmt: skip
     _finish(db, _change(db, int(ch["id"])), "accepted", user_id, note, int(made["version"]))
+    _acknowledge_answer(db, tenant, ch, user_id)
     po = _order(db, ch["po_no"])
-    if (
-        po["status"] == "sent"
-    ):  # the supplier asked for the change instead of accepting: agreeing to it settles the order
-        dispatch.acknowledge(
-            db, ch["po_no"], user(user_id), version=int(made["version"]), via="app", promised=None,
-            note=f"accepted with the change: {what}",
-        )  # fmt: skip
     changes.tell_people(
         db, tenant, ch["po_no"], f"Order {ch['po_no']} changed (version {made['version']})",
         f"The supplier asked for a change and it was accepted: {what}.", buyer=po["buyer"],
     )  # fmt: skip
     return {"status": "accepted", "version": made["version"], "supplier_told": made["supplier_told"]}
+
+
+def _acknowledge_answer(db: Session, tenant: str, ch: dict[str, Any], user_id: int) -> None:
+    """The supplier asked for exactly these changes instead of accepting: when every change of its answer is accepted
+    and the last version they made carried its approval, that version is acknowledged, by the person who decided
+    (OP-10). A material version goes back to approval and is sent again for the supplier to accept."""
+    answer = [
+        dict(r)
+        for r in db.execute(
+            text("select id, status, version_made from po_change where task_id = :t order by id"
+                 if ch["task_id"] else "select id, status, version_made from po_change where id = :i"),
+            {"t": ch["task_id"], "i": ch["id"]},
+        ).mappings()
+    ]  # fmt: skip
+    if any(r["status"] != "accepted" or r["version_made"] is None for r in answer):
+        return
+    last = max(int(r["version_made"]) for r in answer)
+    po = _order(db, ch["po_no"])
+    if int(po["version"]) != last or not dispatch.waiting_ack(po):
+        return
+    try:
+        dispatch.acknowledge(
+            db, ch["po_no"], user(user_id), version=last, via="app", promised=None, tenant=tenant,
+            note="the supplier's changes were accepted: " + "; ".join(
+                _describe(_change(db, int(r["id"])), db) for r in answer
+            ),
+            detail=dispatch.AckDetail(change_ids=tuple(int(r["id"]) for r in answer)),
+        )  # fmt: skip
+    except dispatch.DispatchError as exc:
+        db.rollback()
+        log.info("the answer to %s was not recorded as its acknowledgement: %s", ch["po_no"], exc)
 
 
 # ---- a price above the tolerance: the purchase manager ----------------------------------------------

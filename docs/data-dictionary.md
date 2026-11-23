@@ -348,6 +348,7 @@ The profile companies (`apex`, `brightwave`, written by `datagen/generator/compa
 | truth_grni | month_end, receipt_no, po_no, po_line_no, item_code, qty_accepted, qty_invoiced, qty_not_invoiced, value_not_invoiced | Goods (and services) accepted but not covered by a valid invoice received by each month end, at the order price |
 | truth_payment | invoice_no, supplier_code, total, tds_section, tds_amount, net_payable, due_date, msme, status_at_cutoff, paid_on | Per payable invoice: tax at source, the net to pay, the due date (MSME limit for micro and small suppliers) and when it was paid |
 | truth_po_versions | scenario, version, location, place, qty, unit_price, price_record_version, taxable, cgst, sgst, igst, total, rule, approver, material, reasons | Block 7: per scenario of `version_scenarios:` (spec section 7) and per version of its order: the delivery place and its state (the place of supply), the line, the contract price version, the tax (CGST = SGST, each half up, when the supplier is in that state; else IGST, half up once), the approving rule and person (a maker of the version never approves it; a version that is not material carries the approval it is measured from), and whether it is material against the last approved version with the reasons |
+| truth_supplier_confirmation | scenario, figure, value | Block 8: scenario P's line amounts, GST and total and version 2 of K3; the acknowledgement due days, the dates refused or accepted when accepting (K4), the line dates and their reminder days, the chaser days and the overdue task (K7, K7b), and the days late (K9, Q), all on the delivery place's calendar (Chakan: Monday to Saturday, its holidays) |
 | truth_period_sourcing | scenario, line, item, location, period_from, period_to, qty, suggested_qty, supplier, net_price, taxable, cgst, sgst, igst, total, rule, approver, ceiling, contract_code | Block 5: per period RFQ scenario of `period_scenarios:` and line, the engine's suggested quantity (the larger of the open requirements in the period and the history's orders of the 12 months before, pro rata, rounded up), the awarded value with GST by the states, the `po` band and person that approve it (an automatic band moves up) and the draft contract with its ceiling (before tax); `P1-use` is the later request bought on that contract |
 
 Their `truth_case` types: duplicate_invoice, price_mismatch, qty_mismatch, part_delivery, failed_inspection,
@@ -469,6 +470,32 @@ contract line to the contract price in force (`po_line.price_record_id` changes 
 when a supplier's price is accepted, which clears it). Delivery place and payment terms are material; delivery terms are
 not (Q19; OP-2 waits for the owner). `po_revision.changes` gains `{"header", "from", "to"}` entries (and `gst` for a
 place) and a line's `contract_version` `{from, to}`. A touchless order a person changes is no longer touchless.
+
+Supplier confirmation (block 8: task 1.3 acknowledgement code, 11b.3, D53, DF-27). A supplier's answer from a respond
+link needs a one-time code (`one_time_code.purpose` `po_answer`, `ref` `<po_no>:<link id>`, `address` the contact)
+emailed only to **supplier_link.sent_to** (the address the link's mail went to), while it is a registered contact of an
+active supplier; the dispatch link needs none. The version's **po_version** row keeps how it was acknowledged, written
+only by `orders/dispatch.acknowledge` · ack_address (the contact's address, link or email), ack_link_id, ack_code_id,
+ack_email_id, ack_sender_auth (the mail's sender check, `{server, spf, dkim, dmarc, verdict}`), ack_change_ids (the
+supplier's changes an accepted answer was made of: an answer all accepted whose last version carried the approval is
+that version's acknowledgement, `ack_via` `app`), ack_note (the buyer's note of how the supplier confirmed; required).
+An acknowledgement carries a date per open line (`formulas/deliveries.check_promised`: not in the past, a working day of
+the delivery place, at most `supplier_date_days` calendar days after the date ordered; the buyer's record may give a
+closed day, said back as a warning); each goes to
+`po_line.promised_date` and to a **po_commitment** row · po_version, source (`ack_link`, `ack_email`, `ack_app`,
+`agent_date` for one line's date moved by the agent, `agent_qty` for a quantity noted), acknowledgement_id (the
+`po_version` row). A line's due date is its promised date, else its need-by date (`line_due`): late-delivery alerts,
+the store's list and delivery reminders go by line on the delivery place's calendar. **po_change.po_version** is the
+version a change was asked on; status `stale` when the order changed since in another way (OP-11). An outbound order
+mail records **email_message.po_version**: a reply answers the version of the mail it threads to (no thread: version 1
+if there was never another). An emailed acknowledgement is recorded only from a registered contact with sender
+authentication `pass` and the gate `supplier.change` allowing (OP-4 interim, `supplier_comms.EMAIL_ACK`); `none` makes a
+task `supplier_ack_confirm`; `fail` is not read (task `supplier_sender_check`). **supplier_chase.po_version**: chasers
+go on working days of the delivery place, the first once `supplier_ack_due_days` working days after the version's
+`sent_at` have passed, then every `supplier_chase_days` working days, at most `supplier_chase_max` per version (both
+settings); then one task `po_ack_overdue` for the buyer (escalating to the purchase manager), done when the version is
+acknowledged, revised or the order cancelled. Supplier scoring counts acknowledgement timeliness per sent version: a
+version counts when acknowledged or when its due day passed before a newer one replaced it.
 
 ## Budget engine and forward buying (block 3: tasks 3.7 and 13.5)
 

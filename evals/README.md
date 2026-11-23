@@ -6,6 +6,7 @@ recomputes the right answer from the raw dataset with its own plain code and com
 
     python evals/run.py                  everything; the AI evals use a scripted model
     python evals/run.py --live           the AI evals call the real models (keys in .env, free tiers)
+                                         each eval's live result is kept in results/live.json and live.md
     python evals/run.py --only E04,E09   some of them
     python evals/run.py --quick          smaller samples
 

@@ -444,7 +444,9 @@ def _run(ctx: Any) -> Outcome:
                     "submitted",
                 )
                 # D-07 (block 4): every decision from an email link needs a one-time code, emailed to the director
-                with d.step("director", "clicks Email me a code, types the code from the email and clicks Approve") as page:
+                with d.step(
+                    "director", "clicks Email me a code, types the code from the email and clicks Approve"
+                ) as page:
                     page.get_by_role("button", name="Email me a code").click()
                     expect(page.locator("body")).to_contain_text("A code was sent to")
                     coded = [m for m in mails_to("director") if "code is " in m["body"]]
@@ -792,20 +794,38 @@ def _run(ctx: Any) -> Outcome:
                 mail = next(m for m in reversed(supplier_mails(subject=no)) if "/supplier/" in m["body"])
                 return re.search(r"https?://\S+/supplier/[\w.\-]+", mail["body"]).group(0)  # type: ignore[union-attr]
 
+            def code_for(no: str, page: Any) -> str:
+                """D53: the supplier presses Email me a code, reads the code in its mailbox and types it in the form it
+                answers with (block 8)."""
+                before = len(box.sent)
+                page.get_by_role("button", name="Email me a code").first.click()
+                expect(page.locator("body")).to_contain_text("A code was sent to")
+                mail = next(
+                    m for m in reversed(box.sent[before:]) if no in m["subject"] and "one-time code" in m["body"]
+                )
+                found = re.search(r"one-time code is (\d{6})", mail["body"])
+                assert found and mail["to"].lower() in {v.lower() for v in contacts.values()}
+                return found.group(1)
+
             def supplier_answers(no: str, promised: date) -> None:
-                """Step 8: Deccan accepts its touchless order by the link; Gujarat asks to deliver the seals later and
-                the buyer accepts the change on the order (version 2, the requester told)."""
+                """Step 8: Deccan accepts its touchless order by the link, with the code from its mail and each line on the
+                date ordered; Gujarat asks to deliver the seals later, with its code, and the buyer accepts the change on
+                the order (version 2, the requester told)."""
                 code = q("select supplier_code from po where no = :n", n=no)[0][0]
                 key = f"supplier-{code}"
                 if key not in d.pages:
                     d.visitor(key, f"{suppliers[code]['trade_name']} (supplier, no login)")
                 if no != seal_po:
                     with d.step(
-                        key, f"opens the link in the email for {no}, enters {promised} and clicks Accept the order"
+                        key,
+                        f"opens the link in the email for {no}, clicks Email me a code, types the code from its mail "
+                        "and clicks Accept the order (each line on the date ordered)",
                     ) as page:
                         page.goto(order_link(no))
                         expect(page.locator("body")).to_contain_text(no)
-                        page.locator("#promised").fill(promised.isoformat())
+                        code = code_for(no, page)
+                        accept = page.locator("form", has=page.locator("button[value=accept]"))
+                        accept.locator("input[name=code]").fill(code)
                         page.get_by_role("button", name="Accept the order").click()
                         expect(page.locator("body")).to_contain_text("accepted")
                     d.sync()
@@ -819,8 +839,11 @@ def _run(ctx: Any) -> Outcome:
                     key, f"opens the link for {no} and asks to deliver on {new_date}: Send the change to the buyer"
                 ) as page:
                     page.goto(order_link(no))
-                    page.locator("input[name=date_1]").fill(new_date.isoformat())
+                    code = code_for(no, page)
+                    change = page.locator("form", has=page.locator("button[value=change]"))
+                    change.locator("input[name=date_1]").fill(new_date.isoformat())
                     page.locator("#creason").fill("The seals are in our next lot")
+                    change.locator("input[name=code]").fill(code)
                     page.get_by_role("button", name="Send the change to the buyer").click()
                     expect(page.locator("body")).to_contain_text("Thank you")
                 d.sync()
@@ -873,10 +896,14 @@ def _run(ctx: Any) -> Outcome:
                 if no in (imp_po, seal_po):  # step 8: these two suppliers answer through the link in their order email
                     supplier_answers(no, promised)
                     continue
-                with d.step("buyer", f"clicks Record acknowledgement with the promised date {promised}") as page:
-                    page.locator("#poAckDate").fill(promised.isoformat())
+                with d.step(
+                    "buyer",
+                    "clicks Record acknowledgement: each line on the date ordered, a note of how the supplier "
+                    "confirmed",
+                ) as page:
+                    page.locator("#poAckNote").fill("Confirmed by phone with the sales desk")
                     page.locator("#poAck").click()
-                    expect(page.locator("#appContent")).to_contain_text("Acknowledged on")
+                    expect(page.locator("#appContent")).to_contain_text("Acknowledged version")
                 d.sync()
             c.same("every order is acknowledged", sorted({r[0] for r in q("select status from po")}), ["acknowledged"])
             c.true(
@@ -1286,7 +1313,9 @@ def _run(ctx: Any) -> Outcome:
                 from p2p.platform.tokens import create_access_token
 
                 # Apex has one administrator: the checker is a login made for this walk-through
-                checker_id = users.create_user(slug, f"checker-{slug}@apexpumps.example", demo.DEV_PASSWORD, "C", "Admin")
+                checker_id = users.create_user(
+                    slug, f"checker-{slug}@apexpumps.example", demo.DEV_PASSWORD, "C", "Admin"
+                )
                 checker = {"Authorization": f"Bearer {create_access_token(checker_id, slug, 'Admin')}"}
                 for waiting in demo_ui.api("GET", "/api/setup/pending", checker).json():
                     approve = f"/api/admin/proposals/{waiting['proposal_id']}/approve"
@@ -1711,7 +1740,9 @@ def production_orders(
     c.true(f"the {NAMES[approver]} was emailed a link for {r_no}", mail is not None)
     if mail:
         url = re.search(r"https?://\S+/approve/[\w.\-]+", mail["body"]).group(0)  # type: ignore[union-attr]
-        with d.step(approver, f"opens the link in the email for {r_no}, asks for a code, types it, clicks Approve") as page:
+        with d.step(
+            approver, f"opens the link in the email for {r_no}, asks for a code, types it, clicks Approve"
+        ) as page:
             page.goto(url)
             page.get_by_role("button", name="Email me a code").click()  # D-07 (block 4): a code on every link
             expect(page.locator("body")).to_contain_text("A code was sent to")

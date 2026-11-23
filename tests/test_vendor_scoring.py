@@ -77,6 +77,14 @@ def _history(
                 "ack": None if acked_days is None else sent + timedelta(days=acked_days),
             },
         )
+        if acked_days is not None:  # its version's row: acknowledgement timeliness is counted per sent version (8.8.7)
+            db.execute(
+                text(
+                    "insert into po_version (po_no, version, made_at, made_by, snapshot, sent_at, acknowledged_at) "
+                    "values (:n, 1, :sent, 'test', '{}', :sent, :ack)"
+                ),
+                {"n": po, "sent": sent, "ack": sent + timedelta(days=acked_days)},
+            )
         db.execute(
             text(
                 "insert into po_line (po_no, line_no, request_no, request_line_no, item_code, qty, uom, unit_price, gst_rate, taxable, "
@@ -417,3 +425,60 @@ def test_a_best_vendor_line_bought_on_a_price_list_is_labelled_so_is_never_touch
     again = orders.order_request(shop, shop.info["slug"], no, as_of=TODAY)
     assert again.pos == []
     assert shop.execute(text("select count(*) from po_line where po_no like 'PO-%'")).scalar_one() == 1
+
+
+# ---- acknowledgement timeliness per sent version (block 8, 8.8.7, OP-21) ----------------------------
+
+
+def _versions(db: Session, supplier: str, *versions: tuple[str, str | None, str | None]) -> None:
+    """One order of the supplier with versions (made and sent on, acknowledged on), delivered to a place that works
+    Monday to Saturday and is closed on 24 Nov 2026."""
+    db.execute(text("update location set working_days = 'Mon-Sat' where code = 'WH-BLR'"))
+    if not db.execute(text("select 1 from ref_holiday where holiday_date = '2026-11-24'")).first():
+        db.execute(
+            text(
+                "insert into ref_holiday (holiday_date, name, kind, scope) values ('2026-11-24', 'Holiday', 'closed', 'central')"
+            )
+        )
+    po = f"V-{supplier}"
+    db.execute(
+        text(
+            "insert into po (no, supplier_code, ship_to_location, status, sent_at, version) "
+            "values (:n, :s, 'WH-BLR', 'sent', :at, :v)"
+        ),
+        {"n": po, "s": supplier, "at": f"{versions[0][0]} 10:00+05:30", "v": len(versions)},
+    )
+    for n, (sent, acked, _) in enumerate(versions, start=1):
+        db.execute(
+            text(
+                "insert into po_version (po_no, version, made_at, made_by, snapshot, sent_at, acknowledged_at) "
+                "values (:p, :v, :m, 'test', '{}', :m, :a)"
+            ),
+            {"p": po, "v": n, "m": f"{sent} 10:00+05:30", "a": f"{acked} 11:00+05:30" if acked else None},
+        )
+    db.commit()
+
+
+def test_acknowledgement_is_counted_per_sent_version(db: Session) -> None:  # noqa: F811
+    # K3: v1 sent Mon 23 Nov (due Thu 26), replaced Wed 25 unanswered: left out; v2 sent 25 Nov (due Fri 27), answered 26
+    _versions(db, "S1", ("2026-11-23", None, None), ("2026-11-25", "2026-11-26", None))
+    # the same, version 2 answered late, on Mon 30 Nov
+    _versions(db, "S2", ("2026-11-23", None, None), ("2026-11-25", "2026-11-30", None))
+    # version 1 replaced on Fri 27 Nov, after its due day, unanswered: counted, late; version 2 answered at once
+    _versions(db, "S3", ("2026-11-23", None, None), ("2026-11-27", "2026-11-27", None))
+
+    h = scoring.histories(db, date(2026, 12, 1))
+
+    assert (h["S1"].acks, h["S1"].quick_acks, h["S1"].orders) == (1, 1, 1)
+    assert (h["S2"].acks, h["S2"].quick_acks) == (1, 0)
+    assert (h["S3"].acks, h["S3"].quick_acks) == (2, 1)
+
+
+def test_a_version_still_open_before_its_due_day_is_not_counted_yet(db: Session) -> None:  # noqa: F811
+    _versions(db, "S1", ("2026-11-23", None, None))
+
+    assert scoring.histories(db, date(2026, 11, 26))["S1"].acks == 0  # due that day: no answer yet is fair
+    assert (
+        scoring.histories(db, date(2026, 11, 27))["S1"].acks,
+        scoring.histories(db, date(2026, 11, 27))["S1"].quick_acks,
+    ) == (1, 0)

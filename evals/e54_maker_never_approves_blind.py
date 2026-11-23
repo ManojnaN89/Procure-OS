@@ -1012,12 +1012,16 @@ def _run(ctx: Any) -> Outcome:
             bool(links), f"{no}: the order email carries no supplier link", "medium"
         ):
             return None
+        mailed = len(box.sent)
+        client.post(f"{links[0]}/code")  # D53: the supplier asks for its one-time code and reads it from its mail
+        coded = [m for m in box.sent[mailed:] if "one-time code is " in m["body"]]
         client.post(
             links[0],
             data={
                 "action": "change",
                 "price_1": new_price,
                 "reason": "E54: metal prices",
+                "code": coded[-1]["body"].split("one-time code is ")[1][:6] if coded else "",
             },
         )
         changes = (

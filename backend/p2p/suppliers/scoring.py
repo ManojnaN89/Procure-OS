@@ -14,7 +14,7 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from p2p.formulas import scoring as rules
-from p2p.formulas.calendar import IST
+from p2p.formulas.calendar import IST, business_today
 from p2p.formulas.money import format_qty
 from p2p.platform import reference
 
@@ -129,21 +129,45 @@ def histories(db: Session, as_of: date | None = None) -> dict[str, History]:
         h.received_qty += D(received)
         h.rejected_qty += D(rejected)
         h.accepted_shares += D(accepted) / D(received) if D(received) > 0 else D(1)
-    calendar = reference.calendar_for(db)
-    ack_days = int(_setting(db, "supplier_ack_due_days", "2"))
-    for supplier, sent, acked in db.execute(
-        text(
-            "select supplier_code, sent_at, acknowledged_at from po where sent_at is not null "
-            "and (sent_at at time zone :tz)::date <= :c"
-        ),
+    for (supplier,) in db.execute(
+        text("select supplier_code from po where sent_at is not null and (sent_at at time zone :tz)::date <= :c"),
         {"tz": TZ_NAME, "c": cutoff},
     ):
+        out.setdefault(supplier, History()).orders += 1
+    for supplier, counted, quick in _ack_versions(db, as_of or business_today()):
         h = out.setdefault(supplier, History())
-        h.orders += 1
-        if acked is not None:
-            h.acks += 1
-            sent_on = sent.astimezone(IST).date()
-            h.quick_acks += acked.astimezone(IST).date() <= calendar.add_working_days(sent_on, ack_days)
+        h.acks += counted
+        h.quick_acks += quick
+    return out
+
+
+def _ack_versions(db: Session, as_of: date) -> list[tuple[str, int, int]]:
+    """Acknowledgement timeliness per sent version (8.8.7, OP-21): a version counts when it was acknowledged, or when its
+    due day (`supplier_ack_due_days` working days after its sending, delivery place's calendar) passed before a newer
+    version replaced it (or before `as_of`); it is quick when acknowledged on or before that day. A version replaced
+    before its due day without an answer is left out: the supplier had no fair chance. (supplier, counted, quick)."""
+    ack_days = int(_setting(db, "supplier_ack_due_days", "2"))
+    calendars: dict[str, Any] = {}
+    out = []
+    for supplier, place, sent, acked, replaced in db.execute(
+        text(
+            "select p.supplier_code, p.ship_to_location, v.sent_at, v.acknowledged_at, "
+            "(select n.made_at from po_version n where n.po_no = v.po_no and n.version = v.version + 1) "
+            "from po_version v join po p on p.no = v.po_no where v.sent_at is not null "
+            "and (v.sent_at at time zone :tz)::date <= :c"
+        ),
+        {"tz": TZ_NAME, "c": as_of},
+    ):
+        if place not in calendars:
+            calendars[place] = reference.calendar_for_location(db, place)
+        due = calendars[place].add_working_days(sent.astimezone(IST).date(), ack_days)
+        answered = acked.astimezone(IST).date() if acked is not None else None
+        if answered is not None and answered > as_of:
+            answered = None
+        ended = replaced.astimezone(IST).date() if replaced is not None else as_of
+        if answered is None and ended <= due:
+            continue  # replaced (or still open) before it fell due, unanswered: not counted
+        out.append((str(supplier), 1, int(answered is not None and answered <= due)))
     return out
 
 
