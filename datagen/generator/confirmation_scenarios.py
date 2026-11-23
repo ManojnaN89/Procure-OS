@@ -18,6 +18,7 @@ The rules, as the block 8 spec says them:
 - supplier scoring counts a version acknowledged, or whose due day passed before a newer version replaced it.
 """
 
+import csv
 from datetime import date, timedelta
 from decimal import ROUND_HALF_UP, Decimal
 from pathlib import Path
@@ -53,9 +54,18 @@ def _order(lines: list[dict[str, Any]]) -> list[tuple[str, str]]:
     for n, ln in enumerate(lines, start=1):
         amount = _paise(Decimal(ln["qty"]) * Decimal(ln["price"]))
         half = _paise(amount * Decimal(ln["gst"]) / 2 / 100)
-        rows += [(f"line_{n}_taxable", str(amount)), (f"line_{n}_cgst", str(half)), (f"line_{n}_sgst", str(half))]
+        rows += [
+            (f"line_{n}_taxable", str(amount)),
+            (f"line_{n}_cgst", str(half)),
+            (f"line_{n}_sgst", str(half)),
+        ]
         taxable, cgst = taxable + amount, cgst + half
-    rows += [("taxable", str(taxable)), ("cgst", str(cgst)), ("sgst", str(cgst)), ("total", str(taxable + 2 * cgst))]
+    rows += [
+        ("taxable", str(taxable)),
+        ("cgst", str(cgst)),
+        ("sgst", str(cgst)),
+        ("total", str(taxable + 2 * cgst)),
+    ]
     return rows
 
 
@@ -72,12 +82,17 @@ def _chasers(
 ) -> tuple[date, list[date], date | None]:
     """The due day, the chaser days and the day of the task after the last, from sending up to `until`."""
     due = _add(cal, sent, _setting(data, "supplier_ack_due_days"), loc)
-    every, most = _setting(data, "supplier_chase_days"), _setting(data, "supplier_chase_max")
+    every, most = (
+        _setting(data, "supplier_chase_days"),
+        _setting(data, "supplier_chase_max"),
+    )
     chasers: list[date] = []
     task = None
     day = due + timedelta(days=1)
     while day <= until and task is None:
-        if _working(cal, day, loc) and (not chasers or day >= _add(cal, chasers[-1], every, loc)):
+        if _working(cal, day, loc) and (
+            not chasers or day >= _add(cal, chasers[-1], every, loc)
+        ):
             if len(chasers) < most:
                 chasers.append(day)
             else:
@@ -86,7 +101,9 @@ def _chasers(
     return due, chasers, task
 
 
-def rows_of(sc: dict[str, Any], data: dict[str, Any], cal: Calendar) -> list[dict[str, str]]:
+def rows_of(
+    sc: dict[str, Any], data: dict[str, Any], cal: Calendar
+) -> list[dict[str, str]]:
     loc = sc["location"]
     out: list[tuple[str, str, str]] = []
     lines = sc["lines"]
@@ -98,70 +115,118 @@ def rows_of(sc: dict[str, Any], data: dict[str, Any], cal: Calendar) -> list[dic
     revised[int(k3["line"]) - 1]["qty"] = k3["qty"]
     out += [("K3", f"v2_{f}", v) for f, v in _order(revised)]
     ack_days = _setting(data, "supplier_ack_due_days")
-    sent1, sent2 = date.fromisoformat(sc["sent_on"]), date.fromisoformat(k3["revised_on"])
+    sent1, sent2 = (
+        date.fromisoformat(sc["sent_on"]),
+        date.fromisoformat(k3["revised_on"]),
+    )
     due1, due2 = _add(cal, sent1, ack_days, loc), _add(cal, sent2, ack_days, loc)
     acked = date.fromisoformat(k3["acknowledged_on"])
+    # scoring (8.8.7) counts v2 on time and leaves v1 out: v1 was replaced before its due day, v2 answered by its due day
+    assert sent2 <= due1 and acked <= due2, (
+        "K3 must replace v1 before it falls due and answer v2 in time"
+    )
     out += [
-        ("K3", "v1_ack_due", due1.isoformat()), ("K3", "v1_counted", str(sent2 > due1).lower()),
-        ("K3", "v2_ack_due", due2.isoformat()), ("K3", "v2_counted", "true"),
-        ("K3", "v2_on_time", str(acked <= due2).lower()),
+        ("K3", "v1_sent", sent1.isoformat()), ("K3", "v1_ack_due", due1.isoformat()),
+        ("K3", "v2_sent", sent2.isoformat()), ("K3", "v2_ack_due", due2.isoformat()),
+        ("K3", "v2_acknowledged", acked.isoformat()),
     ]  # fmt: skip
 
-    # K4: a date per line when accepting; the refusals; reminders per line
+    # K4: a date per line when accepting (the tried dates are refused: checked here, not written); each line's date,
+    # its reminder before, and the reminders if nothing arrives on the late line
     k4 = sc["k4"]
     today = date.fromisoformat(k4["today"])
     slip = _tolerance(data, "supplier_date_days")
     for line_no, given in k4["tries"]:
-        day = date.fromisoformat(given)
-        ordered = date.fromisoformat(lines[int(line_no) - 1]["need_by"])
-        if day < today:
-            why = "past"
-        elif not _working(cal, day, loc):
-            why = "not_working_day"
-        elif (day - ordered).days > slip:
-            why = f"later_by_{(day - ordered).days}"
-        else:
-            why = "accepted"
-        out.append(("K4", f"try_line_{line_no}_{given}", why))
-    promised = {n: date.fromisoformat(ln["need_by"]) for n, ln in enumerate(lines, start=1)}
+        day, ordered = (
+            date.fromisoformat(given),
+            date.fromisoformat(lines[int(line_no) - 1]["need_by"]),
+        )
+        refused = (
+            day < today or not _working(cal, day, loc) or (day - ordered).days > slip
+        )
+        assert refused == (given not in k4["dates"].values()), (
+            f"K4: {given} on line {line_no}"
+        )
+    promised = {
+        n: date.fromisoformat(ln["need_by"]) for n, ln in enumerate(lines, start=1)
+    }
     promised.update({int(n): date.fromisoformat(d) for n, d in k4["dates"].items()})
     before = _setting(data, "delivery_reminder_before_days")
-    after, every_late = _setting(data, "delivery_overdue_after_days"), _setting(data, "delivery_overdue_every_days")
-    most_late = _setting(data, "delivery_overdue_max")
+    after, every_late = (
+        _setting(data, "delivery_overdue_after_days"),
+        _setting(data, "delivery_overdue_every_days"),
+    )
     for n, day in sorted(promised.items()):
-        ordered = date.fromisoformat(lines[n - 1]["need_by"])
         out += [
             ("K4", f"line_{n}_promised", day.isoformat()),
-            ("K4", f"line_{n}_days_later", str((day - ordered).days)),
-            ("K4", f"line_{n}_before_reminder", _add(cal, day, -before, loc).isoformat()),
+            (
+                "K4",
+                f"line_{n}_before_reminder",
+                _add(cal, day, -before, loc).isoformat(),
+            ),
         ]
-        out += [
-            ("K4", f"line_{n}_overdue_reminder_{k}", _add(cal, day, after + (k - 1) * every_late, loc).isoformat())
-            for k in range(1, most_late + 1)
-        ]
+    late = int(k4["late_line"])
+    out += [
+        (
+            "K4",
+            f"line_{late}_overdue_reminder_{k}",
+            _add(cal, promised[late], after + (k - 1) * every_late, loc).isoformat(),
+        )
+        for k in range(1, _setting(data, "delivery_overdue_max") + 1)
+    ]
 
     # K7: never acknowledged; K7b: revised on a day, the clock and the count start again
     k7 = sc["k7"]
-    due, chasers, task = _chasers(cal, loc, date.fromisoformat(k7["sent_on"]), date.fromisoformat(k7["until"]), data)
-    out += [("K7", "ack_due", due.isoformat()), ("K7", "overdue_from", (due + timedelta(days=1)).isoformat())]
-    out += [("K7", f"chaser_{k}", d.isoformat()) for k, d in enumerate(chasers, start=1)]
+    due, chasers, task = _chasers(
+        cal,
+        loc,
+        date.fromisoformat(k7["sent_on"]),
+        date.fromisoformat(k7["until"]),
+        data,
+    )
+    out += [
+        ("K7", "ack_due", due.isoformat()),
+        ("K7", "overdue_from", (due + timedelta(days=1)).isoformat()),
+    ]
+    out += [
+        ("K7", f"chaser_{k}", d.isoformat()) for k, d in enumerate(chasers, start=1)
+    ]
     out.append(("K7", "overdue_task", task.isoformat() if task else ""))
     revised_on = date.fromisoformat(sc["k7b"]["revised_on"])
-    due_b, chasers_b, _ = _chasers(cal, loc, revised_on, date.fromisoformat(k7["until"]), data)
+    due_b, chasers_b, _ = _chasers(
+        cal, loc, revised_on, date.fromisoformat(k7["until"]), data
+    )
     out += [
         ("K7b", "v1_chasers", str(sum(1 for d in chasers if d < revised_on))),
         ("K7b", "v2_ack_due", due_b.isoformat()),
     ]
-    out += [("K7b", f"v2_chaser_{k}", d.isoformat()) for k, d in enumerate(chasers_b, start=1)]
+    out += [
+        ("K7b", f"v2_chaser_{k}", d.isoformat())
+        for k, d in enumerate(chasers_b, start=1)
+    ]
 
     # K9: late lines on a day (a line received in full is not late); Q: a line with only its need-by date
     k9 = sc["k9"]
     on = date.fromisoformat(k9["today"])
-    late = {n: (on - d).days for n, d in promised.items() if d < on and n not in k9["received_lines"]}
-    out += [("K9", f"line_{n}_days_late", str(days)) for n, days in sorted(late.items())]
+    late = {
+        n: (on - d).days
+        for n, d in promised.items()
+        if d < on and n not in k9["received_lines"]
+    }
+    out += [
+        ("K9", f"line_{n}_days_late", str(days)) for n, days in sorted(late.items())
+    ]
     out.append(("K9", "days_late", str(max(late.values()) if late else 0)))
     q = sc["q"]
-    out.append(("Q", "days_late", str((date.fromisoformat(q["today"]) - date.fromisoformat(q["need_by"])).days)))
+    out.append(
+        (
+            "Q",
+            "days_late",
+            str(
+                (date.fromisoformat(q["today"]) - date.fromisoformat(q["need_by"])).days
+            ),
+        )
+    )
     return [{"scenario": a, "figure": b, "value": c} for a, b, c in out]
 
 
@@ -182,8 +247,6 @@ def check(out: Path) -> list[str]:
     path = out / "truth" / "truth_supplier_confirmation.csv"
     if not path.exists():
         return []
-    import csv  # noqa: PLC0415
-
     figures: dict[tuple[str, str], str] = {}
     with path.open(encoding="utf-8", newline="") as f:
         for r in csv.DictReader(f):
@@ -191,8 +254,11 @@ def check(out: Path) -> list[str]:
     problems = []
     for name, prefix in (("P", ""), ("K3", "v2_")):
         taxable, cgst, sgst, total = (
-            Decimal(figures[(name, prefix + k)]) for k in ("taxable", "cgst", "sgst", "total")
+            Decimal(figures[(name, prefix + k)])
+            for k in ("taxable", "cgst", "sgst", "total")
         )
         if cgst != sgst or taxable + cgst + sgst != total:
-            problems.append(f"truth_supplier_confirmation {name}: the order does not add up")
+            problems.append(
+                f"truth_supplier_confirmation {name}: the order does not add up"
+            )
     return problems

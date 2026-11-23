@@ -1,14 +1,19 @@
 # Evals report
 
-Run on 2026-11-23 20:03; AI evals used the real models.
+Run on 2026-11-23 21:27; AI evals used the real models.
 
 | ID | What it checks | Result | Seconds | Key figures |
 |---|---|---|---|---|
 | E13 | Supplier emails are read into the right quotes, and when unsure the system asks a person | **PASS** | 256.5 | email cases 39; perfect reader: exact % 100.0; perfect reader: silent errors 0; sloppy reader: mistakes that did not slip through {'invented price': '33/33 not clean-but-wrong', 'invented gst': '33/33 not clean-but-wrong', 'invented delivery': '33/33 not clean-but-wrong', 'swapped prices': '16/16 not clean-but-wrong'} |
 | E15 | The assistant tells the truth from the data, adds nothing up on its own, and changes nothing | **PASS** | 30.2 | questions 12; answers right % 100.0; answers grounded % 91.7; right tool chosen % 100.0 |
 | E28 | Supplier emails are classified, small changes applied, the rest handed to a person, nothing wrong applied | **PASS** | 353.3 | orders sent and acknowledged / RFQs to answer 1 / 1; replies 90; careful reader: handled the right way % 100.0; careful reader: wrong changes / unsafe effects / spoofed mail read 0 / 0 / 0 |
+| E140 | The supplier agent moves one line, never every line, and records an email acknowledgement only for its version | **FAIL** | 51.3 | LIVE model: handled right % 88.9; LIVE model: wrong changes applied 0; LIVE model: mails 9; mutations caught ['every_line_moved: K5 a date for line 2 only', "old_version_reply_recorded: K8 a confirmation replying to version 1's mail"] |
 
-**3 of 3 passed.**
+**3 of 4 passed.**
+
+## Findings
+
+- **medium** (E140): LIVE: 88.9% of 9 mails handled right; the threshold is 90% (OP-20)
 
 ## Details
 
@@ -60,3 +65,24 @@ Checks: Plan P1-14 (AG02): at least 90% of replies handled the right way; a chan
 - note: live miss: sent as 'qty' (po); wanted applied, got task read as 'partial_dispatch' | not applied: the email gives no date and no number of days || 'RE: PO PO-CKN-2627-00001' 'Only 11 NOS available now. Balance next week. OK?\nSales Desk'
 - note: live miss: sent as 'date' (po); wanted task, got needs_person read as 'None' | the reading was not reliable; a person was asked to look at it || 'PO PO-CKN-2627-00001 - Partial dispatch' 'Dear Procurement,\n\nWe have dispatched 11 NOS of V-belt B-42 against PO PO-CKN-2627-00001 today vide LR attached. The balance will be dispatched by 19 Nov 2026.\n\nRegards,\nSales Desk\nWestern Industrial Supplies'
 - note: live miss: sent as 'date' (po); wanted task, got needs_person read as 'None' | the reading was not reliable; a person was asked to look at it || 'RE: PO PO-CKN-2627-00001' 'Sent 11 NOS today. Rest 20 Nov 2026. LR attached.\nSales Desk'
+
+### E140 The supplier agent moves one line, never every line, and records an email acknowledgement only for its version
+
+Checks: AG02, task 11b.3, DF-27, D53 (block 8 spec 8.7, K5, K5b, K5c, K8): a date for one named line moves that line only, within tolerance and with no stock effect; a date naming no line is never applied; a reply's version is its thread's; an email acknowledgement only from a registered contact with sender authentication pass, for the current version; none -> the buyer records it; fail or unregistered -> not read; --live: >= 90% right, 0 wrong applied; tenant check
+
+- LIVE model: handled right %: 88.9
+- LIVE model: wrong changes applied: 0
+- LIVE model: mails: 9
+- mutations caught: ['every_line_moved: K5 a date for line 2 only', "old_version_reply_recorded: K8 a confirmation replying to version 1's mail"]
+- checks: 70
+- failed: 1
+- note: LIVE miss: K5b: the mail naming no line (email 30) left promised {1: datetime.date(2026, 12, 7), 2: datetime.date(2026, 12, 10), 3: datetime.date(2026, 12, 14)} -> {1: datetime.date(2026, 12, 7), 2: datetime.date(2026, 12, 10), 3: datetime.date(2026, 12, 14)} and proposed []; expected nothing moved and a proposed date per open line (OP-13)
+- note: LIVE detail (medium): K5b: proposed changes []; expected [(1, '2026-12-07', '2026-12-12'), (2, '2026-12-10', '2026-12-12'), (3, '2026-12-14', '2026-12-12')]
+- note: LIVE detail (medium): K5b: new tasks naming PO-CKN-2627-00002: []; the spec says one
+- note: K5c: MO-81 loaded with RM-03 60 needed on 9 Dec; request REQ-CKN-2627-00002; order PO-CKN-2627-00001
+- note: K8 P2: the request API took one need-by for every line; the eval gave the draft's lines their own dates as the owner before submitting (spec 9 P has 7 Dec and 14 Dec)
+- note: P: the request API took one need-by for every line; the eval gave the draft's lines their own dates as the owner before submitting (spec 9 P has 7 Dec and 14 Dec)
+- note: The scripted model answers what E28's careful reader writes: {type: ack | date_change, new_date, item (the line's description), confidence 0.95}; the item is never given for the mail that names no line.
+- note: Replies thread to the captured order mail's message_id (In-Reply-To, References) and go to its reply_to, else the order's plus address.
+- note: Spec gap: the K5c production order is named MO-81 when the demo already holds MO-1 (the reset loads the ERP's MO-1 needed on 5 Dec); its only line is RM-03, needed on 9 Dec.
+- note: The live result (OP-20) is this eval's metrics; `python evals/run.py --live --only E28,E140 --out evals/results/live` keeps it in evals/results/live.*.

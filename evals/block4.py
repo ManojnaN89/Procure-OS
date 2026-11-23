@@ -410,6 +410,7 @@ class Co(s2.Co):
     """A demo company with the block 4 calls."""
 
     box: Any = None  # the mail caught in this process (one for the run)
+    AUTO_CODE = True  # answers from a link ask for the code and enter it, as a supplier does (block 8, D53)
 
     def __init__(self, profile: str, prefix: str, client: Any, box: Any) -> None:
         self.box = box
@@ -544,7 +545,7 @@ class Co(s2.Co):
         page and read from the mail it went to, as a supplier does; a dispatch needs none."""
         self.db.rollback()
         codes: dict[str, str] = self.__dict__.setdefault("_link_codes", {})  # a code not used yet stays good
-        if data.get("action") not in (None, "dispatch") and "code" not in data:
+        if self.AUTO_CODE and data.get("action") not in (None, "dispatch") and "code" not in data:
             if token not in codes:
                 before = len(self.box.sent)
                 self.client.post(f"/supplier/{token}/code")

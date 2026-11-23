@@ -181,7 +181,9 @@ def _k7(out: Outcome, check: b.Checker, co: e.Co8, notes: list[str]) -> tuple[li
               "nothing is automatic beyond chasers and the task (8.8.6)")  # fmt: skip
     check(int(co.one("select count(*) from po") or 0) == pos0, "K7: an order was made while chasing (8.8.6: no new "
           "supplier)")  # fmt: skip
+    # spec 9 K7: "exceptions row from 29 Nov", the day after the acknowledgement fell due
     e.compare_truth(check, co, "K7", {"sent": e.NOV26, "ack_due": oracle.ack_due(e.NOV26),
+                                      "overdue_from": oracle.ack_due(e.NOV26) + timedelta(days=1),
                                       **{f"chaser_{i}": d for i, d in enumerate(c1, 1)}, "overdue_task": task1})  # fmt: skip
     m.report(check, out, ["count_across_versions", "calendar_days"])
     out.metrics["K7"] = {"P1": p1, "P2": p2, "P1 chasers": [str(d) for d, _v in sorted(seen[p1])],

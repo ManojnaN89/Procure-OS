@@ -388,6 +388,8 @@ def pin(d: date) -> None:
 class Co8(t.Co7):
     """A demo company with the block 8 calls."""
 
+    AUTO_CODE = False  # block 8's evals give, or withhold, the code themselves (block4.Co.supplier enters it for the others)
+
     # ---- reading ----
     def lines8(self, no: str) -> list[dict[str, Any]]:
         return self.qd("select * from po_line where po_no = :n order by line_no", n=no)

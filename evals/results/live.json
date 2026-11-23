@@ -115,5 +115,41 @@
       "live miss: sent as 'date' (po); wanted task, got needs_person read as 'None' | the reading was not reliable; a person was asked to look at it || 'PO PO-CKN-2627-00001 - Partial dispatch' 'Dear Procurement,\\n\\nWe have dispatched 11 NOS of V-belt B-42 against PO PO-CKN-2627-00001 today vide LR attached. The balance will be dispatched by 19 Nov 2026.\\n\\nRegards,\\nSales Desk\\nWestern Industrial Supplies'",
       "live miss: sent as 'date' (po); wanted task, got needs_person read as 'None' | the reading was not reliable; a person was asked to look at it || 'RE: PO PO-CKN-2627-00001' 'Sent 11 NOS today. Rest 20 Nov 2026. LR attached.\\nSales Desk'"
     ]
+  },
+  {
+    "id": "E140",
+    "title": "The supplier agent moves one line, never every line, and records an email acknowledgement only for its version",
+    "requirement": "AG02, task 11b.3, DF-27, D53 (block 8 spec 8.7, K5, K5b, K5c, K8): a date for one named line moves that line only, within tolerance and with no stock effect; a date naming no line is never applied; a reply's version is its thread's; an email acknowledgement only from a registered contact with sender authentication pass, for the current version; none -> the buyer records it; fail or unregistered -> not read; --live: >= 90% right, 0 wrong applied; tenant check",
+    "status": "FAIL",
+    "seconds": 51.3,
+    "metrics": {
+      "LIVE model: handled right %": 88.9,
+      "LIVE model: wrong changes applied": 0,
+      "LIVE model: mails": 9,
+      "mutations caught": [
+        "every_line_moved: K5 a date for line 2 only",
+        "old_version_reply_recorded: K8 a confirmation replying to version 1's mail"
+      ],
+      "checks": 70,
+      "failed": 1
+    },
+    "findings": [
+      {
+        "severity": "medium",
+        "text": "LIVE: 88.9% of 9 mails handled right; the threshold is 90% (OP-20)"
+      }
+    ],
+    "notes": [
+      "LIVE miss: K5b: the mail naming no line (email 30) left promised {1: datetime.date(2026, 12, 7), 2: datetime.date(2026, 12, 10), 3: datetime.date(2026, 12, 14)} -> {1: datetime.date(2026, 12, 7), 2: datetime.date(2026, 12, 10), 3: datetime.date(2026, 12, 14)} and proposed []; expected nothing moved and a proposed date per open line (OP-13)",
+      "LIVE detail (medium): K5b: proposed changes []; expected [(1, '2026-12-07', '2026-12-12'), (2, '2026-12-10', '2026-12-12'), (3, '2026-12-14', '2026-12-12')]",
+      "LIVE detail (medium): K5b: new tasks naming PO-CKN-2627-00002: []; the spec says one",
+      "K5c: MO-81 loaded with RM-03 60 needed on 9 Dec; request REQ-CKN-2627-00002; order PO-CKN-2627-00001",
+      "K8 P2: the request API took one need-by for every line; the eval gave the draft's lines their own dates as the owner before submitting (spec 9 P has 7 Dec and 14 Dec)",
+      "P: the request API took one need-by for every line; the eval gave the draft's lines their own dates as the owner before submitting (spec 9 P has 7 Dec and 14 Dec)",
+      "The scripted model answers what E28's careful reader writes: {type: ack | date_change, new_date, item (the line's description), confidence 0.95}; the item is never given for the mail that names no line.",
+      "Replies thread to the captured order mail's message_id (In-Reply-To, References) and go to its reply_to, else the order's plus address.",
+      "Spec gap: the K5c production order is named MO-81 when the demo already holds MO-1 (the reset loads the ERP's MO-1 needed on 5 Dec); its only line is RM-03, needed on 9 Dec.",
+      "The live result (OP-20) is this eval's metrics; `python evals/run.py --live --only E28,E140 --out evals/results/live` keeps it in evals/results/live.*."
+    ]
   }
 ]
