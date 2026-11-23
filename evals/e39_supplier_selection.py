@@ -289,7 +289,9 @@ def run(ctx) -> Outcome:
                 quotes.award(db, rfq_no, {1: pick}, buyer, as_of=lib.TODAY)
             refused = False
         except quotes.QuoteError as exc:
-            refused = "reason is required" in str(exc)
+            # block 6 (spec 5.2 rule 1, OP-9): an expired quote is refused even with a reason; it is never the
+            # recommendation, so the oracle always asks for a reason there
+            refused = "reason is required" in str(exc) or "ask for a renewed price" in str(exc)
             db.rollback()
         reason_ok += refused == needs
         if refused != needs:

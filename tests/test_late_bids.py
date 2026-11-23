@@ -178,3 +178,21 @@ def test_the_closing_date_counts_the_working_days_of_the_place_the_goods_go_to(d
     (rfq,) = _source(db, _request(db, "R-1", [("B", "5", None, "C1")])).rfqs
 
     assert _due(db, rfq) == date(2026, 11, 12)  # Fri 6 Nov + 5 working days with Saturday a working day
+
+
+def test_a_quote_written_without_its_receipt_date_gets_the_india_date_it_was_received(
+    shop: Session,  # noqa: F811
+    outbox: Outbox,  # noqa: F811
+) -> None:
+    _, rfq = _sent_rfq(shop, outbox)
+    shop.execute(  # history loaded from another system names only the time
+        text(
+            "insert into quote (no, rfq_no, supplier_code, revision, received_at) "
+            "values ('OLD-Q1', :r, 'S1', 9, '2025-11-10 20:00:00+00')"
+        ),
+        {"r": rfq},
+    )
+    shop.commit()
+
+    got = shop.execute(text("select received_on, channel from quote where no = 'OLD-Q1'")).one()
+    assert got == (date(2025, 11, 11), "entered")  # 01:30 on 11 Nov in India

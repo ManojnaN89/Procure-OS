@@ -195,6 +195,9 @@ def run(ctx) -> Outcome:
             mine = f"{key.split('_')[0]}@eval-co.example"
             good = [mine if p["value"] != mine else f"other.{mine}"]
             bad = ["not an address", "a@b", "two words@x.example", "x@y.example, z@y.example"]
+        elif kind == "host":  # a mail server's name, or empty for none (block 6: mail_authserv_id)
+            good = ["mx.eval-co.example" if p["value"] != "mx.eval-co.example" else "mx2.eval-co.example", ""]
+            bad = ["two words", "a@b.example", "-mx.example", "mx..example"]
         else:
             lo, hi = p["min"], p["max"]
             edge = [

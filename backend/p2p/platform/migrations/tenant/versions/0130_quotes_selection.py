@@ -38,6 +38,20 @@ def upgrade() -> None:
         "where m.id = cast(substr(document_ref, 7) as integer))"
     )
     op.execute("alter table quote alter column received_on set not null")
+    # a quote written without its receipt date (history loaded from another system) gets the India date it was received
+    op.execute(
+        """
+        create function quote_received_on() returns trigger language plpgsql as $$ begin
+          if new.received_on is null then
+            new.received_on := (coalesce(new.received_at, now()) at time zone 'Asia/Kolkata')::date;
+          end if;
+          return new;
+        end $$
+        """
+    )
+    op.execute(
+        "create trigger trg_quote_received_on before insert on quote for each row execute function quote_received_on()"
+    )
     op.execute("alter table order_history add column unit_price numeric(18,4)")
     op.execute(
         "alter table sourcing_decision add column path_case text "
@@ -63,6 +77,8 @@ def downgrade() -> None:
         "drop column path_recommendation_id"
     )
     op.execute("alter table order_history drop column unit_price")
+    op.execute("drop trigger trg_quote_received_on on quote")
+    op.execute("drop function quote_received_on()")
     op.execute(
         "alter table quote drop column channel, drop column email_id, drop column sender_address, "
         "drop column contact_id, drop column sender_auth, drop column received_on"
