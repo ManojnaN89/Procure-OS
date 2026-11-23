@@ -31,7 +31,7 @@ Reading a line: `name*` is part of the primary key, `name?` may be empty, then t
 
 ## Tenant database (one per company)
 
-161 tables.
+162 tables.
 
 **advance** · payment_no* text, po_no text, gross num, taxable num, used_gross num, used_taxable num, paid_on? date
 
@@ -211,7 +211,7 @@ Reading a line: `name*` is part of the primary key, `name?` may be empty, then t
 
 **planning_note** · id* bigint, mr_no text, run_id? int, status text, summary? text, lines? jsonb, snapshot jsonb, snapshot_hash text, reasons ARRAY, created_by text, created_at timestamptz
 
-**po** · no* text, po_type text, supplier_code text, supplier_gstin? text, buyer_gstin? text, ship_to_location text, buyer? text, request_no? text, rfq_no? text, contract_code? text, created_at timestamptz, approved_at? timestamptz, sent_at? timestamptz, payment_terms_code? text, delivery_terms? text, taxable num, cgst num, sgst num, igst num, total num, status text, cancel_reason? text, rule_code? text, rule_version? int, approval_round int, decision_reason? text, hold_reason? text, hold_proposal_id? bigint, sent_to? text, acknowledged_at? timestamptz, ack_note? text, version int, budget_accepted bool, closed_reason? text, closed_at? timestamptz, approval_tier? text, touchless bool, touchless_checks? jsonb, touchless_note? text, touchless_rule? text, approved_version? int
+**po** · no* text, po_type text, supplier_code text, supplier_gstin? text, buyer_gstin? text, ship_to_location text, buyer? text, request_no? text, rfq_no? text, contract_code? text, created_at timestamptz, approved_at? timestamptz, sent_at? timestamptz, payment_terms_code? text, delivery_terms? text, taxable num, cgst num, sgst num, igst num, total num, status text, cancel_reason? text, rule_code? text, rule_version? int, approval_round int, decision_reason? text, hold_reason? text, hold_proposal_id? bigint, sent_to? text, acknowledged_at? timestamptz, ack_note? text, version int, budget_accepted bool, closed_reason? text, closed_at? timestamptz, approval_tier? text, touchless bool, touchless_checks? jsonb, touchless_note? text, touchless_rule? text, approved_version? int, acknowledged_version? int
 
 **po_approval_step** · id* bigint, po_no text, round int, step int, role text, approver text, delegate? text, status text, acted_by? text, acted_at? timestamptz, comment? text, task_id? bigint, version? int
 
@@ -226,6 +226,8 @@ Reading a line: `name*` is part of the primary key, `name?` may be empty, then t
 **po_line** · po_no* text, line_no* int, request_no text, request_line_no int, item_code? text, description? text, qty num, uom? text, base_qty? num, unit_price num, est_price? num, gst_rate num, taxable num, cgst num, sgst num, igst num, need_by? date, promised_date? date, received_qty num, invoiced_qty num, gl_code? text, source text, source_ref? text, status text, short_closed_qty num, price_record_id? bigint
 
 **po_revision** · id* bigint, po_no text, version int, changed_by? text, changed_at timestamptz, reason text, changes jsonb, total_before num, total_after num, reapproval bool, baseline_version? int, material jsonb
+
+**po_version** · id* bigint, po_no text, version int, made_at timestamptz, made_by text, reason? text, snapshot jsonb, document_id? int, sent_at? timestamptz, sent_to? text, acknowledged_at? timestamptz, acknowledged_by? text, ack_via? text
 
 **price_record** · id* bigint, supplier_code? text, item_code? text, contract_code? text, uom? text, price? num, min_qty? int, price_basis? text, freight_included? bool, valid_from? date, valid_to? date, lead_days? int, version int, status text, created_by? text, activated_by? text, activated_at? timestamptz, location_code? text, region_code? text
 

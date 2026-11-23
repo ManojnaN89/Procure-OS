@@ -154,6 +154,12 @@ def test_an_acknowledgement_with_a_date_is_recorded_when_the_gate_allows(shop: S
     assert _promised(shop) == date(2026, 11, 19)
     actors = shop.execute(text("select actor_type, actor_id from audit_event where action = 'po.acknowledge'")).all()
     assert actors == [("agent", "supplier_comms")]
+    # the version the order is now, by email (block 7, OP-8: block 8 binds it to the version read from the reply)
+    assert shop.execute(text("select acknowledged_version from po")).scalar_one() == 1
+    assert shop.execute(text("select ack_via, acknowledged_by from po_version")).one() == (
+        "email",
+        "agent:supplier_comms",
+    )
 
 
 def test_an_acknowledgement_waits_for_a_buyer_when_the_gate_says_no(shop: Session, outbox: Outbox) -> None:  # noqa: F811

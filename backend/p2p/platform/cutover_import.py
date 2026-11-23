@@ -34,6 +34,7 @@ from p2p.invoices import service as invoices
 from p2p.masters.importer import read_table
 from p2p.masters.report import ImportReport
 from p2p.masters.schema import Table
+from p2p.orders import versions
 from p2p.platform import audit, company_state, numbering
 from p2p.platform.sod import user
 from p2p.receiving import goods
@@ -616,9 +617,10 @@ class _Writer:
         db.execute(
             text(
                 "insert into po (no, po_type, supplier_code, supplier_gstin, buyer_gstin, ship_to_location, buyer, request_no, "
-                "contract_code, created_at, approved_at, sent_at, acknowledged_at, payment_terms_code, delivery_terms, "
-                "taxable, cgst, sgst, igst, total, status, version) values (:n, :pt, :s, :sg, :bg, :l, :b, :r, :k, :c, :c, :c, "
-                ":ack, :terms, :dt, :tx, :cg, :sgs, :ig, :tot, :st, 1)"
+                "contract_code, created_at, approved_at, sent_at, acknowledged_at, acknowledged_version, payment_terms_code, "
+                "delivery_terms, taxable, cgst, sgst, igst, total, status, version) values (:n, :pt, :s, :sg, :bg, :l, :b, :r, "
+                ":k, :c, :c, :c, :ack, case when cast(:ack as timestamptz) is null then null else 1 end, :terms, :dt, :tx, :cg, "
+                ":sgs, :ig, :tot, :st, 1)"
             ),
             {
                 "n": no, "pt": "contract_release" if p.get("contract_code") else "standard", "s": p["supplier_code"],
@@ -656,6 +658,14 @@ class _Writer:
                  "tx": am.taxable, "cg": am.cgst, "sg": am.sgst, "ig": am.igst, "nb": ln.get("need_by"),
                  "pd": ln.get("promised_date"), "gl": ln.get("gl_code")},
             )  # fmt: skip
+        versions.record(db, no, made_by="cutover")  # as the old system sent it, and acknowledged if it was
+        db.execute(
+            text(
+                "update po_version v set sent_at = p.sent_at, acknowledged_at = p.acknowledged_at from po p "
+                "where p.no = v.po_no and v.po_no = :n"
+            ),
+            {"n": no},
+        )
         numbering.keep_above(db, "po", no)
         audit.record(db, self.actor, "cutover.po", "po", no, after={"supplier": p["supplier_code"], "taxable": taxable, "total": taxable + cgst + sgst + igst, "lines": len(lines)})  # fmt: skip
 

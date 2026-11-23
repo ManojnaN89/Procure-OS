@@ -581,9 +581,11 @@ def _ack(
             {"po_no": po_no, "email_id": int(mail["id"]), "promised": reading.new_date, "why_not_automatic": allowed.reason},
         )  # fmt: skip
         return Handled("task", "ack", f"not recorded automatically: {allowed.reason}", task)
+    # the version the order is now, by email (OP-8: block 8 passes the version read from the reply)
     warnings = dispatch.acknowledge(
-        db, po_no, AGENT, promised=reading.new_date, note="acknowledged by email", today=as_of
-    )
+        db, po_no, AGENT, version=int(order["version"]), via="email", promised=reading.new_date,
+        note="acknowledged by email", today=as_of,
+    )  # fmt: skip
     autonomy.record_outcome(db, DECISION_CHANGE, auto=True, ref=f"po:{po_no}")
     if warnings:
         task = _task(

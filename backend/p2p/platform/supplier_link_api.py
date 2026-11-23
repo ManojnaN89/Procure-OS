@@ -1,7 +1,8 @@
 """The page behind a supplier's link: answer an order (accept, decline, ask for a change) or record a dispatch.
 
 No sign-in: the signed link is the key (orders/supplier_links.py). Opening the page changes nothing; the answer is a
-separate button and the link works once. A change or a decline goes to the buyer as a proposed change; nothing on the
+separate button and the link works once. The page offers the document of the version the link was mailed with, exactly
+as it was stored (orders/versions.py). A change or a decline goes to the buyer as a proposed change; nothing on the
 order moves until the buyer accepts it (orders/confirmation.py). A dispatch is stored against the order for the store
 (orders/dispatch_notes.py). A link that was altered, has expired, was used, or is for an order that has moved on says so
 and does nothing. Wrong links are counted per address, so guessing is stopped.
@@ -12,7 +13,7 @@ from decimal import Decimal, InvalidOperation
 from html import escape
 from typing import Any
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Request, Response
 from fastapi.responses import HTMLResponse
 from sqlalchemy import text
 from sqlalchemy.orm import Session
@@ -20,7 +21,7 @@ from starlette.concurrency import run_in_threadpool
 
 from p2p.formulas.calendar import business_today
 from p2p.formulas.money import format_inr, format_qty
-from p2p.orders import changes, confirmation, dispatch_notes, supplier_links
+from p2p.orders import changes, confirmation, dispatch_notes, supplier_links, versions
 from p2p.platform import routing
 from p2p.platform.link_pages import Refused, bad_link, guard, open_company, page, refuse
 
@@ -90,6 +91,7 @@ def _respond_form(token: str, po: dict[str, Any], lines: list[dict[str, Any]], n
         + f"<p>{escape(po['company'])} placed order {escape(po['no'])} with you"
         + (f" (version {po['version']})" if po["version"] > 1 else "")
         + f", {escape(format_inr(po['total']))} in all with GST.</p>"
+        f"<p><a href='/supplier/{escape(token)}/pdf'>This version of the order (PDF)</a></p>"
         f"<table><tr><th>Item</th><th>Quantity</th><th>Price</th><th>Needed by</th></tr>{rows}</table>"
         f"<h2>Accept the order</h2><form method=post action='{action}'>"
         "<label for=promised>The date you will deliver (optional)</label><input type=date id=promised name=promised>"
@@ -144,6 +146,28 @@ def _form(token: str, link: supplier_links.Link, note: str = "", status: int = 2
 def show(token: str, request: Request) -> HTMLResponse:
     try:
         return _form(token, _link(token, request))
+    except Refused as error:
+        return refuse(error)
+
+
+@router.get("/supplier/{token}/pdf", response_model=None)
+def version_document(token: str, request: Request) -> Response | HTMLResponse:
+    """The document of the version this link was mailed with, as stored, while the link may still be used (OP-21)."""
+    try:
+        link = _link(token, request)
+        with Session(routing.engine_for(link.tenant)) as db:
+            try:
+                row = supplier_links.check(db, link)
+            except supplier_links.LinkError as exc:
+                raise Refused(409, str(exc)) from None
+            data = versions.stored_pdf(db, link.tenant, link.po_no, int(row["po_version"]))
+        if data is None:
+            raise Refused(404, f"version {row['po_version']} of order {link.po_no} was not issued as a document")
+        return Response(
+            data,
+            media_type="application/pdf",
+            headers={"Content-Disposition": f'inline; filename="{link.po_no}-v{row["po_version"]}.pdf"'},
+        )
     except Refused as error:
         return refuse(error)
 

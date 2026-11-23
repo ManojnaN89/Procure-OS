@@ -3,7 +3,9 @@
 A link names one order, one supplier and one purpose ('respond': accept, decline or ask for a change; 'dispatch': record
 what was shipped). It is signed (platform/signing.py, its own key), expires, and works once: the row in supplier_link is
 marked used by the first answer, and a link for a version of the order that has since changed, for an order no longer in
-the right state, or for an order of another supplier is refused. Opening the page changes nothing.
+the right state, or for an order of another supplier is refused. A respond link is for one version: every mailing of a
+version issues its own, and an older version's link is refused as changed before anything else is said about the order
+(DF-07). A dispatch link stays good across versions (OP-14). Opening the page changes nothing.
 """
 
 import time
@@ -15,6 +17,7 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from p2p.config import get_settings
+from p2p.platform import audit
 from p2p.platform.signing import SignatureError, Signer
 
 EXPIRES_DAYS = {"respond": 14, "dispatch": 60}
@@ -52,6 +55,10 @@ def issue(db: Session, tenant: str, po_no: str, purpose: str, *, now: datetime |
         ),
         {"p": po_no, "s": po[0], "k": purpose, "v": po[1], "n": now, "e": expires},
     ).scalar_one()
+    audit.record(
+        db, audit.SYSTEM, "supplier_link.issue", "po", po_no,
+        after={"link": int(link_id), "purpose": purpose, "version": int(po[1])},
+    )  # fmt: skip
     return SIGNER.sign([tenant, int(link_id), po_no, str(po[0]), purpose, int(expires.timestamp())])
 
 
@@ -92,10 +99,11 @@ def check(db: Session, link: Link, *, lock: bool = False) -> dict[str, Any]:
         raise LinkError(f"order {link.po_no} is not placed with you")
     if row["used_at"] is not None:
         raise LinkError("this link has already been used: it works once")
-    if row["status"] not in OPEN_FOR[link.purpose]:
-        raise LinkError(f"order {link.po_no} is {str(row['status']).replace('_', ' ')}: nothing more can be done here")
+    # the version first: after a revision the supplier hears the order changed, never the state it is in for us now
     if link.purpose == "respond" and row["po_version"] != row["version"]:
         raise LinkError(f"order {link.po_no} has changed since this link was sent: please use the latest email")
+    if row["status"] not in OPEN_FOR[link.purpose]:
+        raise LinkError(f"order {link.po_no} is {str(row['status']).replace('_', ' ')}: nothing more can be done here")
     return dict(row)
 
 

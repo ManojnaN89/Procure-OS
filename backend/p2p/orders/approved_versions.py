@@ -15,16 +15,17 @@ from sqlalchemy.orm import Session
 
 from p2p.approvals import rules
 from p2p.formulas.calendar import business_today
-from p2p.formulas.po_versions import LineState, Snapshot
+from p2p.formulas.po_versions import Charge, LineState, Snapshot
 
 
 def snapshot(db: Session, po_no: str) -> Snapshot:
-    """The order as it stands now."""
+    """The order as it stands now: header, lines (with their contract price version) and charges. The one reader of an
+    order's state, for approved versions and for every version (orders/versions.py)."""
     po = (
         db.execute(
             text(
-                "select version, supplier_code, ship_to_location, payment_terms_code, total, rule_code from po "
-                "where no = :n"
+                "select version, supplier_code, ship_to_location, payment_terms_code, total, rule_code, buyer_gstin, "
+                "delivery_terms, contract_code, taxable, cgst, sgst, igst from po where no = :n"
             ),
             {"n": po_no},
         )
@@ -32,12 +33,37 @@ def snapshot(db: Session, po_no: str) -> Snapshot:
         .one()
     )
     lines = tuple(
-        LineState(int(r[0]), r[1], Decimal(r[2]), Decimal(r[3]), r[4])
+        LineState(
+            int(r["line_no"]),
+            r["item_code"],
+            Decimal(r["qty"]),
+            Decimal(r["unit_price"]),
+            r["need_by"],
+            r["description"],
+            r["uom"],
+            r["gst_rate"],
+            r["taxable"],
+            r["cgst"],
+            r["sgst"],
+            r["igst"],
+            r["price_record_id"],
+            r["contract_version"],
+            r["status"],
+        )  # fmt: skip
         for r in db.execute(
             text(
-                "select line_no, item_code, qty, unit_price, need_by from po_line "
-                "where po_no = :n and status <> 'cancelled' order by line_no"
+                "select l.line_no, l.item_code, l.qty, l.unit_price, l.need_by, l.description, l.uom, l.gst_rate, "
+                "l.taxable, l.cgst, l.sgst, l.igst, l.price_record_id, pr.version as contract_version, l.status "
+                "from po_line l left join price_record pr on pr.id = l.price_record_id "
+                "where l.po_no = :n and l.status <> 'cancelled' order by l.line_no"
             ),
+            {"n": po_no},
+        ).mappings()
+    )
+    charges = tuple(
+        Charge(str(r[0]), r[1], r[2], r[3], r[4], r[5])
+        for r in db.execute(
+            text("select type, amount, gst_rate, cgst, sgst, igst from po_charge where po_no = :n order by id"),
             {"n": po_no},
         )
     )
@@ -50,6 +76,14 @@ def snapshot(db: Session, po_no: str) -> Snapshot:
         None,
         lines,
         po["rule_code"],
+        po["buyer_gstin"],
+        po["delivery_terms"],
+        po["contract_code"],
+        po["taxable"],
+        po["cgst"],
+        po["sgst"],
+        po["igst"],
+        charges,
     )
 
 

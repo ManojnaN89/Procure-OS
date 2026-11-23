@@ -735,6 +735,19 @@ period_scenarios:
   - {name: P4, title: The automatic band never approves an award, as_of: "2026-11-23", location: PLT-CKN, period_from: "2027-01-01", period_to: "2027-03-31", lines: [{item: RM-07, qty: "1000", supplier: SUP-002, price: "84.00"}]}
   - {name: P6, title: An expiry review starts a period RFQ, as_of: "2027-02-01", location: PLT-CKN, period_from: "2027-04-01", period_to: "2028-03-31", lines: [{item: RM-01}, {item: RM-02}, {item: RM-03}, {item: RM-04}, {item: RM-05}]}
 
+# Block 7 (purchase order versions, section 7 of its spec): every version of each scenario's order, worked out by
+# datagen/generator/version_scenarios.py into truth/truth_po_versions.csv. A version names only what changed;
+# `makers`: the roles that made a later version (they never approve it, C1).
+version_scenarios:
+  - {name: P1, title: Acknowledgement bound to the version, item: RM-08, supplier: SUP-005, gst: "18", need_by: "2026-12-14", versions: [{location: PLT-CKN, qty: "120", price: "905.00", terms: NET45}, {qty: "100"}]}
+  - {name: P2, title: A stored document per issued version, item: RM-08, supplier: SUP-005, gst: "18", need_by: "2026-12-14", versions: [{location: PLT-CKN, qty: "120", price: "905.00", terms: NET45}, {qty: "100"}, {need_by: "2026-12-19"}]}
+  - {name: P5, title: Payment terms with an advance are approved again by someone who did not make the change, item: RM-05, supplier: SUP-001, gst: "5", need_by: "2026-12-14", makers: [purchase_manager], versions: [{location: PLT-CKN, qty: "10", price: "180.00", price_record_version: "1", terms: NET30, touchless: true}, {terms: ADV30N30}]}
+  - {name: P6a, title: Delivery terms are a minor change, item: RM-08, supplier: SUP-005, gst: "18", need_by: "2026-12-14", versions: [{location: PLT-CKN, qty: "120", price: "905.00", terms: NET45}, {delivery_terms: ex_works}]}
+  - {name: P6b, title: A minor change to a touchless order, item: RM-05, supplier: SUP-001, gst: "5", need_by: "2026-12-14", versions: [{location: PLT-CKN, qty: "10", price: "180.00", price_record_version: "1", terms: NET30, touchless: true}, {delivery_terms: ex_works}]}
+  - {name: P7, title: A respond link per version, item: RM-08, supplier: SUP-005, gst: "18", need_by: "2026-12-14", versions: [{location: PLT-CKN, qty: "120", price: "905.00", terms: NET45}, {need_by: "2026-12-19"}, {delivery_terms: ex_works}]}
+  - {name: P8, title: The order keeps its contract price version, item: RM-01, supplier: SUP-001, gst: "18", need_by: "2027-01-15", versions: [{location: PLT-CKN, qty: "200", price: "650.00", price_record_version: "1", terms: NET30}, {price: "672.00", price_record_version: "2"}]}
+  - {name: P8-new, title: A new order after version 2 starts, item: RM-01, supplier: SUP-001, gst: "18", need_by: "2027-01-15", versions: [{location: PLT-CKN, qty: "200", price: "672.00", price_record_version: "2", terms: NET30}]}
+
 # Block 6 (quotes and supplier selection): the figures the truth file works out (generator/quote_scenarios.py)
 quote_scenarios:
   - {name: N1, title: Brief on the last price paid, as_of: "2026-11-23", item: RM-08, location: PLT-CKN, qty: "500", l1: "960.00", l2: "975.00"}

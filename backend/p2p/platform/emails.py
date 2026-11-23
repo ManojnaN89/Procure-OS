@@ -55,6 +55,7 @@ def send_linked_email(
     linked_ref: str,
     case_id: int | None = None,
     attachments: list[tuple[str, str, bytes]] | None = None,
+    document_ids: list[int] | None = None,
 ) -> str:
     """Queue an email whose replies will be linked back to the RFQ, PO or invoice. Does not commit: the caller commits it
     together with its own change, then calls `send_queued` (or `commit_and_send`) to send it at once; the `email` job
@@ -70,6 +71,7 @@ def send_linked_email(
         case_id=case_id,
         attachments=attachments,
         reply_to=plus_address(linked_type, linked_ref),
+        document_ids=document_ids,
     )
     db.info.setdefault(_QUEUED, []).append(message_id)
     return message_id

@@ -1570,7 +1570,13 @@ def get_purchase_order(no: str, db: Db, ctx: Ctx) -> dict[str, Any]:
     if not rows:
         raise HTTPException(404, "Not found")
     r = rows[0]
-    lines = _rows(db, "select * from po_line where po_no = :n order by line_no", n=no)
+    lines = _rows(
+        db,
+        "select l.*, pr.contract_code as price_contract, pr.version as price_version, pr.valid_from as price_from, "
+        "pr.valid_to as price_to from po_line l left join price_record pr on pr.id = l.price_record_id "
+        "where l.po_no = :n order by l.line_no",
+        n=no,
+    )
     charges = _rows(db, "select * from po_charge where po_no = :n order by id", n=no)
     promised = [line["promised_date"] for line in lines if line["promised_date"]]
     can_dispatch = can_anywhere(db, ctx.user_id, "po.send")
@@ -1586,6 +1592,7 @@ def get_purchase_order(no: str, db: Db, ctx: Ctx) -> dict[str, Any]:
         "sent_at": _iso(r["sent_at"]),
         "sent_to": r["sent_to"],
         "acknowledged_at": _iso(r["acknowledged_at"]),
+        "acknowledged_version": r["acknowledged_version"],
         "ack_note": r["ack_note"],
         "promised_date": max(promised).isoformat() if promised else None,
         "ack_overdue": r["status"] == "sent" and dispatch.ack_overdue(db, r["sent_at"], business_today()),
@@ -1635,6 +1642,17 @@ def get_purchase_order(no: str, db: Db, ctx: Ctx) -> dict[str, Any]:
                 "received_qty": _qty(line["received_qty"]),
                 "source": line["source"],
                 "source_ref": line["source_ref"],
+                "status": line["status"],
+                # the contract price version the line was bought at (D48); none once the price is no longer the contract's
+                "contract": {
+                    "code": line["price_contract"],
+                    "version": line["price_version"],
+                    "price_record_id": line["price_record_id"],
+                    "valid_from": line["price_from"].isoformat() if line["price_from"] else None,
+                    "valid_to": line["price_to"].isoformat() if line["price_to"] else None,
+                }
+                if line["price_record_id"]
+                else None,
             }
             for line in lines
         ],
@@ -1910,11 +1928,14 @@ def acknowledge_purchase_order(
         promised = date.fromisoformat(str(raw)) if raw else None
     except ValueError:
         raise HTTPException(422, "promised_date must be a date like 2026-11-20") from None
+    seen = _seen_version(payload)  # the version on the buyer's screen (OP-9); omitted: the current one, recorded
+    current = db.execute(text("select version from po where no = :n"), {"n": no}).scalar()
     return _dispatch_action(
         lambda: {
             "status": "acknowledged",
+            "version": seen if seen is not None else current,
             "warnings": dispatch.acknowledge(
-                db, no, sod.user(ctx.user_id), promised=promised, note=payload.get("note")
+                db, no, sod.user(ctx.user_id), version=seen, via="app", promised=promised, note=payload.get("note")
             ),
         }
     )

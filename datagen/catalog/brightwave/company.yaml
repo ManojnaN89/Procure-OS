@@ -479,3 +479,8 @@ cutover:
 # The period RFQ scenario of block 5 here: two suppliers for a category that wants three quotes (see apex/company.yaml).
 period_scenarios:
   - {name: B1, title: Too few quotes on a period award, as_of: "2026-11-23", location: OFF-BLR, period_from: "2027-04-01", period_to: "2028-03-31", contract: true, lines: [{item: HS-01, qty: "60", supplier: SUP-002, price: "2350.00"}, {item: KB-01, qty: "60", supplier: SUP-002, price: "1750.00"}]}
+
+# Block 7 (purchase order versions, section 7 of its spec): a delivery place in another state turns CGST and SGST into
+# IGST and is approved again (generator/version_scenarios.py, truth/truth_po_versions.csv)
+version_scenarios:
+  - {name: P4, title: The delivery place moves to another state, item: LP-01, supplier: SUP-001, gst: "18", need_by: "2026-12-14", versions: [{location: OFF-BLR, qty: "2", price: "62000.00", price_record_version: "1", terms: NET30}, {location: OFF-HYD}]}

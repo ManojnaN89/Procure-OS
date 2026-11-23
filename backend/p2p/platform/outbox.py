@@ -50,10 +50,12 @@ def queue_email(
     attachments: list[tuple[str, str, bytes]] | None = None,
     reply_to: str | None = None,
     sender: str = mail.DEFAULT_SENDER,
+    document_ids: list[int] | None = None,
 ) -> str:
     """Record a mail to send once the caller commits. The mail says `body` + `secret`; `body_text` keeps `record` when
     given (a mail that is all links), else `body`: never the secret part. The caller commits, then calls `send_now` to send it
-    at once (else the `email` job sends it). Returns the Message-ID. Does not commit."""
+    at once (else the `email` job sends it). `document_ids` are files already stored (an order version's document): they
+    are attached as they are, never stored a second time. Returns the Message-ID. Does not commit."""
     tenant = tenant_of(db)
     message_id = mail.new_message_id()
     attachment_ids = [
@@ -62,7 +64,7 @@ def queue_email(
             linked_type="email", linked_id=message_id, commit=False,
         ).id
         for name, ctype, data in attachments or []
-    ]  # fmt: skip
+    ] + [int(i) for i in document_ids or []]  # fmt: skip
     db.execute(
         text(
             "insert into email_message (message_id, direction, from_addr, to_addr, subject, body_text, plus_tag, "

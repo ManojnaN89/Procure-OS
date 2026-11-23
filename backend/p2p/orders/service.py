@@ -31,7 +31,7 @@ from p2p.formulas.orders import (
 )
 from p2p.formulas.touchless import PRICE_LIST
 from p2p.orders import contracts as contract_usage
-from p2p.orders import workflow
+from p2p.orders import versions, workflow
 from p2p.platform import audit, numbering, proposals
 from p2p.platform.sod import Actor
 
@@ -323,18 +323,9 @@ def _create_po(
         .one()
     )
     ship_to = lines[0].location  # every line of the group goes to the same place
-    loc = (
-        db.execute(text("select code, gstin, state_code from location where code = :c"), {"c": ship_to})
-        .mappings()
-        .one()
-    )
-    buyer_gstin = (
-        loc["gstin"]
-        or db.execute(text("select gstin from gst_registration where is_default order by gstin limit 1")).scalar()
-    )
-    place_of_supply = (str(buyer_gstin)[:2] if buyer_gstin else None) or loc["state_code"]
+    buyer_gstin, supply_state = place_of_supply(db, ship_to)
     supplier_state = sup["state_code"] or (str(sup["gstin"])[:2] if sup["gstin"] else None)
-    if not supplier_state or not place_of_supply:
+    if not supplier_state or not supply_state:
         result.skipped.append(
             f"{supplier_code}: the state of the supplier or of the delivery place is unknown, so the GST cannot be split"
         )
@@ -342,7 +333,7 @@ def _create_po(
     registration = Registration(sup["gst_reg_type"] or "regular")
 
     amounts: list[LineAmounts] = [
-        line_amounts(ln.qty, ln.unit_price, ln.gst_rate, supplier_state, place_of_supply, registration) for ln in lines
+        line_amounts(ln.qty, ln.unit_price, ln.gst_rate, supplier_state, supply_state, registration) for ln in lines
     ]
     charge_parts: list[tuple[str, Decimal, Decimal, LineAmounts]] = []
     rate = charge_rate([ln.gst_rate for ln in lines])
@@ -351,7 +342,7 @@ def _create_po(
         for kind, amount in (("freight", q[0]), ("packing_forwarding", q[1])):
             if amount and amount > 0:
                 charge_parts.append(
-                    (kind, amount, rate, line_amounts(1, amount, rate, supplier_state, place_of_supply, registration))
+                    (kind, amount, rate, line_amounts(1, amount, rate, supplier_state, supply_state, registration))
                 )
     totals = order_totals([*amounts, *[c[3] for c in charge_parts]])
 
@@ -460,6 +451,7 @@ def _create_po(
     ).scalar_one()
     if open_left == 0:
         db.execute(text("update request set status = 'closed' where no = :n"), {"n": req["no"]})
+    versions.record(db, po_no, made_by=versions.made_by(actor))
     audit.record(
         db,
         actor,
@@ -473,7 +465,7 @@ def _create_po(
             "taxable": totals.taxable,
             "tax": totals.cgst + totals.sgst + totals.igst,
             "total": totals.total,
-            "place_of_supply": place_of_supply,
+            "place_of_supply": supply_state,
             "supplier_state": supplier_state,
             "held": bool(hold),
         },
@@ -497,6 +489,20 @@ def _create_po(
         result.held.append(po_no)
         return po_no, True
     return po_no, False
+
+
+def place_of_supply(db: Session, location: str) -> tuple[str | None, str | None]:
+    """Our GSTIN for a delivery place (its own registration, else the company's default one) and the state the goods
+    are supplied to (from that GSTIN, else the place's own state). None for a place that is not ours. Used when an
+    order is made and when its delivery place changes (orders/changes.py)."""
+    loc = db.execute(text("select gstin, state_code from location where code = :c"), {"c": location}).first()
+    if loc is None:
+        return None, None
+    gstin = (
+        loc[0]
+        or db.execute(text("select gstin from gst_registration where is_default order by gstin limit 1")).scalar()
+    )
+    return gstin, (str(gstin)[:2] if gstin else None) or loc[1]
 
 
 def _terms(

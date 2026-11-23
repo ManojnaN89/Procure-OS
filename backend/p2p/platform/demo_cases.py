@@ -13,7 +13,8 @@ What it leaves behind (dates are relative to today):
     a draft, a request waiting for the plant head, one waiting for the director,
     a quotation request sent with quotes in and waiting for an award,
     an order made from an award and waiting for the purchase manager, an approved order waiting to be sent,
-    a sent and acknowledged order, a part-received order, a fully received order waiting for an invoice,
+    a sent and acknowledged order at version 2 (its delivery terms changed: the versions can be compared), a
+    part-received order, a fully received order waiting for an invoice,
     an invoice approved and not due yet, a blocked invoice waiting for release,
     a payment run waiting for the director, an approved run with its bank file made, and one case paid and closed,
     a period RFQ whose award waits for the director, a quotation request with a negotiation brief (block 6), and one
@@ -395,6 +396,12 @@ def _later(run: _Run) -> None:
     _, po = run.contract_order("RM-03", 20, "Impellers for the 1 HP pumps")
     run.approve_order(po)
     run.send_order(po)
+    # the plant collects from the foundry: a minor change, so the approval carries and the supplier answers version 2
+    run.call(
+        BUYER, "POST", f"/api/purchase-orders/{po}/revise",
+        {"reason": "We collect from the foundry this time", "version": 1, "header": {"delivery_terms": "ex_works"}},
+    )  # fmt: skip
+    run.call(BUYER, "POST", f"/api/purchase-orders/{po}/acknowledge", {"version": 2, "promised_date": run.day(3)})
     _stage(run, LATER[2], po)
 
     _, po = run.contract_order("RM-04", 20, "Impellers for the 0.5 HP pumps")

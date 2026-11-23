@@ -229,13 +229,15 @@ def accept_by_link(
 ) -> tuple[str, list[str]]:
     """The supplier accepts the order from its link. Returns a link to record the dispatch (also emailed to the supplier)
     and the warnings of the acknowledgement (a promised date later than needed)."""
-    supplier_links.check(db, link, lock=True)
+    row = supplier_links.check(db, link, lock=True)
     supplier_links.use(db, link, "accept")
     try:
         warnings = dispatch.acknowledge(
             db,
             link.po_no,
             supplier_actor(link.supplier_code),
+            version=int(row["po_version"]),  # the version this link was mailed with (the check made sure it is current)
+            via="link",
             promised=promised,
             note=(note or "").strip()[:500] or "accepted by link",
         )
@@ -397,7 +399,10 @@ def _apply(db: Session, tenant: str, ch: dict[str, Any], user_id: int, note: str
     if (
         po["status"] == "sent"
     ):  # the supplier asked for the change instead of accepting: agreeing to it settles the order
-        dispatch.acknowledge(db, ch["po_no"], user(user_id), promised=None, note=f"accepted with the change: {what}")
+        dispatch.acknowledge(
+            db, ch["po_no"], user(user_id), version=int(made["version"]), via="app", promised=None,
+            note=f"accepted with the change: {what}",
+        )  # fmt: skip
     changes.tell_people(
         db, tenant, ch["po_no"], f"Order {ch['po_no']} changed (version {made['version']})",
         f"The supplier asked for a change and it was accepted: {what}.", buyer=po["buyer"],

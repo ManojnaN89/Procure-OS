@@ -117,6 +117,17 @@ def test_the_good_files_load_the_rest_and_a_second_load_loads_nothing(apex: Apex
         ).scalar()
         assert carriers == 31
         assert db.execute(text("select distinct source from po_line")).scalars().all() == ["cutover"]
+        # each order brought over is its version 1, made by the cutover; an acknowledged one is acknowledged at 1
+        kept = db.execute(
+            text("select count(*), count(*) filter (where made_by = 'cutover' and version = 1) from po_version")
+        ).one()
+        assert tuple(kept) == (31, 31)
+        assert not db.execute(
+            text(
+                "select no from po where acknowledged_at is not null and acknowledged_version is distinct from 1 "
+                "union all select no from po where acknowledged_at is null and acknowledged_version is not null"
+            )
+        ).all()
         assert not [a for a in payment.due_advances(db) if a["no"] == "PO-CKN-2627-00202"]
         assert db.execute(text("select count(*) from audit_event where action = 'cutover.invoice'")).scalar() == 44
 

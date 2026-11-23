@@ -9,6 +9,8 @@ from sqlalchemy import text
 from test_main_ui import LAPTOP, clear_stock_and_approvals, open_app, seed_stock_and_approvals, sign_in
 from test_web_shell import URL, Company, browser, company, server  # noqa: F401 - fixtures
 
+from p2p.orders import versions
+
 
 def _order(company: Company, no: str, status: str, received: int) -> None:
     """A sent order of ten bearings from S1 (a line of a request that is already ordered)."""
@@ -42,6 +44,7 @@ def _order(company: Company, no: str, status: str, received: int) -> None:
         ),
         {"n": no, "r": f"REQ-{no}", "got": received, "ls": "part_received" if received else "open"},
     )
+    versions.record(db, no, made_by="backfill")  # as the migration keeps an order made before versions were kept
     db.commit()
 
 
@@ -83,7 +86,8 @@ def test_a_buyer_opens_the_document_changes_cancels_and_closes_and_a_store_perso
 
         # a smaller quantity is a new version with a lower total; the reason is asked for
         buyer.locator("#poReviseOpen").click()
-        buyer.locator("#poRevQty").fill("8")
+        expect(buyer.locator("#poChangeForm")).to_contain_text("go for approval again")
+        buyer.locator('#poChangeForm tr[data-line="1"] .rev-qty').fill("8")
         buyer.locator("#poRevGo").click()
         expect(buyer.locator("#poChangeNote")).to_contain_text("reason is needed")
         buyer.locator("#poChangeReason").fill("Production plan cut")
@@ -91,6 +95,9 @@ def test_a_buyer_opens_the_document_changes_cancels_and_closes_and_a_store_perso
         expect(buyer.locator("#poChangesBox")).to_contain_text("Version 2")
         expect(buyer.locator("#poChangesBox")).to_contain_text("Production plan cut")
         expect(buyer.locator("#appContent")).to_contain_text("₹944")  # 8 x 100 plus 18%
+        # the versions panel compares the two versions side by side (block 7)
+        expect(buyer.locator("#poVersionsBox")).to_contain_text("Version 1")
+        expect(buyer.locator("#poCmpOut")).to_contain_text("Quantity")
 
         # cancelling needs a reason too, and ends the order
         buyer.locator("#poCancelOpen").click()

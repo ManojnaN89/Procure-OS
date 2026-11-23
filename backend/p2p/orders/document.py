@@ -1,8 +1,10 @@
 """The purchase order as a document (PDF) that goes to the supplier with the email.
 
 The layout is fixed; the terms text comes from a template the company can change (the setting `po_terms_template`, a
-Jinja text with the order's own values). Everything on the page is read from the order as it is stored, so the same order
-and version always give the same document.
+Jinja text with the order's own values). Everything on the page is read from the order as it is stored. The document of
+a version is rendered once, when the version is mailed, and kept (orders/versions.py); a version not yet issued is drawn
+live with the title marked "DRAFT: not issued". The page names the version, the day it was made, and for a contract line
+the contract price version it was bought at (D48).
 """
 
 import logging
@@ -19,6 +21,7 @@ from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer, Table, Tabl
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
+from p2p.formulas.calendar import IST
 from p2p.formulas.money import format_inr, format_qty
 
 log = logging.getLogger(__name__)
@@ -129,7 +132,8 @@ class Pdf:
         return buffer.getvalue()
 
 
-def order_document(db: Session, po_no: str) -> bytes:
+def order_document(db: Session, po_no: str, *, draft: bool = False) -> bytes:
+    """The order as it stands now. `draft`: a version not issued to the supplier, so the title says so."""
     found = db.execute(text("select * from po where no = :n"), {"n": po_no}).mappings().first()
     if found is None:
         raise DocumentError(f"{po_no} does not exist")
@@ -138,7 +142,8 @@ def order_document(db: Session, po_no: str) -> bytes:
         dict(r)
         for r in db.execute(
             text(
-                "select l.*, i.hsn_sac from po_line l left join item i on i.code = l.item_code "
+                "select l.*, i.hsn_sac, pr.contract_code as price_contract, pr.version as price_version from po_line l "
+                "left join item i on i.code = l.item_code left join price_record pr on pr.id = l.price_record_id "
                 "where l.po_no = :n and l.status <> 'cancelled' order by l.line_no"
             ),
             {"n": po_no},
@@ -166,7 +171,14 @@ def order_document(db: Session, po_no: str) -> bytes:
 
     doc = Pdf(db)
     version = f", version {po['version']}" if int(po["version"]) > 1 else ""
-    doc.title(f"PURCHASE ORDER {po['no']}{version}", f"Date: {po['created_at']:%d %b %Y}")
+    dated = f"Date: {po['created_at'].astimezone(IST):%d %b %Y}"
+    if int(po["version"]) > 1:
+        made = db.execute(
+            text("select made_at from po_version where po_no = :n and version = :v"), {"n": po_no, "v": po["version"]}
+        ).scalar()
+        if made is not None:
+            dated += f". This version: {made.astimezone(IST):%d %b %Y}"
+    doc.title(f"PURCHASE ORDER {po['no']}{version}" + (", DRAFT: not issued" if draft else ""), dated)
     doc.parties(
         ("Supplier", [str(supplier), f"GSTIN {po['supplier_gstin']}" if po["supplier_gstin"] else "", address]),
         (
@@ -183,7 +195,16 @@ def order_document(db: Session, po_no: str) -> bytes:
         rows.append(
             [
                 str(n),
-                doc.p(ln["description"] + (f" ({ln['item_code']})" if ln["item_code"] else ""), doc.small),
+                doc.p(
+                    ln["description"]
+                    + (f" ({ln['item_code']})" if ln["item_code"] else "")
+                    + (
+                        f"\nContract {ln['price_contract']} version {ln['price_version']}"
+                        if ln["price_contract"]
+                        else ""
+                    ),
+                    doc.small,
+                ),
                 ln["hsn_sac"] or "",
                 f"{format_qty(ln['qty'])} {ln['uom'] or ''}".strip(),
                 _rs(ln["unit_price"]),

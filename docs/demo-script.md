@@ -185,6 +185,15 @@ Business date Mon 23 Nov 2026. production@ asks for 500 kg of copper winding wir
 2. **Closed short.** On an RFQ where only one supplier quotes by the closing date, the next morning's job gives the buyer a case "closed with 1 of 3 quotes wanted"; **Extend closing** completes it and tells the suppliers.
 3. **Path A or B.** With a verified RM-01 benchmark of 600.00 (Maharashtra), a request for 600 castings at Chakan needed in January waits for the buyer: CNT-0001's 650.00 is 7.69% above the market, 30,000.00 on 600. **Ask for quotes (B)** prepares an RFQ; **Buy on the contract (A)** with a reason makes an order that waits for the purchase manager.
 
+## Purchase order versions (block 7)
+
+Business date Mon 23 Nov 2026. Figures: `truth/truth_po_versions.csv`.
+
+1. **Acknowledgement of a version.** An award of 120 kg of copper wire to Pune Copper at 905.00 makes an order of 1,28,148.00 (CGST and SGST 9,774.00 each) that purchasemanager@ approves; buyer@ sends it and the supplier accepts from its link. buyer@ cuts it to 100 kg: version 2 (1,06,790.00) keeps the approval, the supplier gets version 2's document and a new link, and the order shows "Version 2 not yet acknowledged". The first link now says the order changed. **Versions** → **Compare** 1 with 2 shows the quantity, the taxable value, the tax and the total.
+2. **A new delivery place (Brightwave).** Two laptops on CNT-0001 for Bengaluru (1,46,320.00 with CGST and SGST), approved by the CFO and acknowledged; buyer@ moves the delivery to Hyderabad: IGST 22,320.00, our Telangana GSTIN, and the order goes back to the CFO.
+3. **The contract price version.** An order of 200 castings at 650.00 on CNT-0001 version 1 keeps that price when version 2 (672.00 from 1 Jan 2027) is activated. On 4 Jan 2027 **Use the contract price in force** makes version 2 of the order at 672.00 (1,58,592.00), approved again because the price went up.
+4. **A minor change.** Changing the delivery terms of a touchless order to ex works keeps the rule's approval, but the order is no longer touchless; its note says who changed it.
+
 ## Start with cases in flight
 
 `python -m p2p.cli demo populate apex --reset` (about 20 seconds, local database only) makes the company and then does what the people would do, through the real API, so every figure, email, notification and audit row is real:
@@ -196,7 +205,7 @@ Business date Mon 23 Nov 2026. production@ asks for 500 kg of copper winding wir
 | production@ **Requests** | A draft (bearings) to submit |
 | planthead@ / director@ My work | Winding wire (₹18,400) for the plant head; motor bodies (₹1,30,000) for the director; the payment run for the director |
 | purchasemanager@ My work | The copper wire order from an award; the blocked invoice to release |
-| later stages | An order approved and waiting to be sent, one acknowledged, one part received (store@), one received and waiting for an invoice (ap@), an invoice not due yet, a run with its bank file made, and one case paid and closed |
+| later stages | An order approved and waiting to be sent, one acknowledged at version 2 (its delivery terms changed to ex works: on the order, **Versions** → **Compare** version 1 with version 2), one part received (store@), one received and waiting for an invoice (ap@), an invoice not due yet, a run with its bank file made, and one case paid and closed |
 
 It refuses a company that already has requests. To go back to the empty company (what E34 and the journey above expect), run `demo reset apex` again.
 

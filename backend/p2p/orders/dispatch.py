@@ -6,6 +6,10 @@ as soon as it is approved, unless the kill switch is on. The acknowledgement car
 is copied to the open lines and checked against the date the goods are needed. The email carries a signed link where the
 supplier accepts, declines or asks for a change (orders/supplier_links.py, orders/confirmation.py), and sending an order
 starts the daily delivery reminders (orders/delivery_reminders.py).
+
+Each mailing is of one version: its document is stored once and attached as stored (orders/versions.py), and its link
+answers that version only. An acknowledgement is of one version: one for a version the order has moved on from is
+refused (DF-07), and a revision voids the acknowledgement of the version before it.
 """
 
 import logging
@@ -17,8 +21,8 @@ from sqlalchemy.orm import Session
 
 from p2p.formulas.calendar import IST, business_today
 from p2p.formulas.money import format_inr, format_qty
-from p2p.orders import delivery_reminders, document, supplier_links
-from p2p.platform import audit, emails, reference, routing, worker
+from p2p.orders import delivery_reminders, document, supplier_links, versions
+from p2p.platform import audit, emails, outbox, reference, routing, worker
 from p2p.platform.sod import Actor
 from p2p.sourcing import documents
 
@@ -131,13 +135,9 @@ def send_po(db: Session, po_no: str, actor: Actor = SERVICE, *, tenant: str | No
     company = db.execute(text("select coalesce(short_name, legal_name) from company limit 1")).scalar() or "Our company"
     name, address = document.delivery_place(db, po["ship_to_location"])
     ship_to = f"{name} ({po['ship_to_location']})" + (f", {address}" if address else "")
-    try:
-        pdf = [(f"{po_no}.pdf", "application/pdf", document.order_document(db, po_no))]
-    except Exception:  # noqa: BLE001 - the order still goes out as text; a fault in the document must not stop it
-        log.warning("the document of %s could not be made; sending the order as text only", po_no, exc_info=True)
-        db.rollback()
+    issued = versions.issue_document(db, tenant or outbox.tenant_of(db), po_no)
+    if issued is None:  # sent as text; the document's failure is audited, and the order is locked again
         po = db.execute(text("select * from po where no = :n for update"), {"n": po_no}).mappings().one()
-        pdf = []
     version = f" (version {po['version']})" if int(po["version"]) > 1 else ""
     link = supplier_links.url(supplier_links.issue(db, tenant, po_no, "respond")) if tenant else None
     emails.send_linked_email(
@@ -147,12 +147,13 @@ def send_po(db: Session, po_no: str, actor: Actor = SERVICE, *, tenant: str | No
         _body(dict(po), lines, charges, contact[1], str(company), str(ship_to), link),
         linked_type="po",
         linked_ref=po_no,
-        attachments=pdf or None,
+        document_ids=[issued.document_id] if issued else None,
     )
     db.execute(
         text("update po set status = 'sent', sent_at = now(), sent_to = :t where no = :n"),
         {"t": contact[0], "n": po_no},
     )
+    versions.mark_sent(db, po_no, int(po["version"]), str(contact[0]))
     audit.record(
         db, actor, "po.send", "po", po_no, before={"status": "approved"}, after={"status": "sent", "to": contact[0]}
     )
@@ -167,16 +168,29 @@ def acknowledge(
     po_no: str,
     actor: Actor,
     *,
+    version: int | None = None,
+    via: str = "app",
     promised: date | None,
     note: str | None,
     today: date | None = None,
     tenant: str | None = None,
 ) -> list[str]:
-    """Record that the supplier confirmed the order. Returns warnings (a promised date later than the need-by date)."""
+    """Record that the supplier confirmed `version` of the order (None: the version it is now, recorded as such), by
+    its link, to a buyer in the app, or by email. Refused for any version but the current one (DF-07). Returns warnings
+    (a promised date later than the need-by date)."""
     today = today or business_today()
-    po = db.execute(text("select status from po where no = :n for update"), {"n": po_no}).first()
+    po = db.execute(text("select status, version from po where no = :n for update"), {"n": po_no}).first()
     if po is None:
         raise DispatchError(f"{po_no} does not exist")
+    if via not in versions.VIA:
+        db.rollback()
+        raise DispatchError(f"an acknowledgement comes by link, app or email, not {via}")
+    version = int(po[1]) if version is None else version
+    if version != int(po[1]):
+        db.rollback()
+        raise DispatchError(
+            f"{po_no} has changed since that version: it is now version {po[1]}; the supplier answers the new version"
+        )
     if po[0] != "sent":
         raise DispatchError(f"{po_no} is {po[0]}; only a sent order can be acknowledged")
     slip = int(_setting(db, "supplier_date_days", "3"))
@@ -197,9 +211,13 @@ def acknowledge(
             {"d": promised, "n": po_no},
         )
     db.execute(
-        text("update po set status = 'acknowledged', acknowledged_at = now(), ack_note = :note where no = :n"),
-        {"note": (note or "").strip() or None, "n": po_no},
+        text(
+            "update po set status = 'acknowledged', acknowledged_at = now(), acknowledged_version = :v, ack_note = :note "
+            "where no = :n"
+        ),
+        {"v": version, "note": (note or "").strip() or None, "n": po_no},
     )
+    versions.mark_acknowledged(db, po_no, version, actor, via)
     audit.record(
         db,
         actor,
@@ -207,7 +225,7 @@ def acknowledge(
         "po",
         po_no,
         before={"status": "sent"},
-        after={"status": "acknowledged", "promised": promised, "warnings": warnings},
+        after={"status": "acknowledged", "promised": promised, "warnings": warnings, "version": version, "via": via},
     )
     db.commit()
     from p2p.requests import material  # noqa: PLC0415 - material requests sit above orders

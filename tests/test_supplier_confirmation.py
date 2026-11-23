@@ -169,6 +169,28 @@ def test_a_link_for_an_order_that_changed_since_is_refused(shop: Session, outbox
     assert got.status_code == 409 and "has changed since" in got.text
 
 
+def test_after_a_material_change_an_old_link_says_the_order_changed_never_its_state_with_us(
+    shop: Session,
+    outbox: Outbox,  # noqa: F811
+) -> None:
+    # given a sent order whose need-by then moved 5 days: approved again, so it is submitted with us (R23)
+    po_no, logins, token = _sent(shop, outbox)
+    from p2p.orders import changes
+
+    changes.revise(
+        shop, shop.info["slug"], po_no, logins["buyer"], "later", [changes.LineChange(1, need_by=date(2026, 11, 25))]
+    )
+    assert shop.execute(text("select status from po")).scalar_one() == "submitted"
+
+    shown = client.get(f"/supplier/{token}")
+    answered = client.post(f"/supplier/{token}", data={"action": "accept"})
+
+    for got in (shown, answered):
+        assert got.status_code == 409
+        assert f"order {po_no} has changed since this link was sent: please use the latest email" in got.text
+        assert "submitted" not in got.text
+
+
 # ---- a date change: version 2, the requester told (the plan's "done when") ------------------------------
 
 
