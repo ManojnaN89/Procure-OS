@@ -499,6 +499,40 @@ def test_a_policy_change_is_stored_logged_and_read_back_by_the_code_that_uses_it
     assert changes[0]["by_name"] == "An Admin" and changes[0]["reason"] == "Tighter control"
 
 
+def test_the_order_terms_change_only_when_a_second_administrator_agrees_and_a_broken_template_is_refused(
+    s: Setup,
+) -> None:
+    # given the order terms, a setting two administrators agree to change (D-22); the standard text until then
+    listed = {p["key"]: p for p in client.get("/api/setup/policies", headers=s.a).json()["settings"]}
+    assert listed["po_terms_template"]["kind"] == "text" and listed["po_terms_template"]["set"] is False
+    path = "/api/setup/policies/po_terms_template"
+
+    # a template that does not render, or reaches outside the sandbox, is refused before anyone is asked
+    for broken in ("{{ unclosed", "{{ ''.__class__.__mro__ }}"):
+        r = client.put(path, json={"value": broken, "reason": "New terms"}, headers=s.a)
+        assert r.status_code == 422 and "the template does not work" in r.json()["detail"], r.text
+    assert s.changes("policy", "po_terms_template") == []
+
+    # one administrator's change waits for the other; nothing is stored until then
+    waiting = client.put(
+        path, json={"value": "Pay {{ payment_terms }} for {{ po_no }}.", "reason": "Legal"}, headers=s.a
+    )
+    assert waiting.status_code == 202 and waiting.json()["status"] == "waiting"
+    s.db.expire_all()
+    assert s.db.execute(text("select value from org_setting where key = 'po_terms_template'")).first() is None
+    done = client.post(f"/api/admin/proposals/{waiting.json()['proposal_id']}/approve", json={}, headers=s.a2)
+    assert done.status_code == 200 and done.json()["execution"] == "ok"
+
+    # then the order document uses it, and the history says who and why
+    s.db.expire_all()
+    from p2p.orders import document  # noqa: PLC0415
+
+    terms = document.terms_text(s.db, {"no": "PO-1", "payment_terms_code": "NET30", "delivery_terms": None})
+    assert terms == "Pay NET30 for PO-1."
+    (logged,) = s.changes("policy", "po_terms_template")
+    assert (logged["new_value"], logged["reason"]) == ({"value": "Pay {{ payment_terms }} for {{ po_no }}.\n"}, "Legal")
+
+
 def test_what_a_policy_was_on_any_day_can_be_read_back(s: Setup, owner_session: Any) -> None:
     put = lambda value: s.put(  # noqa: E731
         "/api/setup/policies/price_band_pct", json={"value": value, "reason": "Review"}

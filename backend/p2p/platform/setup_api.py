@@ -13,6 +13,7 @@ automation and adding a person who is not an administrator apply at once.
 
 import json
 import re
+from collections.abc import Callable
 from datetime import date, datetime, timedelta
 from decimal import Decimal, InvalidOperation
 from typing import Annotated, Any
@@ -26,6 +27,7 @@ from p2p.agents import autonomy, planning
 from p2p.approvals.rules import chain_roles
 from p2p.formulas.calendar import business_today
 from p2p.invoices import tolerances as tolerance_versions
+from p2p.orders import document
 from p2p.platform import audit, routing, setting_changes, tenants, users
 from p2p.platform.permissions import require
 from p2p.platform.rows import rows as _rows
@@ -273,6 +275,18 @@ POLICIES: dict[str, tuple[str, str, str, str, str, float | None, float | None, t
         "The name our own mail server writes in Authentication-Results (e.g. mx.google.com): only its check of a "
         "supplier's sender counts (D53). Empty: no sender is taken as checked, so a person confirms every emailed quote",
         "",
+        None,
+        None,
+        (),
+    ),
+    "po_terms_template": (
+        "org",
+        "text",
+        "Terms printed on the purchase order",
+        "The terms block of every order document from now on (a document already sent keeps the terms it had). "
+        "Fields filled in for each order: {{ po_no }}, {{ payment_terms }}, {{ delivery_terms }}, {{ ack_days }}. "
+        "Empty: the standard terms",
+        document.DEFAULT_TERMS,
         None,
         None,
         (),
@@ -1365,8 +1379,18 @@ def _approval_rule(db: Session, actor: Actor, args: dict[str, Any], reason: str,
 # ---- policies and tolerances ------------------------------------------------------------------
 
 
+# what a text setting must be: the quotation request email by default, the order's terms by their own check
+TEXT_CHECKS: dict[str, Callable[[str], list[str]]] = {"po_terms_template": document.terms_problems}
+
+
 def _validate(
-    kind: str, value: str, low: float | None, high: float | None, choices: tuple[str, ...], label: str
+    kind: str,
+    value: str,
+    low: float | None,
+    high: float | None,
+    choices: tuple[str, ...],
+    label: str,
+    text_check: Callable[[str], list[str]] = templates.problems,
 ) -> str:
     value = str(value).strip()
     if kind == "bool":
@@ -1377,7 +1401,7 @@ def _validate(
             raise _422(f"{label}: must be one of {', '.join(choices)}")
     elif kind == "text":
         value = value.replace("\r\n", "\n").strip("\n") + "\n" if value.strip() else ""
-        if value and (bad := templates.problems(value)):
+        if value and (bad := text_check(value)):
             raise _422(f"{label}: " + "; ".join(bad))
     elif kind == "list":
         words = [w.strip().lower() for w in value.split(",") if w.strip()]
@@ -1490,7 +1514,8 @@ def _policy(db: Session, actor: Actor, args: dict[str, Any], reason: str, apply:
         raise HTTPException(404, f"there is no policy '{key}'")
     store, kind, label, _, default, low, high, choices = spec
     optional = default == "" and not str(body.value).strip()  # a setting whose default is empty can be emptied again
-    value = "" if optional else _validate(kind, body.value, low, high, choices, label)
+    check = TEXT_CHECKS.get(key, templates.problems)
+    value = "" if optional else _validate(kind, body.value, low, high, choices, label, check)
     if key in MAILBOXES and value:
         other = next(k for k in MAILBOXES if k != key)
         if _stored(db, "org", other) == value:

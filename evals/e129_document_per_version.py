@@ -77,8 +77,9 @@ def _run(ctx: Any) -> Outcome:
         ("Spec gap: whether the terms template is printed on the PDF is not said; the draft of version 3 is checked to "
          "show the new terms (medium), which is what makes the unchanged reprints a real test."),
         "The filename `<no>-v<v>.pdf` and the content type are checked as low.",
-        ("Spec gap: P2 calls the terms change 'existing two-person setting change', but `/api/setup/policies` has no "
-         "po_terms_template key at 5edb766; the eval tries it and otherwise writes the setting as the owner (low)."),
+        ("P2's 'existing two-person setting change': `po_terms_template` is a policy two administrators change through "
+         "`/api/setup/policies` (owner's decision after the first run); the eval still falls back to writing it as the "
+         "owner, with a low finding, if the API refuses it."),
     ]
     return out
 
@@ -94,7 +95,8 @@ def _set_terms(check: b.Checker, co: t.Co7) -> bool:
         check(False, f"P2: the policies API does not take po_terms_template ({asked.status_code} {asked.text[:120]}); "
               "the template was written as the owner", "low")  # fmt: skip
         aif.set_org(co, "po_terms_template", NEW_TERMS)
-    return co.org("po_terms_template") == NEW_TERMS
+    # the settings API keeps a text setting with one trailing newline (as rfq_email_template): the same terms
+    return str(co.org("po_terms_template") or "").rstrip("\n") == NEW_TERMS
 
 
 def _stored(check: b.Checker, co: t.Co7, no: str, v: int, label: str) -> bytes | None:

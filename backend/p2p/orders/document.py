@@ -48,6 +48,24 @@ def _setting(db: Session, key: str, default: str) -> str:
     return str(value) if value not in (None, "") else default
 
 
+MAX_TERMS = 4000
+_SAMPLE = {"po_no": "PO-CKN-2627-00001", "payment_terms": "NET30", "delivery_terms": "for_destination", "ack_days": "2"}
+
+
+def terms_problems(template: str) -> list[str]:
+    """What is wrong with a terms template, in words for the person changing the setting `po_terms_template` (empty when
+    it is fine): too long, or it does not render with an order's values in the sandbox."""
+    found: list[str] = []
+    if len(template) > MAX_TERMS:
+        found.append(f"the text is longer than {MAX_TERMS} characters")
+    try:
+        _ENV.from_string(template).render(**_SAMPLE)
+    except Exception as exc:  # noqa: BLE001 - any fault of the template is the editor's to fix
+        found.append(f"the template does not work ({type(exc).__name__}: {str(exc)[:120]}); the fields are "
+                     + ", ".join("{{ " + k + " }}" for k in _SAMPLE))  # fmt: skip
+    return found
+
+
 def terms_text(db: Session, po: dict[str, Any]) -> str:
     """The company's terms template filled with this order's values. A template that does not render falls back to the
     standard text, so a typo in the setting never stops an order from going out."""
