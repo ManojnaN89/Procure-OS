@@ -15,7 +15,9 @@ What it leaves behind (dates are relative to today):
     an order made from an award and waiting for the purchase manager, an approved order waiting to be sent,
     a sent and acknowledged order, a part-received order, a fully received order waiting for an invoice,
     an invoice approved and not due yet, a blocked invoice waiting for release,
-    a payment run waiting for the director, an approved run with its bank file made, and one case paid and closed.
+    a payment run waiting for the director, an approved run with its bank file made, and one case paid and closed,
+    a period RFQ whose award waits for the director, a quotation request with a negotiation brief (block 6), and one
+    that closed with too few quotes and is a case for the buyer.
 
 Two spares are used up and left without any request, so "Check stock levels" still has something to suggest.
 """
@@ -32,10 +34,11 @@ from sqlalchemy.orm import Session
 
 import p2p.platform.demo as demo
 from p2p.agents import autonomy
-from p2p.formulas.calendar import business_today
+from p2p.formulas.calendar import business_today, pin_today, today_is_pinned
 from p2p.main import app
 from p2p.platform import audit, routing, tenants, worker
 from p2p.requests import replenishment
+from p2p.sourcing import closing
 
 REQUESTER, STORE, BUYER = "Production Manager", "Storekeeper", "Buyer"
 AP, FINANCE = "AP Executive", "Finance Manager"
@@ -65,6 +68,8 @@ LATER = (
     "payment run approved, bank file made",
     "paid and closed",
     "period RFQ: award waiting for the director",
+    "quotation request with a negotiation brief",
+    "quotation request closed short, a case for the buyer",
 )
 STAGES = EARLY + LATER
 
@@ -437,6 +442,7 @@ def _later(run: _Run) -> None:
     run.call(AP, "POST", f"/api/invoices/{blocked['invoice']}/release", {"reason": reason})
     _stage(run, LATER[6], blocked["invoice"])
     _period(run)
+    _quotes(run)
 
 
 def _period(run: _Run) -> None:
@@ -456,6 +462,41 @@ def _period(run: _Run) -> None:
         run.quote(rfq, supplier, {1: price}, 18)
     run.call(BUYER, "POST", f"/api/rfqs/{rfq}/award", {"choices": {"1": made["invited"][1]}}, expect=202)
     _stage(run, LATER[10], rfq)
+
+
+def _quotes(run: _Run) -> None:
+    """Block 6: copper wire quoted above the last price paid (a negotiation brief for the buyer), and a quotation
+    request sent a fortnight ago that closed with one quote of three (the morning job's case for the buyer)."""
+    no = run.request([("RM-08", 500)], "Winding wire for the January production", gap=2)
+    run.approve_request(no)
+    run.work()
+    rfq, proposal = run.rfq_of(no)
+    run.send_rfq(rfq, proposal)
+    prices = {"SUP-005": "990", "SUP-003": "1005", "SUP-001": "1020"}  # above the 910 paid earlier in this run
+    for supplier in run.invited(rfq):
+        run.quote(rfq, supplier, {1: prices.get(supplier, "1025")}, 18)
+    if not run.q("select 1 from recommendation where kind = 'negotiation_brief' and business_key = :k "
+                 "and status = 'proposed'", k=f"{rfq}/1"):  # fmt: skip
+        raise demo.DemoError(f"{rfq} should have a negotiation brief")
+    _stage(run, LATER[11], rfq)
+
+    # A request sourced and sent two weeks ago (the business date set back while it is made), one quote in by its date
+    was = business_today() if today_is_pinned() else None
+    pin_today(run.today - timedelta(days=14))
+    try:
+        short = run.request([("RM-08", 100)], "Winding wire for the export order", gap=3)
+        run.approve_request(short)
+        run.work()
+        rfq, proposal = run.rfq_of(short)
+        run.send_rfq(rfq, proposal)
+        run.quote(rfq, run.invited(rfq)[0], {1: "915"}, 18)
+    finally:
+        pin_today(was)
+    with Session(routing.engine_for(run.slug)) as db:
+        closing.run(db, run.slug, business_today())  # what the morning reminder job does
+    if not run.q("select 1 from task where kind = 'rfq_no_response' and payload->>'rfq_no' = :n", n=rfq):
+        raise demo.DemoError(f"{rfq} should have closed short with a case for the buyer")
+    _stage(run, LATER[12], rfq)
 
 
 def _expect(result: dict[str, Any], status: str, what: str) -> None:

@@ -25,15 +25,16 @@ from sqlalchemy.orm import Session
 
 from p2p.agents import autonomy
 from p2p.formulas.buying_route import Check, is_tighter, quotes_needed
+from p2p.formulas.calendar import business_today
 from p2p.formulas.contracts import ceiling_breach
 from p2p.formulas.money import format_inr, format_qty
-from p2p.formulas.sourcing import PriceOption, pick_contract_price
+from p2p.formulas.sourcing import PriceOption, first_send_due, pick_contract_price
 from p2p.formulas.words import count
 from p2p.masters import regions
 from p2p.orders import contracts as contract_usage
 from p2p.platform import audit, email_layout, emails, numbering, outbox, permissions, proposals, reference, worker
 from p2p.platform.sod import Actor
-from p2p.sourcing import documents, quote_sheet, route, templates
+from p2p.sourcing import documents, notes, quote_sheet, route, templates
 from p2p.suppliers import scoring
 
 D = Decimal
@@ -69,6 +70,7 @@ class LineOutcome:
     min_quotes: int = 0
     needs_agreement: bool = False  # a direct buy the purchase manager must agree to
     proposal_id: int | None = None
+    path_case: str | None = None  # 'waiting': a contract fits but the market is lower; the buyer chooses A or B (D40)
 
 
 @dataclass
@@ -417,6 +419,9 @@ def source_request(
 
     for outcome in result.lines:
         _save_decision(db, request_no, outcome, as_of)
+    for outcome in result.lines:
+        if outcome.method == "contract" and outcome.route == "contract" and outcome.price_record_id:
+            _hold_for_path(db, request_no, outcome, as_of)
     audit.record(
         db,
         actor,
@@ -430,9 +435,13 @@ def source_request(
             "manual": result.count("manual"),
             "rfqs": result.rfqs,
             "routes": {str(o.line_no): {"route": o.route, "rule": o.route_rule} for o in result.lines},
+            "path_cases": [o.line_no for o in result.lines if o.path_case],
         },
     )
-    db.commit()
+    notes.flush(db)
+    for outcome in result.lines:
+        if outcome.path_case:
+            _path_task(db, tenant, request_no, outcome)
 
     for outcome in result.lines:
         if outcome.method == "direct" and outcome.needs_agreement:
@@ -443,6 +452,157 @@ def source_request(
         for rfq_no in result.rfqs:
             _dispatch(db, rfq_no, Decimal(req["total_value"]), actor, result)
     return result
+
+
+def _hold_for_path(db: Session, request_no: str, outcome: LineOutcome, as_of: date) -> None:
+    """The A/B test (D40 steps 3-5, formulas/path.py): a contract price above the market beyond every threshold, on a
+    line that is not urgent, waits for the buyer; path B is recommended. Does not commit."""
+    if not notes.is_path_case(db, request_no, outcome.line_no, as_of):
+        return
+    rec_id = notes.write_path_case(db, request_no, outcome.line_no, as_of)
+    outcome.path_case = "waiting"
+    outcome.reason += (
+        "; held for the buyer: the market is lower, choose path A (buy on the contract) or B (ask for quotes)"
+    )
+    db.execute(
+        text(
+            "update sourcing_decision set path_case = 'waiting', path_recommendation_id = :r, reason = :why "
+            "where request_no = :n and line_no = :l"
+        ),
+        {"r": rec_id, "why": outcome.reason, "n": request_no, "l": outcome.line_no},
+    )
+
+
+PATH_TASK = "path_case"
+PATH_SLA_HOURS = 9  # one working day
+
+
+def _path_task(db: Session, tenant: str, request_no: str, outcome: LineOutcome) -> int:
+    from p2p.platform import tasks  # noqa: PLC0415 - tasks import the notification layer
+    from p2p.sourcing import price_review  # noqa: PLC0415 - price reviews read this module
+
+    return tasks.create_task(
+        db, tenant, kind=PATH_TASK,
+        title=f"Choose path A or B for {request_no} line {outcome.line_no} ({outcome.item_code or outcome.name})",
+        assignee=price_review.buyer_for(db, tenant, outcome.item_code), sla_hours=PATH_SLA_HOURS,
+        payload={"request_no": request_no, "line_no": outcome.line_no, "link": f"#/requisitions/{request_no}"},
+        actor=SERVICE, email=False,
+    )  # fmt: skip
+
+
+class PathError(Exception):
+    def __init__(self, message: str, status: int = 409) -> None:
+        super().__init__(message)
+        self.status = status
+
+
+def decide_path(
+    db: Session, tenant: str, request_no: str, line_no: int, chosen: str, user_id: int, *, reason: str | None,
+    as_of: date,
+) -> dict[str, Any]:  # fmt: skip
+    """The buyer chooses path A (buy on the contract; a reason is required and the order is never touchless, D43) or
+    path B (ask for quotes: an RFQ draft waiting for the send to be confirmed, D42). The case is checked again first."""
+    from p2p.agents import recommendations  # noqa: PLC0415 - the agents read this module
+    from p2p.platform import tasks, workflows  # noqa: PLC0415
+
+    if chosen not in ("A", "B"):
+        raise PathError("the path is A or B", 422)
+    why = (reason or "").strip()
+    if chosen == "A" and not why:
+        raise PathError("a reason is needed to buy on the contract when the market is lower (path A)", 422)
+    row = db.execute(
+        text(
+            "select path_case, path_recommendation_id from sourcing_decision where request_no = :n and line_no = :l "
+            "for update"
+        ),
+        {"n": request_no, "l": line_no},
+    ).first()
+    if row is None or row[0] != "waiting":
+        db.rollback()
+        raise PathError(f"no A/B case waits on line {line_no} of {request_no}")
+    rec_id = int(row[1])
+    rec = recommendations.get(db, rec_id)
+    key = f"{request_no}/{line_no}"
+    got = workflows.revalidate(db, "path_case", key, str(rec["basis_hash"])) if rec else None
+    if isinstance(got, workflows.Stale):
+        _path_changed(db, tenant, request_no, line_no, rec_id, got.reason, as_of)
+        raise PathError(f"the case changed: {got.reason}")
+    figures = dict(rec["engine_figures"]) if rec else {}
+    after = {"path": chosen, "contract": figures.get("contract"), "contract_price": figures.get("contract_price"),
+             "market": figures.get("market"), "gap": figures.get("gap"), "gap_pct": figures.get("gap_pct"),
+             "saving": figures.get("saving")}  # fmt: skip
+    actor = Actor("user", str(user_id))
+    audit.record(db, actor, "sourcing.path", "request", key, after=after, reason=why or None)
+    out: dict[str, Any] = {"path": chosen}
+    if chosen == "A":
+        db.execute(
+            text(
+                "update sourcing_decision set path_case = 'chosen_a', path_confirmed_by = :u where request_no = :n "
+                "and line_no = :l"
+            ),
+            {"u": user_id, "n": request_no, "l": line_no},
+        )
+        recommendations.decide(db, rec_id, user_id, accepted=False, note=why)
+        db.commit()
+        _complete_path_tasks(db, tasks, request_no, line_no, user_id)
+        from p2p.orders import service as ordering  # noqa: PLC0415 - orders build on sourcing
+
+        made = ordering.order_request(db, tenant, request_no, as_of=as_of)
+        out["po_nos"] = made.pos
+        return out
+    recommendations.decide(db, rec_id, user_id, accepted=True, note=why or None)
+    db.commit()
+    changed = change_route(
+        db, tenant, request_no, line_no, "rfq", actor, reason=why or "path B: ask for quotes, the market is lower",
+        as_of=as_of,
+    )  # fmt: skip
+    db.execute(
+        text(
+            "update sourcing_decision set path_case = 'chosen_b', path_confirmed_by = :u, path_recommendation_id = :r "
+            "where request_no = :n and line_no = :l"
+        ),
+        {"u": user_id, "r": rec_id, "n": request_no, "l": line_no},
+    )
+    db.commit()
+    _complete_path_tasks(db, tasks, request_no, line_no, user_id)
+    out["rfq_no"] = changed.get("rfq_no")
+    return out
+
+
+def _complete_path_tasks(db: Session, tasks: Any, request_no: str, line_no: int, user_id: int | None) -> None:
+    for (task_id,) in db.execute(
+        text(
+            "select id from task where kind = :k and status in ('open', 'overdue') and payload->>'request_no' = :n "
+            "and (payload->>'line_no')::int = :l"
+        ),
+        {"k": PATH_TASK, "n": request_no, "l": line_no},
+    ).all():
+        tasks.complete_task(db, int(task_id), user_id)
+
+
+def _path_changed(db: Session, tenant: str, request_no: str, line_no: int, rec_id: int, why: str, as_of: date) -> None:
+    """The case changed before the buyer's choice: the record goes stale and the engine tests the line again. Still a
+    case: a fresh record waits. No case any more: the line is bought on the contract by the engine."""
+    from p2p.agents import recommendations  # noqa: PLC0415
+    from p2p.platform import tasks  # noqa: PLC0415
+
+    recommendations.mark_stale(db, rec_id, why)
+    if notes.is_path_case(db, request_no, line_no, as_of):
+        fresh = notes.write_path_case(db, request_no, line_no, as_of)
+        db.execute(
+            text("update sourcing_decision set path_recommendation_id = :r where request_no = :n and line_no = :l"),
+            {"r": fresh, "n": request_no, "l": line_no},
+        )
+        notes.flush(db)
+        return
+    db.execute(
+        text("update sourcing_decision set path_case = null where request_no = :n and line_no = :l"),
+        {"n": request_no, "l": line_no},
+    )
+    audit.record(db, SERVICE, "sourcing.path_closed", "request", f"{request_no}/{line_no}", reason=why)
+    db.commit()
+    _complete_path_tasks(db, tasks, request_no, line_no, None)
+    worker.enqueue(tenant, "order_request", {"request_no": request_no})
 
 
 def _quotation(
@@ -867,19 +1027,23 @@ def _dispatch(db: Session, rfq_no: str, value: Decimal, actor: Actor, result: So
     asked = db.execute(text("select count(*) from rfq_supplier where rfq_no = :r"), {"r": rfq_no}).scalar_one()
     if not asked:  # only prospects may be asked: nothing to send until the buyer invites one (confirm_send)
         return
+    from p2p.agents import recommendations  # noqa: PLC0415 - the agents read this module
+
     gate = autonomy.gate(db, DECISION_TYPE, value=value, confidence=1.0)
+    rec_id = notes.write_rfq_draft(db, rfq_no)  # why these suppliers, for the buyer who confirms (11b.2)
     pid = proposals.propose(
         db,
         SERVICE,
         action="rfq.send",
         summary=f"Send {rfq_no} to {count(asked, 'supplier')}: {gate.reason}",
-        payload={"rfq_no": rfq_no},
+        payload={"rfq_no": rfq_no, recommendations.KEY: rec_id},
         required_permission="rfq.send",
         risk="low",
         document="rfq",
     )
+    recommendations.link_proposal(db, rec_id, pid)
     db.execute(text("update rfq set proposal_id = :p where no = :r"), {"p": pid, "r": rfq_no})
-    db.commit()
+    notes.flush(db)
     result.proposals.append(pid)
 
 
@@ -893,13 +1057,13 @@ def item_lines(lines: list[dict[str, Any]]) -> str:
     )
 
 
-def _company(db: Session) -> str:
+def company_name(db: Session) -> str:
     return str(
         db.execute(text("select coalesce(short_name, legal_name) from company limit 1")).scalar() or "Our company"
     )
 
 
-def _deliver_to(db: Session, rfq: dict[str, Any]) -> str:
+def deliver_to(db: Session, rfq: dict[str, Any]) -> str:
     """Where the RFQ's goods go: its own delivery location (a period RFQ has no request), else its request's."""
     return str(
         db.execute(
@@ -933,10 +1097,10 @@ def question_reply_draft(db: Session, rfq_no: str, contact: str | None, question
         templates.QUESTION_REPLY,
         {
             "contact": contact or "Sir or Madam",
-            "company": _company(db),
+            "company": company_name(db),
             "reference": rfq_no,
             "due_date": f"{rfq['due_date']:%d %b %Y}",
-            "deliver_to": _deliver_to(db, dict(rfq)),
+            "deliver_to": deliver_to(db, dict(rfq)),
             "items": items_text(dict(rfq), lines),
             "question": " ".join(question.split()),
         },
@@ -972,10 +1136,11 @@ def send_rfq(db: Session, rfq_no: str, actor: Actor = SERVICE) -> int:
     leave right after the commit (platform/outbox.py); one that fails is shown on the supplier's row (`send_error`) and
     retried by the email job, and the others are not held up.
     """
-    rfq = db.execute(text("select * from rfq where no = :n for update"), {"n": rfq_no}).mappings().first()
-    if rfq is None:
+    found = db.execute(text("select * from rfq where no = :n for update"), {"n": rfq_no}).mappings().first()
+    if found is None:
         db.rollback()
         raise SourcingError(f"{rfq_no} does not exist")
+    rfq: dict[str, Any] = dict(found)
     if rfq["status"] not in ("draft", "sent"):
         db.rollback()
         raise SourcingError(f"{rfq_no} is {rfq['status']} and cannot be sent")
@@ -986,9 +1151,11 @@ def send_rfq(db: Session, rfq_no: str, actor: Actor = SERVICE) -> int:
         dict(r)
         for r in db.execute(text("select * from rfq_line where rfq_no = :n order by line_no"), {"n": rfq_no}).mappings()
     ]
-    company = _company(db)
+    due_before = rfq["due_date"]
+    today = business_today()
+    company = company_name(db)
     category = db.execute(text("select name from item_category where code = :c"), {"c": rfq["category_code"]}).scalar()
-    deliver_to = _deliver_to(db, dict(rfq))
+    place = deliver_to(db, dict(rfq))
     pending = db.execute(
         text(
             "select rs.supplier_code, rs.email, (select c.name from supplier_contact c where c.supplier_code = rs.supplier_code "
@@ -997,16 +1164,27 @@ def send_rfq(db: Session, rfq_no: str, actor: Actor = SERVICE) -> int:
         ),
         {"n": rfq_no},
     ).all()
+    refused = _not_eligible(db, rfq, lines, [str(p[0]) for p in pending], today)
+    for code, why in refused.items():  # one supplier no longer eligible does not hold up the others (OP-26)
+        db.execute(
+            text("update rfq_supplier set send_error = :e where rfq_no = :n and supplier_code = :s"),
+            {"e": f"not sent: {why}", "n": rfq_no, "s": code},
+        )
+    pending = [p for p in pending if str(p[0]) not in refused]
+    if pending and rfq["sent_at"] is None:  # the first sending: suppliers get the full reply time (OP-6)
+        days = int(_org_setting(db, "default_rfq_response_days", "5"))
+        rfq["due_date"] = first_send_due(rfq["due_date"], today, days, reference.calendar_for(db))
+        db.execute(text("update rfq set due_date = :d where no = :n"), {"d": rfq["due_date"], "n": rfq_no})
     subject = f"Request for quotation {rfq_no}" + (f": {category}" if category else "")
     template = rfq_template(db)
-    sheet = quote_sheet.build(dict(rfq), lines, str(company))
+    sheet = quote_sheet.build(rfq, lines, str(company))
     queued: list[str] = []
     for code, email, contact in pending:
         message_id = outbox.queue_email(
             db,
             to=email,
             subject=subject,
-            body=(body := _body(template, dict(rfq), lines, contact, str(company), str(deliver_to))),
+            body=(body := _body(template, rfq, lines, contact, str(company), str(place))),
             html=email_layout.text_email(subject, body),
             linked_type="rfq",
             linked_ref=rfq_no,
@@ -1025,11 +1203,41 @@ def send_rfq(db: Session, rfq_no: str, actor: Actor = SERVICE) -> int:
         db.execute(
             text("update rfq set status = 'sent', sent_at = coalesce(sent_at, now()) where no = :n"), {"n": rfq_no}
         )
-    if queued:  # a second sender finds nobody left to invite and records nothing
-        audit.record(db, actor, "rfq.send", "rfq", rfq_no, after={"queued": len(queued)})
+    if queued or refused:  # a second sender finds nobody left to invite and records nothing
+        audit.record(
+            db, actor, "rfq.send", "rfq", rfq_no,
+            before={"due_date": due_before},
+            after={"queued": len(queued), "due_date": rfq["due_date"], "not_sent": refused},
+        )  # fmt: skip
     db.commit()  # one transaction: the RFQ stays locked until every invitation is queued
     outbox.send_now(outbox.tenant_of(db), queued, engine=db.get_bind().engine)  # then they leave
     return len(queued)
+
+
+def _not_eligible(
+    db: Session, rfq: dict[str, Any], lines: list[dict[str, Any]], codes: list[str], on: date
+) -> dict[str, str]:
+    """Invitees that no longer pass what they were invited under (an active supplier still eligible for the category
+    here; a prospect still a prospect), with why. Checked at every sending, whatever the capability (11b.2)."""
+    if not codes or not rfq["category_code"]:
+        return {}
+    items = [str(ln["item_code"]) for ln in lines if ln["item_code"]]
+    eligible, notes_ = eligible_suppliers(db, rfq["category_code"], items, on, rfq["delivery_location"])
+    ok = {e.code for e in eligible}
+    out: dict[str, str] = {}
+    for code in codes:
+        status = db.execute(text("select status from supplier where code = :c"), {"c": code}).scalar()
+        if status == "prospect" or code in ok:
+            continue
+        note = next((n for n in notes_ if n.startswith(f"{code} left out: ")), None)
+        out[code] = (
+            note.split(": ", 1)[1]
+            if note
+            else f"{code} is {status}"
+            if status != "active"
+            else "no longer approved here"
+        )
+    return out
 
 
 # how a confirmation through the proposal is recorded: 'proposal', or 'bulk' while confirm_many approves

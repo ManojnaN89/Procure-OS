@@ -15,6 +15,7 @@ band's approver decides (sourcing/award_approval.py), no order is ever made from
 rows count once final (an operational RFQ) or approved (a period RFQ); proposed, rejected and withdrawn ones do not.
 """
 
+import json
 from collections import defaultdict
 from dataclasses import dataclass, field, replace
 from datetime import UTC, date, datetime
@@ -32,6 +33,7 @@ from p2p.formulas.calendar import business_today
 from p2p.formulas.money import format_inr, format_qty, round_money
 from p2p.formulas.orders import current_gst_rate, net_unit_price
 from p2p.formulas.scoring import NEUTRAL
+from p2p.formulas.sourcing import is_late
 from p2p.formulas.words import count
 from p2p.masters import prospects, regions
 from p2p.orders import selection_rule
@@ -76,19 +78,49 @@ class QuoteInput:
     warranty_months: int | None = None
     deviations: str | None = None
     document_ref: str | None = None
+    channel: str = "entered"  # 'entered' (a buyer typed it, under their login) or 'email' (a confirmed draft)
+    email_id: int | None = None
+    sender_address: str | None = None
+    contact_id: int | None = None
+    sender_auth: dict[str, Any] | None = None  # the mail's sender authentication; None for a typed quote
+    received_on: date | None = None  # an emailed quote: the business date the mail was stored (OP-4)
 
 
 # ---- entering a quote -------------------------------------------------------------------------
 
 
+def quoted_on_time(db: Session, rfq_no: str, supplier: str, due_date: date) -> bool:
+    """The supplier has a quote on the RFQ received on or before the closing date: its later revisions are a
+    negotiation round, not a late bid (OP-2)."""
+    return (
+        db.execute(
+            text("select 1 from quote where rfq_no = :r and supplier_code = :s and received_on <= :d limit 1"),
+            {"r": rfq_no, "s": supplier, "d": due_date},
+        ).first()
+        is not None
+    )
+
+
+def late_words(rfq_no: str, due_date: date) -> str:
+    return f"{rfq_no} closed on {due_date:%d %b %Y}: a quote received after the closing date is refused (late bid)"
+
+
 def enter_quote(db: Session, rfq_no: str, data: QuoteInput, actor: Actor, *, now: datetime | None = None) -> str:
-    """Record what a supplier offered. A second quote from the same supplier is a new revision (a negotiation round)."""
+    """Record what a supplier offered. A second quote from the same supplier is a new revision (a negotiation round).
+
+    A first quote received after the RFQ closed (the end of its due date) is refused; a revision from a supplier that
+    quoted on time is accepted (12.6, OP-2). A typed quote is received the day it is entered: no backdating (OP-3)."""
     now = now or datetime.now(UTC)
-    rfq = db.execute(text("select status from rfq where no = :n for update"), {"n": rfq_no}).first()
+    rfq = db.execute(text("select status, due_date from rfq where no = :n for update"), {"n": rfq_no}).first()
     if rfq is None:
         raise QuoteError(f"{rfq_no} does not exist")
     if rfq[0] != "sent":
         raise QuoteError(f"{rfq_no} is {rfq[0]}; quotes can only be entered while it is out with the suppliers")
+    if data.channel not in ("entered", "email"):
+        raise QuoteError(f"a quote comes by email or is entered, not by {data.channel}")
+    received_on = data.received_on if data.channel == "email" and data.received_on else business_today()
+    if is_late(received_on, rfq[1]) and not quoted_on_time(db, rfq_no, data.supplier_code, rfq[1]):
+        raise QuoteError(late_words(rfq_no, rfq[1]))
     invited = db.execute(
         text("select 1 from rfq_supplier where rfq_no = :r and supplier_code = :s"),
         {"r": rfq_no, "s": data.supplier_code},
@@ -121,6 +153,11 @@ def enter_quote(db: Session, rfq_no: str, data: QuoteInput, actor: Actor, *, now
     if data.freight < 0 or data.packing_forwarding < 0:
         raise QuoteError("freight and packing charges must not be negative")
 
+    auth = (
+        data.sender_auth or {"verdict": "none"}
+        if data.channel == "email"
+        else {"method": "login", "user": int(actor.id) if str(actor.id).isdigit() else actor.id}
+    )
     revision = (
         db.execute(
             text("select coalesce(max(revision), 0) from quote where rfq_no = :r and supplier_code = :s"),
@@ -132,8 +169,10 @@ def enter_quote(db: Session, rfq_no: str, data: QuoteInput, actor: Actor, *, now
     db.execute(
         text(
             "insert into quote (no, rfq_no, supplier_code, revision, received_at, valid_until, payment_terms_code, "
-            "delivery_terms, packing_forwarding, freight, warranty_months, deviations, document_ref, entered_by) values "
-            "(:no, :r, :s, :rev, :at, :vu, :pt, :dt, :pf, :fr, :w, :dev, :doc, :by)"
+            "delivery_terms, packing_forwarding, freight, warranty_months, deviations, document_ref, entered_by, channel, "
+            "email_id, sender_address, contact_id, sender_auth, received_on) values "
+            "(:no, :r, :s, :rev, :at, :vu, :pt, :dt, :pf, :fr, :w, :dev, :doc, :by, :ch, :mail, :addr, :contact, "
+            "cast(:auth as jsonb), :on)"
         ),
         {
             "no": quote_no,
@@ -150,6 +189,12 @@ def enter_quote(db: Session, rfq_no: str, data: QuoteInput, actor: Actor, *, now
             "dev": data.deviations,
             "doc": data.document_ref,
             "by": actor.id,
+            "ch": data.channel,
+            "mail": data.email_id,
+            "addr": data.sender_address,
+            "contact": data.contact_id,
+            "auth": json.dumps(auth, default=str),
+            "on": received_on,
         },
     )
     for line in data.lines:
@@ -185,10 +230,21 @@ def enter_quote(db: Session, rfq_no: str, data: QuoteInput, actor: Actor, *, now
         "quote.enter",
         "quote",
         quote_no,
-        after={"rfq": rfq_no, "supplier": data.supplier_code, "revision": revision, "lines": len(data.lines)},
-    )
+        after={
+            "rfq": rfq_no, "supplier": data.supplier_code, "revision": revision, "lines": len(data.lines),
+            "channel": data.channel, "verdict": auth.get("verdict", "login"), "received_on": received_on,
+        },
+    )  # fmt: skip
     db.commit()
+    _after_quote(db, rfq_no)
     return quote_no
+
+
+def _after_quote(db: Session, rfq_no: str) -> None:
+    """A quote changes the comparison: the ranking and the briefs are written again (sourcing/notes.py)."""
+    from p2p.sourcing import notes  # noqa: PLC0415 - sourcing builds on orders
+
+    notes.on_quote(db, rfq_no)
 
 
 # ---- comparing ---------------------------------------------------------------------------------
@@ -719,13 +775,6 @@ def award(
         raise QuoteError("choose a supplier for at least one line")
     comp = comparison(db, rfq_no, as_of)
     by_line = {line.rfq_line_no: line for line in comp.lines}
-    lapsed = {
-        int(r[0])
-        for r in db.execute(
-            text(f"select rfq_line_no from award where rfq_no = :n and lapsed_at is not null and {LIVE}"),  # noqa: S608
-            {"n": rfq_no},
-        )
-    }
     overridden: list[int] = []
     short: list[str] = []
     chosen: dict[int, list[tuple[Offer, Decimal]]] = {}
@@ -741,12 +790,11 @@ def award(
         else:
             parts = _parts_of_choice(line, asked[0][0])
         offers = {o.supplier_code: o for o in line.offers}
-        reaward = line_no in lapsed
         for s, _ in parts:
             if not offers[s].counts:
                 raise QuoteError(f"{PROSPECT_REFUSED}: {s} {offers[s].why_not}")
             expired = next((f for f in offers[s].flags if f.startswith("expired")), None)
-            if expired and reaward:  # re-selecting after a lapsed conditional award (D-03 R10, T-Q1-5)
+            if expired:  # an award is refused after the quote's validity, with or without a reason (Rev s12 #16, OP-9)
                 raise QuoteError(f"{s}'s quote {expired}: ask for a renewed price before selecting it")
         chosen[line_no] = [(offers[s], q) for s, q in parts]
         if not _is_recommended(line, parts) or not all(offers[s].compliant for s, _ in parts):
@@ -787,6 +835,7 @@ def award(
             db.rollback()
             raise QuoteError(str(exc)) from None
         picked_words = {k: ", ".join(o.supplier_code for o, _ in p) for k, p in chosen.items()}
+        _settle(db, rfq_no, "its award is proposed")
         return AwardResult(rfq_no, picked_words, overridden, False, decision=got)
 
     who = actor.id if actor.kind == "user" else f"{actor.kind}:{actor.id}"
@@ -862,7 +911,10 @@ def award(
         reason=reason,
         rule_version=comp.rule,
     )
+    _decide_ranking(db, rfq_no, actor, overridden, reason)
     db.commit()
+    if complete:
+        _settle(db, rfq_no, "every line has a supplier selected")
     if tenant:
         worker.enqueue(tenant, "order_request", {"request_no": rfq[1]})
     return AwardResult(
@@ -871,6 +923,21 @@ def award(
 
 
 SHORT_ACTION = "rfq.award_short"
+
+
+def _settle(db: Session, rfq_no: str, why: str) -> None:
+    """The RFQ's no-response case is done (sourcing/closing.py)."""
+    from p2p.sourcing import closing  # noqa: PLC0415 - sourcing builds on orders
+
+    closing.settle(db, rfq_no, why)
+
+
+def _decide_ranking(db: Session, rfq_no: str, actor: Actor, overridden: list[int], reason: str | None) -> None:
+    """The buyer's selection decides the ranking explanation: accepted when it is the recommendation, else rejected with
+    the reason. It never blocks the selection. Does not commit."""
+    from p2p.sourcing import notes  # noqa: PLC0415 - sourcing builds on orders
+
+    notes.decide_ranking(db, rfq_no, actor, accepted=not overridden, note=reason)
 
 
 def _needs_agreement(db: Session, rfq_no: str, chosen: dict[int, list[tuple[Offer, Decimal]]], as_of: date) -> str:

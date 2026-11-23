@@ -100,3 +100,11 @@ REGRET_NOTE = (
     "time. We value your interest and hope to invite you again.\n\n"
     "Regards,\nProcurement, {company}\n"
 )
+
+# The closing date moved (block 6): fixed words to every invited supplier that has not declined; no model writes them.
+EXTENSION = (
+    "Dear {contact},\n\n"
+    "the closing date of our request for quotation {reference} is now {due_date}. If you have not quoted yet, please "
+    "reply by then. A quote you have sent stands unless you revise it.\n\n"
+    "Regards,\nProcurement, {company}\n"
+)

@@ -54,14 +54,14 @@ union
 select a.actor_id from audit_event a
   join po_line l on a.entity_id = l.request_no || '/' || l.request_line_no
  where a.actor_type = 'user' and a.entity = 'request' and l.po_no = :n
-   and (a.action = 'sourcing.route_change_proposed'
+   and (a.action = 'sourcing.route_change_proposed' or a.action = 'sourcing.path'
         or (a.action = 'sourcing.route_change' and a.after ->> 'route' = 'rfq'))
 """
 
 
 def makers(db: Session, po: dict[str, Any]) -> frozenset[str]:
-    """Who made the order: its buyer, who submitted or revised it, who awarded its quotation and who changed its lines'
-    buying route. None of them approves it or its price, at any value, by any path (C1)."""
+    """Who made the order: its buyer, who submitted or revised it, who awarded its quotation, who changed its lines'
+    buying route and who chose path A or B for a line (D43). None of them approves it or its price, at any value, by any path (C1)."""
     people = {str(po["buyer"])} if po["buyer"] else set()
     for (uid,) in db.execute(text(_MAKERS_SQL), {"n": po["no"]}):
         code = org_code_of(db, int(uid)) if str(uid).isdigit() else None

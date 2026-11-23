@@ -61,3 +61,15 @@ def reminder_due(
     if after_days <= 0 or reminders_sent >= max_reminders or today > due_date:
         return False
     return today >= calendar.add_working_days(last_contact, after_days)
+
+
+def is_late(received_on: date, due_date: date) -> bool:
+    """A quote is late when it was received after the closing date: an RFQ closes at the end of its due date, India
+    time, so a quote received on the due date itself is on time (OP-1)."""
+    return received_on > due_date
+
+
+def first_send_due(due_date: date, today: date, response_days: int, calendar: BusinessCalendar) -> date:
+    """The closing date when an RFQ first goes out: at least `response_days` working days from the sending (OP-6), so a
+    late confirmation never shortens the time suppliers have."""
+    return max(due_date, calendar.add_working_days(today, response_days))

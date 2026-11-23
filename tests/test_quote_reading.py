@@ -238,7 +238,7 @@ def test_a_clear_quote_becomes_a_draft_and_a_person_turns_it_into_a_quote(shop: 
         "quote",
         "S1",
         [],
-        [],
+        [replies.UNAUTHENTICATED],  # block 6: no trusted sender check here, so a person confirms it
     )
     assert provider.calls == ["cheap"]  # one call to the small model was enough
     assert [(x["rfq_line_no"], x["unit_price"], x["gst_rate"]) for x in draft["proposal"]["lines"]] == [
@@ -332,7 +332,7 @@ def test_mail_from_anyone_but_an_invited_supplier_is_never_shown_to_the_model(sh
     draft = _draft(shop, draft_id)  # type: ignore[arg-type]
     assert provider.calls == []  # no model call at all
     assert draft["status"] == "needs_person" and draft["supplier_code"] is None
-    assert "is not one of the suppliers asked" in draft["problems"][0]
+    assert "is not a registered contact of a supplier invited to" in draft["problems"][0]
 
 
 def test_a_supplier_that_was_asked_but_by_another_rfq_is_not_accepted(shop: Session, outbox: Outbox) -> None:  # noqa: F811
@@ -497,6 +497,10 @@ def test_a_clean_draft_is_confirmed_by_itself_only_when_the_gate_allows(shop: Se
 
     autonomy.configure(shop, sod.user(1), "quote.read", level="auto")
     second_mail = _inbox(shop, rfq, "Bravo <s2@supplier.example>", "Seal Rs 190, GST 18%, 4 days.")
+    shop.execute(  # block 6: only a sender our mail server authenticated is confirmed without a person
+        text("""update email_message set auth = '{"verdict": "pass"}' where id = :i"""), {"i": second_mail}
+    )
+    shop.commit()
     second = _read(
         shop, second_mail, _gateway(_as_json(reading(line("Seal", "190", gst_rate=D(18), delivery_days=4))))[0]
     )

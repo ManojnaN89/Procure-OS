@@ -8,7 +8,8 @@ actions; this switch stops a capability's model work too.
 Switching on waits for a second administrator and records the D54 checks given (attested: the test file, the eval with
 its threshold and result, tracing, the switch-off tried). Switching off is immediate and hands the open work over:
 queued jobs, open workflows, waiting runs and recommendations without a proposal each become an `ai_handover` task for
-the capability's owner (planning's explanations are dropped with no task: they only inform, block 2).
+the capability's owner (planning's explanations are dropped with no task: they only inform, block 2; the sourcing
+records that only inform and the jobs that only reword them are left as they are or dropped, block 6).
 """
 
 from collections.abc import Callable
@@ -49,6 +50,8 @@ class Capability:
     hands_over: bool = True  # False: its open work only informs, and is dropped with no task
     owner_titles: tuple[str, ...] = ()  # designations tried before the roles (spec 2.6: the purchase manager)
     links: dict[str, str] = field(default_factory=dict)
+    dropped_jobs: tuple[str, ...] = ()  # jobs that only reword: dropped at switch-off with no task (block 6)
+    informs: tuple[str, ...] = ()  # recommendation kinds that only inform: kept as they are at switch-off (block 6)
 
 
 CAPABILITIES: dict[str, Capability] = {
@@ -64,7 +67,8 @@ CAPABILITIES: dict[str, Capability] = {
         ),
         Capability(
             "sourcing", "Reads quotes, prepares RFQs", ("rfq.send", "rfq.award", "quote.read"),
-            ("read_supplier_reply",), ("Buyer",),
+            ("read_supplier_reply", "sourcing_note"), ("Buyer",), dropped_jobs=("sourcing_note",),
+            informs=("ranking", "negotiation_brief", "review_note"),
         ),
         Capability(
             "execution", "Supplier mail and order follow-up", ("po.send", "po.issue", "supplier.change", "supplier.remind"),
@@ -140,7 +144,7 @@ def hand_over_job(
     """A job of a switched-off capability: its work goes to a person (the mail stays stored). None for planning."""
     code = OF_JOB[kind]
     cap = CAPABILITIES[code]
-    if not cap.hands_over:
+    if not cap.hands_over or kind in cap.dropped_jobs:
         return None
     if "email_id" in payload:
         what, link = _email_link(db, int(payload["email_id"]))
@@ -252,9 +256,9 @@ def _hand_over_recommendations(db: Session, tenant: str, cap: Capability, reason
     rows = db.execute(
         text(
             "select id, kind, business_key from recommendation where capability = :c and status = 'proposed' "
-            "and proposal_id is null order by id"
+            "and proposal_id is null and not (kind = any(:keep)) order by id"
         ),
-        {"c": cap.code},
+        {"c": cap.code, "keep": list(cap.informs)},
     ).all()
     made = 0
     for rec_id, kind, key in rows:

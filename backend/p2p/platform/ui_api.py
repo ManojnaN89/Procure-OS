@@ -38,7 +38,7 @@ from p2p.orders import contracts as contract_usage
 from p2p.orders import dispatch, dispatch_notes, quotes
 from p2p.orders import service as orders  # noqa: F401 - registers the price-variance proposal executor
 from p2p.orders import workflow as po_workflow
-from p2p.platform import audit, ratelimit, routing, sod
+from p2p.platform import audit, quote_api, ratelimit, routing, sod
 from p2p.platform.permissions import PermissionDenied, can_anywhere, require
 from p2p.platform.rows import rows as _rows
 from p2p.platform.tokens import decode_access_token
@@ -728,6 +728,7 @@ def get_requisition(no: str, db: Db, ctx: Ctx) -> dict[str, Any]:
         "rl.est_source, rl.reason, rl.status, rl.delivery_location, d.method as source_method, d.reason as source_reason, "
         "d.rfq_no as source_rfq, d.contract_code as source_contract, d.route, d.route_rule, d.checks as route_checks, "
         "d.min_quotes, d.window_value, (select status from proposal where id = d.proposal_id) as agreement, "
+        "d.path_case, d.path_recommendation_id, "
         "(select p.po_no from po_line p "
         "where p.request_no = rl.request_no and p.request_line_no = rl.line_no and p.status <> 'cancelled' limit 1) as po_no "
         "from request_line rl "
@@ -775,6 +776,8 @@ def get_requisition(no: str, db: Db, ctx: Ctx) -> dict[str, Any]:
                 "reason": line["reason"],
                 "status": line["status"],
                 "bought_for": bought_for.get(line["line_no"], []),
+                "path_case": line["path_case"],
+                "path_recommendation": quote_api.path_json(db, line["path_recommendation_id"]),
                 "source": {
                     "method": line["source_method"],
                     "reason": line["source_reason"],
@@ -1199,7 +1202,7 @@ def get_rfq(no: str, db: Db, ctx: Ctx) -> dict[str, Any]:
         ],
         "comparison": _comparison_json(db, no, ctx.user_id),
         "drafts": [_draft_json(d) for d in replies.drafts_of(db, no)],
-        "quotes": [],
+        **quote_api.rfq_extras(db, dict(r)),
     }
 
 
@@ -1342,6 +1345,7 @@ def _draft_json(d: dict[str, Any]) -> dict[str, Any]:
         "confidence": str(d["confidence"]) if d["confidence"] is not None else None,
         "problems": d["problems"],
         "assumptions": d["assumptions"],
+        "sender_auth": d.get("sender_auth"),
         "decline_reason": reading.get("decline_reason"),
         "question": reading.get("question"),
         "valid_until": proposal.get("valid_until"),

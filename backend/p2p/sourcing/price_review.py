@@ -4,11 +4,13 @@ A review is a task of kind `strategic_review` for the category's buyer. A plan, 
 request always opens one; a contract price above the market (or repeated price variance, from 13.2) opens one only
 when the versioned threshold rule says the gap is worth it on verified, fresh, in-region benchmarks. Every evaluation
 is written to `rule_evaluation` whether or not it goes ahead. One review is open per business key (trigger, contract,
-item, scope); a second trigger joins it. The contract stays valid and is still used for ordering in every case.
+item, scope); a second trigger joins it. The contract stays valid either way; a review never sets aside its
+obligations. An order line the contract fits is still bought on it unless the price-gap test at sourcing holds it for
+the buyer's choice of path A or B (block 6, D40 steps 4-5, formulas/path.py): a review alone changes no order.
 """
 
 import json
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from datetime import date, timedelta
 from decimal import Decimal
 from typing import Any
@@ -200,6 +202,7 @@ class Assessment:
     qty: Decimal
     gap: rules.Gap
     described: list[dict[str, Any]]
+    markets: list[tuple[Decimal, dict[str, Any]]] = field(default_factory=list)  # the counting prices and records
 
 
 def assess(db: Session, price_record_id: int, on: date) -> Assessment:
@@ -214,18 +217,32 @@ def assess(db: Session, price_record_id: int, on: date) -> Assessment:
         raise ReviewError(f"price record {price_record_id} does not exist", 404)
     scope = regions.price_scope(dict(pr))
     rule = rule_for(db, pr["category_code"], on)
-    rows = benchmarks.records(db, item=pr["item_code"])
-    described = benchmarks.described(
-        db, rows, on=on, max_age_days=rule.evidence_max_age_days, scope=scope, uom=pr["uom"]
-    )
-    conv = benchmarks.conversions(db, str(pr["item_code"]))
-    markets = [
-        p
-        for r, d in zip(rows, described, strict=True)
-        if d["counts"] and (p := bench_rules.price_in(benchmarks.as_rule(r), str(pr["uom"]), conv)) is not None
-    ]
+    found = counting_markets(db, str(pr["item_code"]), str(pr["uom"]), scope, on, rule.evidence_max_age_days)
+    markets = [p for p, _ in found.prices]
     qty = relevant_qty(db, str(pr["item_code"]), scope, on)
-    return Assessment(dict(pr), scope, rule, qty, rules.test(Decimal(pr["price"]), markets, qty, rule), described)
+    return Assessment(
+        dict(pr), scope, rule, qty, rules.test(Decimal(pr["price"]), markets, qty, rule), found.described, found.prices
+    )
+
+
+@dataclass
+class Markets:
+    described: list[dict[str, Any]]  # every benchmark of the item, with whether it counts and why
+    prices: list[tuple[Decimal, dict[str, Any]]]  # the counting ones, in the unit asked, with their record
+
+
+def counting_markets(db: Session, item: str, uom: str, scope: Scope, on: date, max_age_days: int) -> Markets:
+    """The benchmarks of an item that count as market evidence for a price in `uom` within `scope` (D41: verified,
+    fresh, in region, in a convertible unit), with their prices in that unit."""
+    rows = benchmarks.records(db, item=item)
+    described = benchmarks.described(db, rows, on=on, max_age_days=max_age_days, scope=scope, uom=uom)
+    conv = benchmarks.conversions(db, item)
+    prices = [
+        (p, d)
+        for r, d in zip(rows, described, strict=True)
+        if d["counts"] and (p := bench_rules.price_in(benchmarks.as_rule(r), uom, conv)) is not None
+    ]
+    return Markets(described, prices)
 
 
 def evaluate(db: Session, price_record_id: int, on: date, actor: Actor = SYSTEM) -> Evaluation:
@@ -268,7 +285,7 @@ def evaluate(db: Session, price_record_id: int, on: date, actor: Actor = SYSTEM)
 # ---- reviews -------------------------------------------------------------------------------------
 
 
-def _buyer(db: Session, tenant: str, item: str | None) -> int:
+def buyer_for(db: Session, tenant: str, item: str | None) -> int:
     code = (
         db.execute(
             text("select c.buyer_user from item i join item_category c on c.code = i.category_code where i.code = :i"),
@@ -359,13 +376,16 @@ def open_review(
     what = " ".join(x for x in (contract, item) if x)
     title = f"Strategic review ({trigger.replace('_', ' ')}): {what or 'sourcing'}"
     task_id = tasks.create_task(
-        db, tenant, kind=KIND, title=title, assignee=_buyer(db, tenant, item), sla_hours=72,
+        db, tenant, kind=KIND, title=title, assignee=buyer_for(db, tenant, item), sla_hours=72,
         payload=payload, actor=actor, email=False,
     )  # fmt: skip
     audit.record(
         db, actor, "review.open", "task", task_id, after={"key": key, "reason": reason}, rule_version=rule_version
     )
-    db.commit()
+    from p2p.sourcing import notes  # noqa: PLC0415 - the notes read this module
+
+    notes.write_review_note(db, task_id, title, payload, rule_version)
+    notes.flush(db)
     return task_id, False
 
 
@@ -419,6 +439,9 @@ def _close(db: Session, task_id: int, actor: Actor, outcome: str, reason: str, r
     audit.record(
         db, actor, "review.closed", "task", task_id, after={"outcome": outcome, "rfq": rfq_no}, reason=reason.strip()
     )
+    from p2p.sourcing import notes  # noqa: PLC0415 - the notes read this module
+
+    notes.decide_review_note(db, task_id, actor, accepted=outcome == "rfq_started", note=reason.strip())
 
 
 def close(db: Session, task_id: int, user_id: int, outcome: str, reason: str) -> None:

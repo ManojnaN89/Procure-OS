@@ -380,6 +380,33 @@ const RequisitionsView = {
       </div>`;
   },
 
+  // Block 6 (D40): a contract fits but the market is lower; the buyer chooses path A or B
+  pathCell(l) {
+    const rec = l.path_recommendation;
+    if (l.path_case !== "waiting" || !rec) return "";
+    const words = rec.ai_note
+      ? `${this.esc(rec.ai_note)} <span class="badge" style="font-size:10px;">AI wording, checked against the figures</span>`
+      : this.esc(rec.summary);
+    const can = Auth.can("rfq.create");
+    return `<div class="panel" style="margin-top:6px;font-size:12px;">${words}
+      ${can ? `<div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:6px;">
+        <input type="text" class="pathReason" data-line="${this.esc(l.line_no)}" placeholder="Reason (needed for A)" style="padding:5px;flex:1;min-width:140px;">
+        <div class="btn btn-sm pathPick" data-line="${this.esc(l.line_no)}" data-path="A">Buy on the contract (A)</div>
+        <div class="btn btn-primary btn-sm pathPick" data-line="${this.esc(l.line_no)}" data-path="B">Ask for quotes (B)</div>
+      </div><div class="pathNote" data-line="${this.esc(l.line_no)}" style="color:var(--warning-text);"></div>` : ""}</div>`;
+  },
+
+  wirePath(r) {
+    document.querySelectorAll(".pathPick").forEach((btn) => btn.addEventListener("click", async () => {
+      const line = btn.dataset.line;
+      const reason = (document.querySelector(`.pathReason[data-line="${line}"]`) || {}).value || "";
+      const res = await API.postJSON(`/api/requests/${encodeURIComponent(r.id)}/lines/${line}/path`, { path: btn.dataset.path, reason });
+      if (res.ok) return this.renderDetail(document.getElementById("appContent"), r.id);
+      const note = document.querySelector(`.pathNote[data-line="${line}"]`);
+      if (note) note.textContent = res.data.detail || "That did not work.";
+    }));
+  },
+
   wireForwardBuy(r) {
     const f = r.forward_buy;
     if (!f) return;
@@ -476,7 +503,7 @@ const RequisitionsView = {
                   <td class="cell-muted">${l.est_price === null ? "—" : formatCurrency(l.est_price)}${l.est_source ? `<div class="est-source" style="font-size:11px;">estimate from ${this.esc(l.est_source)}</div>` : ""}</td>
                   <td>${l.value === null ? "—" : formatCurrency(l.value)}</td>
                   <td class="cell-muted">${formatDate(l.need_by)}</td>
-                  <td style="font-size:12px;">${this.sourceCell(l.source)}</td>
+                  <td style="font-size:12px;">${this.sourceCell(l.source)}${this.pathCell(l)}</td>
                 </tr>
               `).join("")}
             </tbody>
@@ -507,6 +534,7 @@ const RequisitionsView = {
       `;
       this.wireApproval(r);
       this.wireForwardBuy(r);
+      this.wirePath(r);
       container.querySelectorAll(".price-view").forEach((a) => a.addEventListener("click", (ev) => { ev.preventDefault(); PriceView.open(document.getElementById("priceViewBox"), a.dataset.item, a.dataset.loc || null); }));
     } catch {
       container.innerHTML = `<div class="empty-state">Couldn't load this request. Go back to the list and try again.</div>`;

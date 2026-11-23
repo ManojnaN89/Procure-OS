@@ -36,6 +36,8 @@ from approval_scenarios import check as check_approval  # noqa: E402
 from approval_scenarios import write_approval  # noqa: E402
 from period_scenarios import check as check_period  # noqa: E402
 from period_scenarios import write_period  # noqa: E402
+from quote_scenarios import check as check_quotes  # noqa: E402
+from quote_scenarios import write_quotes  # noqa: E402
 from demand_scenarios import write_scenarios  # noqa: E402
 from stock_scenarios import write_stock  # noqa: E402
 import cutover  # noqa: E402
@@ -623,6 +625,7 @@ def build(profile: CompanyProfile, out: Path) -> dict[str, dict[str, int]]:
     opening = cutover.write(out, profile) if history and "cutover" in profile.data else {}
     write_approval(profile.data, out)  # the approval scenarios of block 4: every order version worked out
     write_period(profile.data, out)  # the period RFQ scenarios of block 5: suggested quantities, awards, contracts
+    write_quotes(profile.data, out)  # block 6: last prices paid, negotiation briefs, the A/B case, order totals
     manifest = {
         "dataset": profile.dataset,
         "profile": profile.name,
@@ -714,7 +717,7 @@ def _column(path: Path, column: str) -> set[str]:
 
 def check(out: Path, profile: CompanyProfile | None = None) -> list[str]:
     """What is wrong with the dataset, in plain words. Empty when it is as designed."""
-    problems = common_problems(out) + check_approval(out) + check_period(out)
+    problems = common_problems(out) + check_approval(out) + check_period(out) + check_quotes(out)
     if problems:
         return problems
     m = out / "master"

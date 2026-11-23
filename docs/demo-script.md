@@ -177,6 +177,14 @@ After `demo reset apex`, on Mon 23 Nov 2026 (scenario P1, AT-02; the figures are
    purchase manager, and the contract has Rs 6,86,400 left. Brightwave (B1): only two IT suppliers, so the award needs a
    reason and the purchase agreement before the CFO decides; CNT-0003 is activated by the IT head.
 
+## Quotes and supplier selection (block 6)
+
+Business date Mon 23 Nov 2026. production@ asks for 500 kg of copper winding wire (RM-08) at Chakan, need-by 21 Dec; it is approved and goes to quotation with Shree Wires, Pune Copper and Deccan Castings. buyer@ confirms the send (the RFQ shows **Why these suppliers**).
+
+1. **Negotiation brief.** buyer@ enters Pune Copper 960.00, Shree Wires 975.00 and Deccan Castings 990.00. The RFQ shows **Why this ranking** and a **Negotiation brief**: Pune Copper is lowest at 960.00, above the last price paid, 905.91 on PO-CKN-2627-00199 of 05 Oct 2026 (5.63% gap); ask for 905.91: 27,045.00 less on 500 kg. After purchasemanager@ verifies the October copper benchmark (897.00), the brief adds the market and the target becomes 897.00 (31,500.00 less). A revised 900.00 from Pune Copper withdraws the brief.
+2. **Closed short.** On an RFQ where only one supplier quotes by the closing date, the next morning's job gives the buyer a case "closed with 1 of 3 quotes wanted"; **Extend closing** completes it and tells the suppliers.
+3. **Path A or B.** With a verified RM-01 benchmark of 600.00 (Maharashtra), a request for 600 castings at Chakan needed in January waits for the buyer: CNT-0001's 650.00 is 7.69% above the market, 30,000.00 on 600. **Ask for quotes (B)** prepares an RFQ; **Buy on the contract (A)** with a reason makes an order that waits for the purchase manager.
+
 ## Start with cases in flight
 
 `python -m p2p.cli demo populate apex --reset` (about 20 seconds, local database only) makes the company and then does what the people would do, through the real API, so every figure, email, notification and audit row is real:

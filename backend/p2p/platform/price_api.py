@@ -19,7 +19,7 @@ from p2p.masters import regions
 from p2p.platform import files, ratelimit, routing, worker
 from p2p.platform.permissions import can_anywhere, need_any, require
 from p2p.platform.sod import user
-from p2p.sourcing import benchmarks, price_review, price_view
+from p2p.sourcing import benchmarks, notes, price_review, price_view
 
 router = APIRouter(prefix="/api", tags=["prices"])
 Db = Annotated[Session, Depends(routing.tenant_session)]
@@ -198,7 +198,11 @@ def contract_market(code: str, db: Db, ctx: Viewer) -> dict[str, Any]:
         ),
         {"c": code, "d": today},
     ).all()
-    reviews = [r for r in price_review.listing(db) if r.get("contract") == code]
+    reviews = [
+        {**r, "note": notes.as_json(notes.latest(db, "review_note", f"review:{r['task_id']}"))}
+        for r in price_review.listing(db)
+        if r.get("contract") == code
+    ]
     out = []
     for rid, item in rows:
         a = price_review.assess(db, int(rid), today)
@@ -232,7 +236,10 @@ def _reviewer(ctx: Ctx, db: Db) -> routing.TenantContext:
 def list_reviews(
     db: Db, ctx: Annotated[routing.TenantContext, Depends(_reviewer)], status: str = "open"
 ) -> list[dict[str, Any]]:
-    return price_review.listing(db, status)
+    return [
+        {**r, "note": notes.as_json(notes.latest(db, "review_note", f"review:{r['task_id']}"))}
+        for r in price_review.listing(db, status)
+    ]
 
 
 @router.post("/reviews")

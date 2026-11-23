@@ -5,15 +5,19 @@ tagged with the RFQ. Incoming mail is linked by that tag, or by In-Reply-To / Re
 sent. A linked message that matches a case adds a case event.
 """
 
+import email
 import json
 import re
 from datetime import timedelta
 from email.utils import parseaddr
+from typing import Any
 
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from p2p.config import get_settings
+from p2p.formulas import sender_auth
+from p2p.formulas.calendar import business_today
 from p2p.platform import audit, cases, email_layout, events, files, outbox, worker
 from p2p.platform.mailbox import ImapMailbox, IncomingMail, Mailbox, MailpitMailbox
 from p2p.platform.sod import Actor
@@ -85,6 +89,16 @@ def commit_and_send(db: Session) -> list[str]:
     return send_queued(db)
 
 
+def sender_check(db: Session, incoming: IncomingMail) -> dict[str, Any]:
+    """Our own mail server's sender authentication of the mail (formulas/sender_auth.py), read once at intake."""
+    trusted = db.execute(text("select value from org_setting where key = 'mail_authserv_id'")).scalar()
+    try:
+        headers = [str(h) for h in email.message_from_bytes(incoming.raw).get_all("Authentication-Results") or []]
+    except Exception:  # noqa: BLE001 - a raw copy that cannot be read has no trusted result
+        headers = []
+    return sender_auth.read(headers, str(trusted or ""), incoming.from_addr)
+
+
 def ingest(db: Session, tenant: str, incoming: IncomingMail) -> int | None:
     """Store one incoming message, its attachments and the raw copy; link it. Returns None if already stored."""
     if db.execute(text("select 1 from email_message where message_id = :m"), {"m": incoming.message_id}).first():
@@ -130,12 +144,13 @@ def ingest(db: Session, tenant: str, incoming: IncomingMail) -> int | None:
         ).id
         for name, ctype, data in incoming.attachments
     ]
+    auth = sender_check(db, incoming)
     email_id = int(
         db.execute(
             text(
                 "insert into email_message (message_id, in_reply_to, direction, from_addr, to_addr, subject, body_text, sent_at, "
-                "plus_tag, linked_type, linked_id, case_id, raw_document_id, attachment_ids) values (:m, :r, 'in', :f, :t, :s, :b, "
-                ":n, :tag, :lt, :li, :c, :rd, cast(:a as jsonb)) returning id"
+                "plus_tag, linked_type, linked_id, case_id, raw_document_id, attachment_ids, received_on, auth) values (:m, :r, 'in', "
+                ":f, :t, :s, :b, :n, :tag, :lt, :li, :c, :rd, cast(:a as jsonb), :on, cast(:auth as jsonb)) returning id"
             ),
             {
                 "m": incoming.message_id,
@@ -151,6 +166,8 @@ def ingest(db: Session, tenant: str, incoming: IncomingMail) -> int | None:
                 "c": case_id,
                 "rd": raw_doc.id,
                 "a": json.dumps(attachment_ids),
+                "on": business_today(),  # the day we stored it: a quote's receipt date, never the sender's Date header
+                "auth": json.dumps(auth),
             },
         ).scalar_one()
     )
@@ -165,6 +182,7 @@ def ingest(db: Session, tenant: str, incoming: IncomingMail) -> int | None:
             "subject": incoming.subject,
             "linked": linked_id,
             "attachments": len(attachment_ids),
+            "auth_verdict": auth["verdict"],
         },
     )
     if case_id:

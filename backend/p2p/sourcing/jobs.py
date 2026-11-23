@@ -1,4 +1,5 @@
-"""The job that sources a request as soon as it is approved, and the daily strategic review detectors (task 12.5)."""
+"""The job that sources a request as soon as it is approved, the daily strategic review detectors (task 12.5) and the
+sourcing notes' rewording (block 6)."""
 
 import logging
 from datetime import timedelta
@@ -7,7 +8,7 @@ from sqlalchemy.orm import Session
 
 from p2p.formulas.calendar import IST, business_today
 from p2p.platform import routing, worker
-from p2p.sourcing import award_approval, price_review, reminders, service  # noqa: F401 - award_approval: its event route
+from p2p.sourcing import award_approval, notes, price_review, reminders, service  # noqa: F401 - their event routes
 
 log = logging.getLogger(__name__)
 JOB = "source_request"
@@ -34,6 +35,19 @@ def _award_note(ctx: worker.JobContext) -> None:
 
     with Session(routing.engine_for(ctx.tenant)) as db:
         award_note.explain(db, int(ctx.payload["decision_id"]), Gateway())
+
+
+@worker.register(notes.JOB)
+def _sourcing_note(ctx: worker.JobContext) -> None:
+    """The AI step rewords a sourcing record's fixed words; the template stays on any failure (block 6). A job of a
+    switched-off capability is dropped with no task: the record keeps its template."""
+    from p2p.agents import capabilities  # noqa: PLC0415 - the switch imports the agents
+    from p2p.ai_steps import sourcing_note  # noqa: PLC0415
+    from p2p.ai_steps.gateway import Gateway  # noqa: PLC0415
+
+    with Session(routing.engine_for(ctx.tenant)) as db:
+        if capabilities.job_allowed(db, ctx.tenant, notes.JOB, ctx.payload):
+            sourcing_note.explain(db, int(ctx.payload["recommendation_id"]), Gateway())
 
 
 @worker.register("read_supplier_reply")
@@ -79,6 +93,7 @@ def _review_item(ctx: worker.JobContext) -> None:
     """A benchmark was just verified: test that item's contract prices now."""
     with Session(routing.engine_for(ctx.tenant)) as db:
         price_review.run(db, ctx.tenant, ctx.now.astimezone(IST).date(), item=str(ctx.payload["item"]))
+        notes.rerun_for_item(db, str(ctx.payload["item"]))  # the negotiation briefs of its open RFQs
 
 
 def schedule_reviews(tenant: str) -> int | None:

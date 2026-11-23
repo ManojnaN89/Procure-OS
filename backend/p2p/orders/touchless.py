@@ -199,6 +199,13 @@ def facts(db: Session, po_no: str, rule: rules.ApprovalRule, today: date) -> tl.
         revised=db.execute(
             text("select exists (select 1 from po_revision where po_no = :n and reapproval)"), {"n": po_no}
         ).scalar_one(),
+        directed=db.execute(
+            text(
+                "select exists (select 1 from po_line l join sourcing_decision d on d.request_no = l.request_no "
+                "and d.line_no = l.request_line_no where l.po_no = :n and d.path_case = 'chosen_a')"
+            ),
+            {"n": po_no},
+        ).scalar_one(),
     )
 
 

@@ -32,6 +32,7 @@ from p2p.platform.payment_api import router as payment_router
 from p2p.platform.period_rfq_api import router as period_rfq_router
 from p2p.platform.price_api import router as price_router
 from p2p.platform.prospect_api import router as prospect_router
+from p2p.platform.quote_api import router as quote_router
 from p2p.platform.reconciliation_api import router as reconciliation_router
 from p2p.platform.service_entry_api import router as service_entry_router
 from p2p.platform.setup_api import router as setup_router
@@ -75,6 +76,7 @@ app.include_router(invoice_intake_router)
 app.include_router(master_router)
 app.include_router(prospect_router)
 app.include_router(price_router)
+app.include_router(quote_router)
 app.include_router(order_router)
 app.include_router(agent_router)
 app.include_router(approval_link_router)

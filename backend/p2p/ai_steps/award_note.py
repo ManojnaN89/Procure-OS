@@ -8,8 +8,6 @@ other failure, the template stays and nobody is asked to check anything. A model
 quantity or a value.
 """
 
-import json
-from decimal import Decimal
 from typing import Any
 
 from pydantic import BaseModel, Field
@@ -17,8 +15,7 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from p2p.agents import capabilities
-from p2p.ai_steps.evidence import dates_in, numbers_in
-from p2p.platform import audit
+from p2p.ai_steps import grounded_note
 from p2p.platform.sod import Actor
 
 NAME = "award_note"
@@ -40,17 +37,12 @@ SYSTEM = (
 )
 
 
-def source_text(template: str, figures: dict[str, Any]) -> str:
-    """The template and the engine's figures as text: the only place the model's numbers may come from."""
-    return f"{template}\n\nFigures: {json.dumps(figures, sort_keys=True, default=str)}"
+source_text = grounded_note.source_text
 
 
 def invented(note: Note, source: str) -> list[str]:
     """Numbers or dates in the answer that are not in the source."""
-    allowed_numbers, allowed_dates = numbers_in(source), dates_in(source)
-    words = " ".join([note.summary, *note.risks])
-    bad = [f"number {n}" for n in sorted(numbers_in(words)) if n not in allowed_numbers and n != Decimal(0)]
-    return bad + [f"date {d}" for d in sorted(dates_in(words)) if d not in allowed_dates]
+    return grounded_note.invented([note.summary, *note.risks], source)
 
 
 def explain(db: Session, decision_id: int, gateway: Any) -> str:
@@ -72,8 +64,8 @@ def explain(db: Session, decision_id: int, gateway: Any) -> str:
         got = gateway.extract(NAME, messages, Note, db=db, prompt_version=PROMPT_VERSION)
     except Exception as exc:  # noqa: BLE001 - no model, the cost cap, a bad answer, a timeout: the template stays
         db.rollback()
-        audit.record(db, ACTOR, "ai_step.rejected", "award_decision", decision_id,
-                     reason=f"{type(exc).__name__}: {str(exc)[:300]}", prompt_version=PROMPT_VERSION)  # fmt: skip
+        grounded_note.rejected(db, ACTOR, "award_decision", decision_id, f"{type(exc).__name__}: {str(exc)[:300]}",
+                               PROMPT_VERSION)  # fmt: skip
         db.commit()
         return "template"
     note = got.value
@@ -81,8 +73,8 @@ def explain(db: Session, decision_id: int, gateway: Any) -> str:
     model = f"{got.completion.provider}/{got.completion.model}"
     bad = invented(note, source)
     if bad:
-        audit.record(db, ACTOR, "ai_step.rejected", "award_decision", decision_id, after=note.model_dump(mode="json"),
-                     reason="not in the evidence: " + ", ".join(bad), model=model, prompt_version=PROMPT_VERSION)  # fmt: skip
+        grounded_note.rejected(db, ACTOR, "award_decision", decision_id, "not in the evidence: " + ", ".join(bad),
+                               PROMPT_VERSION, answer=note.model_dump(mode="json"), model=model)  # fmt: skip
         db.commit()
         return "template"
     words = note.summary.strip() + (" Risks: " + "; ".join(r.strip() for r in note.risks) + "." if note.risks else "")
@@ -90,7 +82,8 @@ def explain(db: Session, decision_id: int, gateway: Any) -> str:
         text("update award_decision set note = :n, note_source = 'ai' where id = :i and status = 'waiting'"),
         {"n": words, "i": decision_id},
     )
-    audit.record(db, ACTOR, "ai_step.accepted", "award_decision", decision_id, after=note.model_dump(mode="json"),
-                 model=model, prompt_version=PROMPT_VERSION)  # fmt: skip
+    grounded_note.accepted(
+        db, ACTOR, "award_decision", decision_id, note.model_dump(mode="json"), model, PROMPT_VERSION
+    )
     db.commit()
     return "ai"

@@ -40,6 +40,22 @@ KINDS: dict[str, str] = {
     "demand": "Demand changes to act on",
     "late_supply": "Supply promised too late",
     "ai_handover": "AI work handed to a person",
+    "rfq_no_response": "Quotation requests closed short",
+    "quote_sender_check": "Supplier replies not read",
+    "quote_expired": "Quotes expired before the order",
+    "path_case": "Contract above the market: path A or B",
+}
+SOURCING_NEXT: dict[str, tuple[str, str]] = {  # task kind (block 6): the permission that acts, next step
+    "rfq_no_response": (
+        "rfq.create",
+        "Extend the closing date, select from the quotes received with a reason, or change the lines' route",
+    ),
+    "quote_sender_check": (
+        "rfq.create",
+        "Ask the supplier to send from its registered address, or register the contact through supplier records",
+    ),
+    "quote_expired": ("rfq.create", "Ask for a renewed price, or select another valid quote with a reason"),
+    "path_case": ("rfq.create", "Choose path A (buy on the contract, with a reason) or B (ask for quotes)"),
 }
 
 AP = ("AP", "invoice.match", "Ask the supplier for a corrected invoice")
@@ -322,6 +338,26 @@ def _ai_handover(db: Session) -> Iterator[Stuck]:
         )  # fmt: skip
 
 
+def _sourcing_cases(db: Session) -> Iterator[Stuck]:
+    """The sourcing cases of block 6: an RFQ closed short, a reply not read, a quote expired before its order, a
+    contract line held for path A or B. Each is an open task of its buyer."""
+    rows = _rows(
+        db,
+        "select id, kind, title, assignee, payload, created_at from task where kind = any(:k) "
+        "and status in ('open', 'overdue') order by id",
+        k=list(SOURCING_NEXT),
+    )
+    for r in rows:
+        p, code = r["payload"] or {}, org_code_of(db, int(r["assignee"]))
+        act, step = SOURCING_NEXT[str(r["kind"])]
+        ref = str(p.get("rfq_no") or (f"{p.get('request_no')}/{p.get('line_no')}" if p.get("request_no") else r["id"]))
+        yield Stuck(
+            str(r["kind"]), ref, str(p.get("link") or "#/exceptions"), str(r["title"]),
+            name_of(db, code) if code else "Not assigned", step, _day(r["created_at"]), act=act,
+            people=frozenset({code}) if code else frozenset(), see=(act,),
+        )  # fmt: skip
+
+
 def collect(db: Session, today: date, calendar: BusinessCalendar) -> list[Stuck]:
     """Every stuck case in the company, whoever must act."""
     return [
@@ -335,6 +371,7 @@ def collect(db: Session, today: date, calendar: BusinessCalendar) -> list[Stuck]
         *_demand(db),
         *_late_supply(db),
         *_ai_handover(db),
+        *_sourcing_cases(db),
     ]
 
 

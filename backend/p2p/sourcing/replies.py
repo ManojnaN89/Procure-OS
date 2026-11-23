@@ -7,7 +7,7 @@ Whether a clean draft may be confirmed without a person is the autonomy gate's d
 """
 
 import json
-from dataclasses import asdict
+from dataclasses import asdict, dataclass
 from datetime import UTC, date, datetime
 from decimal import Decimal
 from email.utils import parseaddr
@@ -21,16 +21,22 @@ from p2p.ai_steps import quote_reading as reading_step
 from p2p.ai_steps.gateway import Gateway
 from p2p.ai_steps.quote_reading import Proposal, QuoteReading, RfqLine
 from p2p.ai_steps.runner import run_step
+from p2p.formulas import sender_auth
+from p2p.formulas.calendar import business_today
 from p2p.formulas.money import format_qty
 from p2p.formulas.orders import current_gst_rate
+from p2p.formulas.sourcing import is_late
 from p2p.orders import quotes
 from p2p.platform import audit, tasks
 from p2p.platform.sod import Actor
-from p2p.sourcing import service
+from p2p.sourcing import closing, service
 
 SERVICE = Actor("service", "quote_reading")
 DECISION_TYPE = "quote.read"
 MAX_ATTACHMENT_CHARS = 20_000
+SENDER_TASK = "quote_sender_check"
+SENDER_SLA_HOURS = 9  # one working day
+UNAUTHENTICATED = "the sender could not be authenticated"
 
 
 class ReplyError(Exception):
@@ -49,19 +55,48 @@ def _buyer_user(db: Session) -> int:
     return int(found or 0)
 
 
-def _supplier_of(db: Session, rfq_no: str, from_addr: str) -> str | None:
+@dataclass(frozen=True)
+class Sender:
+    """Who wrote, as D53 counts it: a registered contact of one invited supplier, or why nobody."""
+
+    address: str
+    supplier: str | None = None
+    contact_id: int | None = None
+    problem: str | None = None
+
+
+def sender_of(db: Session, rfq_no: str, from_addr: str) -> Sender:
+    """The From address matched only to a current contact (`supplier_contact`) of a supplier invited to the RFQ that is
+    active or a prospect (D53). The address an RFQ was mailed to is a copy and identifies nobody; an address registered
+    for two invited suppliers identifies neither."""
     address = parseaddr(from_addr)[1].strip().lower()
-    if not address:
-        return None
-    row = db.execute(
-        text(
-            "select rs.supplier_code from rfq_supplier rs where rs.rfq_no = :r and ("
-            "lower(rs.email) = :a or exists (select 1 from supplier_contact c where c.supplier_code = rs.supplier_code "
-            "and lower(c.email) = :a))"
-        ),
-        {"r": rfq_no, "a": address},
-    ).first()
-    return str(row[0]) if row else None
+    rows = (
+        db.execute(
+            text(
+                "select c.supplier_code, min(c.id) from supplier_contact c join rfq_supplier rs on rs.rfq_no = :r "
+                "and rs.supplier_code = c.supplier_code join supplier s on s.code = c.supplier_code "
+                "where lower(c.email) = :a and s.status in ('active', 'prospect') group by c.supplier_code "
+                "order by c.supplier_code"
+            ),
+            {"r": rfq_no, "a": address},
+        ).all()
+        if address
+        else []
+    )
+    if not rows:
+        return Sender(
+            address,
+            problem=f"the sender {address or from_addr} is not a registered contact of a supplier invited to {rfq_no}: "
+            "the email was not read",
+        )
+    if len(rows) > 1:
+        names = " and ".join(str(r[0]) for r in rows)
+        return Sender(address, problem=f"{address} is registered for {names}: the email was not read")
+    return Sender(address, str(rows[0][0]), int(rows[0][1]))
+
+
+def _supplier_of(db: Session, rfq_no: str, from_addr: str) -> str | None:
+    return sender_of(db, rfq_no, from_addr).supplier
 
 
 def _contact_name(db: Session, supplier: str, from_addr: str) -> str | None:
@@ -149,8 +184,8 @@ def read_reply(db: Session, tenant: str, email_id: int, gateway: Gateway, *, as_
     mail = (
         db.execute(
             text(
-                "select id, from_addr, subject, body_text, linked_type, linked_id, attachment_ids from email_message "
-                "where id = :i and direction = 'in'"
+                "select id, from_addr, subject, body_text, linked_type, linked_id, attachment_ids, auth, received_on "
+                "from email_message where id = :i and direction = 'in'"
             ),
             {"i": email_id},
         )
@@ -162,32 +197,30 @@ def read_reply(db: Session, tenant: str, email_id: int, gateway: Gateway, *, as_
     if db.execute(text("select 1 from quote_draft where email_id = :i"), {"i": email_id}).first():
         return None  # already read
     rfq_no = str(mail["linked_id"])
-    rfq = db.execute(text("select status from rfq where no = :n"), {"n": rfq_no}).first()
+    rfq = db.execute(text("select status, due_date from rfq where no = :n"), {"n": rfq_no}).first()
     if rfq is None:
         return None
-    supplier = _supplier_of(db, rfq_no, mail["from_addr"] or "")
-    if supplier is None:
-        draft = _store(
-            db,
-            rfq_no,
-            email_id,
-            None,
-            "needs_person",
-            problems=[f"the sender {mail['from_addr']} is not one of the suppliers asked, so the email was not read"],
+    sender = sender_of(db, rfq_no, mail["from_addr"] or "")
+    auth = dict(mail["auth"] or {}) or {"verdict": sender_auth.NONE}
+    problem = sender.problem
+    if problem is None and auth.get("verdict") == sender_auth.FAIL:
+        problem = (
+            f"sender authentication failed ({auth.get('failed') or 'fail'}) for {sender.address}: "
+            "the email was not read"
         )
-        db.commit()
-        return draft
+    if problem is not None:  # D53: an unknown or failed sender is a case for the buyer, never read by a model
+        return _not_read(db, tenant, rfq_no, email_id, sender.supplier, problem, sender_task=True)
+    supplier = str(sender.supplier)
     if rfq[0] != "sent":
-        draft = _store(
-            db,
-            rfq_no,
-            email_id,
-            supplier,
-            "needs_person",
-            problems=[f"{rfq_no} is {rfq[0]}; it is no longer collecting quotes"],
+        return _not_read(
+            db, tenant, rfq_no, email_id, supplier, f"{rfq_no} is {rfq[0]}; it is no longer collecting quotes"
         )
-        db.commit()
-        return draft
+    received_on = mail["received_on"] or business_today()  # stored by the mailbox; a mail put in by hand: today
+    if is_late(received_on, rfq[1]) and not quotes.quoted_on_time(db, rfq_no, supplier, rfq[1]):
+        return _not_read(
+            db, tenant, rfq_no, email_id, supplier,
+            f"arrived on {received_on:%d %b %Y}, after {rfq_no} closed on {rfq[1]:%d %b %Y}: a late quote is not read",
+        )  # fmt: skip
 
     notes: list[str] = []
     attachment_ids = [int(x) for x in (mail["attachment_ids"] or [])]
@@ -225,6 +258,8 @@ def read_reply(db: Session, tenant: str, email_id: int, gateway: Gateway, *, as_
     reading = outcome.value
     proposal = reading_step.build_proposal(reading, lines)
     proposal.assumptions.extend(notes)
+    if auth.get("verdict") != sender_auth.PASS:  # read, but a person confirms it whatever the gate allows
+        proposal.assumptions.append(UNAUTHENTICATED)
     status = "pending" if not proposal.problems else "needs_person"
     draft = _store(
         db, rfq_no, email_id, supplier, status, intent=reading.intent, reading=reading, proposal=proposal, model=model
@@ -264,13 +299,49 @@ def read_reply(db: Session, tenant: str, email_id: int, gateway: Gateway, *, as_
                 ),
             },
         )
-    _maybe_apply(db, tenant, draft, reading, proposal, as_of)
+    _maybe_apply(db, tenant, draft, reading, proposal, as_of, str(auth.get("verdict")))
     return draft
 
 
-def _maybe_apply(db: Session, tenant: str, draft: int, reading: QuoteReading, proposal: Proposal, as_of: date) -> None:
-    """A clean draft is confirmed without a person only when the gate allows it. Anything in doubt waits."""
+def _not_read(
+    db: Session,
+    tenant: str,
+    rfq_no: str,
+    email_id: int,
+    supplier: str | None,
+    problem: str,
+    *,
+    sender_task: bool = False,
+) -> int:
+    """A draft for a person, with why the email was not read (no model call); a sender problem is also a task."""
+    draft = _store(db, rfq_no, email_id, supplier, "needs_person", problems=[problem])
+    audit.record(
+        db, SERVICE, "quote_draft.create", "quote_draft", draft,
+        after={"status": "needs_person", "rfq": rfq_no, "supplier": supplier, "problem": problem},
+    )  # fmt: skip
+    db.commit()
+    if sender_task:
+        tasks.create_task(
+            db, tenant, kind=SENDER_TASK, title=f"{rfq_no}: a reply was not read ({problem})"[:200],
+            assignee=closing.buyer_of(db, tenant, rfq_no), sla_hours=SENDER_SLA_HOURS,
+            payload={
+                "rfq_no": rfq_no, "draft": draft, "email_id": email_id, "problem": problem, "link": f"#/rfqs/{rfq_no}",
+                "next": "Ask the supplier to send its quote from its registered address, or register the contact "
+                "through supplier records; nothing is read again automatically",
+            },
+            email=False,
+        )  # fmt: skip
+    return draft
+
+
+def _maybe_apply(
+    db: Session, tenant: str, draft: int, reading: QuoteReading, proposal: Proposal, as_of: date, verdict: str
+) -> None:
+    """A clean draft is confirmed without a person only when the gate allows it and the sender was authenticated.
+    Anything in doubt waits."""
     if reading.intent not in ("quote", "decline") or proposal.problems or proposal.assumptions:
+        return
+    if verdict != sender_auth.PASS:
         return
     value = sum((ln.unit_price for ln in proposal.lines), Decimal(0))
     if not autonomy.gate(db, DECISION_TYPE, value=value, confidence=reading.confidence).allowed:
@@ -344,6 +415,7 @@ def confirm_draft(
                     freight=Decimal(str(proposal.get("freight") or 0)),
                     packing_forwarding=Decimal(str(proposal.get("packing_forwarding") or 0)),
                     document_ref=f"email:{draft['email_id']}",
+                    **_from_mail(db, rfq_no, int(draft["email_id"])),
                 ),
                 actor,
             )
@@ -371,6 +443,21 @@ def confirm_draft(
     return result
 
 
+def _from_mail(db: Session, rfq_no: str, email_id: int) -> dict[str, Any]:
+    """How an emailed quote came: the mail, its sender and registered contact, the authentication, the day stored."""
+    mail = db.execute(
+        text("select from_addr, auth, received_on from email_message where id = :i"),
+        {"i": email_id},
+    ).first()
+    if mail is None:
+        return {"channel": "email", "email_id": email_id}
+    sender = sender_of(db, rfq_no, str(mail[0] or ""))
+    return {
+        "channel": "email", "email_id": email_id, "sender_address": sender.address, "contact_id": sender.contact_id,
+        "sender_auth": dict(mail[1] or {}) or {"verdict": sender_auth.NONE}, "received_on": mail[2] or business_today(),
+    }  # fmt: skip
+
+
 def dismiss_draft(db: Session, draft_id: int, actor: Actor, note: str | None = None) -> None:
     draft = _locked(db, draft_id)
     if draft["status"] in ("applied", "dismissed"):
@@ -389,7 +476,7 @@ def drafts_of(db: Session, rfq_no: str) -> list[dict[str, Any]]:
     """The drafts of an RFQ for the screen, newest first."""
     rows = db.execute(
         text(
-            "select d.*, coalesce(s.trade_name, s.legal_name) as supplier_name, e.subject, e.from_addr "
+            "select d.*, coalesce(s.trade_name, s.legal_name) as supplier_name, e.subject, e.from_addr, e.auth as sender_auth "
             "from quote_draft d left join supplier s on s.code = d.supplier_code "
             "left join email_message e on e.id = d.email_id where d.rfq_no = :n order by d.id desc"
         ),

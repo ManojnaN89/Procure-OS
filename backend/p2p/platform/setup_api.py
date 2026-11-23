@@ -266,6 +266,17 @@ POLICIES: dict[str, tuple[str, str, str, str, str, float | None, float | None, t
         10,
         (),
     ),
+    "mail_authserv_id": (
+        "org",
+        "host",
+        "Our receiving mail server",
+        "The name our own mail server writes in Authentication-Results (e.g. mx.google.com): only its check of a "
+        "supplier's sender counts (D53). Empty: no sender is taken as checked, so a person confirms every emailed quote",
+        "",
+        None,
+        None,
+        (),
+    ),
     "rfq_email_template": (
         "org",
         "text",
@@ -1373,6 +1384,10 @@ def _validate(
         if not words or not all(LIST_WORD.fullmatch(w) for w in words):
             raise _422(f"{label}: a comma-separated list of words like cancelled_cheque, bank_letter")
         value = ",".join(dict.fromkeys(words))
+    elif kind == "host":
+        value = value.lower()
+        if value and not HOST.fullmatch(value):
+            raise _422(f"{label}: must be a server name like mx.yourcompany.example, or empty")
     elif kind == "email":
         value = value.lower()
         if value and (len(value) > 254 or not EMAIL.fullmatch(value)):
@@ -1396,6 +1411,7 @@ def _validate(
 
 LIST_WORD = re.compile(r"[a-z][a-z0-9_]{0,39}")
 EMAIL = re.compile(r"[a-z0-9._%+-]+@[a-z0-9-]+(?:\.[a-z0-9-]+)+")
+HOST = re.compile(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)*")
 MAILBOXES = (
     "request_mailbox",
     "invoice_receipt_mailbox",

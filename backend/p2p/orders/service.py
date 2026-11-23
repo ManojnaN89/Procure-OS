@@ -96,6 +96,7 @@ def ready_lines(db: Session, request_no: str, as_of: date) -> tuple[list[ReadyLi
             "join sourcing_decision d on d.request_no = rl.request_no and d.line_no = rl.line_no "
             "left join item i on i.code = rl.item_code "
             "where rl.request_no = :n and rl.status = 'sourcing' and d.method in ('contract', 'direct', 'rfq') "
+            "and (d.path_case is null or d.path_case <> 'waiting') "
             "and (d.method = 'rfq' or not exists (select 1 from po_line p where p.request_no = rl.request_no "
             "and p.request_line_no = rl.line_no and p.status <> 'cancelled')) order by rl.line_no"
         ),
@@ -143,10 +144,11 @@ def ready_lines(db: Session, request_no: str, as_of: date) -> tuple[list[ReadyLi
             )
             continue
         # one row per supplier selected; a line shared between suppliers is ordered in parts, each from its own quote
-        for supplier, price, quote_no, gst_rate, part, split, conditional, lapsed, status in db.execute(
+        for supplier, price, quote_no, gst_rate, part, split, conditional, lapsed, status, valid_until in db.execute(
             text(
                 "select a.supplier_code, a.price, a.quote_no, ql.gst_rate, a.qty, a.split, a.conditional, "
-                "a.lapsed_at is not null, (select s.status from supplier s where s.code = a.supplier_code) from award a "
+                "a.lapsed_at is not null, (select s.status from supplier s where s.code = a.supplier_code), "
+                "(select q.valid_until from quote q where q.no = a.quote_no) from award a "
                 "join rfq_line l on l.rfq_no = a.rfq_no and l.line_no = a.rfq_line_no "
                 "join quote_line ql on ql.quote_no = a.quote_no and ql.rfq_line_no = a.rfq_line_no "
                 "where a.rfq_no = :r and a.status = 'final' and l.request_no = :n and l.request_line_no = :l and not exists ("
@@ -157,6 +159,11 @@ def ready_lines(db: Session, request_no: str, as_of: date) -> tuple[list[ReadyLi
         ):
             if lapsed:
                 notes.append(f"line {r['line_no']} ({r['name']}): the conditional award to {supplier} lapsed")
+                continue
+            if valid_until is not None and valid_until < as_of:  # DF-33: lapsed by order_request
+                notes.append(
+                    f"line {r['line_no']} ({r['name']}): {supplier}'s quote {quote_no} expired on {valid_until:%d %b %Y}"
+                )
                 continue
             if conditional and status != "active":
                 notes.append(f"line {r['line_no']} ({r['name']}): waiting for the supplier's activation ({supplier})")
@@ -189,10 +196,73 @@ def order_request(db: Session, tenant: str, request_no: str, actor: Actor = SERV
     if req is None:
         db.rollback()
         return result
+    expired = expired_awards(db, request_no, as_of)
     lines, notes = ready_lines(db, request_no, as_of)
     result.skipped.extend(notes)
     place(db, tenant, dict(req), lines, result, actor, as_of=as_of)
+    for found in expired:
+        lapse_expired(db, tenant, found)
     return result
+
+
+EXPIRED_TASK = "quote_expired"
+EXPIRED_SLA_HOURS = 18  # two working days
+
+
+def expired_awards(db: Session, request_no: str, as_of: date) -> list[dict[str, Any]]:
+    """Final awards of the request not yet ordered whose quote's validity ended before the date (DF-33). A quote
+    with no validity date stays valid (OP-11)."""
+    return [
+        dict(r)
+        for r in db.execute(
+            text(
+                "select a.id, a.rfq_no, a.rfq_line_no, a.supplier_code, a.quote_no, q.valid_until, "
+                "coalesce(s.trade_name, s.legal_name) as supplier_name from award a "
+                "join quote q on q.no = a.quote_no join supplier s on s.code = a.supplier_code "
+                "join rfq_line l on l.rfq_no = a.rfq_no and l.line_no = a.rfq_line_no "
+                "where l.request_no = :n and a.status = 'final' and a.lapsed_at is null and q.valid_until < :d "
+                "and not exists (select 1 from po_line p where p.source_ref = a.quote_no and p.request_no = :n "
+                "and p.request_line_no = l.request_line_no and p.status <> 'cancelled') order by a.rfq_no, a.rfq_line_no"
+            ),
+            {"n": request_no, "d": as_of},
+        ).mappings()
+    ]
+
+
+def lapse_expired(db: Session, tenant: str, a: dict[str, Any]) -> None:
+    """An award whose quote expired before its order lapses: the RFQ is out again and its buyer decides (renew the
+    price, or select another valid quote with a reason). Nothing is awarded to anyone else (OP-10)."""
+    from p2p.platform import tasks  # noqa: PLC0415 - tasks import the notification layer
+    from p2p.sourcing import closing  # noqa: PLC0415 - sourcing builds on orders
+
+    why = (
+        f"{a['supplier_name']}'s quote {a['quote_no']} expired on {a['valid_until']:%d %b %Y} before the order was made"
+    )
+    done = db.execute(
+        text("update award set lapsed_at = now(), lapse_reason = :w where id = :i and lapsed_at is null returning id"),
+        {"w": why, "i": a["id"]},
+    ).first()
+    if done is None:
+        db.rollback()
+        return
+    db.execute(text("update rfq set status = 'sent' where no = :n and status = 'awarded'"), {"n": a["rfq_no"]})
+    audit.record(
+        db, SERVICE, "award.lapsed", "rfq", a["rfq_no"],
+        after={"line": a["rfq_line_no"], "supplier": a["supplier_code"], "quote": a["quote_no"]}, reason=why,
+    )  # fmt: skip
+    db.commit()
+    tasks.create_task(
+        db, tenant, kind=EXPIRED_TASK,
+        title=f"{a['rfq_no']} line {a['rfq_line_no']}: {a['supplier_name']}'s quote expired before the order was made",
+        assignee=closing.buyer_of(db, tenant, a["rfq_no"]), sla_hours=EXPIRED_SLA_HOURS,
+        payload={
+            "rfq_no": a["rfq_no"], "line": a["rfq_line_no"], "supplier": a["supplier_code"], "quote": a["quote_no"],
+            "why": why, "link": f"#/rfqs/{a['rfq_no']}",
+            "next": "Ask for a renewed price (a revision; extend the closing date first if the RFQ has closed) or "
+            "select another valid quote with a reason; nothing was awarded automatically",
+        },
+        actor=SERVICE, email=False,
+    )  # fmt: skip
 
 
 def place(

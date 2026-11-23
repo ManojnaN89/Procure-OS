@@ -734,3 +734,13 @@ period_scenarios:
   - {name: P2, title: Rejected and selected again (round 2), as_of: "2026-11-23", location: PLT-CKN, period_from: "2027-01-01", period_to: "2027-03-31", lines: [{item: RM-08, qty: "900", supplier: SUP-003, price: "895.00"}]}
   - {name: P4, title: The automatic band never approves an award, as_of: "2026-11-23", location: PLT-CKN, period_from: "2027-01-01", period_to: "2027-03-31", lines: [{item: RM-07, qty: "1000", supplier: SUP-002, price: "84.00"}]}
   - {name: P6, title: An expiry review starts a period RFQ, as_of: "2027-02-01", location: PLT-CKN, period_from: "2027-04-01", period_to: "2028-03-31", lines: [{item: RM-01}, {item: RM-02}, {item: RM-03}, {item: RM-04}, {item: RM-05}]}
+
+# Block 6 (quotes and supplier selection): the figures the truth file works out (generator/quote_scenarios.py)
+quote_scenarios:
+  - {name: N1, title: Brief on the last price paid, as_of: "2026-11-23", item: RM-08, location: PLT-CKN, qty: "500", l1: "960.00", l2: "975.00"}
+  - {name: N2, title: Brief on the market once verified, as_of: "2026-11-23", item: RM-08, location: PLT-CKN, qty: "500", l1: "960.00", l2: "975.00", market: "897.00"}
+  - {name: N3, title: L1 revised within the thresholds, as_of: "2026-11-23", item: RM-08, location: PLT-CKN, qty: "500", l1: "900.00", market: "897.00"}
+  - {name: N4, title: Below the saving floor, as_of: "2026-11-23", item: RM-08, location: PLT-CKN, qty: "400", l1: "960.00", l2: "975.00"}
+  - {name: A1, title: Path A/B case, kind: path, as_of: "2026-11-23", item: RM-01, location: PLT-CKN, qty: "600", contract: "650.00", market: "600.00"}
+  - {name: A2, title: Path A order on CNT-0001, kind: order, as_of: "2026-11-23", item: RM-01, location: PLT-CKN, qty: "600", price: "650.00", gst: "18"}
+  - {name: V1, title: Reselected after the expired award, kind: order, as_of: "2026-11-26", item: RM-08, location: PLT-CKN, qty: "500", price: "975.00", gst: "18"}

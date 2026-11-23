@@ -152,6 +152,67 @@ const RfqsView = {
 
   FLAG_NOTE: "does not comply",
 
+  // Block 6: the engine's words, or the model's rewording of them (checked against the figures)
+  noteWords(rec) {
+    if (!rec) return "";
+    return rec.ai_note
+      ? `${this.esc(rec.ai_note)} <span class="badge" style="font-size:10px;">AI wording, checked against the figures</span>`
+      : this.esc(rec.summary);
+  },
+
+  notePanel(title, rec) {
+    if (!rec || rec.status === "superseded") return "";
+    return `<div class="panel" style="margin-bottom:12px;"><div class="panel-title">${this.esc(title)}</div><div style="font-size:12.5px;">${this.noteWords(rec)}</div></div>`;
+  },
+
+  noResponsePanel(r) {
+    const t = r.no_response_task;
+    if (!t || (t.status !== "open" && t.status !== "overdue")) return "";
+    return `<div class="panel" style="margin-bottom:12px;font-size:12.5px;color:var(--warning-text);">${this.esc(t.title)}. ${this.esc(t.next || "")}
+      ${t.silent && t.silent.length ? `<div class="cell-muted" style="font-size:11.5px;">Did not reply: ${t.silent.map((x) => this.esc(x)).join(", ")}</div>` : ""}</div>`;
+  },
+
+  extendPanel(r) {
+    if (r.status !== "sent" || !Auth.can("rfq.send")) return "";
+    return `<div class="panel" style="margin-bottom:12px;font-size:12.5px;display:flex;gap:6px;align-items:center;flex-wrap:wrap;">Extend closing
+      <input type="date" id="extendDate" style="padding:5px;">
+      <input type="text" id="extendReason" placeholder="Reason" style="padding:5px;flex:1;min-width:160px;">
+      <div class="btn btn-sm" id="extendBtn">Extend closing</div><span id="extendNote" style="color:var(--warning-text);"></span></div>`;
+  },
+
+  cameBy(q) {
+    if (q.channel === "email") {
+      const checked = q.sender_auth && q.sender_auth.verdict === "pass";
+      return `Email from ${this.esc(q.sender_address || "")}, sender ${checked ? "checked" : "not checked"}`;
+    }
+    return `Entered by ${this.esc(q.entered_by_name || "a buyer")}`;
+  },
+
+  quotesCame(r) {
+    const qs = r.quotes || [];
+    if (!qs.length) return "";
+    return `<div class="table-wrap" style="margin-bottom:12px;"><table class="data-table">
+      <thead><tr><th>QUOTE</th><th>RECEIVED</th><th>HOW IT CAME</th></tr></thead>
+      <tbody>${qs.map((q) => `<tr><td>${this.esc(q.quote_no)}</td><td class="cell-muted">${formatDate(q.received_on)}</td><td class="cell-muted" style="font-size:12px;">${this.cameBy(q)}</td></tr>`).join("")}</tbody>
+    </table></div>`;
+  },
+
+  briefsPanel(r) {
+    const briefs = ((r.recommendations || {}).briefs || []).filter((b) => b.status === "proposed" || b.status === "accepted" || b.status === "rejected");
+    if (!briefs.length) return "";
+    return briefs.map((b) => {
+      const f = b.figures || {};
+      const refs = (f.references || []).map((x) => `<li>${x.kind === "last_paid" ? `Last paid ${formatCurrency(x.price)} on ${this.esc(x.ref)} (${formatDate(x.on)})` : `Market ${formatCurrency(x.price)} (${this.esc(x.ref)}, ${formatDate(x.on)})`}: gap ${this.esc(x.gap_pct)}%</li>`).join("");
+      const open = b.status === "proposed" && Auth.can("rfq.create");
+      return `<div class="panel" style="margin-bottom:12px;"><div class="panel-title">Negotiation brief · line ${this.esc(b.line)}${b.status !== "proposed" ? ` · ${b.status === "accepted" ? "used" : "dismissed"}` : ""}</div>
+        <div style="font-size:12.5px;">${this.noteWords(b)}</div>
+        <ul style="margin:6px 0;padding-left:18px;font-size:11.5px;">${refs}</ul>
+        <div style="font-size:12px;">Target ${formatCurrency(f.target)} · saving at target ${formatCurrency(f.saving_at_target)}</div>
+        ${open ? `<div style="display:flex;gap:8px;margin-top:8px;"><div class="btn btn-sm briefDecide" data-id="${this.esc(b.id)}" data-used="1">Used</div><div class="btn btn-sm briefDecide" data-id="${this.esc(b.id)}" data-used="0">Dismiss</div></div>` : ""}
+      </div>`;
+    }).join("");
+  },
+
   comparisonPanel(r) {
     const c = r.comparison;
     if (!c) return "";
@@ -304,6 +365,19 @@ const RfqsView = {
 
   wire(r) {
     const on = (id, fn) => { const el = document.getElementById(id); if (el) el.addEventListener("click", fn); };
+    on("extendBtn", async () => {
+      const res = await API.postJSON(`/api/rfqs/${encodeURIComponent(r.id)}/extend`, {
+        due_date: document.getElementById("extendDate").value,
+        reason: document.getElementById("extendReason").value,
+      });
+      if (res.ok) return this.renderDetail(document.getElementById("appContent"), r.id);
+      const note = document.getElementById("extendNote");
+      if (note) note.textContent = res.data.detail || "That did not work.";
+    });
+    document.querySelectorAll(".briefDecide").forEach((btn) => btn.addEventListener("click", async () => {
+      const res = await API.postJSON(`/api/recommendations/${btn.dataset.id}/decide`, { used: btn.dataset.used === "1" });
+      if (res.ok) return this.renderDetail(document.getElementById("appContent"), r.id);
+    }));
     on("addQuoteBtn", () => { const f = document.getElementById("quoteForm"); if (f) { f.style.display = "block"; f.scrollIntoView({ behavior: "smooth", block: "center" }); } });
     on("cancelQuote", () => { document.getElementById("quoteForm").style.display = "none"; });
     on("saveQuote", async () => {
@@ -412,10 +486,13 @@ const RfqsView = {
           <p>${this.esc(r.id)} · ${statusBadge(r.status)} · ${r.kind === "period"
             ? `prices for ${formatDate(r.period_from)} to ${formatDate(r.period_to)} (an estimate, not a commitment)${r.review_task_id ? ` · from <a href="#/contracts" style="color:var(--accent-tint)">strategic review ${this.esc(r.review_task_id)}</a>` : ""}`
             : `for <a href="#/requisitions/${this.esc(r.request_no)}" style="color:var(--accent-tint)">${this.esc(r.request_no)}</a>`}
-             · reply by ${formatDate(r.due_date)}${r.sent_at ? ` · sent ${formatDate(r.sent_at)}` : ""}
+             · ${r.closed ? `Closed on ${formatDate(r.due_date)}` : `Closes ${formatDate(r.due_date)}, end of day`}${r.sent_at ? ` · sent ${formatDate(r.sent_at)}` : ""}
              ${r.delivery_location_name ? ` · deliver to ${this.esc(r.delivery_location_name)}` : ""}${r.min_quotes ? ` · minimum quotes ${this.esc(r.min_quotes)}${r.min_quotes_rule ? ` (rule: ${this.esc(r.min_quotes_rule)})` : ""}` : ""}</p>
         </div>
         ${FlowStrip.forRfq(r)}
+        ${r.status === "draft" && r.proposal_id ? this.notePanel("Why these suppliers", (r.recommendations || {}).rfq_draft) : ""}
+        ${this.noResponsePanel(r)}
+        ${this.extendPanel(r)}
         ${r.status === "draft" && r.proposal_id ? `<div class="panel" style="margin-bottom:12px;font-size:12.5px;color:var(--text-secondary);">Not sent yet: a buyer confirms every new RFQ before it goes out. <span class="btn btn-primary btn-sm" id="confirmOne" style="margin-left:8px;"><i class="ti ti-send"></i>Confirm and send</span><span id="confirmOneNote" style="margin-left:8px;color:var(--warning-text);"></span></div>` : ""}
         ${r.confirmed_at ? `<div class="cell-muted" style="font-size:12px;margin-bottom:8px;">Sending confirmed ${formatDate(r.confirmed_at)}</div>` : ""}
         ${r.note ? `<div class="panel" style="margin-bottom:12px;font-size:12.5px;color:var(--warning-text);">${this.esc(r.note)}</div>` : ""}
@@ -449,7 +526,10 @@ const RfqsView = {
         <div id="supplierMessagesBox"></div>
         ${this.draftsPanel(r)}
         ${this.awardPanel(r)}
+        ${this.quotesCame(r)}
         ${this.comparisonPanel(r)}
+        ${this.notePanel("Why this ranking", (r.recommendations || {}).ranking)}
+        ${this.briefsPanel(r)}
         ${this.quoteForm(r)}
       `;
       this.wire(r);

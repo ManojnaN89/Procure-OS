@@ -29,6 +29,8 @@ CAPABILITY_OF = {
     "supplier_message": "execution",
     "reply_classification": "execution",
     "invoice_reading": "invoice_ap",
+    "award_note": "sourcing",
+    "sourcing_note": "sourcing",
 }
 
 

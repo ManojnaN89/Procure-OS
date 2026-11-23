@@ -3,7 +3,7 @@
 A reminder goes out once the days set in 'rfq_reminder_after_days' (working days) have passed since the request or the
 last reminder, at most 'rfq_max_reminders' times, and never after the reply date. A supplier who has replied, even if
 a buyer has not turned the reply into a quote yet, or who has declined, is left alone. The autonomy kill switch stops
-them like every other automatic message.
+them like every other automatic message. The same daily job looks at the RFQs that closed (sourcing/closing.py).
 """
 
 import logging
@@ -14,7 +14,7 @@ from typing import Any
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
-from p2p.formulas.calendar import IST
+from p2p.formulas.calendar import IST, business_today
 from p2p.formulas.sourcing import reminder_due
 from p2p.platform import audit, emails, reference, routing, worker
 from p2p.platform.sod import Actor
@@ -149,6 +149,9 @@ def schedule(tenant: str, run_at: datetime | None = None) -> int | None:
 
 @worker.register(JOB)
 def _run(ctx: worker.JobContext) -> None:
+    from p2p.sourcing import closing  # noqa: PLC0415 - closing reads the quotes, which import the sourcing service
+
     with Session(routing.engine_for(ctx.tenant)) as db:
         run(db, as_of=ctx.now.astimezone(IST).date(), now=ctx.now)
+        closing.run(db, ctx.tenant, business_today())  # RFQs that closed short: a case for the buyer (AT-10)
     worker.enqueue_unique(ctx.tenant, JOB, {}, next_run(ctx.now), exclude_id=ctx.id)
