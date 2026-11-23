@@ -95,6 +95,10 @@ def test_an_acknowledgement_is_of_one_version_and_a_revision_voids_it(shop: Sess
     )
     assert len(audits(shop, "po.acknowledge", po_no)) == before and order(shop, po_no)["status"] == "sent"
 
+    # and the link already used for version 1 says the order changed, and that it was used (R23, P1)
+    old = client.get(f"/supplier/{token}")
+    assert old.status_code == 409 and "has changed since this link was sent" in old.text and "used already" in old.text
+
     # and the buyer recording version 2 in the app binds it to version 2
     head = _headers(shop.info["slug"], logins["buyer"], "Buyer")
     got = client.post(f"/api/purchase-orders/{po_no}/acknowledge", json={"version": 2}, headers=head)

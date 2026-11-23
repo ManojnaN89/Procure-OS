@@ -172,7 +172,8 @@ const PurchaseOrdersView = {
       <div style="padding:6px 0;border-bottom:1px solid var(--border);font-size:12px;">
         <b>Version ${this.esc(h.version)}</b> · ${formatDate(h.at)} · ${this.esc(h.by)}
         ${(h.said || []).length ? `<div>${this.esc(h.said.join("; "))}</div>` : ""}
-        <div class="cell-muted">${this.esc(h.reason)} · total ${formatCurrency(h.total_before)} → ${formatCurrency(h.total_after)}${h.reapproval ? ` · approved again${(h.material || []).length ? `: ${this.esc(h.material.join("; "))}` : ""}` : ""}${h.approval_carried ? ` · approval of version ${this.esc(h.baseline_version)} carries: nothing material changed` : ""}</div>
+        <div class="cell-muted">${this.esc(h.reason)} · total ${formatCurrency(h.total_before)} → ${formatCurrency(h.total_after)}${h.outcome ? ` · ${this.esc(h.outcome)}` : ""}</div>
+        ${h.acknowledged ? `<div class="cell-muted">${this.esc(h.acknowledged)}</div>` : ""}
       </div>`).join("");
     box.innerHTML = `
       <div class="panel" style="margin-bottom:12px;">

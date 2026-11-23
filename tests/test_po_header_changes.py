@@ -262,6 +262,10 @@ def test_delivery_terms_are_a_minor_change_the_approval_carries_and_the_supplier
     assert (body["reapproval"], body["approval_carried"], body["status"], body["material"]) == (False, True, "sent", [])
     po = order(shop, po_no)
     assert (po["delivery_terms"], po["approved_version"], po["acknowledged_version"]) == ("ex_works", 1, None)
+    (said,) = client.get(f"/api/purchase-orders/{po_no}/controls", headers=buyer(shop, logins)).json()["history"]
+    assert said["outcome"] == "approval of version 1 carries: nothing material changed"
+    assert said["acknowledged"].startswith("Version 1 acknowledged in the app on ")
+    assert said["acknowledged"].endswith("; version 2 not yet acknowledged")
     assert rows(shop, "select count(*) as n from po_approval_step where version = 2") == [{"n": 0}]
     (mail,) = outbox.sent
     (link,) = rows(shop, "select po_version from supplier_link order by id desc limit 1")

@@ -97,11 +97,13 @@ def check(db: Session, link: Link, *, lock: bool = False) -> dict[str, Any]:
         raise LinkError("this link is not valid")
     if row["po_supplier"] != link.supplier_code:
         raise LinkError(f"order {link.po_no} is not placed with you")
+    # the version first: after a revision an older version's link always says the order changed (R23), never the state
+    # the order is in for us now; a link of that version already used says so too
+    if link.purpose == "respond" and row["po_version"] != row["version"]:
+        used = " (this link has also been used already: it works once)" if row["used_at"] is not None else ""
+        raise LinkError(f"order {link.po_no} has changed since this link was sent{used}: please use the latest email")
     if row["used_at"] is not None:
         raise LinkError("this link has already been used: it works once")
-    # the version first: after a revision the supplier hears the order changed, never the state it is in for us now
-    if link.purpose == "respond" and row["po_version"] != row["version"]:
-        raise LinkError(f"order {link.po_no} has changed since this link was sent: please use the latest email")
     if row["status"] not in OPEN_FOR[link.purpose]:
         raise LinkError(f"order {link.po_no} is {str(row['status']).replace('_', ' ')}: nothing more can be done here")
     return dict(row)

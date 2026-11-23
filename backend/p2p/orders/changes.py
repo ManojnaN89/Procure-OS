@@ -851,11 +851,50 @@ def said(entry: dict[str, Any]) -> list[str]:
     return out
 
 
+def _outcome(r: Any) -> str:
+    """What a revision did to the approval, in words."""
+    if r["reapproval"]:
+        reasons = list(r["material"] or [])
+        return "approved again" + (f": {'; '.join(reasons)}" if reasons else ": changed while waiting for approval")
+    if r["baseline_version"] is not None:
+        return f"approval of version {r['baseline_version']} carries: nothing material changed"
+    return "not approved yet"
+
+
+_VIA = {"link": "by link", "app": "in the app", "email": "by email"}
+
+
+def _acknowledged(db: Session, po_no: str, version: int) -> str:
+    """The supplier's answer to the version before and to this one (R5): 'Version 1 acknowledged by link on 23 Nov
+    2026; version 2 not yet acknowledged'."""
+    rows = {
+        int(r[0]): (r[1], r[2])
+        for r in db.execute(
+            text("select version, acknowledged_at, ack_via from po_version where po_no = :n and version in (:a, :b)"),
+            {"n": po_no, "a": version - 1, "b": version},
+        )
+    }
+    words = []
+    for v in (version - 1, version):
+        if v not in rows:
+            continue
+        at, via = rows[v]
+        words.append(
+            f"version {v} acknowledged {_VIA.get(str(via), '')} on {at.astimezone(IST):%d %b %Y}".replace("  ", " ")
+            if at
+            else f"version {v} not yet acknowledged"
+        )
+    said = "; ".join(words)
+    return said[:1].upper() + said[1:]
+
+
 def history(db: Session, po_no: str) -> list[dict[str, Any]]:
     return [
         {
             "version": r["version"],
             "said": [w for e in r["changes"] or [] for w in said(e)],
+            "outcome": _outcome(r),
+            "acknowledged": _acknowledged(db, po_no, int(r["version"])),
             "at": r["changed_at"].isoformat(),
             "by": name_of(db, _code_of_id(db, r["changed_by"])),
             "reason": r["reason"],
