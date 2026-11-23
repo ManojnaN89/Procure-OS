@@ -450,7 +450,7 @@ def _touchless_lost(
     db: Session, po: dict[str, Any], user_id: int, base: po_versions.Snapshot | None, version: int, material: bool
 ) -> str:
     """A person changed an order the system issued without a buyer: it is no longer touchless (Rev s5)."""
-    when = po["sent_at"] or po["approved_at"] or po["created_at"]
+    when = versions.issued_on(db, po["no"], version) or po["sent_at"] or po["approved_at"] or po["created_at"]
     said = f"Changed by {name_of(db, _code(db, user_id))} after it was issued on {when.astimezone(IST):%d %b %Y}: "
     said += "no longer touchless (Rev s5). "
     if material or base is None:

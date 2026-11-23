@@ -284,7 +284,6 @@ def test_a_touchless_order_changed_by_a_person_is_no_longer_touchless_but_keeps_
     logins = _logins(tiers)
     _gate(tiers)
     po = _order(tiers, "R-P6", "RM-01", "50", "650")
-    sent_on = order(tiers, po)["sent_at"]
     tiers.execute(  # the buyer as a person of the organisation, so the note names them
         text("insert into org_user (code, name, email) values ('U-BUY', 'A Buyer', :e)"),
         {"e": notifications.email_of(logins["buyer"])},
@@ -299,7 +298,7 @@ def test_a_touchless_order_changed_by_a_person_is_no_longer_touchless_but_keeps_
     assert (done["reapproval"], done["touchless_lost"], done["status"]) == (False, True, "sent")
     row = order(tiers, po)
     assert row["touchless"] is False and row["touchless_note"] == (
-        f"Changed by A Buyer after it was issued on {sent_on.astimezone(order_versions.IST):%d %b %Y}: "
+        "Changed by A Buyer after it was issued on 06 Nov 2026: "  # the business day it went out, not the clock
         "no longer touchless (Rev s5). The approval by rule PO-01 of version 1 carries: nothing material changed."
     )
     assert rows(tiers, "select version, approved_by from po_approved_version") == [

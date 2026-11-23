@@ -272,6 +272,7 @@ const PurchaseOrdersView = {
     const res = await Auth.fetch(`${API.base}/api/purchase-orders/${encodeURIComponent(po.id)}/versions`);
     if (!res.ok) return;
     const rows = await res.json();
+    if (!box.isConnected) return; // the page was drawn again meanwhile; its own call fills the new box
     if (!rows.length) { box.innerHTML = ""; return; }
     const options = (pick) => rows.map((v) => `<option value="${this.esc(v.version)}"${v.version === pick ? " selected" : ""}>Version ${this.esc(v.version)}</option>`).join("");
     // by default the current version against the one last approved (what an approver needs), else the one before it
@@ -300,11 +301,11 @@ const PurchaseOrdersView = {
       if (r.ok) window.open(URL.createObjectURL(await r.blob()), "_blank");
     }));
     const compare = () => {
-      const a = document.getElementById("poCmpFrom").value, b = document.getElementById("poCmpTo").value;
-      if (a !== b) return this.showComparison(po, a, b);
-      document.getElementById("poCmpOut").innerHTML = `<div class="cell-muted" style="font-size:12px;">${rows.length > 1 ? "Pick two different versions." : "This is the only version so far: nothing to compare yet."}</div>`;
+      const a = box.querySelector("#poCmpFrom").value, b = box.querySelector("#poCmpTo").value;
+      if (a !== b) return this.showComparison(po, a, b, box.querySelector("#poCmpOut"));
+      box.querySelector("#poCmpOut").innerHTML = `<div class="cell-muted" style="font-size:12px;">${rows.length > 1 ? "Pick two different versions." : "This is the only version so far: nothing to compare yet."}</div>`;
     };
-    document.getElementById("poCmpGo").addEventListener("click", compare);
+    box.querySelector("#poCmpGo").addEventListener("click", compare);
     compare();
   },
 
@@ -315,11 +316,11 @@ const PurchaseOrdersView = {
     return this.esc(value);
   },
 
-  async showComparison(po, a, b) {
-    const out = document.getElementById("poCmpOut");
+  async showComparison(po, a, b, out) {
     if (!out) return;
     const r = await Auth.fetch(`${API.base}/api/purchase-orders/${encodeURIComponent(po.id)}/versions/compare?from=${encodeURIComponent(a)}&to=${encodeURIComponent(b)}`);
     const data = await r.json();
+    if (!out.isConnected) return;
     if (!r.ok) { out.innerHTML = `<div class="cell-muted" style="font-size:12px;">${this.esc(data.detail || "These versions cannot be compared.")}</div>`; return; }
     const changed = "background:var(--warning-bg, rgba(255,196,0,.12));font-weight:600;";
     const row = (what, f) => `<tr><td>${what}</td><td>${this.cmpValue(f.field, f.before)}</td><td style="${changed}">${this.cmpValue(f.field, f.after)}</td></tr>`;

@@ -156,12 +156,20 @@ def issue_document(db: Session, tenant: str, po_no: str) -> Issued | None:
 
 
 def mark_sent(db: Session, po_no: str, version: int, to: str) -> None:
-    """The version went to the supplier at this address (the caller commits)."""
+    """The version went to the supplier at this address, on the business date (the caller commits)."""
     _ensure(db, po_no, version)
     db.execute(
-        text("update po_version set sent_at = now(), sent_to = :t where po_no = :p and version = :v"),
-        {"t": to, "p": po_no, "v": version},
+        text("update po_version set sent_at = :at, sent_to = :t where po_no = :p and version = :v"),
+        {"at": _made_at(), "t": to, "p": po_no, "v": version},
     )
+
+
+def issued_on(db: Session, po_no: str, before: int) -> datetime | None:
+    """When the order last went to the supplier before version `before` (its business date)."""
+    found = db.execute(
+        text("select max(sent_at) from po_version where po_no = :p and version < :v"), {"p": po_no, "v": before}
+    ).scalar()
+    return found if isinstance(found, datetime) else None
 
 
 def mark_acknowledged(db: Session, po_no: str, version: int, by: Actor, via: str) -> None:

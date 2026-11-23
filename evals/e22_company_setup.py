@@ -92,7 +92,9 @@ def source_reads(key: str) -> set[str]:
                 found.add("app")
             if "DEFAULT_SETTINGS" in window:
                 found.add("app")
-            if re.search(r"settings\.(value|number)\(", window):  # platform/settings.py: the org's value, else the app's
+            if re.search(
+                r"settings\.(value|number)\(", window
+            ):  # platform/settings.py: the org's value, else the app's
                 found |= {"org", "app"}
     return found
 
@@ -183,11 +185,21 @@ def run(ctx) -> Outcome:
             good, bad = [("true" if p["value"] == "false" else "false")], ["maybe", "1", ""]
         elif kind == "choice":
             good, bad = [c for c in p["choices"] if c != p["value"]][:1], ["nonsense", "WARN "]
+        elif kind == "text" and key == "po_terms_template":
+            # the order's terms (block 7 spec P2, the owner's two-person setting): a Jinja text with the order's
+            # fields, checked by rendering it in the sandbox; plain words are fine, a template that does not render is not
+            good = ["Pay within {{ payment_terms }}; quote {{ po_no }} on every invoice.\n", ""]
+            bad = ["{{ unclosed", "{{ ''.__class__.__mro__ }}", "{{ po_no }} " + "y" * 4100]
         elif kind == "text":  # a template: it must use {items} and {reference} and no other field
             # accepted: a template with its two required fields, and empty (= the standard wording);
             # refused: no fields, an unknown field, a stray brace, and text over the length limit
             good = ["Please quote {items} (ref {reference}).\n", ""]
-            bad = ["no fields at all", "{items} {reference} {nope}", "{items} {reference} {", "{items} {reference} " + "y" * 4100]
+            bad = [
+                "no fields at all",
+                "{items} {reference} {nope}",
+                "{items} {reference} {",
+                "{items} {reference} " + "y" * 4100,
+            ]
         elif kind == "list":  # a comma-separated list of plain words (e.g. the accepted bank verification methods)
             good = ["cancelled_cheque,bank_letter"]
             bad = ["", ",,", "two words", "cheque;letter"]
@@ -223,7 +235,11 @@ def run(ctx) -> Outcome:
                     for t in ("org_setting", "app_setting")
                 },
             )  # noqa: S608
-            r = client.put(f"{SETUP}/policies/{key}", json={"value": value, "reason": f"edge {value.strip()}".strip()}, headers=admin)
+            r = client.put(
+                f"{SETUP}/policies/{key}",
+                json={"value": value, "reason": f"edge {value.strip()}".strip()},
+                headers=admin,
+            )
             db.rollback()
             if r.status_code != 200:
                 refused_wrong += 1
@@ -416,7 +432,8 @@ def run(ctx) -> Outcome:
     in_force = [
         r
         for r in client.get(f"{SETUP}/approval-rules", headers=admin).json()["rules"]
-        if r["in_force"] and r["document"] in ("request", "po")
+        if r["in_force"]
+        and r["document"] in ("request", "po")
         and not r.get("adds")  # a row that adds an approver is not a band of its own (no gap or overlap to test)
         and r.get("location", "ANY") == "ANY"
     ]
