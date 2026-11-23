@@ -140,9 +140,17 @@ export function Policies(shared: Shared) {
 										) : (
 											<Input
 												inputMode={
-													p.kind === "email" ? "email" : p.kind === "host" ? "url" : "decimal"
+													p.kind === "email"
+														? "email"
+														: p.kind === "host"
+															? "url"
+															: "decimal"
 												}
-												placeholder={p.kind === "email" || p.kind === "host" ? "none" : undefined}
+												placeholder={
+													p.kind === "email" || p.kind === "host"
+														? "none"
+														: undefined
+												}
 												value={value}
 												onChange={(e) =>
 													setEdits({ ...edits, [p.key]: e.target.value })

@@ -360,13 +360,16 @@ def test_an_expired_quote_cannot_be_re_selected_after_a_lapsed_award_without_a_r
         quotes.award(world, rfq, {1: "S1"}, user(world.info["buyer"]), reason="it was cheaper", as_of=TODAY)
 
 
-def test_in_a_first_selection_an_expired_quote_only_needs_a_written_reason(world: Session, outbox: Outbox) -> None:  # noqa: F811
+def test_an_expired_quote_is_never_selected_even_in_a_first_selection_with_a_reason(  # block 6, OP-9
+    world: Session,
+    outbox: Outbox,  # noqa: F811
+) -> None:
     rfq = _expired_and_valid_quotes(world, outbox)
 
-    with pytest.raises(quotes.QuoteError, match="reason is required"):
-        quotes.award(world, rfq, {1: "S1"}, user(world.info["buyer"]), as_of=TODAY)
-    quotes.award(world, rfq, {1: "S1"}, user(world.info["buyer"]), reason="it was cheaper", as_of=TODAY)
-    assert world.execute(text("select supplier_code from award")).scalar_one() == "S1"
+    for reason in (None, "it was cheaper"):
+        with pytest.raises(quotes.QuoteError, match="expired on .*: ask for a renewed price before selecting it"):
+            quotes.award(world, rfq, {1: "S1"}, user(world.info["buyer"]), reason=reason, as_of=TODAY)
+    assert world.execute(text("select count(*) from award")).scalar_one() == 0
 
 
 def test_the_rfq_keeps_its_quotation_count_when_the_category_changes(world: Session, outbox: Outbox) -> None:  # noqa: F811
