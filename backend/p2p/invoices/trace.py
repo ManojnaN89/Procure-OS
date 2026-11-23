@@ -221,7 +221,10 @@ def _rfqs(db: Session, requests: set[str], pos: set[str], who: People) -> list[d
         p=list(pos),
     ):
         awards = _rows(
-            db, "select distinct supplier_code, by_user from award where rfq_no = :n order by supplier_code", n=r["no"]
+            db,
+            "select distinct supplier_code, by_user from award where rfq_no = :n and status in ('final', 'approved') "
+            "order by supplier_code",
+            n=r["no"],
         )
         won = f"; awarded to {', '.join(a['supplier_code'] for a in awards)}" if awards else ""
         out.append(

@@ -190,7 +190,7 @@ def build_registry(db: Session, user_id: int) -> ToolRegistry:
             _rows(
                 db,
                 "select rfq_line_no, supplier_code, price, conditional, lapsed_at is not null as lapsed from award "
-                "where rfq_no = :n order by rfq_line_no",
+                "where rfq_no = :n and status in ('final', 'approved') order by rfq_line_no",
                 n=p.no,
             )
         )

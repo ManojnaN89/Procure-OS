@@ -17,6 +17,7 @@ from p2p.platform.budget_api import router as budget_router
 from p2p.platform.buying_rules_api import router as buying_rules_router
 from p2p.platform.company_api import router as company_router
 from p2p.platform.company_state import StateError
+from p2p.platform.contract_link_api import router as contract_link_router
 from p2p.platform.demand_api import router as demand_router
 from p2p.platform.export_api import router as export_router
 from p2p.platform.files import router as files_router
@@ -28,6 +29,7 @@ from p2p.platform.master_api import router as master_router
 from p2p.platform.material_api import router as material_router
 from p2p.platform.order_api import router as order_router
 from p2p.platform.payment_api import router as payment_router
+from p2p.platform.period_rfq_api import router as period_rfq_router
 from p2p.platform.price_api import router as price_router
 from p2p.platform.prospect_api import router as prospect_router
 from p2p.platform.reconciliation_api import router as reconciliation_router
@@ -77,6 +79,8 @@ app.include_router(order_router)
 app.include_router(agent_router)
 app.include_router(approval_link_router)
 app.include_router(supplier_link_router)
+app.include_router(contract_link_router)
+app.include_router(period_rfq_router)
 app.include_router(payment_router)
 app.include_router(reconciliation_router)
 app.include_router(supplier_agent_router)

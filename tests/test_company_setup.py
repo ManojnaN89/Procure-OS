@@ -571,19 +571,20 @@ def test_a_tolerance_is_set_for_a_category_and_the_goods_receipt_uses_it(s: Setu
 # ---- automation --------------------------------------------------------------------------------
 
 
-def test_the_automation_table_lists_every_decision_and_locks_the_three_that_stay_with_a_person(s: Setup) -> None:
+def test_the_automation_table_lists_every_decision_and_locks_the_four_that_stay_with_a_person(s: Setup) -> None:
     got = client.get("/api/setup/automation", headers=s.a).json()
     rows = {r["decision_type"]: r for r in got["decisions"]}
 
     assert got["kill_switch"] is False
     assert {"rfq.send", "rfq.award", "quote.read", "po.send"} <= set(rows)
-    for locked in ("payment_run.approve", "supplier.set_status", "invoice.release_block"):
+    for locked in ("payment_run.approve", "supplier.set_status", "invoice.release_block", "rfq.send"):
         assert (
             rows[locked]["locked"] is True
             and rows[locked]["levels"] == ["propose"]
             and rows[locked]["level"] == "propose"
         )
-    assert rows["rfq.send"]["locked"] is False and rows["rfq.send"]["levels"] == ["off", "propose", "auto"]
+    assert rows["rfq.send"]["note"].startswith("D42: a buyer confirms every new RFQ")  # D42: never automatic
+    assert rows["rfq.award"]["locked"] is False and rows["rfq.award"]["levels"] == ["off", "propose", "auto"]
     assert rows["po.send"]["level"] == "propose"  # a buyer sends orders until the company says otherwise
 
 
@@ -635,13 +636,13 @@ def test_a_decision_is_set_to_act_within_limits_and_the_gate_obeys_the_new_setti
     ],
 )
 def test_a_nonsense_automation_setting_is_refused(s: Setup, body: dict) -> None:
-    assert s.put("/api/setup/automation/rfq.send", json={**body, "reason": "Try"}).status_code == 422
+    assert s.put("/api/setup/automation/rfq.award", json={**body, "reason": "Try"}).status_code == 422
     assert s.put("/api/setup/automation/nonsense", json={"level": "auto", "reason": "Try"}).status_code in (404, 422)
     assert s.changes("automation") == []
 
 
-def test_payment_runs_vendor_status_and_releasing_a_block_can_never_act_alone(s: Setup) -> None:
-    for locked in ("payment_run.approve", "supplier.set_status", "invoice.release_block"):
+def test_payment_runs_vendor_status_releasing_a_block_and_sending_an_rfq_can_never_act_alone(s: Setup) -> None:
+    for locked in ("payment_run.approve", "supplier.set_status", "invoice.release_block", "rfq.send"):
         r = s.put(f"/api/setup/automation/{locked}", json={"level": "auto", "reason": "Faster"})
         assert r.status_code == 422 and "always decided by a person" in r.text, locked
         with pytest.raises(ValueError, match="always decided by a person"):
@@ -684,15 +685,15 @@ def test_orders_are_sent_by_a_person_or_automatically_never_by_nobody(s: Setup) 
 
 
 def test_the_kill_switch_is_set_from_the_screen_stops_automatic_action_and_is_logged(s: Setup) -> None:
-    s.put("/api/setup/automation/rfq.send", json={"level": "auto", "reason": "Go"})
+    s.put("/api/setup/automation/rfq.award", json={"level": "auto", "reason": "Go"})
     s.db.expire_all()
-    assert autonomy.gate(s.db, "rfq.send", value=D(1), confidence=1.0).allowed is True
+    assert autonomy.gate(s.db, "rfq.award", value=D(1), confidence=1.0).allowed is True
 
     on = s.put("/api/setup/automation-kill-switch", json={"on": True, "reason": "Wrong emails went out"})
 
     assert on.status_code == 200 and on.json() == {"kill_switch": True}
     s.db.expire_all()
-    gate = autonomy.gate(s.db, "rfq.send", value=D(1), confidence=1.0)
+    gate = autonomy.gate(s.db, "rfq.award", value=D(1), confidence=1.0)
     assert gate.allowed is False and "kill switch" in gate.reason
     assert client.get("/api/setup/automation", headers=s.a).json()["kill_switch"] is True
     assert s.put("/api/setup/automation-kill-switch", json={"on": False, "reason": "Fixed"}).status_code == 200

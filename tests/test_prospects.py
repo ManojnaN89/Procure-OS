@@ -254,7 +254,10 @@ def _rfq(db_: Session, outbox_: Outbox, item: str = "A") -> str:
     no = _request(db_, f"R-P-{item}", [(item, "100", None, "C1")])
     service.source_request(db_, db_.info["slug"], no, as_of=TODAY, dispatch=False)
     rfq = str(db_.execute(text("select no from rfq where request_no = :n"), {"n": no}).scalar_one())
-    db_.execute(text("update rfq set status = 'sent' where no = :n"), {"n": rfq})
+    db_.execute(
+        text("update rfq set status = 'sent', confirmed_at = now(), confirmed_via = 'proposal' where no = :n"),
+        {"n": rfq},
+    )
     db_.commit()
     return rfq
 

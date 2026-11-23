@@ -69,11 +69,12 @@ def test_seven_capabilities_are_listed_with_monitoring_off(env: Env) -> None:
 
 
 def test_switching_off_is_immediate_and_the_gate_names_the_capability(env: Env) -> None:
-    autonomy.configure(env.db, Actor("user", str(env.admin)), "rfq.send", level="auto")
+    # rfq.award: rfq.send is always a person's (D42), so its gate never gets as far as the capability
+    autonomy.configure(env.db, Actor("user", str(env.admin)), "rfq.award", level="auto")
     r = env.put("sourcing", {"on": False, "reason": "incident"})
 
     assert r.status_code == 200 and r.json()["enabled"] is False and not env.enabled("sourcing")
-    verdict = autonomy.gate(env.db, "rfq.send", value=None, confidence=1.0)
+    verdict = autonomy.gate(env.db, "rfq.award", value=None, confidence=1.0)
     assert not verdict.allowed and "Reads quotes, prepares RFQs capability is switched off" in verdict.reason
     assert env.put("sourcing", {"on": False, "reason": "again"}).status_code == 409
     assert env.put("sourcing", {"on": False}).status_code == 422

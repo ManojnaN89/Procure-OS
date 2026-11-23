@@ -133,8 +133,47 @@ def _approver(db: Session, user_id: int, org: str | None) -> list[dict[str, Any]
         grouped.setdefault(p["action"], []).append(p)
     for action, (key, title) in titles.items():
         if action in grouped:
-            rows = [_row(str(p["id"]), p["summary"][:90], "/admin/approvals") for p in grouped[action]]
-            out.append(_section(key, title, "/admin/approvals", rows))
+            where = "#/rfqs" if action == "rfq.send" else "/admin/approvals"  # RFQs are confirmed from their list (D42)
+            rows = [_row(str(p["id"]), p["summary"][:90], where) for p in grouped[action]]
+            out.append(_section(key, title, where, rows))
+    return out + _awards_and_contracts(db, user_id, org)
+
+
+def _awards_and_contracts(db: Session, user_id: int, org: str | None) -> list[dict[str, Any]]:
+    """Block 5: the period awards waiting for this person by name, and the contracts from awards that the supplier has
+    accepted and this person may activate (not its maker, not its award's approver)."""
+    out = []
+    if org is not None:
+        rows = _rows(
+            db,
+            "select rfq_no, value_total from award_decision where status = 'waiting' and (approver = :o or delegate = :o) "
+            "order by proposed_at",
+            o=org,
+        )
+        out.append(
+            _section(
+                "awards",
+                "Awards waiting for you",
+                "#/rfqs",
+                [_row(r["rfq_no"], r["rfq_no"], f"#/rfqs/{r['rfq_no']}", format_inr(r["value_total"])) for r in rows],
+            )
+        )
+    rows = _rows(
+        db,
+        "select c.code, c.max_value from contract c left join award_decision d on d.id = c.award_decision_id "
+        "where c.status = 'draft' and c.supplier_accepted_at is not null and c.created_by is distinct from :u "
+        "and d.decided_by is distinct from :u and exists (select 1 from user_role ur join role_permission rp "
+        "on rp.role = ur.role where ur.user_id = cast(:u as int) and rp.action = 'contract.activate') order by c.code",
+        u=str(user_id),
+    )
+    out.append(
+        _section(
+            "contracts_to_activate",
+            "Contracts to activate",
+            "#/contracts",
+            [_row(r["code"], r["code"], f"#/contracts/{r['code']}", format_inr(r["max_value"] or 0)) for r in rows],
+        )
+    )
     return out
 
 

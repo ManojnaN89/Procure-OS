@@ -71,6 +71,7 @@ CARRIED: dict[str, str | None] = {
             "supplier_flag",
             "contract",
             "price_record",
+            "order_history",  # block 5: the old system's orders, history for a period RFQ's suggested quantity
             "sanction_entry",
             "price_threshold_rule",
             "market_benchmark",
@@ -119,6 +120,8 @@ NOT_CARRIED = (
     "vendor_statement", "vendor_statement_line",
     # blocks 3 and 4 and the AI foundation: transactions and their records
     "budget_year_end", "forward_buy", "po_approved_version", "event", "recommendation", "workflow",
+    # block 5: period RFQs, award decisions and their letters, contract links
+    "period_demand_line", "award_decision", "award_letter", "contract_link",
     # loaded fresh into the new database
     "ref_gst_rate", "ref_gst_state", "ref_holiday", "ref_hsn_sac", "ref_load", "ref_rbi_bank_rate", "ref_tds_section",
     "ref_uom",

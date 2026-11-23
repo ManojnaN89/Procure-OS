@@ -9,6 +9,10 @@ tie-break. A line may be split between suppliers only when the saving beats the 
 it). A person confirms the recommendation with a click; anything else, or fewer qualifying quotes than the route asked
 for, needs a written reason. A price far below the others or the last price paid is a question, never a bargain taken
 on trust. Whether a recommendation may be selected without a person is the autonomy gate's decision ('rfq.award').
+
+On a period RFQ (task 12.2) a selection is not final: after the same checks it becomes an award decision that the
+band's approver decides (sourcing/award_approval.py), no order is ever made from it, and it is never automatic. Award
+rows count once final (an operational RFQ) or approved (a period RFQ); proposed, rejected and withdrawn ones do not.
 """
 
 from collections import defaultdict
@@ -21,6 +25,7 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from p2p.agents import autonomy
+from p2p.approvals.rules import ApprovalRuleError
 from p2p.formulas import comparison as rules
 from p2p.formulas import selection as sel
 from p2p.formulas.calendar import business_today
@@ -35,6 +40,7 @@ from p2p.platform.sod import Actor
 from p2p.suppliers import scoring
 
 AWARD_DECISION = "rfq.award"
+LIVE = "status in ('final', 'approved')"  # the award rows that count (readers elsewhere use the same words)
 SERVICE = Actor("service", "award")
 
 
@@ -306,15 +312,12 @@ def last_prices(db: Session, item_codes: list[str]) -> dict[str, Decimal]:
     return {item: price for item, (price, _) in last_paid(db, item_codes).items()}
 
 
-def _input_credit(db: Session, rule: sel.SelectionRule, request_no: str | None) -> bool:
+def _input_credit(db: Session, rule: sel.SelectionRule, location: str | None) -> bool:
     """GST is claimed back when the rule says the company claims it and the delivery place is registered for GST."""
     if not rule.input_credit:
         return False
     gstin = (
-        db.execute(
-            text("select l.gstin from request r join location l on l.code = r.ship_to_location where r.no = :n"),
-            {"n": request_no},
-        ).scalar()
+        db.execute(text("select gstin from location where code = :c"), {"c": location}).scalar()
         or db.execute(text("select gstin from gst_registration where is_default limit 1")).scalar()
     )
     return bool(gstin)
@@ -400,7 +403,7 @@ def comparison(db: Session, rfq_no: str, as_of: date) -> Comparison:
             text("select ship_to_location from request where no = :n"), {"n": rfq["request_no"]}
         ).scalar()
     rule = selection_rule.rule_for(db, as_of)
-    credit = _input_credit(db, rule, rfq["request_no"])
+    credit = _input_credit(db, rule, rfq["delivery_location"])
     basis = (
         "price and freight; GST is claimed back, so it is shown but not counted" if credit else "price, freight and GST"
     )
@@ -440,7 +443,7 @@ def comparison(db: Session, rfq_no: str, as_of: date) -> Comparison:
     awards: dict[int, list[tuple[str, Decimal]]] = defaultdict(list)
     for line_no, supplier, qty in db.execute(
         text(
-            "select rfq_line_no, supplier_code, qty from award where rfq_no = :n and lapsed_at is null "
+            f"select rfq_line_no, supplier_code, qty from award where rfq_no = :n and lapsed_at is null and {LIVE} "  # noqa: S608
             "order by qty desc, supplier_code"
         ),
         {"n": rfq_no},
@@ -557,7 +560,7 @@ def comparison(db: Session, rfq_no: str, as_of: date) -> Comparison:
         result_lines.append(
             LineComparison(
                 rfq_line_no=line["line_no"],
-                request_line_no=line["request_line_no"],
+                request_line_no=line["request_line_no"] or 0,
                 item_code=line["item_code"],
                 name=line["description"],
                 qty=line["qty"],
@@ -643,6 +646,7 @@ class AwardResult:
     overridden: list[int]
     complete: bool  # every line of the RFQ now has a selection
     proposal_id: int | None = None  # too few counting quotes above the route's limit: waits for the purchase manager
+    decision: Any = None  # a period RFQ: the award waiting for the band's approver (award_approval.Proposed)
 
 
 Parts = list[tuple[str, Decimal]]
@@ -695,6 +699,7 @@ def award(
     tenant: str | None = None,
     splits: dict[int, Parts] | None = None,
     agreed: bool = False,
+    regret_notes: bool = True,
 ) -> AwardResult:
     """Select a supplier for RFQ lines (or share a line between suppliers, `splits`: line to supplier and quantity).
 
@@ -702,9 +707,11 @@ def award(
     split), and when a line has fewer qualifying quotes than the route asked for. A selection is final for a line; the
     purchase orders follow from it, one per supplier.
     """
-    rfq = db.execute(text("select status, request_no from rfq where no = :n for update"), {"n": rfq_no}).first()
+    rfq = db.execute(text("select status, request_no, kind from rfq where no = :n for update"), {"n": rfq_no}).first()
     if rfq is None:
         raise QuoteError(f"{rfq_no} does not exist")
+    if rfq[0] == "award_proposed":
+        raise QuoteError(f"the award of {rfq_no} waits for its approver; it can be withdrawn first")
     if rfq[0] != "sent":
         raise QuoteError(f"{rfq_no} is {rfq[0]}; a supplier can only be selected while the RFQ is out")
     wanted: dict[int, Parts] = {**{k: [(v, Decimal(0))] for k, v in choices.items()}, **(splits or {})}
@@ -715,7 +722,8 @@ def award(
     lapsed = {
         int(r[0])
         for r in db.execute(
-            text("select rfq_line_no from award where rfq_no = :n and lapsed_at is not null"), {"n": rfq_no}
+            text(f"select rfq_line_no from award where rfq_no = :n and lapsed_at is not null and {LIVE}"),  # noqa: S608
+            {"n": rfq_no},
         )
     }
     overridden: list[int] = []
@@ -762,11 +770,24 @@ def award(
             payload={
                 "rfq": rfq_no, "choices": {str(k): v for k, v in choices.items()},
                 "splits": {str(k): [[s, str(q)] for s, q in v] for k, v in (splits or {}).items()},
-                "reason": reason, "tenant": tenant,
+                "reason": reason, "tenant": tenant, "regret_notes": regret_notes,
             },
             required_permission="sourcing.route_approve",
         )  # fmt: skip
         return AwardResult(rfq_no, {}, overridden, False, proposal_id=pid)
+    if rfq[2] == "period":  # the band's approver decides; no order is made from a period award
+        from p2p.sourcing import award_approval  # noqa: PLC0415 - sourcing builds on orders
+
+        try:
+            got = award_approval.propose(
+                db, actor, rfq_no, chosen, reason=reason, overridden=overridden, as_of=as_of,
+                regret_notes=regret_notes, tenant=tenant,
+            )  # fmt: skip
+        except (award_approval.AwardError, ApprovalRuleError) as exc:
+            db.rollback()
+            raise QuoteError(str(exc)) from None
+        picked_words = {k: ", ".join(o.supplier_code for o, _ in p) for k, p in chosen.items()}
+        return AwardResult(rfq_no, picked_words, overridden, False, decision=got)
 
     who = actor.id if actor.kind == "user" else f"{actor.kind}:{actor.id}"
     for line_no, picked in chosen.items():
@@ -800,7 +821,8 @@ def award(
                     reason="a prospect is awarded on condition that it is qualified and activated before any order",
                 )  # fmt: skip
     awarded_all = db.execute(
-        text("select count(distinct rfq_line_no) from award where rfq_no = :n"), {"n": rfq_no}
+        text(f"select count(distinct rfq_line_no) from award where rfq_no = :n and {LIVE}"),  # noqa: S608
+        {"n": rfq_no},
     ).scalar_one()
     complete = awarded_all == len(comp.lines)
     if complete:
@@ -872,8 +894,10 @@ def _award_agreed(db: Session, payload: dict[str, Any], actor: Actor) -> dict[st
         db, str(payload["rfq"]), {int(k): str(v) for k, v in dict(payload["choices"]).items()}, buyer,
         reason=payload.get("reason"), as_of=business_today(), tenant=payload.get("tenant"),
         splits={int(k): [(str(s), Decimal(q)) for s, q in v] for k, v in dict(payload.get("splits") or {}).items()},
-        agreed=True,
+        agreed=True, regret_notes=bool(payload.get("regret_notes", True)),
     )  # fmt: skip
+    if result.decision is not None:
+        return {"award_proposed": result.decision.decision_id, "approver": result.decision.approver}
     return {"awarded": {str(k): v for k, v in result.awarded.items()}, "complete": result.complete}
 
 
@@ -883,6 +907,8 @@ def auto_award(db: Session, tenant: str, rfq_no: str, *, as_of: date) -> AwardRe
     Only when every invited supplier has replied or declined, and every line has enough qualifying quotes and a single
     recommended offer that is also the cheapest and raises no price question. Otherwise the buyer decides.
     """
+    if db.execute(text("select kind from rfq where no = :n"), {"n": rfq_no}).scalar() == "period":
+        return None  # a period award is always proposed by a buyer and decided by the band's approver
     comp = comparison(db, rfq_no, as_of)
     if comp.waiting_for or comp.quotes_received < comp.min_quotes:
         return None

@@ -724,3 +724,13 @@ approval_scenarios:
   - {name: O2, title: The order approval code above Rs 5 lakh, item: RM-08, need_by: "2026-12-14", versions: [{qty: "500", price: "905.00", approved: true}]}
   - {name: O2-small, title: No code at or below Rs 5 lakh, item: RM-08, need_by: "2026-12-14", versions: [{qty: "120", price: "905.00"}]}
   - {name: O2b, title: A code is bound to the version, item: RM-08, need_by: "2026-12-14", versions: [{qty: "500", price: "905.00"}, {qty: "480", while: submitted, approved: true}]}
+
+# The period RFQ scenarios of block 5 (tasks 12.1 to 12.3, section 8.3 of its spec): prices asked for a period with no
+# request, the award by band, the draft rate contract and a later request buying on it. Worked out by
+# datagen/generator/period_scenarios.py into truth/truth_period_sourcing.csv. as_of: the business date the RFQ is made.
+period_scenarios:
+  - {name: P1, title: Period RFQ to an active contract (AT-02), as_of: "2026-11-23", location: PLT-CKN, period_from: "2027-01-01", period_to: "2027-03-31", contract: true, lines: [{item: RM-08, qty: "900", supplier: SUP-005, price: "880.00"}]}
+  - {name: P1-use, title: A later request buys on the contract, as_of: "2027-01-04", location: PLT-CKN, contract_ref: CNT-0002, ceiling: "792000.00", lines: [{item: RM-08, qty: "120", supplier: SUP-005, price: "880.00"}]}
+  - {name: P2, title: Rejected and selected again (round 2), as_of: "2026-11-23", location: PLT-CKN, period_from: "2027-01-01", period_to: "2027-03-31", lines: [{item: RM-08, qty: "900", supplier: SUP-003, price: "895.00"}]}
+  - {name: P4, title: The automatic band never approves an award, as_of: "2026-11-23", location: PLT-CKN, period_from: "2027-01-01", period_to: "2027-03-31", lines: [{item: RM-07, qty: "1000", supplier: SUP-002, price: "84.00"}]}
+  - {name: P6, title: An expiry review starts a period RFQ, as_of: "2027-02-01", location: PLT-CKN, period_from: "2027-04-01", period_to: "2028-03-31", lines: [{item: RM-01}, {item: RM-02}, {item: RM-03}, {item: RM-04}, {item: RM-05}]}

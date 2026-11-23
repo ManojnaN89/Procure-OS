@@ -8,7 +8,8 @@ const WorkspaceView = {
   // What the person does with each kind of item: one plain verb per row.
   VERBS: {
     drafts: "Submit", returned: "Change", requests: "Review", orders: "Review", payment_runs: "Approve", releases: "Review",
-    suppliers: "Review", variances: "Decide", rfq_sends: "Approve", to_source: "Find suppliers", to_send: "Send",
+    suppliers: "Review", variances: "Decide", rfq_sends: "Confirm", to_source: "Find suppliers", to_send: "Send",
+    awards: "Decide", contracts_to_activate: "Activate",
     to_acknowledge: "Record", supplier_messages: "Read", to_receive: "Receive", inspections: "Inspect",
     to_invoice: "Enter invoice", blocked: "Fix", due: "Plan payment", restock: "Raise",
   },

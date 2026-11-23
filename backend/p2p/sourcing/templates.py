@@ -7,6 +7,7 @@ evaluated.
 
 import re
 from collections.abc import Mapping
+from datetime import date
 
 FIELDS = {
     "contact": "the supplier contact's name",
@@ -67,3 +68,35 @@ def problems(template: str) -> list[str]:
 def render(template: str, values: Mapping[str, str]) -> str:
     """The template with each field replaced by its value (a field with no value is left empty)."""
     return _FIELD.sub(lambda m: values.get(m.group(1), ""), template)
+
+
+# ---- strategic sourcing: fixed words (D20, D45); nothing here is written by a model -------------------------------
+
+
+def period_sentence(start: date, end: date) -> str:
+    """Opens the item block of a period RFQ: prices are for orders in the period, the quantities only an estimate."""
+    return (
+        f"Prices are asked for the period {start:%d %b %Y} to {end:%d %b %Y}, for orders placed during it. "
+        "The quantities are our estimate for the period, not a commitment to buy."
+    )
+
+
+AWARD_LETTER = (
+    "Dear {contact},\n\n"
+    "{company} has selected {supplier} for {reference}:\n"
+    "{lines}\n"
+    "for the period {period_from} to {period_to}, delivered to {location}.\n\n"
+    "This is a notice of selection, not an order and not a commitment to buy. "
+    "The rate contract {contract} is attached for your review: accept or decline it here: "
+)
+AWARD_LETTER_END = (
+    "\n\nOrders will follow during the period as we need the goods.\n\nRegards,\nProcurement, {company}\n"
+)
+
+# a regret note never says a price, a quantity, a value or who was selected (D45)
+REGRET_NOTE = (
+    "Dear {contact},\n\n"
+    "thank you for your quotation {quote} for {reference}. After comparing the offers we have not selected yours this "
+    "time. We value your interest and hope to invite you again.\n\n"
+    "Regards,\nProcurement, {company}\n"
+)

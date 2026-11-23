@@ -8,6 +8,10 @@ Contract prices are versions (D48). A price is entered as a draft; it is used on
 contract nor entered a price of that version activates it: with the contract itself (version 1), or, on an active
 contract, through a proposal for the next version. Two prices of one supplier for the same item, unit and quantity break
 never apply on the same day; a new version replaces the one in force from its first day, which then ends the day before.
+
+A rate contract can also come from an approved award of a period RFQ (task 12.3, `from_award`): a draft made in the
+approval's transaction in the proposing buyer's name, which the supplier accepts by link and code
+(masters/contract_acceptance.py) before anyone may activate it, and never the person who approved the award (D48, D53).
 """
 
 from datetime import date, timedelta
@@ -98,8 +102,13 @@ def set_verified(db: Session, supplier: str, doc_id: int, verified: bool, user_i
 TYPES = ("rate_contract", "service_contract", "framework")
 
 
-def create_contract(db: Session, data: dict[str, Any], user_id: int) -> str:
-    """Store a contract as a draft. It is used for sourcing only after an approver activates it."""
+def create_contract(
+    db: Session, data: dict[str, Any], user_id: int, *, created_by: int | None = None, commit: bool = True
+) -> str:
+    """Store a contract as a draft. It is used for sourcing only after an approver activates it. `created_by` names the
+    maker when it is not the caller (a contract from an award is the proposing buyer's); `commit=False` leaves the
+    caller's transaction open."""
+    maker = created_by if created_by is not None else user_id
     supplier = str(data["supplier_code"])
     if db.execute(text("select 1 from supplier where code = :c"), {"c": supplier}).first() is None:
         raise MasterError(f"supplier {supplier} does not exist")
@@ -123,18 +132,25 @@ def create_contract(db: Session, data: dict[str, Any], user_id: int) -> str:
         {
             "c": code, "s": supplier, "t": kind, "f": start, "e": end, "m": ceiling, "p": data.get("payment_terms_code"),
             "d": data.get("delivery_terms"), "fr": data.get("freight_terms"), "w": data.get("warranty_months"),
-            "sla": data.get("sla_text"), "by": str(user_id),
+            "sla": data.get("sla_text"), "by": str(maker),
         },
     )  # fmt: skip
+    if data.get("source_rfq"):
+        db.execute(
+            text("update contract set source_rfq = :r, award_decision_id = :d where code = :c"),
+            {"r": data["source_rfq"], "d": data.get("award_decision_id"), "c": code},
+        )
     audit.record(
         db,
         user(user_id),
         "contract.create",
         "contract",
         code,
-        after={"supplier": supplier, "type": kind, "ceiling": ceiling},
-    )
-    db.commit()
+        after={"supplier": supplier, "type": kind, "ceiling": ceiling, "created_by": maker,
+               "source_rfq": data.get("source_rfq")},
+    )  # fmt: skip
+    if commit:
+        db.commit()
     return code
 
 
@@ -198,16 +214,25 @@ def _overlap(
     return None
 
 
-def add_price(db: Session, contract: str, data: dict[str, Any], user_id: int) -> int:
+def add_price(
+    db: Session,
+    contract: str,
+    data: dict[str, Any],
+    user_id: int,
+    *,
+    created_by: int | None = None,
+    commit: bool = True,
+) -> int:
     """Enter a price as a draft of the contract's next version. Nothing is bought at it until it is activated."""
+    maker = created_by if created_by is not None else user_id
     c = db.execute(
         text("select supplier_code, status, valid_from, valid_to from contract where code = :c for update"),
         {"c": contract},
     ).first()
     if c is None:
         raise MasterError(f"contract {contract} does not exist")
-    if c[1] == "expired":
-        raise MasterError("an expired contract takes no new prices")
+    if c[1] in ("expired", "declined"):
+        raise MasterError(f"a contract that is {c[1]} takes no new prices")
     if _pending_proposal(db, contract) is not None:
         raise MasterError(
             "a price version of this contract is waiting to be activated; it takes no prices until decided"
@@ -256,7 +281,7 @@ def add_price(db: Session, contract: str, data: dict[str, Any], user_id: int) ->
             ),
             {
                 "s": c[0], "i": item, "c": contract, "u": key["uom"], "p": price, "m": key["min_qty"],
-                "f": start, "e": end, "l": data.get("lead_days"), "v": version, "by": str(user_id),
+                "f": start, "e": end, "l": data.get("lead_days"), "v": version, "by": str(maker),
                 "loc": key["location"], "reg": key["region"],
             },
         ).scalar_one()
@@ -268,7 +293,8 @@ def add_price(db: Session, contract: str, data: dict[str, Any], user_id: int) ->
             "location": key["location"], "region": key["region"],
         },
     )  # fmt: skip
-    db.commit()
+    if commit:
+        db.commit()
     return rid
 
 
@@ -375,6 +401,7 @@ def activate(db: Session, contract: str, user_id: int, *, today: date) -> None:
     if draft is None:
         raise MasterError("a contract with no prices cannot be used: add its price list first")
     _refuse_maker(db, contract, int(draft), user_id)
+    refuse_award_steps(db, contract, user_id)
     done = _activate_rows(db, contract, c[0], int(draft), user_id)
     db.execute(text("update contract set status = 'active' where code = :c"), {"c": contract})
     audit.record(
@@ -387,6 +414,85 @@ def activate(db: Session, contract: str, user_id: int, *, today: date) -> None:
         after={"status": "active", **done},
     )
     db.commit()
+
+
+class AwardActivationRefused(MasterError):
+    """Activating a contract from an award before the supplier accepted it (409) or by its award's approver (403)."""
+
+    def __init__(self, message: str, status: int) -> None:
+        super().__init__(message)
+        self.status = status
+
+
+def refuse_award_steps(db: Session, contract: str, user_id: int) -> None:
+    """A contract from an award is activated only once its supplier accepted the terms, and never by whoever approved
+    the award (OP-13: four separate acts)."""
+    row = db.execute(
+        text(
+            "select c.award_decision_id, c.supplier_accepted_at, d.decided_by from contract c "
+            "left join award_decision d on d.id = c.award_decision_id where c.code = :c"
+        ),
+        {"c": contract},
+    ).first()
+    if row is None or row[0] is None:
+        return
+    if row[2] is not None and str(row[2]) == str(user_id):
+        raise AwardActivationRefused("whoever approved the award does not activate its contract", 403)
+    if row[1] is None:
+        raise AwardActivationRefused(f"{contract} waits for the supplier to accept its terms", 409)
+
+
+# ---- a contract from an approved award (task 12.3) ----------------------------------------------------------
+
+
+def _award_terms(db: Session, supplier: str, parts: list[dict[str, Any]]) -> tuple[str | None, str | None]:
+    """Payment terms and delivery terms from the quote, else the supplier's own."""
+    terms = next((p["payment_terms_code"] for p in parts if p["payment_terms_code"]), None)
+    terms = (
+        terms or db.execute(text("select payment_terms_code from supplier where code = :c"), {"c": supplier}).scalar()
+    )
+    return terms, next((p["delivery_terms"] for p in parts if p["delivery_terms"]), None)
+
+
+def _award_key(rfq: dict[str, Any], part: dict[str, Any]) -> dict[str, Any]:
+    return {"item": part["item_code"], "uom": part["uom"], "min_qty": 1, "location": rfq["delivery_location"],
+            "region": None}  # fmt: skip
+
+
+def award_clash(db: Session, supplier: str, parts: list[dict[str, Any]], rfq: dict[str, Any]) -> str | None:
+    """Why the award's contract prices could not be stored (an overlap with a price of the supplier), else None."""
+    for p in parts:
+        clash = _overlap(db, supplier, _award_key(rfq, p), rfq["period_from"], rfq["period_to"], set())
+        if clash:
+            return clash
+    return None
+
+
+def from_award(
+    db: Session, rfq: dict[str, Any], decision: dict[str, Any], supplier: str, parts: list[dict[str, Any]], by: int
+) -> str:
+    """The draft rate contract of one awarded supplier, in the approval's transaction (does not commit): the period,
+    a ceiling of the awarded value before tax, the quote's terms, one price per awarded line at the RFQ's location
+    (OP-5). Its maker is the proposing buyer, so the award's approver is never recorded as the maker."""
+    from p2p.formulas.money import round_money  # noqa: PLC0415 - the one money helper this function needs
+
+    buyer = int(decision["proposed_by"])
+    terms, delivery = _award_terms(db, supplier, parts)
+    ceiling = sum((round_money(p["qty"] * p["price"]) for p in parts), Decimal(0))
+    data = {
+        "supplier_code": supplier, "type": "rate_contract", "valid_from": rfq["period_from"],
+        "valid_to": rfq["period_to"], "max_value": ceiling, "payment_terms_code": terms, "delivery_terms": delivery,
+        "source_rfq": rfq["no"], "award_decision_id": decision["id"],
+    }  # fmt: skip
+    code = create_contract(db, data, by, created_by=buyer, commit=False)
+    for p in parts:
+        add_price(
+            db, code,
+            {"item_code": p["item_code"], "price": p["price"], "uom": p["uom"], "min_qty": 1,
+             "lead_days": p["delivery_days"], "location_code": rfq["delivery_location"]},
+            by, created_by=buyer, commit=False,
+        )  # fmt: skip
+    return code
 
 
 # ---- a new price version of an active contract ------------------------------------------------

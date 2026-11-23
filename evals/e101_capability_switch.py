@@ -14,7 +14,7 @@ Scenarios, on the main demo company (Apex):
    `capability`) and a `capability.on` audit row.
 4. Refusals: empty check text, `tracing` false and an `eval_result` below its threshold give 422; no reason 422; an
    unknown code 404; the buyer 403; a second switch-on while one waits 409; switching off what is off 409.
-5. The gate names the capability: with `sourcing` off, `autonomy.gate('rfq.send')` refuses with a reason naming it; on
+5. The gate names the capability: with `sourcing` off, `autonomy.gate('rfq.award')` refuses with a reason naming it; on
    again (two administrators) the reason no longer does.
 6. The CLI: `capability list` names all seven; `capability off apex assistant --reason` switches it off at once
    (actor `service:cli`); the assistant then answers without a model call.
@@ -191,7 +191,7 @@ def _gate(check: b.Checker, co: s2.Co) -> None:
     aif.check_status(check, r, 200, "switching sourcing off")
     db = aif.new_session(co)
     try:
-        g = autonomy.gate(db, "rfq.send", value=Decimal(1), confidence=1.0)
+        g = autonomy.gate(db, "rfq.award", value=Decimal(1), confidence=1.0)  # rfq.send is always a person's (D42)
     finally:
         db.close()
     said = str(g.reason).lower()
@@ -202,7 +202,7 @@ def _gate(check: b.Checker, co: s2.Co) -> None:
           f"answered {asked.status_code} / {getattr(approved, 'status_code', None)}")  # fmt: skip
     db = aif.new_session(co)
     try:
-        g = autonomy.gate(db, "rfq.send", value=Decimal(1), confidence=1.0)
+        g = autonomy.gate(db, "rfq.award", value=Decimal(1), confidence=1.0)  # rfq.send is always a person's (D42)
     finally:
         db.close()
     check("switched off" not in str(g.reason).lower(), f"sourcing on again, the gate still says {g.reason!r}")

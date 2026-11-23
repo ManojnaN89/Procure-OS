@@ -46,9 +46,9 @@ from p2p.receiving import goods
 from p2p.receiving.kinds import service_lines
 from p2p.receiving.stock import SafetyStockError, StockError, post_count, post_issue, stock_levels
 from p2p.requests import combining, duplicates, jobs, lifecycle, replenishment, reservation
+from p2p.sourcing import award_approval, replies, rfq_document
 from p2p.sourcing import documents as supplier_documents
 from p2p.sourcing import prospects as rfq_prospects
-from p2p.sourcing import replies, rfq_document
 from p2p.sourcing import service as sourcing
 from p2p.suppliers import scoring
 
@@ -1070,27 +1070,44 @@ def change_route(
         raise HTTPException(409, str(exc)) from None
 
 
+def _rfq_for(r: dict[str, Any]) -> str:
+    """What an RFQ asks prices for: its request, or (a period RFQ) its period."""
+    if r.get("kind") == "period" and r.get("period_from") and r.get("period_to"):
+        return f"{r['period_from']:%d %b %Y} to {r['period_to']:%d %b %Y}"
+    return str(r["request_no"])
+
+
 @router.get("/rfqs")
-def list_rfqs(db: Db, ctx: Ctx) -> list[dict[str, Any]]:
+def list_rfqs(db: Db, ctx: Ctx, kind: str | None = None) -> list[dict[str, Any]]:
     rows = _rows(
         db,
-        "select r.no, r.status, r.due_date, r.request_no, r.created_at, r.proposal_id, c.name as category, "
+        "select r.no, r.status, r.due_date, r.request_no, r.created_at, r.proposal_id, r.kind, r.period_from, "
+        "r.period_to, r.confirmed_by, r.confirmed_at, r.review_task_id, c.name as category, "
+        "(select p.status from proposal p where p.id = r.proposal_id) as proposal_status, "
         "(select count(*) from rfq_line l where l.rfq_no = r.no) as items, "
         "(select count(*) from rfq_supplier s where s.rfq_no = r.no) as vendors, "
         "(select count(distinct q.supplier_code) from quote q where q.rfq_no = r.no) as quoted "
-        "from rfq r left join item_category c on c.code = r.category_code order by r.created_at desc, r.no desc limit 500",
+        "from rfq r left join item_category c on c.code = r.category_code "
+        "where cast(:k as text) is null or r.kind = :k order by r.created_at desc, r.no desc limit 500",
+        k=kind or None,
     )
     return [
         {
             "id": r["no"],
-            "title": f"{r['category'] or 'Quotation request'}: {count(r['items'], 'item')} for {r['request_no']}",
+            "title": f"{r['category'] or 'Quotation request'}: {count(r['items'], 'item')} for {_rfq_for(r)}",
+            "kind": r["kind"],
+            "period_from": r["period_from"].isoformat() if r["period_from"] else None,
+            "period_to": r["period_to"].isoformat() if r["period_to"] else None,
+            "confirmed_by": r["confirmed_by"],
+            "confirmed_at": _iso(r["confirmed_at"]),
+            "review_task_id": r["review_task_id"],
             "status": r["status"],
             "vendor_count": r["vendors"],
             "quote_count": r["quoted"],
             "due_date": r["due_date"].isoformat(),
             "request_no": r["request_no"],
             "created_at": _iso(r["created_at"]),
-            "waiting_to_send": r["status"] == "draft" and r["proposal_id"] is not None,
+            "waiting_to_send": r["status"] == "draft" and r["proposal_status"] == "pending",
         }
         for r in rows
     ]
@@ -1106,7 +1123,12 @@ def get_rfq(no: str, db: Db, ctx: Ctx) -> dict[str, Any]:
     if not rows:
         raise HTTPException(404, "Not found")
     r = rows[0]
-    lines = _rows(db, "select * from rfq_line where rfq_no = :n order by line_no", n=no)
+    lines = _rows(
+        db,
+        "select l.*, d.suggested_qty, d.suggestion from rfq_line l left join period_demand_line d "
+        "on d.id = l.period_line_id where l.rfq_no = :n order by l.line_no",
+        n=no,
+    )
     suppliers = _rows(
         db,
         "select s.supplier_code, coalesce(v.trade_name, v.legal_name) as name, s.email, s.invited_at, s.send_error, "
@@ -1126,7 +1148,15 @@ def get_rfq(no: str, db: Db, ctx: Ctx) -> dict[str, Any]:
 
     return {
         "id": r["no"],
-        "title": f"{r['category'] or 'Quotation request'}: {count(len(lines), 'item')} for {r['request_no']}",
+        "title": f"{r['category'] or 'Quotation request'}: {count(len(lines), 'item')} for {_rfq_for(r)}",
+        "kind": r["kind"],
+        "period_from": r["period_from"].isoformat() if r["period_from"] else None,
+        "period_to": r["period_to"].isoformat() if r["period_to"] else None,
+        "review_task_id": r["review_task_id"],
+        "confirmed_by": r["confirmed_by"],
+        "confirmed_at": _iso(r["confirmed_at"]),
+        "confirmed_via": r["confirmed_via"],
+        "award_decision": award_approval.as_json(db, no, ctx.user_id),
         "status": r["status"],
         "category_code": r["category_code"],
         "delivery_location": r["delivery_location"],
@@ -1149,6 +1179,8 @@ def get_rfq(no: str, db: Db, ctx: Ctx) -> dict[str, Any]:
                 "qty": _qty(line["qty"]),
                 "uom": line["uom"],
                 "need_by": line["need_by"].isoformat() if line["need_by"] else None,
+                "suggested_qty": _qty(line["suggested_qty"]) if line["suggested_qty"] is not None else None,
+                "suggestion": line["suggestion"],
             }
             for line in lines
         ],
@@ -1405,10 +1437,10 @@ def enter_rfq_quote(
     return {"quote_no": quote_no, "auto_awarded": auto is not None}
 
 
-@router.post("/rfqs/{no}/award")
+@router.post("/rfqs/{no}/award", response_model=None)
 def award_rfq(
     no: str, payload: dict[str, Any], db: Db, ctx: Annotated[routing.TenantContext, Depends(require("rfq.create"))]
-) -> dict[str, Any]:
+) -> dict[str, Any] | JSONResponse:
     """A buyer selects the supplier of each line (choices: line to supplier), or shares a line between suppliers
     (splits: line to a list of [supplier, quantity])."""
     try:
@@ -1426,11 +1458,27 @@ def award_rfq(
             as_of=business_today(),
             tenant=ctx.slug,
             splits=splits,
+            regret_notes=payload.get("regret_notes", True) is not False,
         )
     except (ValueError, TypeError) as exc:
         raise HTTPException(422, f"the selection could not be read: {exc}") from None
     except quotes.QuoteError as exc:
-        raise HTTPException(409, str(exc)) from None
+        message, period = (
+            str(exc),
+            db.execute(text("select kind from rfq where no = :n"), {"n": no}).scalar() == "period",
+        )
+        # a missing reason is an input error on a period RFQ (block 5); operational RFQs keep their 409
+        raise HTTPException(422 if period and message.startswith("a reason is required") else 409, message) from None
+    if done.decision is not None:  # a period RFQ: the band's approver decides (task 12.2)
+        return JSONResponse(
+            {
+                "status": "award_proposed", "decision_id": done.decision.decision_id,
+                "proposal_id": done.decision.proposal_id, "approver": done.decision.approver,
+                "approver_name": done.decision.approver_name, "value_total": str(done.decision.value_total),
+                "awarded": {str(k): v for k, v in done.awarded.items()},
+            },
+            status_code=202,
+        )  # fmt: skip
     if done.proposal_id is not None:
         return {
             "status": "waiting",
@@ -1445,7 +1493,8 @@ def award_rfq(
         f"{line}: {s}"
         for line, s in db.execute(
             text(
-                "select rfq_line_no, supplier_code from award where rfq_no = :n and conditional and lapsed_at is null"
+                "select rfq_line_no, supplier_code from award where rfq_no = :n and conditional and lapsed_at is null "
+                "and status = 'final'"
             ),
             {"n": no},
         )
@@ -1944,6 +1993,17 @@ def list_contracts(db: Db, ctx: Ctx) -> list[dict[str, Any]]:
     return [_contract_json(c, contract_usage.usage(db, c["code"])) for c in rows]
 
 
+def _activation_refused(db: Session, code: str, user_id: int) -> str | None:
+    """Why this person may not activate a contract from an award now, in words (the activate button explains it)."""
+    from p2p.masters import documents_and_contracts as masters  # noqa: PLC0415 - one check, read for the screen
+
+    try:
+        masters.refuse_award_steps(db, code, user_id)
+    except masters.MasterError as exc:
+        return str(exc)
+    return None
+
+
 @router.get("/contracts/{code}")
 def get_contract(code: str, db: Db, ctx: Ctx) -> dict[str, Any]:
     rows = _rows(db, _CONTRACT + " where c.code = :c", c=code)
@@ -1987,6 +2047,14 @@ def get_contract(code: str, db: Db, ctx: Ctx) -> dict[str, Any]:
         # an active contract takes new prices as a draft version that someone else activates (D48)
         "can_manage": can_anywhere(db, ctx.user_id, "contract.manage") and c["status"] in ("draft", "active"),
         "can_activate": may_activate and c["status"] == "draft",
+        # a contract from an award (task 12.3): the supplier accepts its terms first (D53)
+        "source_rfq": c["source_rfq"],
+        "award_decision_id": c["award_decision_id"],
+        "supplier_accepted_at": _iso(c["supplier_accepted_at"]),
+        "supplier_accepted_by": c["supplier_accepted_by"],
+        "supplier_declined_at": _iso(c["supplier_declined_at"]),
+        "decline_reason": c["decline_reason"],
+        "activation_refused": _activation_refused(db, code, ctx.user_id) if c["status"] == "draft" else None,
         "draft_version": draft,
         "version_waiting": waiting is not None,
         "can_submit_version": c["status"] == "active" and draft is not None and waiting is None,

@@ -5,9 +5,9 @@ from datetime import timedelta
 
 from sqlalchemy.orm import Session
 
-from p2p.formulas.calendar import IST
+from p2p.formulas.calendar import IST, business_today
 from p2p.platform import routing, worker
-from p2p.sourcing import price_review, reminders, service
+from p2p.sourcing import award_approval, price_review, reminders, service  # noqa: F401 - award_approval: its event route
 
 log = logging.getLogger(__name__)
 JOB = "source_request"
@@ -17,13 +17,23 @@ JOB = "source_request"
 def _run(ctx: worker.JobContext) -> None:
     with Session(routing.engine_for(ctx.tenant)) as db:
         try:
-            service.source_request(db, ctx.tenant, str(ctx.payload["request_no"]), as_of=ctx.now.astimezone(IST).date())
+            service.source_request(db, ctx.tenant, str(ctx.payload["request_no"]), as_of=business_today())
         except service.SourcingError as exc:
             # not approved (any more) or gone: nothing to do, and trying again later would not change that
             db.rollback()
             log.info("sourcing skipped for %s: %s", ctx.payload.get("request_no"), exc)
     reminders.schedule(ctx.tenant)  # the daily reminder job keeps itself going once it has started
     schedule_reviews(ctx.tenant)  # so do the strategic review detectors
+
+
+@worker.register("award_note")
+def _award_note(ctx: worker.JobContext) -> None:
+    """The AI step rewords a new award's note for its approver; the template stays on any failure (block 5)."""
+    from p2p.ai_steps import award_note  # noqa: PLC0415
+    from p2p.ai_steps.gateway import Gateway  # noqa: PLC0415 - only the worker needs a gateway of its own
+
+    with Session(routing.engine_for(ctx.tenant)) as db:
+        award_note.explain(db, int(ctx.payload["decision_id"]), Gateway())
 
 
 @worker.register("read_supplier_reply")

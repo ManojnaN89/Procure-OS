@@ -149,7 +149,7 @@ def ready_lines(db: Session, request_no: str, as_of: date) -> tuple[list[ReadyLi
                 "a.lapsed_at is not null, (select s.status from supplier s where s.code = a.supplier_code) from award a "
                 "join rfq_line l on l.rfq_no = a.rfq_no and l.line_no = a.rfq_line_no "
                 "join quote_line ql on ql.quote_no = a.quote_no and ql.rfq_line_no = a.rfq_line_no "
-                "where a.rfq_no = :r and l.request_no = :n and l.request_line_no = :l and not exists ("
+                "where a.rfq_no = :r and a.status = 'final' and l.request_no = :n and l.request_line_no = :l and not exists ("
                 "select 1 from po_line p where p.request_no = :n and p.request_line_no = :l "
                 "and p.source_ref = a.quote_no and p.status <> 'cancelled') order by a.qty desc, a.supplier_code"
             ),

@@ -121,7 +121,7 @@ def lapse_due(db: Session, tenant: str, today: date) -> list[str]:
         text(
             "select a.rfq_no, a.rfq_line_no, a.supplier_code, a.at, a.awarded_on, r.buyer, s.status from award a "
             "join rfq r on r.no = a.rfq_no join supplier s on s.code = a.supplier_code "
-            "where a.conditional and a.lapsed_at is null and s.status <> 'active' "
+            "where a.conditional and a.lapsed_at is null and a.status = 'final' and s.status <> 'active' "
             "and not exists (select 1 from po_line p where p.source_ref = a.quote_no and p.status <> 'cancelled') "
             "order by a.rfq_no, a.rfq_line_no"
         )

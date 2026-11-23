@@ -446,9 +446,14 @@ def test_automation_controls_set_a_level_with_a_reason_and_the_locked_ones_stay_
     page.get_by_role("link", name="Automation").click()
     expect(page.get_by_role("heading", name="Automation controls")).to_be_visible()
 
-    # paying, activating a supplier and releasing a block have no level to choose
-    expect(page.get_by_text("person only")).to_have_count(3)
-    for locked in ("Approve a payment run", "Activate or block a supplier", "Release a payment block on an invoice"):
+    # paying, activating a supplier, releasing a block and sending an RFQ (D42) have no level to choose
+    expect(page.get_by_text("person only")).to_have_count(4)
+    for locked in (
+        "Approve a payment run",
+        "Activate or block a supplier",
+        "Release a payment block on an invoice",
+        "Send a request for quotation",
+    ):
         row = _row(page, locked)
         assert row.get_by_role("combobox").count() == 0 and row.get_by_role("button", name="Save").count() == 0
 

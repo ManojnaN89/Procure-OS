@@ -64,6 +64,7 @@ LATER = (
     "payment run waiting for the director",
     "payment run approved, bank file made",
     "paid and closed",
+    "period RFQ: award waiting for the director",
 )
 STAGES = EARLY + LATER
 
@@ -107,11 +108,13 @@ class _Run:
             self._tokens[designation] = {"Authorization": "Bearer " + r.json()["access_token"]}
         return self._tokens[designation]
 
-    def call(self, designation: str, method: str, path: str, body: dict[str, Any] | None = None) -> Any:
+    def call(
+        self, designation: str, method: str, path: str, body: dict[str, Any] | None = None, *, expect: int = 200
+    ) -> Any:
         self.db.rollback()
         r = self.client.request(method, path, json=body, headers=self.who(designation))
         self.db.rollback()
-        if r.status_code != 200:
+        if r.status_code != expect:
             raise demo.DemoError(f"{designation}: {method} {path} gave {r.status_code}: {r.text[:200]}")
         return r.json()
 
@@ -433,6 +436,26 @@ def _later(run: _Run) -> None:
     reason = "The supplier's price rose and the stock is needed"
     run.call(AP, "POST", f"/api/invoices/{blocked['invoice']}/release", {"reason": reason})
     _stage(run, LATER[6], blocked["invoice"])
+    _period(run)
+
+
+def _period(run: _Run) -> None:
+    """Strategic sourcing (block 5): copper wire for next quarter priced with no request, three quotes in, the award
+    proposed by the buyer and waiting for the director (it is above Rs 5 lakh with GST)."""
+    start = (run.today.replace(day=1) + timedelta(days=62)).replace(day=1)  # the first day of the month after next
+    end = (start + timedelta(days=92)).replace(day=1) - timedelta(days=1)  # three calendar months
+    made = run.call(
+        BUYER, "POST", "/api/rfqs/period",
+        {"location_code": LOCATION, "period_from": start.isoformat(), "period_to": end.isoformat(),
+         "lines": [{"item_code": "RM-08", "qty": "900"}], "note": "Copper wire for the next quarter"},
+        expect=201,
+    )  # fmt: skip
+    rfq = str(made["rfq_no"])
+    run.call(BUYER, "POST", "/api/rfqs/confirm-send", {"rfqs": [rfq]})
+    for supplier, price in zip(made["invited"], ("895", "880", "910"), strict=False):
+        run.quote(rfq, supplier, {1: price}, 18)
+    run.call(BUYER, "POST", f"/api/rfqs/{rfq}/award", {"choices": {"1": made["invited"][1]}}, expect=202)
+    _stage(run, LATER[10], rfq)
 
 
 def _expect(result: dict[str, Any], status: str, what: str) -> None:

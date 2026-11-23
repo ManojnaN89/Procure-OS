@@ -142,3 +142,15 @@ def test_a_company_that_already_has_requests_is_refused(filled: Filled) -> None:
 def test_a_company_that_does_not_exist_is_refused(control_db: str) -> None:
     with pytest.raises(demo.DemoError, match="no company"):
         populate("nosuchcompany")
+
+
+def test_a_period_rfq_award_waits_for_the_director_and_no_order_comes_from_it(filled: Filled) -> None:
+    rfq = filled.result.cases[LATER[10]]
+    kind, status, approver, value = one(
+        filled,
+        "select r.kind, r.status, d.approver, d.value_total from rfq r join award_decision d on d.rfq_no = r.no "
+        "where r.no = :n and d.status = 'waiting'",
+        n=rfq,
+    )
+    assert (kind, status, approver) == ("period", "award_proposed", "U09") and value > 500000  # type: ignore[operator]
+    assert one(filled, "select count(*) from po where rfq_no = :n", n=rfq) == (0,)

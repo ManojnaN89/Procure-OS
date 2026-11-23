@@ -129,7 +129,7 @@ def _order_waiting_awards(db: Session, tenant: str, code: str) -> None:
     for (request_no,) in db.execute(
         text(
             "select distinct r.request_no from award a join rfq r on r.no = a.rfq_no "
-            "where a.supplier_code = :c and a.conditional and a.lapsed_at is null"
+            "where a.supplier_code = :c and a.conditional and a.lapsed_at is null and a.status = 'final'"
         ),
         {"c": code},
     ):

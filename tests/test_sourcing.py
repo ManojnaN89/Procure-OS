@@ -232,7 +232,26 @@ def _request(
 
 
 def _source(db: Session, no: str, **kw: Any) -> service.SourcingResult:
-    return service.source_request(db, db.info["slug"], no, as_of=TODAY, **kw)
+    result = service.source_request(db, db.info["slug"], no, as_of=TODAY, **kw)
+    if db.info.get("confirm_sends") and kw.get("dispatch", True) and result.rfqs:
+        _confirm_sends(db, result)
+    return result
+
+
+def _sender(db: Session) -> int:
+    """A buyer who confirms sending RFQs (D42), made once per company."""
+    if "sender" not in db.info:
+        db.info["sender"] = users.create_user(
+            db.info["slug"], f"sender{db.info['sfx']}@x.example", PASSWORD, "Sending Buyer", "Buyer"
+        )
+    return int(db.info["sender"])
+
+
+def _confirm_sends(db: Session, result: service.SourcingResult) -> None:
+    """The buyer confirms every RFQ the run proposed to send, at once (confirm_many)."""
+    for done in service.confirm_many(db, result.rfqs, _sender(db)):
+        result.sent += done.sent
+    result.proposals = []
 
 
 class Outbox:
@@ -257,7 +276,9 @@ def outbox(monkeypatch: pytest.MonkeyPatch) -> Outbox:
 
 
 def _auto_send(db: Session) -> None:
-    autonomy.configure(db, sod.user(1), "rfq.send", level="auto")
+    """RFQs go out as soon as they are made: a buyer confirms each one at once (D42: sending is never automatic, so
+    `_source` has the buyer confirm what the run proposed)."""
+    db.info["confirm_sends"] = True
 
 
 # ---- contract or quotation --------------------------------------------------------------------
@@ -474,8 +495,7 @@ def test_by_default_the_rfq_waits_for_a_buyer_to_approve_sending(db: Session, ou
     ).one()
     assert proposal[:2] == ("rfq.send", "pending") and proposal[3:] == ("service", "rfq.send")
     assert proposal[2] == (
-        "Send RFQ-2627-00001 to 3 suppliers: a person confirms it first "
-        "(automation setting “Send a request for quotation”: propose)"
+        "Send RFQ-2627-00001 to 3 suppliers: “Send a request for quotation” is always decided by a person"
     )
     assert db.execute(text("select status, proposal_id from rfq")).one() == ("draft", pid)
 
@@ -494,7 +514,7 @@ def test_a_buyer_who_approves_the_proposal_sends_the_emails(db: Session, outbox:
     assert db.execute(text("select count(*) from rfq_supplier where invited_at is not null")).scalar_one() == 3
 
 
-def test_when_set_to_automatic_the_emails_go_out_at_once_and_say_what_is_wanted(db: Session, outbox: Outbox) -> None:
+def test_once_a_buyer_confirms_the_emails_go_out_at_once_and_say_what_is_wanted(db: Session, outbox: Outbox) -> None:
     _auto_send(db)
     no = _request(db, "R-13", [("B", "5", None, "C1"), (None, "2.5", "Special gasket", "C1")])
 
@@ -521,12 +541,8 @@ def test_when_set_to_automatic_the_emails_go_out_at_once_and_say_what_is_wanted(
         == 3
     )
     assert (
-        db.execute(
-            text(
-                "select count(*) from autonomy_outcome where decision_type = 'rfq.send' and auto and ref = 'RFQ-2627-00001'"
-            )
-        ).scalar_one()
-        == 1
+        db.execute(text("select count(*) from autonomy_outcome where decision_type = 'rfq.send' and auto")).scalar_one()
+        == 0  # nothing was sent automatically
     )
     assert (
         db.execute(
@@ -534,25 +550,29 @@ def test_when_set_to_automatic_the_emails_go_out_at_once_and_say_what_is_wanted(
         ).scalar_one()
         == 1
     )
+    who, via = db.execute(text("select confirmed_by, confirmed_via from rfq")).one()
+    assert (who, via) == (db.info["sender"], "bulk")
 
 
-def test_the_kill_switch_stops_automatic_sending(db: Session, outbox: Outbox) -> None:
-    _auto_send(db)
-    autonomy.set_kill_switch(db, sod.user(1), True, "incident")
+def test_sending_an_rfq_can_never_be_set_to_automatic(db: Session, outbox: Outbox) -> None:
+    """D42 (was: automatic sending, the kill switch and the value cap): no setting sends an RFQ without a buyer."""
+    with pytest.raises(ValueError, match="always decided by a person"):
+        autonomy.configure(db, sod.user(1), "rfq.send", level="auto", value_cap=D("10000"))
+    db.rollback()
+    db.execute(
+        text(
+            "insert into autonomy_setting (decision_type, level, min_confidence, max_wrong_rate) "
+            "values ('rfq.send', 'auto', 0, 1)"
+        )
+    )  # even a row written straight into the table
+    db.commit()
     no = _request(db, "R-14", [("B", "5", None, "C1")])
 
     result = _source(db, no)
 
-    assert outbox.sent == [] and len(result.proposals) == 1
-
-
-def test_a_value_above_the_autonomy_cap_waits_for_a_person(db: Session, outbox: Outbox) -> None:
-    autonomy.configure(db, sod.user(1), "rfq.send", level="auto", value_cap=D("10000"))
-    no = _request(db, "R-15", [("B", "5", None, "C1")], total="50000")
-
-    result = _source(db, no)
-
-    assert outbox.sent == [] and len(result.proposals) == 1
+    assert outbox.sent == [] and result.sent == 0 and len(result.proposals) == 1
+    gate = autonomy.gate(db, "rfq.send", value=D(1), confidence=1.0)
+    assert gate.allowed is False and "always decided by a person" in gate.reason
 
 
 def test_one_supplier_whose_email_fails_does_not_hold_up_the_rest_and_is_retried(db: Session, outbox: Outbox) -> None:
@@ -654,10 +674,10 @@ def test_the_pages_show_the_sourcing_of_each_line_and_the_rfq_with_its_suppliers
     h = _headers(slug, buyer, "Buyer")
     _price(db, "S1", "A", "100")
     no = _request(db, "R-30", [("A", "1", None, "C1"), ("B", "5", None, "C1")])
-    _auto_send(db)
-
     done = client.post(f"/api/requisitions/{no}/source", headers=h).json()
-    assert (done["contract"], done["rfq"], done["emails_sent"], done["rfqs"]) == (1, 1, 3, ["RFQ-2627-00001"])
+    assert (done["contract"], done["rfq"], done["emails_sent"], done["rfqs"]) == (1, 1, 0, ["RFQ-2627-00001"])
+    sent = client.post("/api/rfqs/confirm-send", json={"rfqs": ["RFQ-2627-00001"]}, headers=h).json()
+    assert sent == {"results": [{"rfq_no": "RFQ-2627-00001", "status": "sent", "sent": 3}]}
 
     detail = client.get(f"/api/requisitions/{no}", headers=h).json()
     by_name = {line["name"]: line for line in detail["lines"]}

@@ -347,7 +347,7 @@ def run(ctx) -> Outcome:
 
     # ... and the others obey what is set, including the kill switch
     gate_problems = 0
-    for dt in ("rfq.send", "rfq.award", "quote.read"):
+    for dt in ("rfq.award", "quote.read"):  # rfq.send can no longer be set to automatic (D42, block 5)
         cap, conf = Decimal(rng.randint(1000, 90000)), Decimal(rng.choice(["0.8", "0.9", "0.95"]))
         client.put(
             f"{SETUP}/automation/{dt}",

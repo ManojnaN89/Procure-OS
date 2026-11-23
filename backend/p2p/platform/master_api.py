@@ -48,6 +48,8 @@ def _number(value: Any, field: str, *, required: bool = False) -> Decimal | None
 def _guard(call: Callable[[], dict[str, Any]]) -> dict[str, Any]:
     try:
         return call()
+    except masters.AwardActivationRefused as exc:
+        raise HTTPException(exc.status, str(exc)) from None
     except masters.MasterError as exc:
         message = str(exc)
         if "does not exist" in message:

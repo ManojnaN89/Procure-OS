@@ -158,6 +158,25 @@ After `demo reset apex` and the store check (A0), on 23 Nov 2026:
    quantity, and a new planning request for 746 kg goes to the director for approval with its own budget check (11.44%
    used). Command line: `python -m p2p.cli forward-buy apex --item RM-08 --dry-run`.
 
+## Strategic sourcing (block 5)
+
+After `demo reset apex`, on Mon 23 Nov 2026 (scenario P1, AT-02; the figures are in `truth/truth_period_sourcing.csv`):
+
+1. **Period RFQ.** As Neha Kulkarni (buyer), **Quotations** → **New period RFQ**: Plant, Chakan, 1 Jan to 31 Mar 2027,
+   copper winding wire. **Suggest** gives 753 kg (3,009.5 kg bought in the last 12 months, 752.375 for 3 months; 216 kg
+   of open requirements); type 900. SUP-003, SUP-005 and SUP-001 are asked (three quotes above Rs 2,00,000). Nothing goes
+   out until she ticks it and clicks **Confirm and send selected** (D42): the mail says the period and that the quantity
+   is an estimate, not a commitment.
+2. **Award.** Enter the quotes (SUP-005 Rs 880, SUP-003 Rs 895, SUP-001 Rs 910, valid to 31 Dec 2026) and **Propose
+   award** to SUP-005: Rs 7,92,000 before GST, Rs 9,34,560 with it, so the director (PO-03) decides; no order, no budget.
+   As Meera Iyer (director), **Approve award**: one award letter with draft contract CNT-0002 (ceiling Rs 7,92,000, NET45,
+   Rs 880 a kg at Chakan) and two regret notes with no prices. Approving on 1 Jan 2027 instead says the award is stale.
+3. **Contract.** Open the award letter's link (Mailpit), **Email me a code**, accept. The director cannot activate it
+   (she approved the award), nor the buyer; Sanjay Rao (purchase manager) activates it.
+4. **Use.** On 4 Jan 2027 a request for 120 kg is bought on CNT-0002 at Rs 880: the order is Rs 1,24,608 with GST for the
+   purchase manager, and the contract has Rs 6,86,400 left. Brightwave (B1): only two IT suppliers, so the award needs a
+   reason and the purchase agreement before the CFO decides; CNT-0003 is activated by the IT head.
+
 ## Start with cases in flight
 
 `python -m p2p.cli demo populate apex --reset` (about 20 seconds, local database only) makes the company and then does what the people would do, through the real API, so every figure, email, notification and audit row is real:

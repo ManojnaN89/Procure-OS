@@ -475,3 +475,7 @@ cutover:
   advance_terms: {PO-BLR-2627-00120: ADV30N30}  # the AC maintenance order was agreed with 30% in advance
   advances:
     - {payment_no: PAY-2627-000160, po_no: PO-BLR-2627-00120, paid_on: "2026-10-30", pct: "30", utr: HDFC26103000000160}
+
+# The period RFQ scenario of block 5 here: two suppliers for a category that wants three quotes (see apex/company.yaml).
+period_scenarios:
+  - {name: B1, title: Too few quotes on a period award, as_of: "2026-11-23", location: OFF-BLR, period_from: "2027-04-01", period_to: "2028-03-31", contract: true, lines: [{item: HS-01, qty: "60", supplier: SUP-002, price: "2350.00"}, {item: KB-01, qty: "60", supplier: SUP-002, price: "1750.00"}]}

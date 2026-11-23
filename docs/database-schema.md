@@ -31,7 +31,7 @@ Reading a line: `name*` is part of the primary key, `name?` may be empty, then t
 
 ## Tenant database (one per company)
 
-156 tables.
+161 tables.
 
 **advance** · payment_no* text, po_no text, gross num, taxable num, used_gross num, used_taxable num, paid_on? date
 
@@ -61,7 +61,11 @@ Reading a line: `name*` is part of the primary key, `name?` may be empty, then t
 
 **autonomy_setting** · decision_type* text, level text, value_cap? num, min_confidence num, max_wrong_rate num, updated_by? int, updated_at timestamptz
 
-**award** · rfq_no* text, rfq_line_no* int, supplier_code* text, quote_no text, qty num, price num, reason? text, overridden bool, by_user? text, at timestamptz, split bool, selection_rule? text, conditional bool, lapsed_at? timestamptz, lapse_reason? text, awarded_on? date
+**award** · rfq_no text, rfq_line_no int, supplier_code text, quote_no text, qty num, price num, reason? text, overridden bool, by_user? text, at timestamptz, split bool, selection_rule? text, conditional bool, lapsed_at? timestamptz, lapse_reason? text, awarded_on? date, id* bigint, status text, decision_id? bigint
+
+**award_decision** · id* bigint, rfq_no text, round int, status text, proposed_by text, proposed_at timestamptz, reason? text, value_taxable num, cgst num, sgst num, igst num, value_total num, rule_code? text, rule_version? int, approver? text, delegate? text, proposal_id? bigint, recommendation_id? int, regret_notes bool, note? text, note_source? text, decided_by? text, decided_at? timestamptz, decision_note? text
+
+**award_letter** · id* bigint, decision_id bigint, supplier_code text, kind text, message_id? text, contract_code? text, queued_at timestamptz
 
 **bank** · code* text, name? text, ifsc_prefix? text
 
@@ -91,7 +95,9 @@ Reading a line: `name*` is part of the primary key, `name?` may be empty, then t
 
 **company_bank_account** · code* text, bank_code? text, account_no? text, ifsc? text, purpose? text, payment_file_format? text
 
-**contract** · code* text, supplier_code? text, type? text, valid_from? date, valid_to? date, max_value? num, payment_terms_code? text, delivery_terms? text, freight_terms? text, warranty_months? text, sla_text? text, status? text, created_by? text
+**contract** · code* text, supplier_code? text, type? text, valid_from? date, valid_to? date, max_value? num, payment_terms_code? text, delivery_terms? text, freight_terms? text, warranty_months? text, sla_text? text, status? text, created_by? text, source_rfq? text, award_decision_id? bigint, supplier_accepted_at? timestamptz, supplier_accepted_by? text, supplier_declined_at? timestamptz, decline_reason? text
+
+**contract_link** · id* bigint, contract_code text, supplier_code text, purpose text, sent_to text, issued_at timestamptz, expires_at timestamptz, used_at? timestamptz, used_for? text
 
 **cost_centre** · code* text, name? text, department_code? text, location_code? text, owner_user? text, active? bool
 
@@ -183,7 +189,9 @@ Reading a line: `name*` is part of the primary key, `name?` may be empty, then t
 
 **number_series** · id* bigint, document_type? text, prefix? text, scope? text, format? text, reset? text
 
-**one_time_code** · id* bigint, purpose text, ref text, user_id bigint, code_hash text, created_at timestamptz, expires_at timestamptz, attempts int, status text, used_at? timestamptz
+**one_time_code** · id* bigint, purpose text, ref text, user_id? bigint, code_hash text, created_at timestamptz, expires_at timestamptz, attempts int, status text, used_at? timestamptz, address? text
+
+**order_history** · id* bigint, po_no text, line_no int, item_code text, location_code text, ordered_on date, qty num, uom? text
 
 **org_setting** · key* text, value? text, description? text
 
@@ -198,6 +206,8 @@ Reading a line: `name*` is part of the primary key, `name?` may be empty, then t
 **payment_run** · no* text, run_date date, company_bank_account? text, proposed_by text, approved_by? text, approved_at? timestamptz, status text, total num, proposal_id? bigint, file_text? text, created_at timestamptz
 
 **payment_terms** · code* text, name? text, days? int, baseline? text, advance_pct? int, discount_pct? num, discount_days? int
+
+**period_demand_line** · id* bigint, item_code text, location_code text, period_from date, period_to date, qty num, uom? text, suggested_qty? num, suggestion? text, status text, review_task_id? int, created_by text, created_at timestamptz
 
 **planning_note** · id* bigint, mr_no text, run_id? int, status text, summary? text, lines? jsonb, snapshot jsonb, snapshot_hash text, reasons ARRAY, created_by text, created_at timestamptz
 
@@ -263,9 +273,9 @@ Reading a line: `name*` is part of the primary key, `name?` may be empty, then t
 
 **request_line** · request_no* text, line_no* int, item_code? text, free_text? text, attributes? jsonb, qty num, uom? text, base_qty? num, est_price? num, need_by? date, delivery_location? text, cost_centre_code? text, gl_code? text, category_code? text, project_code? text, reason? text, status text, stock_qty? num, est_source? text
 
-**rfq** · no* text, buyer? text, request_no? text, category_code? text, created_at timestamptz, due_date date, type text, delivery_terms? text, payment_terms_proposed? text, status text, sent_at? timestamptz, proposal_id? bigint, note? text, min_quotes? int, min_quotes_rule? text, delivery_location? text
+**rfq** · no* text, buyer? text, request_no? text, category_code? text, created_at timestamptz, due_date date, type text, delivery_terms? text, payment_terms_proposed? text, status text, sent_at? timestamptz, proposal_id? bigint, note? text, min_quotes? int, min_quotes_rule? text, delivery_location? text, kind text, period_from? date, period_to? date, review_task_id? int, confirmed_by? int, confirmed_at? timestamptz, confirmed_via? text
 
-**rfq_line** · rfq_no* text, line_no* int, request_no text, request_line_no int, item_code? text, description? text, qty num, uom? text, need_by? date
+**rfq_line** · rfq_no* text, line_no* int, request_no? text, request_line_no? int, item_code? text, description? text, qty num, uom? text, need_by? date, period_line_id? bigint
 
 **rfq_supplier** · rfq_no* text, supplier_code* text, email? text, invited_at? timestamptz, send_error? text, reminders_sent int, responded_at? timestamptz, declined bool, decline_reason? text, last_reminded_at? timestamptz, invited_by? text, message_id? text
 

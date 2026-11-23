@@ -191,12 +191,30 @@ def accept_variances(state: State) -> int:
     return accepted
 
 
+def confirm_sends(state: State) -> int:
+    """The buyer confirms every RFQ waiting to be sent, at most 50 at a time (D42). Returns how many went out."""
+    db = state.world.db
+    db.rollback()
+    waiting = [
+        str(r[0])
+        for r in db.execute(
+            text("select q.no from rfq q join proposal p on p.id = q.proposal_id where p.status = 'pending' order by q.no")
+        )
+    ]
+    sent = 0
+    for i in range(0, len(waiting), 50):
+        for done in sourcing.confirm_many(db, waiting[i : i + 50], state.world.logins["Buyer"]):
+            sent += done.status == "sent"
+            if done.status != "sent":
+                state.notes.append(f"{done.rfq_no} not sent: {done.reason}")
+    return sent
+
+
 def run_pipeline(world: World, *, seed: int = 7) -> State:
     """From stock levels to approved purchase orders. Returns the timings and what was done."""
     db = world.db
     state = State(world, lib.capture_mail())
     rng = random.Random(seed)
-    autonomy.configure(db, sod.user(1), "rfq.send", level="auto")
     autonomy.configure(db, sod.user(1), "rfq.award", level="auto")
 
     t = time.monotonic()
@@ -215,6 +233,7 @@ def run_pipeline(world: World, *, seed: int = 7) -> State:
 
     t = time.monotonic()
     sourcing.sweep(db, world.slug, as_of=lib.TODAY)
+    confirm_sends(state)  # D42 (block 5): sending is never automatic; the buyer confirms the RFQs in one go
     _stage(state, "sourcing and RFQ emails", t)
 
     t = time.monotonic()

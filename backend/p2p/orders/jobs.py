@@ -4,7 +4,7 @@ import logging
 
 from sqlalchemy.orm import Session
 
-from p2p.formulas.calendar import IST
+from p2p.formulas.calendar import business_today
 from p2p.orders import delivery_reminders, dispatch, service  # noqa: F401 - these register the send and reminder jobs
 from p2p.platform import routing, worker
 
@@ -16,7 +16,10 @@ JOB = "order_request"
 def _run(ctx: worker.JobContext) -> None:
     with Session(routing.engine_for(ctx.tenant)) as db:
         made = service.order_request(
-            db, ctx.tenant, str(ctx.payload["request_no"]), as_of=ctx.now.astimezone(IST).date()
+            db,
+            ctx.tenant,
+            str(ctx.payload["request_no"]),
+            as_of=business_today(),  # the business date (a pinned day)
         )
         for note in made.skipped:
             log.info("ordering %s: %s", made.request_no, note)

@@ -12,12 +12,19 @@ const RfqsView = {
 
   async renderList(container) {
     container.innerHTML = `
-      <div class="page-header">
-        <h1>Quotations</h1>
-        <p>Prices asked from suppliers for approved requests, and the answers that came back</p>
+      <div class="page-header" style="display:flex;justify-content:space-between;align-items:flex-end;gap:12px;flex-wrap:wrap;">
+        <div><h1>Quotations</h1>
+        <p>Prices asked from suppliers for approved requests or for a period, and the answers that came back</p></div>
+        <div style="display:flex;gap:8px;">
+          <div class="btn btn-sm" id="confirmSelected" style="display:none;"><i class="ti ti-send"></i>Confirm and send selected</div>
+          <div class="btn btn-primary btn-sm" id="newPeriodRfq"><i class="ti ti-calendar-plus"></i>New period RFQ</div>
+        </div>
       </div>
+      <div id="periodForm"></div>
+      <div id="confirmNote" style="font-size:12px;color:var(--warning-text);margin-bottom:8px;"></div>
       <div class="table-wrap" id="tableWrap"><div class="empty-state">Loading…</div></div>
     `;
+    document.getElementById("newPeriodRfq").addEventListener("click", () => this.periodForm());
     try {
       const rows = await API.listRfqs();
       const wrap = document.getElementById("tableWrap");
@@ -28,15 +35,17 @@ const RfqsView = {
       }
       wrap.innerHTML = `
         <table class="data-table">
-          <thead><tr><th>NUMBER</th><th>TITLE</th><th>SUPPLIERS</th><th>REPLY BY</th><th>STATUS</th><th>QUOTES</th></tr></thead>
+          <thead><tr><th></th><th>NUMBER</th><th>KIND</th><th>TITLE</th><th>SUPPLIERS</th><th>REPLY BY</th><th>STATUS</th><th>QUOTES</th></tr></thead>
           <tbody>
             ${rows.map((r) => `
               <tr data-id="${this.esc(r.id)}">
+                <td>${r.waiting_to_send ? `<input type="checkbox" class="sendPick" value="${this.esc(r.id)}" aria-label="Select ${this.esc(r.id)} to send">` : ""}</td>
                 <td class="cell-muted" style="white-space:nowrap;">${this.esc(r.id)}</td>
+                <td class="cell-muted">${r.kind === "period" ? "Period" : "Request"}</td>
                 <td>${this.esc(r.title)}</td>
                 <td class="cell-muted">${this.esc(r.vendor_count)} suppliers</td>
                 <td class="cell-muted">${formatDate(r.due_date)}</td>
-                <td>${statusBadge(r.status)}${r.waiting_to_send ? `<div class="cell-muted" style="font-size:11px;margin-top:3px;">waiting for a buyer to approve sending</div>` : ""}</td>
+                <td>${statusBadge(r.status)}${r.waiting_to_send ? `<div class="cell-muted" style="font-size:11px;margin-top:3px;">waiting for a buyer to confirm sending</div>` : ""}</td>
                 <td class="cell-muted">${this.esc(r.quote_count)} of ${this.esc(r.vendor_count)}</td>
               </tr>
             `).join("")}
@@ -44,12 +53,101 @@ const RfqsView = {
         </table>
       `;
       wrap.querySelectorAll("tr[data-id]").forEach((tr) => {
-        tr.addEventListener("click", () => { window.location.hash = `#/rfqs/${tr.dataset.id}`; });
+        tr.addEventListener("click", (e) => {
+          if (e.target.classList.contains("sendPick")) return;
+          window.location.hash = `#/rfqs/${tr.dataset.id}`;
+        });
+      });
+      const button = document.getElementById("confirmSelected");
+      const picked = () => [...wrap.querySelectorAll(".sendPick:checked")].map((el) => el.value);
+      wrap.querySelectorAll(".sendPick").forEach((el) => el.addEventListener("change", () => {
+        button.style.display = picked().length ? "" : "none";
+      }));
+      button.addEventListener("click", async () => {
+        const res = await API.postJSON("/api/rfqs/confirm-send", { rfqs: picked() });
+        const note = document.getElementById("confirmNote");
+        if (!res.ok) { if (note) note.textContent = res.data.detail || "Not sent."; return; }
+        const refused = res.data.results.filter((x) => x.status !== "sent");
+        await this.renderList(container);
+        const after = document.getElementById("confirmNote");
+        if (after && refused.length) after.textContent = refused.map((x) => `${x.rfq_no}: ${x.reason}`).join("; ");
       });
     } catch {
       const gone = document.getElementById("tableWrap");
       if (gone) gone.innerHTML = `<div class="empty-state">Couldn't load RFQs.</div>`;
     }
+  },
+
+  async periodForm() {
+    const box = document.getElementById("periodForm");
+    if (!box) return;
+    const form = await API.getJSON("/api/rfqs/period/form");
+    if (form.error || form.detail) { box.innerHTML = `<div class="panel" style="margin-bottom:12px;">${this.esc(form.detail || form.error)}</div>`; return; }
+    const input = "background:var(--surface-sunken);border:1px solid var(--border);color:var(--text-primary);border-radius:6px;padding:6px 8px;font-size:12.5px;";
+    const items = form.items.map((i) => `<option value="${this.esc(i.code)}">${this.esc(i.code)} · ${this.esc(i.name)} (${this.esc(i.uom)})</option>`).join("");
+    const line = () => `<tr class="pLine"><td><select class="pItem" style="${input}">${items}</select></td>
+      <td><input type="number" min="0" step="0.001" class="pQty" style="${input}width:110px;"></td>
+      <td><div class="btn btn-sm pSuggest">Suggest</div></td><td class="cell-muted pWords" style="font-size:11.5px;"></td></tr>`;
+    box.innerHTML = `
+      <div class="panel" style="margin-bottom:12px;">
+        <div class="panel-title">New period RFQ</div>
+        <div style="font-size:12.5px;color:var(--text-secondary);margin-bottom:8px;">Prices for a period, with no request. The quantities are an estimate, not a commitment; a buyer confirms sending.</div>
+        <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:10px;">
+          <label style="font-size:12px;color:var(--text-muted);">Location <select id="pLocation" style="${input}">${form.locations.map((l) => `<option value="${this.esc(l.code)}">${this.esc(l.name)}</option>`).join("")}</select></label>
+          <label style="font-size:12px;color:var(--text-muted);">From <input type="date" id="pFrom" style="${input}"></label>
+          <label style="font-size:12px;color:var(--text-muted);">To <input type="date" id="pTo" style="${input}"></label>
+        </div>
+        <table class="data-table"><thead><tr><th>ITEM</th><th>QUANTITY</th><th></th><th>ENGINE'S SUGGESTION</th></tr></thead><tbody id="pLines">${line()}</tbody></table>
+        <div style="display:flex;gap:8px;margin-top:10px;">
+          <div class="btn btn-sm" id="pAdd"><i class="ti ti-plus"></i>Add an item</div>
+          <div class="btn btn-primary btn-sm" id="pSave">Make the period RFQ</div>
+          <div class="btn btn-sm" id="pCancel">Cancel</div>
+        </div>
+        <div id="pNote" style="font-size:12px;color:var(--warning-text);margin-top:8px;"></div>
+      </div>`;
+    const wireLine = (tr) => tr.querySelector(".pSuggest").addEventListener("click", async () => {
+      const q = new URLSearchParams({ item_code: tr.querySelector(".pItem").value, location_code: document.getElementById("pLocation").value,
+        period_from: document.getElementById("pFrom").value, period_to: document.getElementById("pTo").value });
+      const got = await API.getJSON(`/api/rfqs/period/suggest?${q}`);
+      if (got.suggested_qty === undefined) { tr.querySelector(".pWords").textContent = got.detail || "Give the period first."; return; }
+      tr.querySelector(".pQty").value = got.suggested_qty;
+      tr.querySelector(".pWords").textContent = got.suggestion;
+    });
+    box.querySelectorAll(".pLine").forEach(wireLine);
+    document.getElementById("pAdd").addEventListener("click", () => {
+      document.getElementById("pLines").insertAdjacentHTML("beforeend", line());
+      wireLine(document.getElementById("pLines").lastElementChild);
+    });
+    document.getElementById("pCancel").addEventListener("click", () => { box.innerHTML = ""; });
+    document.getElementById("pSave").addEventListener("click", async () => {
+      const lines = [...box.querySelectorAll(".pLine")].map((tr) => ({ item_code: tr.querySelector(".pItem").value, qty: tr.querySelector(".pQty").value }));
+      const res = await API.postJSON("/api/rfqs/period", { location_code: document.getElementById("pLocation").value,
+        period_from: document.getElementById("pFrom").value, period_to: document.getElementById("pTo").value, lines });
+      if (res.ok) { window.location.hash = `#/rfqs/${res.data.rfq_no}`; return; }
+      document.getElementById("pNote").textContent = res.data.detail || "Not made.";
+    });
+  },
+
+  awardPanel(r) {
+    const d = r.award_decision;
+    if (!d) return "";
+    const money = (v) => formatCurrency(v);
+    const tax = Number(d.igst) ? `IGST ${money(d.igst)}` : `CGST ${money(d.cgst)} + SGST ${money(d.sgst)}`;
+    const said = { waiting: `Waiting for ${this.esc(d.approver_name)} (${this.esc(d.rule)})`, approved: "Approved", rejected: "Rejected", withdrawn: "Withdrawn by the buyer", stale: "Stale: the buyer selects again" }[d.status] || this.esc(d.status);
+    const letters = (d.letters || []).map((l) => `${this.esc(l.kind === "award" ? "Award letter" : "Regret note")} to ${this.esc(l.supplier_code)}`).join(" · ");
+    const contracts = (d.contracts || []).map((c) => `<a href="#/contracts/${this.esc(c)}" style="color:var(--accent-tint);">${this.esc(c)}</a>`).join(", ");
+    return `<div class="panel" style="margin-bottom:12px;">
+      <div class="panel-title">Award, round ${this.esc(d.round)} · ${said}</div>
+      <div style="font-size:12.5px;margin-bottom:6px;">${money(d.value_taxable)} before GST, ${tax}: ${money(d.value_total)} with GST · proposed by ${this.esc(d.proposed_by)}</div>
+      ${d.note ? `<div style="font-size:12.5px;color:var(--text-secondary);margin-bottom:6px;">${this.esc(d.note)}${d.note_source === "ai" ? ` <span class="cell-muted">(reworded by the assistant from the figures)</span>` : ""}</div>` : ""}
+      ${d.decision_note ? `<div class="cell-muted" style="font-size:12px;">${this.esc(d.decision_note)}</div>` : ""}
+      ${letters ? `<div class="cell-muted" style="font-size:12px;">${letters}</div>` : ""}
+      ${contracts ? `<div style="font-size:12.5px;margin-top:4px;">Draft rate contract: ${contracts} (the supplier accepts it, then a second person activates it)</div>` : ""}
+      ${d.can_decide ? `<textarea id="awardDecisionNote" rows="2" placeholder="Note (a reason is needed to reject)" style="width:100%;margin:8px 0;background:var(--surface-sunken);border:1px solid var(--border);color:var(--text-primary);border-radius:8px;padding:8px;font-size:12.5px;"></textarea>
+        <div style="display:flex;gap:8px;"><div class="btn btn-primary btn-sm" id="awardApprove"><i class="ti ti-check"></i>Approve award</div><div class="btn btn-sm" id="awardReject">Reject</div></div>` : ""}
+      ${d.can_withdraw ? `<div style="display:flex;gap:8px;margin-top:8px;"><input id="awardWithdrawReason" placeholder="Why you withdraw it" style="flex:1;background:var(--surface-sunken);border:1px solid var(--border);color:var(--text-primary);border-radius:6px;padding:6px 8px;font-size:12.5px;"><div class="btn btn-sm" id="awardWithdraw">Withdraw</div></div>` : ""}
+      <div id="awardDecisionMsg" style="font-size:12px;color:var(--warning-text);margin-top:8px;"></div>
+    </div>`;
   },
 
   FLAG_NOTE: "does not comply",
@@ -102,7 +200,8 @@ const RfqsView = {
          <div id="reasonBoxAward" style="margin:8px 0;">
            <textarea id="awardReason" rows="2" placeholder="Reason (needed when you select other than the recommended, cheapest qualifying quote, or when fewer qualifying quotes came in than wanted)" style="width:100%;background:var(--surface-sunken);border:1px solid var(--border);color:var(--text-primary);border-radius:8px;padding:8px;font-size:12.5px;"></textarea>
          </div>
-         <div style="display:flex;gap:8px;"><div class="btn btn-primary btn-sm" id="awardBtn"><i class="ti ti-check"></i>Select these suppliers</div>
+         ${r.kind === "period" ? `<label style="font-size:12px;display:block;margin-bottom:8px;"><input type="checkbox" id="regretNotes" checked> Send regret notes to the others</label>` : ""}
+         <div style="display:flex;gap:8px;"><div class="btn btn-primary btn-sm" id="awardBtn"><i class="ti ti-check"></i>${r.kind === "period" ? "Propose award" : "Select these suppliers"}</div>
          ${c.can_quote ? `<div class="btn btn-sm" id="addQuoteBtn"><i class="ti ti-plus"></i>Enter another quote</div>` : ""}</div>`
       : (c.can_quote ? `<div class="btn btn-sm" id="addQuoteBtn" style="display:inline-flex;"><i class="ti ti-plus"></i>Enter another quote</div>` : "");
     return `<div class="panel" style="margin-bottom:12px;">${head}${waiting}${lines}${actions}<div id="awardNote" style="font-size:12px;color:var(--warning-text);margin-top:8px;"></div></div>`;
@@ -264,7 +363,8 @@ const RfqsView = {
         if (el.value === "__split__") splits[line] = JSON.parse(el.dataset.parts);
         else choices[line] = el.value;
       });
-      const res = await API.postJSON(`/api/rfqs/${encodeURIComponent(r.id)}/award`, { choices, splits, reason: document.getElementById("awardReason").value });
+      const regret = document.getElementById("regretNotes");
+      const res = await API.postJSON(`/api/rfqs/${encodeURIComponent(r.id)}/award`, { choices, splits, reason: document.getElementById("awardReason").value, ...(regret ? { regret_notes: regret.checked } : {}) });
       const note = document.getElementById("awardNote");
       if (res.ok && res.data.status === "waiting") { if (note) note.textContent = `${res.data.message} (proposal ${res.data.proposal_id}).`; return; }
       if (res.ok && (res.data.conditional || []).length) {
@@ -275,6 +375,22 @@ const RfqsView = {
       }
       if (res.ok) return this.renderDetail(document.getElementById("appContent"), r.id);
       if (note) note.textContent = res.data.detail || "That did not work.";
+    });
+    const decide = async (path, body) => {
+      const res = await API.postJSON(`/api/rfqs/${encodeURIComponent(r.id)}/award/${path}`, body);
+      if (res.ok) return this.renderDetail(document.getElementById("appContent"), r.id);
+      const msg = document.getElementById("awardDecisionMsg");
+      if (msg) msg.textContent = res.data.detail || "That did not work.";
+    };
+    on("awardApprove", () => decide("approve", { note: document.getElementById("awardDecisionNote").value }));
+    on("awardReject", () => decide("reject", { reason: document.getElementById("awardDecisionNote").value }));
+    on("awardWithdraw", () => decide("withdraw", { reason: document.getElementById("awardWithdrawReason").value }));
+    on("confirmOne", async () => {
+      const res = await API.postJSON("/api/rfqs/confirm-send", { rfqs: [r.id] });
+      const one = res.ok ? res.data.results[0] : null;
+      if (one && one.status === "sent") return this.renderDetail(document.getElementById("appContent"), r.id);
+      const msg = document.getElementById("confirmOneNote");
+      if (msg) msg.textContent = (one && one.reason) || res.data.detail || "Not sent.";
     });
     on("prospectInvite", async () => {
       const res = await API.postJSON(`/api/rfqs/${encodeURIComponent(r.id)}/prospects`, { supplier_code: document.getElementById("prospectPick").value });
@@ -293,12 +409,15 @@ const RfqsView = {
         <div class="page-header">
           <a href="#/rfqs" style="color:var(--text-muted);font-size:12px;text-decoration:none;">← Quotations</a>
           <h1 style="margin-top:6px;">${this.esc(r.title)}</h1>
-          <p>${this.esc(r.id)} · ${statusBadge(r.status)} · for <a href="#/requisitions/${this.esc(r.request_no)}" style="color:var(--accent-tint)">${this.esc(r.request_no)}</a>
+          <p>${this.esc(r.id)} · ${statusBadge(r.status)} · ${r.kind === "period"
+            ? `prices for ${formatDate(r.period_from)} to ${formatDate(r.period_to)} (an estimate, not a commitment)${r.review_task_id ? ` · from <a href="#/contracts" style="color:var(--accent-tint)">strategic review ${this.esc(r.review_task_id)}</a>` : ""}`
+            : `for <a href="#/requisitions/${this.esc(r.request_no)}" style="color:var(--accent-tint)">${this.esc(r.request_no)}</a>`}
              · reply by ${formatDate(r.due_date)}${r.sent_at ? ` · sent ${formatDate(r.sent_at)}` : ""}
              ${r.delivery_location_name ? ` · deliver to ${this.esc(r.delivery_location_name)}` : ""}${r.min_quotes ? ` · minimum quotes ${this.esc(r.min_quotes)}${r.min_quotes_rule ? ` (rule: ${this.esc(r.min_quotes_rule)})` : ""}` : ""}</p>
         </div>
         ${FlowStrip.forRfq(r)}
-        ${r.status === "draft" && r.proposal_id ? `<div class="panel" style="margin-bottom:12px;font-size:12.5px;color:var(--text-secondary);">Not sent yet: a buyer has to approve sending (Admin → Approvals).</div>` : ""}
+        ${r.status === "draft" && r.proposal_id ? `<div class="panel" style="margin-bottom:12px;font-size:12.5px;color:var(--text-secondary);">Not sent yet: a buyer confirms every new RFQ before it goes out. <span class="btn btn-primary btn-sm" id="confirmOne" style="margin-left:8px;"><i class="ti ti-send"></i>Confirm and send</span><span id="confirmOneNote" style="margin-left:8px;color:var(--warning-text);"></span></div>` : ""}
+        ${r.confirmed_at ? `<div class="cell-muted" style="font-size:12px;margin-bottom:8px;">Sending confirmed ${formatDate(r.confirmed_at)}</div>` : ""}
         ${r.note ? `<div class="panel" style="margin-bottom:12px;font-size:12.5px;color:var(--warning-text);">${this.esc(r.note)}</div>` : ""}
         <div class="table-wrap" style="margin-bottom:12px;">
           <table class="data-table">
@@ -321,7 +440,7 @@ const RfqsView = {
               ${r.lines.map((l) => `
                 <tr>
                   <td>${this.esc(l.name)}<div class="cell-muted" style="font-size:11px;">${this.esc(l.item_code || "free text")}</div></td>
-                  <td>${this.esc(l.qty)} <span class="cell-muted">${this.esc(l.uom)}</span></td>
+                  <td>${this.esc(l.qty)} <span class="cell-muted">${this.esc(l.uom)}</span>${l.suggestion ? `<div class="cell-muted" style="font-size:11px;">suggested ${this.esc(l.suggested_qty)}: ${this.esc(l.suggestion)}</div>` : ""}</td>
                   <td class="cell-muted">${formatDate(l.need_by)}</td>
                 </tr>`).join("")}
             </tbody>
@@ -329,6 +448,7 @@ const RfqsView = {
         </div>
         <div id="supplierMessagesBox"></div>
         ${this.draftsPanel(r)}
+        ${this.awardPanel(r)}
         ${this.comparisonPanel(r)}
         ${this.quoteForm(r)}
       `;

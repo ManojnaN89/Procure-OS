@@ -567,9 +567,11 @@ def test_an_approved_request_is_sourced_and_its_rfq_shows_the_suppliers_waiting_
         row = page.locator("#tableWrap tbody tr")
         expect(row).to_have_count(1)
         expect(row).to_contain_text("3 suppliers")
-        expect(row).to_contain_text("waiting for a buyer to approve sending")
+        expect(row).to_contain_text("waiting for a buyer to confirm sending")  # D42
         row.click()
-        expect(page.locator("#appContent")).to_contain_text("Not sent yet: a buyer has to approve sending")
+        expect(page.locator("#appContent")).to_contain_text(
+            "Not sent yet: a buyer confirms every new RFQ before it goes out"
+        )
         names = page.locator("#appContent table").first.locator("tbody tr")
         expect(names).to_have_count(3)
         expect(names.first).to_contain_text("Alpha <b>Traders</b>")  # shown as typed

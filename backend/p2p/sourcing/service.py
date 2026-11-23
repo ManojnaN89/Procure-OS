@@ -7,11 +7,14 @@ threshold and every emergency wait for the purchase manager to agree. A buyer ma
 line to quotation); loosening it is a proposal. A deterministic service: the choices come from the price records, the
 orders and receipts, the supplier master and the versioned route rule, never from a model.
 
-Sending an RFQ puts a message in front of outside companies, so it goes through the autonomy gate: unless an
-administrator has set 'rfq.send' to automatic, the RFQ is prepared and a proposal waits for a buyer to approve it.
+Sending an RFQ puts a message in front of outside companies, so a buyer confirms every new RFQ before it goes out (D42):
+the RFQ is prepared and a proposal `rfq.send` waits for a buyer, alone or with others at once (`confirm_many`). The
+confirmation is kept on the RFQ (who, when, how) and `send_rfq` refuses an RFQ without one. 'rfq.send' can never be set
+to automatic (agents/autonomy.py LOCKED); the reminders on a confirmed RFQ run by themselves.
 """
 
 import json
+from contextvars import ContextVar
 from dataclasses import dataclass, field
 from datetime import date
 from decimal import Decimal
@@ -28,7 +31,7 @@ from p2p.formulas.sourcing import PriceOption, pick_contract_price
 from p2p.formulas.words import count
 from p2p.masters import regions
 from p2p.orders import contracts as contract_usage
-from p2p.platform import audit, email_layout, emails, numbering, outbox, proposals, reference, worker
+from p2p.platform import audit, email_layout, emails, numbering, outbox, permissions, proposals, reference, worker
 from p2p.platform.sod import Actor
 from p2p.sourcing import documents, quote_sheet, route, templates
 from p2p.suppliers import scoring
@@ -849,23 +852,22 @@ def _take_off_rfq(db: Session, rfq_no: str, request_no: str, line_no: int, actor
 
 
 def confirm_send(db: Session, rfq_no: str, actor: Actor) -> None:
-    """Ask for (or give) the confirmation to send an RFQ that went out to nobody yet, once someone is invited to it."""
+    """Ask a buyer to confirm sending an RFQ that went out to nobody yet, once someone is invited to it."""
     row = db.execute(
-        text("select r.no, r.total_value from rfq q join request r on r.no = q.request_no where q.no = :n"),
+        text(
+            "select q.request_no, r.total_value from rfq q left join request r on r.no = q.request_no where q.no = :n"
+        ),
         {"n": rfq_no},
     ).one()
-    _dispatch(db, rfq_no, Decimal(row[1] or 0), actor, SourcingResult(str(row[0])))
+    _dispatch(db, rfq_no, Decimal(row[1] or 0), actor, SourcingResult(str(row[0] or rfq_no)))
 
 
 def _dispatch(db: Session, rfq_no: str, value: Decimal, actor: Actor, result: SourcingResult) -> None:
+    """Propose sending the RFQ: a buyer confirms it (D42). The gate is asked only for its words: it always refuses."""
     asked = db.execute(text("select count(*) from rfq_supplier where rfq_no = :r"), {"r": rfq_no}).scalar_one()
     if not asked:  # only prospects may be asked: nothing to send until the buyer invites one (confirm_send)
         return
-    gate = autonomy.gate(db, DECISION_TYPE, value=value, confidence=1.0)  # nothing here is a model's guess
-    if gate.allowed:
-        result.sent += send_rfq(db, rfq_no, actor)
-        autonomy.record_outcome(db, DECISION_TYPE, auto=True, ref=rfq_no)
-        return
+    gate = autonomy.gate(db, DECISION_TYPE, value=value, confidence=1.0)
     pid = proposals.propose(
         db,
         SERVICE,
@@ -897,14 +899,26 @@ def _company(db: Session) -> str:
     )
 
 
-def _deliver_to(db: Session, request_no: str) -> str:
+def _deliver_to(db: Session, rfq: dict[str, Any]) -> str:
+    """Where the RFQ's goods go: its own delivery location (a period RFQ has no request), else its request's."""
     return str(
         db.execute(
-            text("select l.name from request r join location l on l.code = r.ship_to_location where r.no = :n"),
-            {"n": request_no},
+            text(
+                "select l.name from location l where l.code = coalesce(cast(:loc as text), "
+                "(select r.ship_to_location from request r where r.no = :n))"
+            ),
+            {"loc": rfq.get("delivery_location"), "n": rfq.get("request_no")},
         ).scalar()
         or "as agreed"
     )
+
+
+def items_text(rfq: dict[str, Any], lines: list[dict[str, Any]]) -> str:
+    """The item block of a mail: for a period RFQ it opens with the fixed sentence on the period (D20: no model)."""
+    listed = item_lines(lines)
+    if rfq.get("kind") == "period" and rfq.get("period_from") and rfq.get("period_to"):
+        return f"{templates.period_sentence(rfq['period_from'], rfq['period_to'])}\n\n{listed}"
+    return listed
 
 
 def question_reply_draft(db: Session, rfq_no: str, contact: str | None, question: str) -> str:
@@ -922,8 +936,8 @@ def question_reply_draft(db: Session, rfq_no: str, contact: str | None, question
             "company": _company(db),
             "reference": rfq_no,
             "due_date": f"{rfq['due_date']:%d %b %Y}",
-            "deliver_to": _deliver_to(db, str(rfq["request_no"])),
-            "items": item_lines(lines),
+            "deliver_to": _deliver_to(db, dict(rfq)),
+            "items": items_text(dict(rfq), lines),
             "question": " ".join(question.split()),
         },
     )
@@ -946,7 +960,7 @@ def _body(
             "reference": str(rfq["no"]),
             "due_date": f"{rfq['due_date']:%d %b %Y}",
             "deliver_to": deliver_to,
-            "items": item_lines(lines),
+            "items": items_text(rfq, lines),
         },
     )
 
@@ -960,16 +974,21 @@ def send_rfq(db: Session, rfq_no: str, actor: Actor = SERVICE) -> int:
     """
     rfq = db.execute(text("select * from rfq where no = :n for update"), {"n": rfq_no}).mappings().first()
     if rfq is None:
+        db.rollback()
         raise SourcingError(f"{rfq_no} does not exist")
     if rfq["status"] not in ("draft", "sent"):
+        db.rollback()
         raise SourcingError(f"{rfq_no} is {rfq['status']} and cannot be sent")
+    if rfq["confirmed_at"] is None:
+        db.rollback()
+        raise SourcingError(f"{rfq_no} has no buyer's confirmation: it is not sent (D42)")
     lines = [
         dict(r)
         for r in db.execute(text("select * from rfq_line where rfq_no = :n order by line_no"), {"n": rfq_no}).mappings()
     ]
     company = _company(db)
     category = db.execute(text("select name from item_category where code = :c"), {"c": rfq["category_code"]}).scalar()
-    deliver_to = _deliver_to(db, str(rfq["request_no"]))
+    deliver_to = _deliver_to(db, dict(rfq))
     pending = db.execute(
         text(
             "select rs.supplier_code, rs.email, (select c.name from supplier_contact c where c.supplier_code = rs.supplier_code "
@@ -1013,9 +1032,87 @@ def send_rfq(db: Session, rfq_no: str, actor: Actor = SERVICE) -> int:
     return len(queued)
 
 
+# how a confirmation through the proposal is recorded: 'proposal', or 'bulk' while confirm_many approves
+_VIA: ContextVar[str] = ContextVar("rfq_confirm_via", default="proposal")
+BULK_LIMIT = 50
+
+
+def confirm(db: Session, rfq_no: str, user_id: int, *, via: str = "proposal") -> None:
+    """Record the buyer's confirmation to send the RFQ (D42), in the transaction that then sends it. An RFQ confirmed
+    before keeps its first confirmation. Does not commit."""
+    row = db.execute(text("select status, confirmed_at from rfq where no = :n for update"), {"n": rfq_no}).first()
+    if row is None:
+        raise SourcingError(f"{rfq_no} does not exist")
+    if row[0] not in ("draft", "sent"):
+        raise SourcingError(f"{rfq_no} is {row[0]} and cannot be sent")
+    if row[1] is not None:
+        return
+    db.execute(
+        text("update rfq set confirmed_by = :u, confirmed_at = now(), confirmed_via = :v where no = :n"),
+        {"u": user_id, "v": via, "n": rfq_no},
+    )
+    audit.record(db, Actor("user", str(user_id)), "rfq.confirm", "rfq", rfq_no, after={"via": via, "by": user_id})
+
+
 @proposals.executor("rfq.send")
 def _send_when_approved(db: Session, payload: dict[str, Any], actor: Actor) -> dict[str, Any]:
+    """A buyer confirmed the proposal: the confirmation is recorded and the RFQ goes out, in one transaction."""
+    if actor.kind != "user":
+        raise SourcingError("only a person confirms sending an RFQ (D42)")
+    confirm(db, str(payload["rfq_no"]), int(actor.id), via=_VIA.get())
     return {"sent": send_rfq(db, str(payload["rfq_no"]), actor)}
+
+
+@dataclass(frozen=True)
+class Confirmed:
+    rfq_no: str
+    status: str  # sent or refused
+    sent: int = 0
+    reason: str | None = None
+
+    def as_json(self) -> dict[str, Any]:
+        out: dict[str, Any] = {"rfq_no": self.rfq_no, "status": self.status, "sent": self.sent}
+        return out | ({"reason": self.reason} if self.reason else {})
+
+
+def confirm_many(db: Session, rfq_nos: list[str], user_id: int) -> list[Confirmed]:
+    """A buyer confirms several RFQs at once: each one's waiting proposal is approved (the same permission, segregation
+    and expiry checks as one by one). One RFQ's refusal does not stop the others."""
+    if not rfq_nos:
+        raise SourcingError("name at least one RFQ to send")
+    if len(rfq_nos) > BULK_LIMIT:
+        raise SourcingError(f"at most {BULK_LIMIT} RFQs are confirmed at once")
+    if not permissions.can_anywhere(db, user_id, DECISION_TYPE):
+        raise permissions.PermissionDenied(f"role does not allow {DECISION_TYPE}")
+    return [_confirm_one(db, rfq_no, user_id) for rfq_no in dict.fromkeys(rfq_nos)]
+
+
+def _confirm_one(db: Session, rfq_no: str, user_id: int) -> Confirmed:
+    db.rollback()
+    row = db.execute(
+        text(
+            "select q.status, q.proposal_id, p.status from rfq q left join proposal p on p.id = q.proposal_id "
+            "where q.no = :n"
+        ),
+        {"n": rfq_no},
+    ).first()
+    if row is None:
+        return Confirmed(rfq_no, "refused", reason=f"{rfq_no} does not exist")
+    if row[1] is None or row[2] != "pending":
+        why = "it was sent already" if row[0] != "draft" else "no sending of it waits for a buyer"
+        return Confirmed(rfq_no, "refused", reason=f"{rfq_no}: {why}")
+    token = _VIA.set("bulk")
+    try:
+        proposals.approve(db, int(row[1]), user_id)
+    except (proposals.ProposalError, permissions.PermissionDenied) as exc:
+        db.rollback()
+        return Confirmed(rfq_no, "refused", reason=str(exc))
+    finally:
+        _VIA.reset(token)
+    execution, result = db.execute(text("select execution, result from proposal where id = :i"), {"i": row[1]}).one()
+    if execution != "ok":
+        return Confirmed(rfq_no, "refused", reason=str((result or {}).get("error") or "not sent"))
+    return Confirmed(rfq_no, "sent", sent=int((result or {}).get("sent") or 0))
 
 
 def sweep(

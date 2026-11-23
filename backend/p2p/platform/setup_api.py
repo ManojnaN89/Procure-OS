@@ -560,7 +560,6 @@ TOLERANCES: dict[str, tuple[str, str, float | None, float | None]] = {
 
 # decision type -> (label, what it does, how its level is stored)
 _HELP = {
-    "rfq.send": "Emails the suppliers chosen for a line",
     "rfq.award": "Awards a quotation when there is a clear winner",
     "quote.read": "Turns a clean reading of a supplier's reply into a quote",
     "po.send": "Emails the order to the supplier",
@@ -575,8 +574,13 @@ _HELP = {
 }
 DECISIONS: dict[str, tuple[str, str]] = {dt: (autonomy.LABELS[dt], help_) for dt, help_ in _HELP.items()}
 LOCKED_LABELS = {
-    dt: autonomy.LABELS[dt] for dt in ("payment_run.approve", "supplier.set_status", "invoice.release_block")
+    dt: autonomy.LABELS[dt]
+    for dt in ("rfq.send", "payment_run.approve", "supplier.set_status", "invoice.release_block")
 }
+LOCKED_NOTES = {
+    "rfq.send": "D42: a buyer confirms every new RFQ before it goes out. Reminders on a confirmed RFQ run by themselves.",
+}
+LOCKED_NOTE = "Always decided by a person. It can never be set to act alone."
 LEVELS = ("off", "propose", "auto")
 
 
@@ -1696,7 +1700,7 @@ def list_automation(db: Db, ctx: SettingsAdmin) -> dict[str, Any]:
             {
                 "decision_type": dt, "label": label, "help": "", "locked": True, "level": "propose", "levels": ["propose"],
                 "value_cap": None, "min_confidence": None, "max_wrong_rate": None, "record": _track_record(db, dt),
-                "note": "Always decided by a person. It can never be set to act alone.",
+                "note": LOCKED_NOTES.get(dt, LOCKED_NOTE),
             }
         )  # fmt: skip
     return {"kill_switch": kill, "decisions": rows, "last_kill_switch": _last_change(db, "automation", "kill_switch")}

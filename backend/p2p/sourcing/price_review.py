@@ -393,11 +393,8 @@ def buyer_trigger(
     )
 
 
-def close(db: Session, task_id: int, user_id: int, outcome: str, reason: str) -> None:
-    if outcome not in ("rfq_started", "no_action"):
-        raise ReviewError("the outcome is rfq_started or no_action")
-    if not reason.strip():
-        raise ReviewError("a reason is needed")
+def open_task(db: Session, task_id: int) -> dict[str, Any]:
+    """The open review, held until the caller commits."""
     row = db.execute(
         text("select status, payload from task where id = :i and kind = :k for update"), {"i": task_id, "k": KIND}
     ).first()
@@ -405,18 +402,40 @@ def close(db: Session, task_id: int, user_id: int, outcome: str, reason: str) ->
         raise ReviewError(f"review {task_id} does not exist", 404)
     if row[0] != "open":
         raise ReviewError(f"review {task_id} is {row[0]}", 409)
-    payload = {**dict(row[1] or {}), "outcome": outcome, "close_reason": reason.strip()}
+    return dict(row[1] or {})
+
+
+def _close(db: Session, task_id: int, actor: Actor, outcome: str, reason: str, rfq_no: str | None = None) -> None:
+    payload = {**open_task(db, task_id), "outcome": outcome, "close_reason": reason.strip()}
+    if rfq_no:
+        payload["rfq_no"] = rfq_no
     db.execute(
         text(
             "update task set status = 'done', completed_at = now(), completed_by = :u, payload = cast(:p as jsonb) "
             "where id = :i"
         ),
-        {"u": user_id, "p": json.dumps(payload, default=str), "i": task_id},
+        {"u": int(actor.id) if actor.kind == "user" else None, "p": json.dumps(payload, default=str), "i": task_id},
     )
     audit.record(
-        db, Actor("user", str(user_id)), "review.closed", "task", task_id, after={"outcome": outcome}, reason=reason
+        db, actor, "review.closed", "task", task_id, after={"outcome": outcome, "rfq": rfq_no}, reason=reason.strip()
     )
+
+
+def close(db: Session, task_id: int, user_id: int, outcome: str, reason: str) -> None:
+    """Close a review with no action. A review that starts a period RFQ is closed by that RFQ (one way in)."""
+    if outcome == "rfq_started":
+        raise ReviewError("start the period RFQ from the review")
+    if outcome != "no_action":
+        raise ReviewError("the outcome is rfq_started or no_action")
+    if not reason.strip():
+        raise ReviewError("a reason is needed")
+    _close(db, task_id, Actor("user", str(user_id)), outcome, reason)
     db.commit()
+
+
+def close_started(db: Session, task_id: int, actor: Actor, rfq_no: str) -> None:
+    """The period RFQ started from the review closes it, in the RFQ's own transaction. Does not commit."""
+    _close(db, task_id, actor, "rfq_started", f"period RFQ {rfq_no} started", rfq_no)
 
 
 def listing(db: Session, status: str = "open") -> list[dict[str, Any]]:

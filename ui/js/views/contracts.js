@@ -203,8 +203,18 @@ const ContractsView = {
           <td>${p.above_thresholds ? '<span class="badge badge-pending">above</span>' : '<span class="badge badge-approved">below</span>'}<div class="cell-muted" style="font-size:11px;">${e(p.why)} \u00b7 ${e(p.rule)}</div></td>
           <td>${p.review ? `open (${e(p.review.trigger.replace(/_/g, " "))})` : "\u2014"}</td></tr>`).join("")}
       </tbody></table>` : '<p class="cell-muted" style="font-size:12px;margin:0;">No price in force today.</p>'}
-      ${(m.reviews || []).length ? `<p style="font-size:12.5px;margin:8px 0 0;">Open reviews: ${m.reviews.map((r) => e(r.title)).join("; ")}. The contract stays valid and is still used for ordering.</p>` : ""}
+      ${(m.reviews || []).length ? `<p style="font-size:12.5px;margin:8px 0 0;">Open reviews: ${m.reviews.map((r) => `${e(r.title)} <span class="btn btn-secondary btn-sm periodStart" data-task="${e(r.task_id)}">Start a period RFQ</span>`).join("; ")}. The contract stays valid and is still used for ordering.</p>` : ""}
       <div style="margin-top:8px;display:flex;gap:6px;align-items:center;flex-wrap:wrap;"><input id="reviewReason" placeholder="Why a review? (needed)" style="padding:5px;min-width:240px;"><span class="btn btn-secondary btn-sm" id="reviewAsk">Ask for a review</span><span id="reviewNote" style="font-size:12px;color:var(--warning-text);"></span></div>`;
+    box.querySelectorAll(".periodStart").forEach((b) => b.addEventListener("click", async () => {
+      const pre = await API.getJSON(`/api/reviews/${b.dataset.task}/period-rfq`);
+      if (!pre.lines) { box.querySelector("#reviewNote").textContent = pre.detail || "The review cannot start an RFQ."; return; }
+      const what = pre.lines.map((l) => `${l.item_code} ${l.suggested_qty}`).join(", ");
+      if (!window.confirm(`Ask prices for ${pre.period_from} to ${pre.period_to} at ${pre.locations[0]}: ${what}? (estimates, not a commitment; a buyer confirms sending)`)) return;
+      const res = await API.postJSON("/api/rfqs/period", { location_code: pre.locations[0], period_from: pre.period_from, period_to: pre.period_to,
+        lines: pre.lines.map((l) => ({ item_code: l.item_code, qty: l.suggested_qty })), review_task_id: Number(b.dataset.task) });
+      if (res.ok) { window.location.hash = `#/rfqs/${res.data.rfq_no}`; return; }
+      box.querySelector("#reviewNote").textContent = res.data.detail || "No RFQ made.";
+    }));
     box.querySelector("#reviewAsk").addEventListener("click", async () => {
       const res = await API.postJSON("/api/reviews", { trigger: "buyer", contract_code: id, reason: box.querySelector("#reviewReason").value.trim() });
       box.querySelector("#reviewNote").textContent = res.ok ? (res.data.joined ? `Added to the open review (task ${res.data.task_id}).` : `Review opened (task ${res.data.task_id}).`) : (res.data.detail || "No review opened.");
@@ -235,6 +245,7 @@ const ContractsView = {
             ${c.start_date ? formatDate(c.start_date) : "\u2014"} \u2192 ${c.end_date ? formatDate(c.end_date) : "\u2014"}
           </p>
           <div class="btn btn-secondary" id="renewContractBtn" style="font-size:11.5px;padding:6px 12px;display:inline-block;">Renew contract</div>
+          ${c.source_rfq ? `<p style="font-size:12.5px;margin:10px 0 0;">From the award of <a href="#/rfqs/${escapeHtml(c.source_rfq)}" style="color:var(--accent-tint);">${escapeHtml(c.source_rfq)}</a>: ${c.supplier_declined_at ? `declined: ${escapeHtml(c.decline_reason || "")}` : c.supplier_accepted_at ? `accepted by ${escapeHtml(c.supplier_accepted_by)} on ${formatDate(c.supplier_accepted_at)}` : "waiting for the supplier to accept"}</p>` : ""}
         </div>
         <div class="panel" style="margin-bottom:14px;">
           <div class="panel-title">Price list ${c.status !== "active" ? `<span class="badge badge-pending">${escapeHtml(c.status)}</span>` : ""}</div>
@@ -244,7 +255,7 @@ const ContractsView = {
           ${c.can_submit_version ? `<div class="btn btn-primary btn-sm" id="vSubmit" style="margin-top:10px;display:inline-block;">Send version ${escapeHtml(c.draft_version)} for activation</div>` : ""}
           ${c.can_activate_version ? `<div class="btn btn-primary btn-sm" id="vActivate" style="margin-top:10px;display:inline-block;">Activate version ${escapeHtml(c.draft_version)}</div> <div class="btn btn-secondary btn-sm" id="vReject" style="margin-top:10px;display:inline-block;">Reject</div>` : ""}
           ${c.can_manage && c.status === "active" && c.draft_version ? `<div class="btn btn-secondary btn-sm" id="vWithdraw" style="margin-top:10px;display:inline-block;">Withdraw the draft</div>` : ""}
-          ${c.can_activate ? `<div class="btn btn-primary btn-sm" id="cActivate" style="margin-top:10px;display:inline-block;">Activate this contract</div>` : ""}
+          ${c.can_activate ? `<div class="btn btn-primary btn-sm" id="cActivate" style="margin-top:10px;display:inline-block;">Activate this contract</div>${c.activation_refused ? `<span class="cell-muted" style="font-size:12px;margin-left:8px;">${escapeHtml(c.activation_refused)}</span>` : ""}` : ""}
           <div id="cMsg" style="font-size:12.5px;color:var(--warning-text);margin-top:6px;"></div>
           <div id="priceViewBox"></div>
         </div>

@@ -310,7 +310,7 @@ def kpis(db: Session, calendar: BusinessCalendar) -> dict[str, Any]:
     }
     # savings: first offer less the awarded price, per awarded RFQ
     per_rfq: dict[str, Decimal] = defaultdict(Decimal)
-    for a in _rows(db, "select rfq_no, rfq_line_no, qty, price from award"):
+    for a in _rows(db, "select rfq_no, rfq_line_no, qty, price from award where status in ('final', 'approved')"):
         first = _rows(
             db,
             "select l.unit_price, l.discount_pct from quote q join quote_line l on l.quote_no = q.no where q.rfq_no = :r and l.rfq_line_no = :n "
