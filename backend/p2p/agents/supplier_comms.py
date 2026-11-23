@@ -7,7 +7,8 @@ a task. Code does the rest:
 
 - an acknowledgement answers the version of the order mail it replies to (OP-12); it is recorded for that version only
   when the sender was authenticated and the gate allows it (OP-4 interim, `EMAIL_ACK`); otherwise a buyer records it
-  with one click. A reply to an older version is answered with the current version's document;
+  with one click. A reply to an older version is answered with the current version's document. An acknowledgement
+  that gives another delivery date is judged as a date change first, whatever the model called it (`date_to_judge`);
 - a change of delivery date or a delay is judged against the due date of the one line it is about (DF-27): within
   'supplier_date_days', with the gate's leave and no stock effect (it would not come after a material request's need,
   rule Q17), only that line's promised date moves. A date naming no line on an order of several lines is never applied;
@@ -65,6 +66,19 @@ OVERDUE_SLA_HOURS = 18  # two working days
 # OP-4 (NEEDS OWNER; interim): what an emailed acknowledgement does, by the sender authentication of the mail. 'record':
 # the agent records it when the gate allows; 'confirm': a buyer records it with one click; 'not_read': never read.
 EMAIL_ACK = {sender_auth.PASS: "record", sender_auth.NONE: "confirm", sender_auth.FAIL: "not_read"}
+
+
+def date_to_judge(order: dict[str, Any], reading: step.SupplierMessage) -> bool:
+    """Whether a reply's delivery date goes through the date-change rules, whatever the model labelled it (rule 2: the
+    model extracts, code decides): a date for the line it names (or the only line) that is not that line's due date, or
+    a date for no line in particular later than a line's due date. A date on or before every due date is only noted."""
+    when = reading.new_date
+    if when is None:
+        return False
+    line = _line_for(order, reading.item)
+    if line is not None:
+        return when != _due(line)
+    return any(due is not None and when > due for due in (_due(ln) for ln in _open_lines(order)))
 
 
 @dataclass
@@ -534,6 +548,8 @@ def _on_order(
         return Handled(
             "task", kind, "the email sets a condition, so a buyer decides; nothing on the order was changed", task
         )
+    if kind == "ack" and date_to_judge(order, reading):
+        return _dated_ack(db, tenant, order, supplier, contact_name, reading, mail, as_of)
     if kind == "ack":
         return _ack(db, tenant, order, supplier, reading, mail, as_of)
     if kind == "dispatch":
@@ -627,7 +643,8 @@ def _ack(
         return _old_version(db, tenant, order, supplier, answers)
     address = parseaddr(mail["from_addr"] or "")[1].strip().lower()
     verdict = str((mail["auth"] or {}).get("verdict") or sender_auth.NONE)
-    dates, why = _ack_dates(order, reading)
+    dates: dict[int, date | None] | None = None  # each line on its own date: a date that differs went to _dated_ack
+    why: str | None = None
     if answers is None:
         why = f"the email does not say which version it answers (the order is version {now})"
     elif why is None and EMAIL_ACK.get(verdict) != "record":
@@ -666,20 +683,23 @@ def _ack(
     return Handled("task", "ack", f"not recorded: {why}; a buyer records it", task)
 
 
-def _ack_dates(
-    order: dict[str, Any], reading: step.SupplierMessage
-) -> tuple[dict[int, date | None] | None, str | None]:
-    """The line dates an emailed acknowledgement gives: a date for the line it names (or the only line); no date, the
-    order's own dates. One date for no line in particular on an order of several lines is not spread over them (DF-27):
-    a person looks unless it is on or before every line's due date."""
-    if reading.new_date is None:
-        return None, None
-    line = _line_for(order, reading.item)
-    if line is not None:
-        return {int(line["line_no"]): reading.new_date}, None
-    if all(_due(ln) is None or reading.new_date <= _due(ln) for ln in _open_lines(order)):  # type: ignore[operator]
-        return None, None
-    return None, f"the email gives {reading.new_date:%d %b %Y} for no line in particular"
+def _dated_ack(
+    db: Session, tenant: str, order: dict[str, Any], supplier: str, contact: str | None,
+    reading: step.SupplierMessage, mail: Any, as_of: date,
+) -> Handled:  # fmt: skip
+    """An acknowledgement that gives another delivery date is a date change first (date_to_judge): a named line moves
+    within the tolerance with no stock effect, else a proposal; no line named on an order of several, a proposal per
+    line. Only when the date was applied is a waiting order's acknowledgement then recorded, with the lines' dates."""
+    handled = _date(db, tenant, order, supplier, contact, reading.model_copy(update={"type": "date_change"}), mail)
+    handled.kind = "ack"
+    if handled.status == "applied" and order["status"] == "sent":
+        now = _order(db, order["no"])
+        assert now is not None
+        acked = _ack(db, tenant, now, supplier, reading.model_copy(update={"new_date": None}), mail, as_of)
+        handled.notes.append(acked.action)
+        if acked.status != "applied":
+            handled.status, handled.task_id = acked.status, acked.task_id
+    return handled
 
 
 def _old_version(db: Session, tenant: str, order: dict[str, Any], supplier: str, answers: int) -> Handled:

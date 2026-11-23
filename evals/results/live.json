@@ -120,10 +120,10 @@
     "id": "E140",
     "title": "The supplier agent moves one line, never every line, and records an email acknowledgement only for its version",
     "requirement": "AG02, task 11b.3, DF-27, D53 (block 8 spec 8.7, K5, K5b, K5c, K8): a date for one named line moves that line only, within tolerance and with no stock effect; a date naming no line is never applied; a reply's version is its thread's; an email acknowledgement only from a registered contact with sender authentication pass, for the current version; none -> the buyer records it; fail or unregistered -> not read; --live: >= 90% right, 0 wrong applied; tenant check",
-    "status": "FAIL",
-    "seconds": 51.3,
+    "status": "PASS",
+    "seconds": 50.3,
     "metrics": {
-      "LIVE model: handled right %": 88.9,
+      "LIVE model: handled right %": 100.0,
       "LIVE model: wrong changes applied": 0,
       "LIVE model: mails": 9,
       "mutations caught": [
@@ -131,18 +131,10 @@
         "old_version_reply_recorded: K8 a confirmation replying to version 1's mail"
       ],
       "checks": 70,
-      "failed": 1
+      "failed": 0
     },
-    "findings": [
-      {
-        "severity": "medium",
-        "text": "LIVE: 88.9% of 9 mails handled right; the threshold is 90% (OP-20)"
-      }
-    ],
+    "findings": [],
     "notes": [
-      "LIVE miss: K5b: the mail naming no line (email 30) left promised {1: datetime.date(2026, 12, 7), 2: datetime.date(2026, 12, 10), 3: datetime.date(2026, 12, 14)} -> {1: datetime.date(2026, 12, 7), 2: datetime.date(2026, 12, 10), 3: datetime.date(2026, 12, 14)} and proposed []; expected nothing moved and a proposed date per open line (OP-13)",
-      "LIVE detail (medium): K5b: proposed changes []; expected [(1, '2026-12-07', '2026-12-12'), (2, '2026-12-10', '2026-12-12'), (3, '2026-12-14', '2026-12-12')]",
-      "LIVE detail (medium): K5b: new tasks naming PO-CKN-2627-00002: []; the spec says one",
       "K5c: MO-81 loaded with RM-03 60 needed on 9 Dec; request REQ-CKN-2627-00002; order PO-CKN-2627-00001",
       "K8 P2: the request API took one need-by for every line; the eval gave the draft's lines their own dates as the owner before submitting (spec 9 P has 7 Dec and 14 Dec)",
       "P: the request API took one need-by for every line; the eval gave the draft's lines their own dates as the owner before submitting (spec 9 P has 7 Dec and 14 Dec)",

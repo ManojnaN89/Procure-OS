@@ -6,6 +6,7 @@ whose sender was authenticated (OP-4 interim), and a failed sender is not read a
 from datetime import date
 from typing import Any
 
+import pytest
 from confirmation_support import audits, count, send_p
 from fastapi.testclient import TestClient
 from sqlalchemy import text
@@ -49,10 +50,20 @@ def _read(
     shop: Session, po_no: str, body: str, reading: str, *, sender: str = SALES, raw: bytes | None = None,
     in_reply_to: str | None = None, auto: bool = True,
 ) -> tuple[supplier_comms.Handled | None, Any]:  # fmt: skip
-    autonomy.configure(shop, sod.user(1), supplier_comms.DECISION_CHANGE, level="auto" if auto else "propose")
+    autonomy.configure(
+        shop,
+        sod.user(1),
+        supplier_comms.DECISION_CHANGE,
+        level="auto" if auto else "propose",
+    )
     gw, provider = _gateway(reading)
     email_id = _mail(
-        shop, po_no, body, sender=sender, raw=raw if raw is not None else _authenticated(shop), in_reply_to=in_reply_to
+        shop,
+        po_no,
+        body,
+        sender=sender,
+        raw=raw if raw is not None else _authenticated(shop),
+        in_reply_to=in_reply_to,
     )
     return supplier_comms.handle_email(shop, shop.info["slug"], email_id, gw, as_of=date(2026, 11, 30)), provider
 
@@ -168,7 +179,14 @@ def _unacknowledged_v2(shop: Session, outbox: Outbox) -> tuple[str, str, str]:
     """P sent (mail M1) and revised on 25 Nov (mail M2), not acknowledged."""
     po_no, logins, _ = send_p(shop, outbox)
     pin_today(date(2026, 11, 25))
-    changes.revise(shop, shop.info["slug"], po_no, logins["buyer"], "plan cut", [changes.LineChange(3, qty=140)])
+    changes.revise(
+        shop,
+        shop.info["slug"],
+        po_no,
+        logins["buyer"],
+        "plan cut",
+        [changes.LineChange(3, qty=140)],
+    )
     return po_no, _order_mail(shop, po_no, 1), _order_mail(shop, po_no, 2)
 
 
@@ -194,7 +212,10 @@ def test_an_emailed_acknowledgement_answers_the_version_of_the_mail_it_replies_t
     to_v2, _ = _read(shop, po_no, "We confirm the order.", _reading("ack"), in_reply_to=m2)
 
     assert to_v2 is not None and to_v2.status == "applied"
-    assert shop.execute(text("select acknowledged_version, status from po")).one() == (2, "acknowledged")
+    assert shop.execute(text("select acknowledged_version, status from po")).one() == (
+        2,
+        "acknowledged",
+    )
     via, auth, email_id = shop.execute(
         text("select ack_via, ack_sender_auth, ack_email_id from po_version where version = 2")
     ).one()
@@ -204,11 +225,21 @@ def test_an_emailed_acknowledgement_answers_the_version_of_the_mail_it_replies_t
 def test_an_unauthenticated_acknowledgement_waits_for_the_buyers_click(shop: Session, outbox: Outbox) -> None:  # noqa: F811
     po_no, _, m2 = _unacknowledged_v2(shop, outbox)
 
-    done, _ = _read(shop, po_no, "We confirm the order.", _reading("ack"), raw=b"raw", in_reply_to=m2)
+    done, _ = _read(
+        shop,
+        po_no,
+        "We confirm the order.",
+        _reading("ack"),
+        raw=b"raw",
+        in_reply_to=m2,
+    )
 
     assert done is not None and done.status == "task"
     shop.rollback()
-    assert shop.execute(text("select status, acknowledged_version from po")).one() == ("sent", None)
+    assert shop.execute(text("select status, acknowledged_version from po")).one() == (
+        "sent",
+        None,
+    )
     title, payload = shop.execute(text("select title, payload from task where kind = 'supplier_ack_confirm'")).one()
     assert title == f"Record Alpha Traders's acknowledgement of {po_no} version 2 (email from s1@supplier.example)"
     assert payload["version"] == 2 and payload["po_no"] == po_no
@@ -240,7 +271,12 @@ def test_another_registered_contact_is_recognised_and_a_failed_sender_is_not_rea
     assert shop.execute(text("select acknowledged_version from po")).scalar() is None
 
     desk, _ = _read(
-        shop, po_no, "We confirm.", _reading("ack"), sender="Desk <orders@supplier.example>", in_reply_to=m2
+        shop,
+        po_no,
+        "We confirm.",
+        _reading("ack"),
+        sender="Desk <orders@supplier.example>",
+        in_reply_to=m2,
     )
 
     assert desk is not None and desk.status == "applied"
@@ -259,3 +295,57 @@ def test_a_reply_with_no_thread_answers_version_1_only_while_there_is_no_other(s
     mail = {"in_reply_to": None}
     assert supplier_comms.reply_version(shop, mail, order) == 1
     assert supplier_comms.reply_version(shop, mail, {"no": po_no, "version": 2}) is None
+
+
+@pytest.mark.parametrize("acknowledged", [True, False])
+def test_a_reply_labelled_an_acknowledgement_that_gives_a_new_date_for_no_line_proposes_each_line(
+    shop: Session,
+    outbox: Outbox,  # noqa: F811
+    acknowledged: bool,
+) -> None:
+    # given P acknowledged with 7, 9 and 14 Dec, or only sent (lines due 7, 7 and 14 Dec)
+    if acknowledged:
+        po_no, _ = _acknowledged_k4(shop, outbox)
+    else:
+        po_no, _, _ = send_p(shop, outbox)
+    pin_today(date(2026, 11, 30))
+    before = _dates(shop)
+
+    # when the model labels the reply an acknowledgement, with the date it gives (code decides, rule 2)
+    done, _ = _read(
+        shop, po_no, f"All goods against {po_no} will be delivered on 12 Dec 2026.",
+        _reading("ack", new_date=date(2026, 12, 12)),
+    )  # fmt: skip
+
+    # then nothing moves and nothing is acknowledged by it; each line is proposed to the buyer on one task
+    assert done is not None and done.status == "task" and done.kind == "ack"
+    assert _dates(shop) == before
+    rows = [
+        tuple(r) for r in shop.execute(text("select po_line_no, new_value, task_id from po_change order by po_line_no"))
+    ]
+    assert [r[:2] for r in rows] == [
+        (1, "2026-12-12"),
+        (2, "2026-12-12"),
+        (3, "2026-12-12"),
+    ]
+    assert len({r[2] for r in rows}) == 1
+    status = "acknowledged" if acknowledged else "sent"
+    assert shop.execute(text("select status from po")).scalar_one() == status
+
+
+def test_a_reply_labelled_an_acknowledgement_with_a_date_on_or_before_every_line_is_only_noted(
+    shop: Session,
+    outbox: Outbox,  # noqa: F811
+) -> None:
+    po_no, _ = _acknowledged_k4(shop, outbox)
+    pin_today(date(2026, 11, 30))
+
+    done, _ = _read(
+        shop,
+        po_no,
+        "We confirm delivery by 7 Dec 2026.",
+        _reading("ack", new_date=date(2026, 12, 7)),
+    )
+
+    assert done is not None and done.status == "noted"
+    assert count(shop, "select count(*) from po_change") == 0

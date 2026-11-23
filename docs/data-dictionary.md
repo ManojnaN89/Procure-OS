@@ -490,7 +490,8 @@ version a change was asked on; status `stale` when the order changed since in an
 mail records **email_message.po_version**: a reply answers the version of the mail it threads to (no thread: version 1
 if there was never another). An emailed acknowledgement is recorded only from a registered contact with sender
 authentication `pass` and the gate `supplier.change` allowing (OP-4 interim, `supplier_comms.EMAIL_ACK`); `none` makes a
-task `supplier_ack_confirm`; `fail` is not read (task `supplier_sender_check`). **supplier_chase.po_version**: chasers
+task `supplier_ack_confirm`; `fail` is not read (task `supplier_sender_check`). A reply the model calls an
+acknowledgement that gives another delivery date is judged as a date change first (`supplier_comms.date_to_judge`). **supplier_chase.po_version**: chasers
 go on working days of the delivery place, the first once `supplier_ack_due_days` working days after the version's
 `sent_at` have passed, then every `supplier_chase_days` working days, at most `supplier_chase_max` per version (both
 settings); then one task `po_ack_overdue` for the buyer (escalating to the purchase manager), done when the version is
