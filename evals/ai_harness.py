@@ -70,7 +70,10 @@ def setup_rfq(world: World, tag: str, items: list[Item], *, rfq_no: str | None =
         {"n": req, "loc": lib.location()},
     )
     db.execute(
-        text("insert into rfq (no, request_no, category_code, due_date, status) values (:r, :q, :c, now(), 'sent')"),
+        text(  # an RFQ out with suppliers has a buyer's confirmation (D42, block 5)
+            "insert into rfq (no, request_no, category_code, due_date, status, confirmed_at, confirmed_via) "
+            "values (:r, :q, :c, now(), 'sent', now(), 'proposal')"
+        ),
         {"r": rfq, "q": req, "c": lib.busiest_category()},
     )
     for it in items:

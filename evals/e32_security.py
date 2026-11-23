@@ -200,7 +200,8 @@ def tools_section(world: Any, out: Outcome) -> None:
         source = (lib.ROOT / "backend" / "p2p" / "agents" / f"{module}.py").read_text(encoding="utf-8")
         if "ToolRegistry" in source or "AgentRuntime" in source:
             out.find("high", f"{module} is meant to have no tools but uses the tool loop")
-    if autonomy.LOCKED != {"payment_run.approve", "supplier.set_status", "invoice.release_block"}:
+    # sending an RFQ joined them in block 5 (D42)
+    if autonomy.LOCKED != {"payment_run.approve", "supplier.set_status", "invoice.release_block", "rfq.send"}:
         out.find("high", f"the decisions a person always makes are {sorted(autonomy.LOCKED)}")
     for decision in sorted(autonomy.LOCKED):
         try:
