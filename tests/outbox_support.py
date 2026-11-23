@@ -22,3 +22,13 @@ def queued_mails(db: Session) -> list[dict[str, Any]]:
         full = json.loads(crypto.decrypt(str(sealed)))
         out.append({"to": to, "subject": subject, "body": full["body"], "html": full.get("html") or ""})
     return out
+
+
+def sent_mail(db: Session, subject: str) -> dict[str, Any]:
+    """The one outgoing mail with this subject, as the outbox keeps it: status, attempts and last error."""
+    db.rollback()
+    row = db.execute(
+        text("select status, attempts, last_error from email_message where direction = 'out' and subject = :s"),
+        {"s": subject},
+    ).one()
+    return dict(row._mapping)

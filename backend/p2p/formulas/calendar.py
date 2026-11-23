@@ -25,6 +25,11 @@ def pin_today(day: date | None) -> None:
     _pinned_today = day
 
 
+def today_is_pinned() -> bool:
+    """True while a test or a scenario has pinned the business date (even to the real calendar day)."""
+    return _pinned_today is not None
+
+
 @dataclass(frozen=True)
 class BusinessCalendar:
     holidays: frozenset[date] = field(default_factory=frozenset)

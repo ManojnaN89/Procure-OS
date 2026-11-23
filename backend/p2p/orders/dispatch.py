@@ -9,7 +9,6 @@ starts the daily delivery reminders (orders/delivery_reminders.py).
 """
 
 import logging
-import smtplib
 from datetime import UTC, date, datetime, timedelta
 from typing import Any
 
@@ -141,19 +140,15 @@ def send_po(db: Session, po_no: str, actor: Actor = SERVICE, *, tenant: str | No
         pdf = []
     version = f" (version {po['version']})" if int(po["version"]) > 1 else ""
     link = supplier_links.url(supplier_links.issue(db, tenant, po_no, "respond")) if tenant else None
-    try:
-        emails.send_linked_email(
-            db,
-            contact[0],
-            f"Purchase order {po_no}{version}",
-            _body(dict(po), lines, charges, contact[1], str(company), str(ship_to), link),
-            linked_type="po",
-            linked_ref=po_no,
-            attachments=pdf or None,
-        )
-    except (OSError, smtplib.SMTPException) as exc:
-        db.rollback()
-        raise DispatchError(f"the email to {contact[0]} failed: {exc}") from None
+    emails.send_linked_email(
+        db,
+        contact[0],
+        f"Purchase order {po_no}{version}",
+        _body(dict(po), lines, charges, contact[1], str(company), str(ship_to), link),
+        linked_type="po",
+        linked_ref=po_no,
+        attachments=pdf or None,
+    )
     db.execute(
         text("update po set status = 'sent', sent_at = now(), sent_to = :t where no = :n"),
         {"t": contact[0], "n": po_no},
@@ -161,7 +156,7 @@ def send_po(db: Session, po_no: str, actor: Actor = SERVICE, *, tenant: str | No
     audit.record(
         db, actor, "po.send", "po", po_no, before={"status": "approved"}, after={"status": "sent", "to": contact[0]}
     )
-    db.commit()
+    emails.commit_and_send(db)  # the order is sent with its mail; a refused mail is retried by the email job
     if tenant:
         delivery_reminders.schedule(tenant)
     return str(contact[0])

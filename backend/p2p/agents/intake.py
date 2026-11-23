@@ -866,17 +866,15 @@ def handle_email(db: Session, tenant: str, email_id: int, gateway: Any) -> Intak
         channel="email",
         attachment_text=_attachment_text(db, tenant, mail["attachment_ids"] or []),
     )
-    try:
-        emails.send_linked_email(
-            db,
-            sender,
-            f"Re: {mail['subject'] or 'your request'}",
-            result.message,
-            linked_type="request",
-            linked_ref=result.request_nos[0] if result.request_nos else f"intake-{email_id}",
-        )
-    except OSError:
-        db.rollback()  # the draft stands; the reply can be sent again by hand
+    emails.send_linked_email(
+        db,
+        sender,
+        f"Re: {mail['subject'] or 'your request'}",
+        result.message,
+        linked_type="request",
+        linked_ref=result.request_nos[0] if result.request_nos else f"intake-{email_id}",
+    )
+    emails.commit_and_send(db)  # the draft stands either way; a refused reply is retried by the email job
     return result
 
 

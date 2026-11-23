@@ -10,7 +10,6 @@ twice; a date that moves (a new version) starts again. The autonomy kill switch 
 """
 
 import logging
-import smtplib
 from dataclasses import dataclass, field
 from datetime import UTC, date, datetime, time, timedelta
 from decimal import Decimal
@@ -158,16 +157,11 @@ def run(
             db, ACTOR, "po.delivery_reminder", "po", po_no,
             after={"kind": kind, "number": number, "date": when, "to": contact[0]},
         )  # fmt: skip
-        try:  # the email commits the reminder row with it; a failed email leaves no row, so it is tried again
-            emails.send_linked_email(
-                db, contact[0], subject, _body(po_no, when, kind, number, lines, contact[1], str(company), link),
-                linked_type="po", linked_ref=po_no,
-            )  # fmt: skip
-        except (OSError, smtplib.SMTPException) as exc:
-            db.rollback()
-            log.warning("delivery reminder for %s failed: %s", po_no, exc)
-            result.failed.append((po_no, kind))
-            continue
+        emails.send_linked_email(
+            db, contact[0], subject, _body(po_no, when, kind, number, lines, contact[1], str(company), link),
+            linked_type="po", linked_ref=po_no,
+        )  # fmt: skip
+        emails.commit_and_send(db)  # the reminder row and its mail together; a refused mail is retried by the job
         result.sent.append((po_no, kind, number))
     return result
 

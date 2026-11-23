@@ -160,6 +160,9 @@ def test_the_store_checks_a_production_order_buys_the_shortfall_and_issues_the_r
     company: Company, browser: Any, tmp_path: Any
 ) -> None:  # noqa: F811
     seed_stock_and_approvals(company, price=100)  # 5 on hand of item A
+    # no safety stock here, so all 5 are free to set aside (C4 keeps safety stock back; it has its own tests)
+    company.db.execute(text("update item_location set safety_stock = null where item_code = 'A'"))
+    company.db.commit()
     (tmp_path / "production_order.csv").write_text("order_no,product_code,qty,need_by\nMO-1,FG-01,8,2026-12-05\n")
     (tmp_path / "production_order_line.csv").write_text("order_no,item_code,qty\nMO-1,A,8\n")
     (tmp_path / "bad_lines.csv").write_text("order_no,item_code,qty\nMO-9,A,8\n")
@@ -193,7 +196,8 @@ def test_the_store_checks_a_production_order_buys_the_shortfall_and_issues_the_r
         expect(store.locator("#mrNote")).to_contain_text("approved at once")
         row = store.locator("#mrList tbody tr").first
         expect(row.locator("td").nth(2)).to_have_text("5")
-        expect(row.locator("td").nth(4)).to_have_text("3")
+        # SHORT is what nothing covers (block 2); the request raised for the 3 covers them
+        expect(row.locator("td").nth(4)).to_have_text("0")
         expect(row.locator("td").nth(5)).to_contain_text("3 on REQ-")
 
         # production starts: the 5 are issued

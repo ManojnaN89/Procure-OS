@@ -8,6 +8,7 @@ from decimal import Decimal
 
 import pytest
 from fastapi.testclient import TestClient
+from outbox_support import sent_mail
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 from test_dispatch import _approved_order
@@ -20,7 +21,7 @@ from p2p.formulas.calendar import BusinessCalendar
 from p2p.formulas.deliveries import before_reminder_due, overdue_reminder_due, overdue_reminder_on, working_days_before
 from p2p.main import app
 from p2p.orders import confirmation, delivery_reminders, dispatch, service, supplier_links
-from p2p.platform import notifications, routing, sod, tenants, users
+from p2p.platform import notifications, routing, sod, tenants, users, worker
 
 D = Decimal
 client = TestClient(app)
@@ -508,15 +509,25 @@ def test_delivery_reminders_go_once_before_and_after_the_date_while_nothing_has_
     assert _audit(shop, "po.delivery_reminder") == 3
 
 
-def test_a_failed_reminder_email_is_not_recorded_and_goes_next_time(shop: Session, outbox: Outbox) -> None:  # noqa: F811
+def test_a_failed_reminder_email_stays_queued_and_the_email_job_sends_it_once(shop: Session, outbox: Outbox) -> None:  # noqa: F811
+    # the outbox (11a.1): the reminder is recorded with its mail; a refusal leaves the mail queued for the email job, and
+    # the next run does not remind again
     po_no = _placed(shop, promised=date(2026, 11, 10))
     outbox.refuse = {"s1@supplier.example"}
+    subject = f"Delivery due 10 Nov 2026: purchase order {po_no}"
 
     first = delivery_reminders.run(shop, shop.info["slug"], as_of=date(2026, 11, 6))
     outbox.refuse = set()
     second = delivery_reminders.run(shop, shop.info["slug"], as_of=date(2026, 11, 6))
 
-    assert first.failed == [(po_no, "before")] and second.sent == [(po_no, "before", 1)]
+    assert first.sent == [(po_no, "before", 1)] and first.failed == [] and second.sent == []
+    assert [m for m in outbox.sent if m["subject"] == subject] == []
+    queued = sent_mail(shop, subject)
+    assert (queued["status"], queued["attempts"]) == ("queued", 1) and "refused" in queued["last_error"]
+    worker.run_once(tenant=shop.info["slug"])
+    worker.run_once(tenant=shop.info["slug"])
+    assert [m["to"] for m in outbox.sent if m["subject"] == subject] == ["s1@supplier.example"]
+    assert sent_mail(shop, subject)["status"] == "sent"
     assert shop.execute(text("select count(*) from delivery_reminder")).scalar_one() == 1
 
 

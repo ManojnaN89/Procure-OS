@@ -192,6 +192,7 @@ def pending(db: Session, now: datetime | None = None) -> list[dict[str, Any]]:
         out.append(
             {
                 **row,
+                "label": _label(row["area"], row["key"]),
                 "proposal_id": p["id"],
                 "reason": payload.get("reason"),
                 "by": int(p["proposed_by_id"]),
@@ -203,6 +204,15 @@ def pending(db: Session, now: datetime | None = None) -> list[dict[str, Any]]:
             }
         )
     return out
+
+
+def _label(area: str | None, key: str) -> str:
+    """The change in words for the screen: an automation decision by its label, else the key with spaces."""
+    from p2p.agents import autonomy  # noqa: PLC0415 - the agents package imports this module
+
+    if area == "automation" and key in autonomy.LABELS:
+        return autonomy.LABELS[key]
+    return key.replace("_", " ")
 
 
 @worker.register(EXPIRE_JOB)

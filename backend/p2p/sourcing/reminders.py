@@ -7,7 +7,6 @@ them like every other automatic message.
 """
 
 import logging
-import smtplib
 from dataclasses import dataclass, field
 from datetime import UTC, date, datetime, time, timedelta
 from typing import Any
@@ -114,20 +113,14 @@ def run(db: Session, *, as_of: date, now: datetime | None = None, dry_run: bool 
         ).scalar()
         subject = f"Reminder: request for quotation {row['rfq_no']}" + (f": {category}" if category else "")
         nth = row["reminders_sent"] + 1
-        try:
-            emails.send_linked_email(
-                db,
-                row["email"],
-                subject,
-                _body(rfq, lines, row["contact"], str(company), nth),
-                linked_type="rfq",
-                linked_ref=row["rfq_no"],
-            )
-        except (OSError, smtplib.SMTPException) as exc:
-            db.rollback()
-            log.warning("reminder for %s to %s failed: %s", row["rfq_no"], row["supplier_code"], exc)
-            result.failed.append(key)
-            continue
+        emails.send_linked_email(
+            db,
+            row["email"],
+            subject,
+            _body(rfq, lines, row["contact"], str(company), nth),
+            linked_type="rfq",
+            linked_ref=row["rfq_no"],
+        )
         db.execute(
             text(
                 "update rfq_supplier set reminders_sent = reminders_sent + 1, last_reminded_at = :n "
@@ -138,7 +131,7 @@ def run(db: Session, *, as_of: date, now: datetime | None = None, dry_run: bool 
         audit.record(
             db, ACTOR, "rfq.remind", "rfq", row["rfq_no"], after={"supplier": row["supplier_code"], "number": nth}
         )
-        db.commit()
+        emails.commit_and_send(db)  # the reminder count and its mail together; a refused mail is retried by the job
         result.sent.append(key)
     return result
 

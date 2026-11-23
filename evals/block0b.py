@@ -10,6 +10,7 @@ import contextlib
 import csv
 import io
 import json
+import re
 import runpy
 import sys
 import tempfile
@@ -356,8 +357,24 @@ class Company:
             who = self.code_of_name.get(str(d.get("waiting_for") or ""))
             if not who:
                 break
-            self.call(who, "POST", f"/api/purchase-orders/{po}/approve", {"comment": "eval"})
+            r = self.call(who, "POST", f"/api/purchase-orders/{po}/approve", {"comment": "eval"})
+            if r.status_code == 409 and "one-time code" in r.text.lower():
+                self._approve_with_code(who, po, d)
         return status
+
+    def _approve_with_code(self, who: str, po: str, order: dict[str, Any]) -> None:
+        """Block 4 (spec 5.2): above `approval_otp_above` the approver asks for a code by email and types it in.
+        The code is read from the mail the eval run caught (lib.capture_mail)."""
+        from p2p.platform import mail
+
+        box = getattr(mail.send_email, "__self__", None)
+        since = len(box.sent) if box is not None else 0
+        self.call(who, "POST", f"/api/purchase-orders/{po}/approval-code", {})
+        sent = box.sent[since:] if box is not None else []
+        codes = [re.search(r"\b(\d{6})\b", str(m.get("body") or "")) for m in sent]
+        code = next((c.group(1) for c in reversed(codes) if c), None)
+        body: dict[str, Any] = {"comment": "eval", "version": order.get("version"), "code": code}
+        self.call(who, "POST", f"/api/purchase-orders/{po}/approve", body)
 
     def region_of(self) -> dict[str, str]:
         return {r["code"]: r.get("region_code", "") for r in self.rows("master", "location")}

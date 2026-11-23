@@ -58,6 +58,7 @@ type Pending = {
 	proposal_id: number;
 	area: string;
 	key: string;
+	label?: string;
 	old: unknown;
 	new: unknown;
 	reason: string;
@@ -137,7 +138,7 @@ export function PendingChanges() {
 						{rows.map((p) => (
 							<tr key={p.proposal_id}>
 								<Td>
-									{p.area.replace(/_/g, " ")} {p.key}
+									{p.area.replace(/_/g, " ")}: {p.label ?? p.key}
 									{p.problem ? (
 										<div className="text-xs text-danger">{p.problem}</div>
 									) : null}

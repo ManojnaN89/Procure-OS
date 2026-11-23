@@ -1,10 +1,836 @@
 [
   {
+    "id": "E01",
+    "title": "Replenishment orders the right items in the right quantities",
+    "requirement": "Plan: read stock levels, create requests for items at their reorder point (quantity from the planning data, whole packs, supplier minimum)",
+    "status": "PASS",
+    "seconds": 7.0,
+    "metrics": {
+      "lines expected": 1,
+      "lines planned": 1,
+      "missing": 0,
+      "extra": 0,
+      "quantity exact %": 100.0,
+      "value exact %": 100.0,
+      "grouping exact %": 100.0,
+      "requests": 1,
+      "total value": "2310.00"
+    },
+    "findings": [],
+    "notes": []
+  },
+  {
+    "id": "E02",
+    "title": "Approval routing follows the rule table and the organisation",
+    "requirement": "Rule 8, the plan and D36: a rule is chosen by value band, spend type, category, department, location and the date it is in force, rows starting '+' add approvers; its chain becomes real people",
+    "status": "PASS",
+    "seconds": 22.0,
+    "metrics": {
+      "cases": 2352,
+      "rule agreement %": 100.0,
+      "cases with no rule": 677,
+      "chain cases": 1675,
+      "chain agreement %": 100.0,
+      "chains that name people": 1656
+    },
+    "findings": [],
+    "notes": []
+  },
+  {
+    "id": "E03",
+    "title": "Sourcing picks the right contract price, or sends the line to quotation",
+    "requirement": "Plan: contract vs RFQ per line; only an active contract in force, for an active supplier, in the right unit, with the quantity break",
+    "status": "PASS",
+    "seconds": 4.7,
+    "metrics": {
+      "items": 15,
+      "cases": 360,
+      "decided on a contract": 60,
+      "sent to quotation": 300,
+      "agreement %": 100.0
+    },
+    "findings": [],
+    "notes": []
+  },
+  {
+    "id": "E04",
+    "title": "GST and order arithmetic is exact, to the paisa",
+    "requirement": "Rule 1: money is Decimal to paise; GST splits into CGST+SGST within the state and IGST across states; composition and unregistered suppliers charge none",
+    "status": "PASS",
+    "seconds": 0.3,
+    "metrics": {
+      "random lines": 5000,
+      "net price errors": 0,
+      "line errors": 0,
+      "identity errors": 0,
+      "total errors": 0
+    },
+    "findings": [],
+    "notes": []
+  },
+  {
+    "id": "E05",
+    "title": "Quote comparison recommends the right supplier and the award rules hold",
+    "requirement": "Plan: collect quotes, compare, select; the recommendation is the lowest qualifying offer; an override or too few qualifying quotes needs a reason",
+    "status": "PASS",
+    "seconds": 27.8,
+    "metrics": {
+      "scenarios": 160,
+      "lines compared": 306,
+      "recommendation correct %": 100.0,
+      "compliance flags correct %": 100.0,
+      "offer order correct %": 100.0,
+      "award rule correct %": 100.0
+    },
+    "findings": [],
+    "notes": []
+  },
+  {
+    "id": "E06",
+    "title": "The whole flow, stock level to approved purchase order, keeps its promises",
+    "requirement": "Plan: nothing is lost, money reconciles, every change is audited, only eligible suppliers are asked, stock on the way is counted once",
+    "status": "PASS",
+    "seconds": 5.8,
+    "metrics": {
+      "requests": 1,
+      "lines": 1,
+      "lines ordered": 1,
+      "RFQs": 1,
+      "quotes": 1,
+      "purchase orders": 1,
+      "orders approved": 1,
+      "line fates": {
+        "ordered": 1
+      },
+      "stage seconds": {
+        "replenishment and submission": 0.22,
+        "request approvals": 0.0,
+        "sourcing and RFQ emails": 0.39,
+        "quotes and awards": 0.14,
+        "purchase orders and their approval": 0.33
+      },
+      "total seconds": 1.1,
+      "company build seconds": 4.53,
+      "orders lines checked": 1
+    },
+    "findings": [],
+    "notes": []
+  },
+  {
+    "id": "E07",
+    "title": "Repeating or racing any stage makes no duplicates",
+    "requirement": "Plan: no duplicate requests, RFQs, emails or orders; document numbers have no gaps and no repeats",
+    "status": "PASS",
+    "seconds": 0.8,
+    "metrics": {
+      "serial repeats": 3,
+      "concurrent callers": 6,
+      "seconds for the race": 0.4,
+      "tables that grew": "none",
+      "extra emails": 0
+    },
+    "findings": [],
+    "notes": []
+  },
+  {
+    "id": "E08",
+    "title": "Decisions stay reproducible when the rules change",
+    "requirement": "Rule 8: rules and rates are versioned data; a decision stays reproducible against the version it used",
+    "status": "PASS",
+    "seconds": 0.9,
+    "metrics": {
+      "decisions": 1,
+      "band holds before / after the change": "1/0 and 1/0",
+      "old rule rows untouched": true,
+      "past date reproduces the old version %": 100.0,
+      "a new submission uses": [
+        "REQ-02",
+        2
+      ],
+      "approval audit rows without a rule version": 0
+    },
+    "findings": [],
+    "notes": []
+  },
+  {
+    "id": "E09",
+    "title": "Every write action is open to exactly the roles the plan names",
+    "requirement": "Rule 7 and the plan: requester, buyer, approver and administrator duties are separate; nobody else can do them; nobody can without logging in",
+    "status": "PASS",
+    "seconds": 29.8,
+    "metrics": {
+      "actions": 66,
+      "roles tried": 8,
+      "cells checked": 528,
+      "too permissive": 0,
+      "too strict": 0,
+      "reads open without login": 0
+    },
+    "findings": [],
+    "notes": []
+  },
+  {
+    "id": "E10",
+    "title": "One company cannot see another company's data",
+    "requirement": "Rule 6: one database per tenant; a request without tenant context is refused; tenant A cannot read tenant B",
+    "status": "PASS",
+    "seconds": 13.8,
+    "metrics": {
+      "probes": 73,
+      "leaks": 0,
+      "company A sees its own records": true
+    },
+    "findings": [],
+    "notes": []
+  },
+  {
+    "id": "E11",
+    "title": "Hostile text is shown as text and never run",
+    "requirement": "Security: names from imported data and typed identifiers cannot inject script into the screens or SQL into the database",
+    "status": "PASS",
+    "seconds": 41.2,
+    "metrics": {
+      "screens opened": 18,
+      "hostile payloads": 6,
+      "script ran or markup injected": 0,
+      "SQL probes": 12,
+      "server errors": 0,
+      "slow (sleep ran)": 0,
+      "orders on screen": 1,
+      "pipeline note": 0
+    },
+    "findings": [],
+    "notes": []
+  },
+  {
+    "id": "E12",
+    "title": "No floats in money, exact amounts on the wire, India's calendar, no secrets, synthetic data stays synthetic",
+    "requirement": "Rules 1, 9, 10 and the generated-data safety rule",
+    "status": "PASS",
+    "seconds": 1.2,
+    "metrics": {
+      "money modules scanned": 6,
+      "float uses": 0,
+      "money fields as JSON numbers": 0,
+      "UTC dates in business logic": 0,
+      "tracked files scanned for secrets": 815,
+      "secret hits": 0,
+      "unsafe generated values": 0
+    },
+    "findings": [],
+    "notes": [
+      "money fields sent as numbers: []"
+    ]
+  },
+  {
+    "id": "E13",
+    "title": "Supplier emails are read into the right quotes, and when unsure the system asks a person",
+    "requirement": "Plan step 8 and rule 2: the model reads, code checks; a wrong reading must never look clean (silent errors = 0)",
+    "status": "PASS",
+    "seconds": 15.4,
+    "metrics": {
+      "email cases": 39,
+      "perfect reader: exact %": 100.0,
+      "perfect reader: silent errors": 0,
+      "sloppy reader: mistakes that did not slip through": {
+        "invented price": "33/33 not clean-but-wrong",
+        "invented gst": "33/33 not clean-but-wrong",
+        "invented delivery": "33/33 not clean-but-wrong",
+        "swapped prices": "16/16 not clean-but-wrong"
+      }
+    },
+    "findings": [],
+    "notes": [
+      "the real models were not called (run with --live)"
+    ]
+  },
+  {
+    "id": "E14",
+    "title": "Hostile emails, even obeyed by the model, change nothing they should not",
+    "requirement": "Security and rule 5: untrusted text cannot award, decline others, set a nonsense price, or reach a model from a stranger",
+    "status": "PASS",
+    "seconds": 7.5,
+    "metrics": {
+      "attacks": 13,
+      "runs": 26,
+      "defended": 26,
+      "failed": 0
+    },
+    "findings": [],
+    "notes": [
+      "the real models were not called (run with --live)"
+    ]
+  },
+  {
+    "id": "E15",
+    "title": "The assistant tells the truth from the data, adds nothing up on its own, and changes nothing",
+    "requirement": "Plan step 8 and rule 2: read-only tools; every figure it gives comes from a tool; it cannot approve or delete",
+    "status": "SKIP",
+    "seconds": 0.0,
+    "metrics": {},
+    "findings": [],
+    "notes": [
+      "skipped: this eval needs the real models (run with --live)"
+    ]
+  },
+  {
+    "id": "E16",
+    "title": "Documents, budget, contract ceilings and reminders do what the plan says",
+    "requirement": "Plan, phase 1 controls: a supplier needs good documents, a request must fit its budget, a contract has a ceiling, and a silent supplier is reminded a limited number of times",
+    "status": "PASS",
+    "seconds": 10.2,
+    "metrics": {
+      "documents: suppliers checked": 6,
+      "documents: spoiled cases": "6 (6 right)",
+      "documents: bad suppliers asked to quote": 0,
+      "budget: cases (over / within)": "80 (42 / 38)",
+      "budget: disagreements": 0,
+      "ceilings: random cases": 3000,
+      "ceilings: disagreements": 0,
+      "ceilings: contract orders replayed": 0,
+      "ceilings: usage figures that differ from the replay": 0,
+      "reminders: expected days": "Tue 10 Nov, Thu 12 Nov",
+      "reminders: silent suppliers on schedule": "2 of 2",
+      "reminders: reminded though replied or declined": 0
+    },
+    "findings": [],
+    "notes": []
+  },
+  {
+    "id": "E17",
+    "title": "Orders are sent to the right supplier with the right amounts, only when approved, and acknowledged on time",
+    "requirement": "Plan: an approved order goes to the supplier by email; nothing else does; the supplier's promised date is checked against the date the goods are needed; an order with no acknowledgement in two working days is overdue",
+    "status": "PASS",
+    "seconds": 5.6,
+    "metrics": {
+      "orders by status before sending": {
+        "approved": 1
+      },
+      "orders sent": 1,
+      "acknowledged": 1,
+      "late promises flagged": 0,
+      "overdue day-checks": 48
+    },
+    "findings": [],
+    "notes": []
+  },
+  {
+    "id": "E18",
+    "title": "Goods receipt: tolerance, rejections, inspection, stock and order progress are right",
+    "requirement": "Plan: goods are received against a sent order; over-delivery is accepted up to the category's tolerance; rejected goods stay out of stock; items needing inspection wait; the order line and the stock follow what was accepted",
+    "status": "PASS",
+    "seconds": 7.9,
+    "metrics": {
+      "order lines to receive": 1,
+      "scenarios": {
+        "inspect": 1
+      },
+      "stock positions changed": 1,
+      "receipts posted": 1
+    },
+    "findings": [],
+    "notes": []
+  },
+  {
+    "id": "E19",
+    "title": "Invoices are matched to orders and receipts the way the dataset's answers say",
+    "requirement": "Plan P1-16/17: three-way match per line (quantity against accepted receipt, price within tolerance), tax and identity checks, duplicates caught, credit notes taken in; nothing is paid that the match blocks",
+    "status": "PASS",
+    "seconds": 52.7,
+    "metrics": {
+      "invoices entered": 479,
+      "judged against the dataset": 476,
+      "verdict agrees %": 100.0,
+      "copies expected / found / false alarms": "3 / 3 / 0",
+      "credit notes taken in": 0,
+      "intake errors": 0,
+      "by expected -> got": {
+        "matched -> matched": 463,
+        "blocked price_variance -> blocked price_variance": 7,
+        "blocked qty_over_received -> blocked qty_over_received": 5,
+        "within_tolerance -> within_tolerance": 1
+      },
+      "differences explained by part deliveries": 0,
+      "verdict agrees % (part-delivery differences aside)": 100.0,
+      "order lines invoiced beyond what was received": 1
+    },
+    "findings": [],
+    "notes": [
+      "differences: "
+    ]
+  },
+  {
+    "id": "E20",
+    "title": "Due dates and tax at source are worked out the way the dataset's answers say",
+    "requirement": "Plan P1-19 (FR23, FR26): due date from the payment terms with the 45-day rule for micro and small suppliers; tax on goods (194Q) at booking on the part of a supplier's year above 50 lakh",
+    "status": "PASS",
+    "seconds": 59.5,
+    "metrics": {
+      "invoices booked": 470,
+      "invoices left out (advance paid on the order)": 0,
+      "due dates agree %": 100.0,
+      "tax amounts agree %": 100.0,
+      "suppliers whose year crosses 50 lakh": 1
+    },
+    "findings": [],
+    "notes": [
+      "due differences: ",
+      "tax differences: "
+    ]
+  },
+  {
+    "id": "E21",
+    "title": "Payments are for the right amounts, in the right order, once, and only for invoices that may be paid",
+    "requirement": "Plan P1-19/20: due date and tax at booking, credit notes netted, MSME first, MSME interest, the run approved by a person, the file equal to the approved run, invoices paid once, the case closed on payment",
+    "status": "PASS",
+    "seconds": 90.4,
+    "metrics": {
+      "payments compared": 421,
+      "amounts agree %": 100.0,
+      "interest agrees % (small suppliers)": 100.0,
+      "invoices in the run": 464,
+      "payments in the run": 6,
+      "orders closed by the payment": 374,
+      "run total": "6582034.21"
+    },
+    "findings": [],
+    "notes": [
+      "differences: "
+    ]
+  },
+  {
+    "id": "E22",
+    "title": "Company setup is admin-only, logged, validated, and its locks cannot be undone",
+    "requirement": "Plan P1-24 and rule 5/8: who approves, tolerances and automation are data an Admin changes with a reason; payment runs, vendor activation and releasing a payment block are never automatic; past decisions stay reproducible",
+    "status": "FAIL",
+    "seconds": 8.5,
+    "metrics": {},
+    "findings": [
+      {
+        "severity": "high",
+        "text": "the eval itself crashed:\nTraceback (most recent call last):\n  File \"C:\\CBC\\PR to PO\\.claude\\worktrees\\p3-b2\\evals\\run.py\", line 82, in main\n    outcome: Outcome = mod.run(ctx)\n                       ^^^^^^^^^^^^\n  File \"C:\\CBC\\PR to PO\\.claude\\worktrees\\p3-b2\\evals\\e22_company_setup.py\", line 202, in run\n    str(int(hi)) if kind == \"int\" else format(Decimal(str(hi)), \"f\"),\n                                              ^^^^^^^^^^^^^^^^\ndecimal.InvalidOperation: [<class 'decimal.ConversionSyntax'>]\n"
+      }
+    ],
+    "notes": []
+  },
+  {
+    "id": "E23",
+    "title": "Vendor scores follow how suppliers really behave, and planted repeat requests are caught",
+    "requirement": "Plan P1-05 and the vendor choice: a supplier's score reflects its delivery, quality and price; the best-vendor mode is no worse than the cheapest; a request that repeats another is flagged and an ordinary one is not",
+    "status": "PASS",
+    "seconds": 21.9,
+    "metrics": {
+      "suppliers scored": 6,
+      "rank agreement: delivery score vs true on-time rate": 0.81,
+      "rank agreement: quality score vs true acceptance rate": 0.51,
+      "mean score by hidden profile": {
+        "average": 85.2,
+        "poor": 77.4,
+        "reliable": 86.2
+      },
+      "receipt lines judged per supplier (on average)": 114.2,
+      "scores that differ from the independent recomputation": 0,
+      "items with two or more suppliers priced": 2,
+      "picks that differ from the cheapest": 2,
+      "true on-time rate of the picks vs of the cheapest": "0.825 vs 0.700",
+      "planted repeat requests / caught": "0 / 0",
+      "other requests flagged": "15 of 113",
+      "requests flagged in all": 15
+    },
+    "findings": [],
+    "notes": []
+  },
+  {
+    "id": "E24",
+    "title": "Plain-words requests become the right drafts or one right question, and never a wrong draft",
+    "requirement": "Plan P1-08 (AG01): at least 90% of lines mapped to the right item and quantity; every value traces to the message; an instruction hidden in a message is ignored; only drafts are made",
+    "status": "PASS",
+    "seconds": 23.3,
+    "metrics": {
+      "cases": 72,
+      "careful reader: right action %": 100.0,
+      "careful reader: lines mapped to the right item and quantity %": 100.0,
+      "careful reader: wrong drafts": 0,
+      "sloppy readers (invented quantity / item / date): wrong drafts": {
+        "qty": 0,
+        "item": 0,
+        "date": 0
+      },
+      "hidden-instruction messages / requests ever left past draft": "3 / 0"
+    },
+    "findings": [],
+    "notes": [
+      "careful reader: action differs from the template: ",
+      "the real models were not called (run with --live)"
+    ]
+  },
+  {
+    "id": "E25",
+    "title": "Blocked invoices are explained with the right cause, and a block is never changed by the agent",
+    "requirement": "Plan P1-18 (AG03): at least 80% of mismatch cases diagnosed correctly (proposed target); the payment block stays until a person releases it; numbers in the answer come from the data",
+    "status": "PASS",
+    "seconds": 75.6,
+    "metrics": {
+      "invoices entered": 479,
+      "blocked by the match": 12,
+      "of those, with a cause the dataset planted": 10,
+      "blocked without a planted cause (part-delivery carry-over, see E19)": 2,
+      "rules: cause diagnosed right %": 100.0,
+      "rules: fixes proposed": {
+        "corrected_invoice": 10
+      },
+      "rules: queries to the supplier that name our reference %": 100.0,
+      "investigator, careful: wording used / cause right": "10 / 10 of 10",
+      "investigator naming a wrong cause: wording used / cause right": "0 / 10 of 10",
+      "investigator adding a made-up number: wording used / cause right": "0 / 10 of 10",
+      "tables changed by looking into invoices": "none"
+    },
+    "findings": [],
+    "notes": [
+      "the real models were not called (run with --live)"
+    ]
+  },
+  {
+    "id": "E26",
+    "title": "Advances, early-payment discounts and the closing notice are right",
+    "requirement": "Plan P1-19/20: 30% advance on an order and its adjustment against invoices (tax at source on the advance), a cash discount for paying inside the window, the requester told when the order is paid and closed",
+    "status": "PASS",
+    "seconds": 247.7,
+    "metrics": {
+      "supplier-years checked (limit lowered)": 12,
+      "of which cross the limit": 6,
+      "invoices with discount terms": 322,
+      "discount checks": 2820,
+      "of which on or just after a window's last day": 644,
+      "discount agrees %": 100.0,
+      "run date": "2026-08-08",
+      "invoices pulled into the run only by their discount": 16,
+      "early-payment discount earned": "3305.42",
+      "orders closed by the run": 271,
+      "closing notices": 271
+    },
+    "findings": [],
+    "notes": [
+      "apex-v1 has no advance payments in its history: part A (advances) was skipped"
+    ]
+  },
+  {
+    "id": "E27",
+    "title": "Invoices are read from documents correctly, e-invoices without a model, and a wrong reading never looks clean",
+    "requirement": "Plan P1-16 (second half): >=95% of fields right on 30 invoices; QR invoices read with 0 model calls; silent errors 0; strangers' mail never reaches a model; automatic entry only when nothing is in doubt",
+    "status": "PASS",
+    "seconds": 127.3,
+    "metrics": {
+      "invoices: e-invoices / plain / sloppy-reader": "12 / 18 / 12",
+      "e-invoices read with a model call": 0,
+      "fields right % (e-invoices + plain, all fields)": 100.0,
+      "fields right % (e-invoices only)": 100.0,
+      "fields checked": 288,
+      "sloppy-model mistakes tried": 12,
+      "  caught or harmless %": 100.0,
+      "  by kind": {
+        "invented qty": "2/2",
+        "invented total": "2/2",
+        "swapped prices": "2/2",
+        "dropped line": "2/2",
+        "date not on the page": "2/2",
+        "invented number": "2/2"
+      },
+      "silent errors": 0,
+      "documents that must be refused / refused with no model call": "4 / 4",
+      "page with orders for the model: draft status": "needs_person",
+      "model calls on those documents": 2,
+      "the same file twice -> one draft": true,
+      "gate on: e-invoices entered by themselves / entered wrongly": "6 / 0",
+      "gate on: invoices entered from a doubtful reading": 0,
+      "audit rows for drafts": 60
+    },
+    "findings": [],
+    "notes": []
+  },
+  {
+    "id": "E28",
+    "title": "Supplier emails are classified, small changes applied, the rest handed to a person, nothing wrong applied",
+    "requirement": "Plan P1-14 (AG02): at least 90% of replies handled the right way; a change within the tolerance is applied, outside it goes to a buyer; a price change, a substitution or a bank change never changes anything; mail from outside the supplier is never read by a model; part deliveries and unacknowledged orders are chased",
+    "status": "PASS",
+    "seconds": 72.1,
+    "metrics": {
+      "orders sent and acknowledged / RFQs to answer": "1 / 1",
+      "replies": 84,
+      "careful reader: handled the right way %": 100.0,
+      "careful reader: wrong changes / unsafe effects / spoofed mail read": "0 / 0 / 0",
+      "replies by type": {
+        "ack": 13,
+        "bank_change": 3,
+        "date_change": 9,
+        "decline_rfq": 4,
+        "delay": 4,
+        "extension_request": 2,
+        "invoice_cover": 4,
+        "other": 2,
+        "partial_dispatch": 4,
+        "payment_followup": 4,
+        "price_change": 7,
+        "qty_change": 6,
+        "question": 8,
+        "quote": 8,
+        "reject": 4,
+        "substitution": 2
+      },
+      "date changes: applied in tolerance / handed to a buyer": "3 / 14",
+      "sloppy readers (invented date / invented quantity / unsure): wrong changes": {
+        "date": 0,
+        "qty": 0,
+        "unsure": 0
+      },
+      "gate off: emails that became tasks / orders changed": "7 of 7 / 0",
+      "mutation checks (rule broken on purpose: caught?)": {
+        "a date of any size is accepted": "caught",
+        "a quantity of any size is accepted": "caught",
+        "anyone counts as the supplier": "caught",
+        "a price change moves the promised date": "caught",
+        "the autonomy gate is ignored": "caught"
+      }
+    },
+    "findings": [],
+    "notes": [
+      "too few orders to test the chasers",
+      "the real models were not called (run with --live)"
+    ]
+  },
+  {
+    "id": "E29",
+    "title": "The control tower, the key figures and the alerts agree with an independent recount",
+    "requirement": "Plan P1-21/P1-23: every role sees what needs it and nothing else; the control tower shows every case by stage, location and age in working days; the key figures reconcile with the raw data; alerts are raised once, routed by role, and resolved when their cause goes away",
+    "status": "PASS",
+    "seconds": 87.5,
+    "metrics": {
+      "control tower: cases by stage": {
+        "request_approval": 7,
+        "sourcing": 4,
+        "rfq_out": 3,
+        "award": 4,
+        "po_approval": 0,
+        "po_sent": 0,
+        "awaiting_receipt": 1,
+        "awaiting_invoice": 0,
+        "invoice_blocked": 12,
+        "awaiting_payment": 43
+      },
+      "key figures": {
+        "spend under management % / on contract %": [
+          "100.0",
+          "18.1"
+        ],
+        "savings": {
+          "rfqs": 172,
+          "total": "71306.01",
+          "per_rfq": "414.57",
+          "rfqs_with_saving": 126
+        },
+        "on-time delivery (lines, %)": [
+          589,
+          "78.9"
+        ],
+        "invoices matched first time (n, %)": [
+          476,
+          "97.5"
+        ],
+        "  \u2026 by the dataset's answer key %": "97.5",
+        "small suppliers paid on time (n, %)": [
+          145,
+          "93.8"
+        ],
+        "touchless (requests, %)": [
+          95,
+          "95.8"
+        ],
+        "duplicates stopped (requests, invoices)": {
+          "requests": {
+            "count": 0,
+            "value": "0"
+          },
+          "invoices": {
+            "count": 3,
+            "value": "44248.00"
+          }
+        },
+        "cycle time, request to paid, working days": {
+          "cases": 70,
+          "median": "44.0",
+          "p90": "57.0"
+        },
+        "paid invoices set up from the dataset": 421
+      },
+      "first-pass gap to the dataset's answer key, points": "0.0",
+      "alerts raised, by rule": {
+        "contract_expiring": 1,
+        "invoice_blocked": 12,
+        "invoice_due": 17,
+        "po_not_acknowledged": 0,
+        "rfq_no_quotes": 3,
+        "stale_requisition": 4
+      },
+      "role homes: sections shown": {
+        "Admin": [
+          "blocked",
+          "due",
+          "rfq_award",
+          "rfq_wait",
+          "to_receive",
+          "to_source"
+        ],
+        "Requester": [],
+        "Buyer": [
+          "rfq_award",
+          "rfq_wait",
+          "to_source"
+        ],
+        "Approver": [],
+        "Store": [
+          "to_receive"
+        ],
+        "AP": [
+          "blocked"
+        ],
+        "Finance": [
+          "due"
+        ],
+        "kpi_keys": [
+          "cycle_time",
+          "duplicates_avoided",
+          "first_pass_match",
+          "msme_on_time_payment",
+          "on_time_delivery",
+          "savings",
+          "spend_under_management",
+          "touchless"
+        ]
+      },
+      "formula checks against brute force": 1030,
+      "alert rules compared with the recount": [
+        "stale_requisition: 4",
+        "rfq_no_quotes: 3",
+        "invoice_blocked: 12",
+        "late_delivery: 0",
+        "invoice_due: 17",
+        "contract_expiring: 1"
+      ]
+    },
+    "findings": [],
+    "notes": []
+  },
+  {
+    "id": "E30",
+    "title": "Demo runs through the real screens: a normal run, a part delivery and a price mismatch on the invoice, each typed in and with documents, and a held order",
+    "requirement": "Plan P1-25: the flow from stock level to a paid and closed order works for real people at real screens: the right person sees the right work, every money figure equals an independent calculation from the dataset, a document (an emailed quotation, an uploaded invoice) leaves the same figures as typing them in, and the separation of duties holds at every step",
+    "status": "PASS",
+    "seconds": 279.8,
+    "metrics": {
+      "straight: steps / checks passed / failed": "26 / 66 / 0",
+      "blocked: steps / checks passed / failed": "22 / 68 / 0",
+      "held: steps / checks passed / failed": "18 / 39 / 0",
+      "part: steps / checks passed / failed": "31 / 85 / 0",
+      "straight_docs: steps / checks passed / failed": "29 / 72 / 0",
+      "part_docs: steps / checks passed / failed": "35 / 94 / 0",
+      "blocked_docs: steps / checks passed / failed": "23 / 72 / 0",
+      "steps taken at screens": 184,
+      "checks against the dataset": 496,
+      "transcripts and screenshots": "evals/results/demo_runs/"
+    },
+    "findings": [],
+    "notes": []
+  },
+  {
+    "id": "E31",
+    "title": "Synthetic invoices and replies read back correctly by the code readers, and what still needs a model is counted",
+    "requirement": "Plan P1-03: documents generated from the dataset with an answer key; QR >=95% (100% on clean), rows by arithmetic >=95% on text-layer invoices, silent errors 0, perfect readings pass the evidence check, deterministic, nothing real",
+    "status": "PASS",
+    "seconds": 686.5,
+    "metrics": {
+      "documents: invoices / replies": "479 / 497",
+      "looks": "low_contrast_pdf 48, multipage_pdf 72, photo_png 48, scan_pdf 72, skewed_jpg 48, text_pdf 191",
+      "dev / hold-out documents": "582 / 394",
+      "hold-out layouts seen": {
+        "invoice": [
+          "low_contrast_pdf",
+          "multipage_pdf",
+          "photo_png",
+          "scan_pdf",
+          "skewed_jpg",
+          "text_pdf"
+        ],
+        "quote_reply": [
+          "body_table",
+          "body_text",
+          "pdf_attachment"
+        ]
+      },
+      "key differs from the CSV rows": 0,
+      "files vs rows": "invoices 479/479, replies 497/497",
+      "QR read, all looks": "136/136 (100.0%)",
+      "QR read, dev slice": "112/112 (100.0%)",
+      "QR read, hold_out slice": "24/24 (100.0%)",
+      "rows exact, text layer": "263/263 (100.0%)",
+      "silent errors": 0,
+      "e-invoice gate passes, text layer": "75/263",
+      "perfect readings failing the evidence check": 0,
+      "OCR sample: rows exact / gate passes / evidence passes": "6/8 / 6/8 / 8/8",
+      "OCR sample: rows exact if a repeated row is ignored": "6/8",
+      "need a model or a person": "358/479 (74.74%)",
+      "replies routed by address / evidence passes": "497/497 / 497/497",
+      "real-looking identifiers found": 0,
+      "same seed, same bytes": "yes"
+    },
+    "findings": [],
+    "notes": [
+      "QR low_contrast_pdf: 11/11",
+      "QR multipage_pdf: 21/21",
+      "QR photo_png: 14/14",
+      "QR scan_pdf: 23/23",
+      "QR skewed_jpg: 13/13",
+      "QR text_pdf: 54/54",
+      "needs a model or a person: 343 - no IRN, so no QR code (a model or a person reads it)",
+      "needs a model or a person: 15 - scan/photo whose OCR text the arithmetic cannot read (estimated from the sample)",
+      "read by code alone: 121/479 (text-layer gate passes 75, plus an estimate of 46 scans and photographs from the OCR sample)",
+      "reply looks: body_table 165, body_text 166, pdf_attachment 166",
+      "reply quirks: incl_gst 50, relative_validity 49, unit_differs 50",
+      "no quotation in the dataset has two lines, so no reply can be partial"
+    ]
+  },
+  {
+    "id": "E32",
+    "title": "Hostile text, even obeyed by the model, changes nothing it must not; limits, secrets and dependencies hold",
+    "requirement": "Plan P1-26: injected instructions cause no action; each agent has its own short tool list; secrets only in the environment; rate limits; no open high-severity dependency finding",
+    "status": "PASS",
+    "seconds": 136.3,
+    "metrics": {
+      "company B: invoices entered / blocked": "120 / 2",
+      "agent tool lists as written down": "7 + 6 (all read-only)",
+      "quotation replies (attacks)": 13,
+      "quotation replies (runs)": 26,
+      "quotation replies (defended)": 26,
+      "quotation replies (failed)": 0,
+      "failed logins / uploads / assistant questions allowed before 429": "4 / 3 / 3 (settings)",
+      "files scanned for secrets / values looked for": "814 / 5 from .env",
+      "dependency audit": "2 finding(s), 0 open",
+      "hostile inputs run (a model that obeys each one)": 25,
+      "inputs that changed something they must not": 0,
+      "mutations: defences broken / noticed": "6 / 6"
+    },
+    "findings": [],
+    "notes": [
+      "dependency audit partly or not run here (needs pip-audit and the network): pip-audit not found: the Python packages were not audited",
+      "hostile inputs per path: assistant 4, invoice document 5, invoice explainer 4, quotation reply 1, request in plain words 4, supplier email 7",
+      "44 model calls were made by the obeying model across the runs"
+    ]
+  },
+  {
     "id": "E33",
     "title": "The main demo company completes the whole flow, from low stock to a paid invoice, with separate people for each job",
     "requirement": "Phase 1: request, approval, price or quotation, order with GST, receipt, invoice match, payment run, closing; requester, approver, receiver, invoice enterer and payer differ for the same case; Rs 10,000 approves itself, up to Rs 1,00,000 the plant head, above that the director; orders above Rs 1,00,000 the purchase manager; payment runs the director",
     "status": "PASS",
-    "seconds": 41.8,
+    "seconds": 64.7,
     "metrics": {
       "people / master rows loaded": "10 / 703",
       "items at or below reorder point": [
@@ -25,7 +851,7 @@
       },
       "documents with no audit row at all": "none",
       "steps checked (one assertion each)": 142,
-      "emails sent (quotation requests, orders, payment advice, ...)": 26
+      "emails sent (quotation requests, orders, payment advice, ...)": 50
     },
     "findings": [],
     "notes": []
@@ -34,8 +860,8 @@
     "id": "E34",
     "title": "The whole application for a real user: the demo script from low stock to a paid invoice in a browser, every role guide followed as a new user, and every screen swept for errors, overflow and raw codes",
     "requirement": "Phase 1 acceptance: the flow works end to end for real people at real screens; a new user completes their first task from the guide; no screen shows an error, a blank panel, a raw code or sideways scrolling",
-    "status": "PASS",
-    "seconds": 341.7,
+    "status": "FAIL",
+    "seconds": 377.8,
     "metrics": {
       "people / master rows loaded": "10 / 703",
       "people per step (audit log)": {
@@ -49,13 +875,1010 @@
       },
       "screens swept (role x screen x width)": 274,
       "steps taken at screens": 95,
-      "checks passed / failed": "411 / 0",
+      "checks passed / failed": "407 / 4",
       "transcript and screenshots": "evals/results/journeys/"
     },
-    "findings": [],
+    "findings": [
+      {
+        "severity": "high",
+        "text": "journey: System Administrator: admin Automation at laptop 1440x900: no blank panel, error, raw code or sideways scroll: a raw code: 'rfq.send'"
+      },
+      {
+        "severity": "high",
+        "text": "journey: System Administrator: admin Automation at laptop 1440x900: no blank panel, error, raw code or sideways scroll: a raw code: 'rfq.send'"
+      },
+      {
+        "severity": "high",
+        "text": "journey: System Administrator: admin Automation at phone 390x844: no blank panel, error, raw code or sideways scroll: a raw code: 'rfq.send'"
+      },
+      {
+        "severity": "high",
+        "text": "journey: System Administrator: admin Automation at phone 390x844: no blank panel, error, raw code or sideways scroll: a raw code: 'rfq.send'"
+      }
+    ],
     "notes": [
       "control tower with the seal invoice blocked: {'request_approval': 0, 'sourcing': 0, 'rfq_out': 0, 'award': 0, 'po_approval': 0, 'po_sent': 0, 'awaiting_receipt': 0, 'awaiting_invoice': 0, 'invoice_blocked': 1, 'awaiting_payment': 3}",
       "kpis at the end: {\"cycle_time\": {\"approval\": {\"label\": \"request raised to approved\", \"cases\": 4, \"median\": \"0.0\", \"p90\": \"0.0\"}, \"ordering\": {\"label\": \"approved to order made\", \"cases\": 4, \"median\": \"0.0\", \"p90\": \"0.0\"}, \"po_approval\": {\"label\": \"order made to order approved\", \"cases\": 4, \"median\": \"0.0\", \"p90\": \"0.0\"}, \"dispatch\": {\"label\": \"order approved to sent\", \"cases\": 4, \"median\": \"0.0\", \"p90\": \"0.0\"}, \"delivery\": {\"label\": \"sent to goods received\", \"cases\": 4, \"median\": \"0.0\", \"p90\": \"0.0\"}, \"invoicing\": {\"label\": \"goods received to invoice received\", \"cases\": 4, \"median\": \"0.0\", \"p90\": \"0.0\"}, \"payment\": {\"label\": \"invoice received to paid\", \"cases\": 4, \"median\": \"19.0\", \"p90\": \"19.0\"}, \"total\": {\""
+    ]
+  },
+  {
+    "id": "E35",
+    "title": "ERP demand files load exactly once, with every bad row explained",
+    "requirement": "Plan P1-29: production orders with their component lines, MRP results, sales orders and the demand plan are imported from the client's ERP files; every rejected row is listed with its reason; the same ERP order is never loaded twice; a changed order is applied and listed with what changed (Q21, 20 Nov: the change propagates); one company never sees another's imports. For an IT services company the joiner kits and the joiner plan load the same way: each joiner row becomes its kit's items times the joiners, by the start date, for the joiner's department, and one material request per plan and department",
+    "status": "PASS",
+    "seconds": 14.4,
+    "metrics": {
+      "Brightwave joiner rows (kits / plan)": "12 / 2",
+      "Brightwave requirements checked against kit x joiners": 12,
+      "Brightwave planted joiner faults caught": "6 of 6",
+      "rows in the files": 25,
+      "requirements checked against the BOM": 20,
+      "planted faults caught": "8 of 8",
+      "rows loaded twice": 0
+    },
+    "findings": [],
+    "notes": []
+  },
+  {
+    "id": "E36",
+    "title": "The buying route: contract, single source, emergency, safe reorder, else quotation with the right quotes",
+    "requirement": "Plan D37 / P1-33: first yes wins; Rs 25,000 agreement and reorder limit; 90 days; 80% on time; 2% price; 2 quotes from Rs 25,000 to Rs 2,00,000 and 3 above; value counted per item over 30 days; categories only stricter",
+    "status": "PASS",
+    "seconds": 13.5,
+    "metrics": {
+      "cases": 68,
+      "agreement %": 100.0,
+      "routes": {
+        "contract": 1,
+        "emergency": 1,
+        "reorder": 7,
+        "rfq": 58,
+        "single_source": 2
+      },
+      "decisions without rule version or tests": 0
+    },
+    "findings": [],
+    "notes": []
+  },
+  {
+    "id": "E37",
+    "title": "Stock is set aside earliest need-by first and only the shortfall is bought",
+    "requirement": "Plan P1-30 and step 2 of the flow: each imported production order gets a material request; the store check sets free stock aside earliest need-by first and never more than is on the shelf; only the shortfall becomes a purchase request, priced at the contract price else the last price paid else the standard price, sent to the approver the rule table names; the plan's MO-1 example (Rs 72,930 for four items short) holds; issue at production start takes exactly what was set aside; nothing is set aside or bought twice; only the store may do it; supply counts for a need only when due by its date (rule Q17): set aside plus timely coming never exceeds the need",
+    "status": "PASS",
+    "seconds": 6.5,
+    "metrics": {
+      "production orders": 2,
+      "lines checked against the oracle": 20,
+      "lines set aside differently": 0,
+      "items short per order": {
+        "MO-1": 4,
+        "MO-2": 8
+      },
+      "purchase request value per order": {
+        "MO-1": "72930.00",
+        "MO-2": "209700.00"
+      },
+      "MO-1, the plan's four items": "Rs 72930.00",
+      "lines with cover split by date (Q17)": 20
+    },
+    "findings": [],
+    "notes": []
+  },
+  {
+    "id": "E38",
+    "title": "Shortfalls of several orders combine into one line, and the budget is checked per location",
+    "requirement": "Plan P1-31 and step 3 of the flow: shortfall lines for the same item and delivery location needed within the combining window (setting, default 7 days) become one requisition line that keeps each order's own quantity; lines further apart stay separate; cancelling one order takes its part off the combined line (and the stock it held covers, earliest need-by first, the parts of the others, which are cut by as much); the budget is checked per department and per location (decision D36: warn at 90% used, over above 100%), naming the location, the department and the months of the financial year it counted; every combination and reduction is audited",
+    "status": "PASS",
+    "seconds": 10.6,
+    "metrics": {
+      "orders": 4,
+      "requisition lines (oracle)": 15,
+      "combined lines": 11,
+      "joins": 14,
+      "location budget checks verified": 6,
+      "lines reduced on cancelling": 8,
+      "window days": 7
+    },
+    "findings": [],
+    "notes": []
+  },
+  {
+    "id": "E39",
+    "title": "Supplier selection: must-haves, total cost, tie-break, split only when it saves, reasons, orders per supplier",
+    "requirement": "Plan step 6 / P1-34: drop quotes failing a must-have; compare total cost (GST not counted with input credit); ties by earlier delivery; split only when the saving beats the extra freight; a reason for other than the cheapest qualifying quote or too few quotes; one PO per supplier; printable RFQ per supplier",
+    "status": "PASS",
+    "seconds": 45.5,
+    "metrics": {
+      "quote sets compared": 126,
+      "must-haves correct %": 100.0,
+      "total costs correct %": 100.0,
+      "ranking correct %": 100.0,
+      "split decision correct %": 100.0,
+      "recommendation correct %": 100.0,
+      "reason rule correct %": 100.0,
+      "split selections ordered per supplier": "15 of 15",
+      "input credit claimed in the first half": true
+    },
+    "findings": [],
+    "notes": []
+  },
+  {
+    "id": "E40",
+    "title": "PO tiers by value, delivery location, touchless orders only within every limit",
+    "requirement": "Plan step 7 / P1-35, D35, D36, v1.1: up to Rs 1,00,000 only a touchless order is approved, by the rule, else the purchase manager, who approves to Rs 5,00,000; director above; never the buyer who made the order; touchless for contract and safe-reorder lines within the limit, active supplier, contract room, price within 2%, budget and the autonomy gate, recorded with the facts and the rule version; delivery place on the PO",
+    "status": "PASS",
+    "seconds": 45.0,
+    "metrics": {
+      "worked example: casting order": "38350.00 (touchless)",
+      "worked example: the four orders at the dataset's GST rates": "84937.90",
+      "orders checked": 88,
+      "totals correct %": 100.0,
+      "tiers correct %": 100.0,
+      "touchless decisions correct %": 100.0,
+      "statuses correct %": 100.0,
+      "audit trails as planned %": 100.0,
+      "touchless orders": 17,
+      "two places, two orders": true
+    },
+    "findings": [],
+    "notes": [
+      "The plan's four orders total Rs 85,113.40; at the dataset's rates they total Rs 84937.90. The cartons (PK-01) are at 5% GST in the dataset (the rate changed on 22 Sep 2025); the plan worked them at 18%."
+    ]
+  },
+  {
+    "id": "E41",
+    "title": "Approval by email: the right person, a full email, one reminder, escalation on time, a code on every link",
+    "requirement": "Plan step 4 and D36: who approves follows the rule table by value, category, department and location (rows that add an approver too); each step keeps its rule row; the email carries the lines, the estimated total, the budget, why it came to this person and approve / reject / return links that work once; one reminder after a working day and escalation after two, counted on the business calendar with holidays; a one-time code on every decision from a link (D-07, block 4: approve, reject and return, at any value) that is hashed, expires in 10 minutes, allows 5 tries and works once; a deputy; the requester never approves",
+    "status": "PASS",
+    "seconds": 39.5,
+    "metrics": {
+      "requests routed / agree with the oracle": "120 / 120",
+      "approval emails checked": 93,
+      "reminder due (oracle) / sent at": "Tue 10 Nov 15:30 / Tue 10 Nov 15:30",
+      "escalated to (platform / oracle)": "U09 / U09",
+      "one-time code checks passed": "8 / 8"
+    },
+    "findings": [],
+    "notes": []
+  },
+  {
+    "id": "E42",
+    "title": "Supplier confirmation: the link works once, every change is the buyer's, a new version tells the requester",
+    "requirement": "Plan step 8, P1-36: accept, decline or ask for a change from a signed link that works once (or by email); each change goes to the buyer old value to new; an accepted date, quantity or price makes a new version and tells the requester; a price above tolerance needs the purchase manager; a decline goes back to the buyer to source again; dispatch notes for the store; reminders before the promised date and after it while nothing has arrived, on the business calendar, each once. Done when a date change makes PO version 2 and tells the requester",
+    "status": "PASS",
+    "seconds": 18.5,
+    "metrics": {
+      "orders the pipeline made, by status": {
+        "approved": 1
+      },
+      "orders sent with a link": 7,
+      "worked example: version / new date / requester told": "2 / 2026-12-06 / True",
+      "price at the 2% edge": "192.8346 -> 196.69: buyer",
+      "price one paisa above the 2% edge": "192.8346 -> 196.70: purchase manager",
+      "declined order / lines left for a buyer / new orders made": "cancelled / True / 0",
+      "part dispatch: checks passed / notes the store sees": "3 of 3 / 2",
+      "links refused (reused, expired, altered, other supplier, other key)": 5,
+      "reminders (platform / oracle)": "['12 Nov before 1', '18 Nov overdue 1', '23 Nov overdue 2', '26 Nov overdue 3'] / 4 expected",
+      "audit rows": {
+        "po.change_proposed": 4,
+        "po.change_accepted": 4,
+        "po.revise": 3,
+        "po.change_referred": 1,
+        "po.dispatch_note": 2,
+        "po.delivery_reminder": 11,
+        "po.acknowledge": 2
+      },
+      "mutation checks (rule broken on purpose: caught?)": {
+        "a price rise of any size is the buyer's": "caught",
+        "a link works more than once": "caught"
+      }
+    },
+    "findings": [],
+    "notes": []
+  },
+  {
+    "id": "E43",
+    "title": "Service entry, the two-way match of services, receipts without an order and serial numbers are right",
+    "requirement": "Plan step 9, P1-37: the requester confirms a service (quantity, percent or amount), a service invoice is matched against the order and the confirmation, an unconfirmed service cannot be invoiced, a receipt without an order needs the purchase manager's approval and an after-the-fact order, serialised items need a unique serial per unit",
+    "status": "PASS",
+    "seconds": 25.2,
+    "metrics": {
+      "service order lines": 79,
+      "invoices held before confirmation": 3,
+      "confirmations checked": 75,
+      "refused as the oracle said (buyer asked, or beyond the order)": 0,
+      "receipts without an order": 2
+    },
+    "findings": [],
+    "notes": []
+  },
+  {
+    "id": "E44",
+    "title": "The exceptions screen lists every stuck case with the right reason, owner and age, by role",
+    "requirement": "Plan step 11/12, P1-38: one list of everything stuck that needs a person (blocked invoices, goods without an order, services not confirmed, approvals past their reminder, proposals, suppliers to chase) with what, reason, owner, next step, age in working days and amount, oldest first, filtered by kind and mine, by permission",
+    "status": "PASS",
+    "seconds": 102.6,
+    "metrics": {
+      "invoices replayed": 479,
+      "rows the oracle expects": 20,
+      "rows by kind": {
+        "approval": 1,
+        "invoice": 12,
+        "proposal": 1,
+        "service": 2,
+        "supplier": 1,
+        "unordered": 3
+      },
+      "rows checked (owner, reason, age)": 20,
+      "Store: rows seen / mine": "3 / 1",
+      "AP: rows seen / mine": "12 / 11",
+      "Buyer: rows seen / mine": "6 / 2",
+      "Finance: rows seen / mine": "12 / 1",
+      "Requester: rows seen / mine": "0 / 0"
+    },
+    "findings": [],
+    "notes": []
+  },
+  {
+    "id": "E45",
+    "title": "Received not invoiced, supplier statements, small-supplier deadlines and the order trace reconcile",
+    "requirement": "Plan step 13, P1-39: received not invoiced (and the reverse) exact to the paisa with its age; a supplier's statement matched line by line with the reason for each difference; MSME invoices listed against the MSMED Act deadline (Q16); the whole chain of a document traced end to end",
+    "status": "PASS",
+    "seconds": 146.7,
+    "metrics": {
+      "received not invoiced today (Rs)": "0",
+      "invoiced not received today (Rs)": "16938.81",
+      "dates checked": 12,
+      "answer-key month ends": 11,
+      "open order lines checked": 89,
+      "received-not-invoiced differences": 0,
+      "small-supplier invoices listed": 155,
+      "statements imported": 3,
+      "statement lines wrong": 0,
+      "trace of": "PI-2526-000061 (PO-CKN-2526-00067)",
+      "trace stages": 6
+    },
+    "findings": [],
+    "notes": []
+  },
+  {
+    "id": "E46",
+    "title": "The IT services company (Brightwave) through all 13 steps in a browser: services, a serialised laptop, two-way match",
+    "requirement": "Phase 1 done-when: both demo companies run through all 13 steps in the browser; services are confirmed by the requester and matched two ways; a serialised item is received with its serial; each step by its own person",
+    "status": "PASS",
+    "seconds": 139.8,
+    "metrics": {
+      "approvers per request": {
+        "REQ-BLR-2627-00001": [
+          "depthead",
+          "ithead"
+        ],
+        "REQ-BLR-2627-00002": [
+          "depthead",
+          "ithead"
+        ],
+        "REQ-BLR-2627-00003": [
+          "depthead"
+        ]
+      },
+      "steps taken at screens": 42,
+      "plan steps shown": "13 of 13",
+      "checks passed / failed": "32 / 0",
+      "transcript and screenshots": "evals/results/journeys/brightwave.md"
+    },
+    "findings": [],
+    "notes": []
+  },
+  {
+    "id": "E47",
+    "title": "Cancelling a production order releases its stock to the next order at once, never stocked and bought twice",
+    "requirement": "Plan P1-30 and step 2 of the flow: cancelling an order releases its reservation (a reason is needed; only the store; once); the freed stock is set aside at once for the open orders earliest need-by first, each up to what it still lacks, never more than is on the shelf; a purchase request still open for that shortfall is cut by as much (set aside plus timely coming never exceeds the need, rule Q17) and the next check buys nothing; purchase requests made only for the cancelled order and not yet with the buyer are cut and cancelled (Q21, 20 Nov); issue never moves more than is set aside; the cancel is audited",
+    "status": "PASS",
+    "seconds": 14.1,
+    "metrics": {
+      "production orders (one planted)": 3,
+      "lines checked against the oracle, before and after": "30 / 20",
+      "lines differing (first check / after the cancel)": "0 / 0",
+      "lines whose request was not cut to what stock leaves short": 0,
+      "freed per item": {
+        "RM-03": "50",
+        "RM-05": "50",
+        "RM-06": "40.000",
+        "RM-07": "50",
+        "RM-08": "50.000",
+        "RM-09": "50",
+        "RM-10": "50",
+        "RM-11": "10.0",
+        "PK-01": "20.000"
+      },
+      "edges hit": {
+        "exact": [
+          "RM-03->MO-3"
+        ],
+        "less": [
+          "RM-05->MO-2",
+          "RM-06->MO-2",
+          "RM-07->MO-2",
+          "RM-08->MO-2",
+          "RM-09->MO-2",
+          "PK-01->MO-2"
+        ],
+        "more": [
+          "RM-10->MO-3",
+          "RM-11->MO-3"
+        ]
+      },
+      "purchase requests left after the cancel": []
+    },
+    "findings": [],
+    "notes": []
+  },
+  {
+    "id": "E48",
+    "title": "Shortfall requests are estimated at the contract price, else the last price paid, else the standard price",
+    "requirement": "Plan step 3 (estimated price): the contract price if one is valid, else the last price paid (the latest order that is not a draft and not cancelled), else the item's standard price; the estimate sets the request's value and so its approver",
+    "status": "PASS",
+    "seconds": 44.9,
+    "metrics": {
+      "orders planted (one cancelled)": 5,
+      "last price paid per item (from the order rows)": {
+        "RM-06": "39.5000",
+        "RM-01": "660.0000"
+      },
+      "estimate basis per short item": {
+        "RM-01": "contract",
+        "RM-06": "last price paid",
+        "RM-08": "standard price",
+        "PK-01": "standard price",
+        "RM-02": "contract",
+        "RM-04": "contract",
+        "RM-05": "contract",
+        "RM-07": "standard price",
+        "RM-09": "standard price"
+      },
+      "disagreements": 0,
+      "purchase request value per order": {
+        "MO-1": "73020.00",
+        "MO-2": "210000.00",
+        "MRP-2027-01/PLT-CKN": "369850.00"
+      }
+    },
+    "findings": [],
+    "notes": []
+  },
+  {
+    "id": "E49",
+    "title": "Supplier selection by weighted score, and the answer key's cheapest supplier, match an independent oracle",
+    "requirement": "Plan step 6 / P1-34: quotes failing a must-have are dropped; the rest are compared on total cost or, when the company's versioned rule says so, on a weighted score of price, delivery, quality and payment terms; ties by earlier delivery; the rule version is recorded with each selection; the dataset's RFQs select the supplier its answer key names",
+    "status": "PASS",
+    "seconds": 54.4,
+    "metrics": {
+      "weighted quote sets compared": 88,
+      "scores correct %": 100.0,
+      "ranking correct %": 100.0,
+      "recommendation correct %": 100.0,
+      "selections recording their rule version": "75 of 75",
+      "answer-key RFQs replayed (splits left out: the key has no part quantities)": "149 (23 left out)",
+      "answer key matched %": 100.0,
+      "oracle agrees with the answer key %": 100.0
+    },
+    "findings": [],
+    "notes": []
+  },
+  {
+    "id": "E50",
+    "title": "Contract price versions: a draft is never used, a second person activates it, the old one ends the day before",
+    "requirement": "D48: a contract price is a version; a draft is used for nothing until someone other than who stored the contract, entered a price of the version or sent it activates it; the version it replaces ends the day before it starts; prices of one supplier for an item never apply on the same day; an order keeps the version it was bought at",
+    "status": "PASS",
+    "seconds": 69.6,
+    "metrics": {
+      "dataset draft version": "RM-01 672.00 from 2027-01-01, RM-02 496.00 from 2027-01-01",
+      "before activation: prices and estimates off the oracle": 0,
+      "order before activation: RM-02 on 2027-01-04": "480.00 (version 1)",
+      "activation refused (sender, pricer, no permission)": {
+        "the plant head who sent it": 403,
+        "the purchase manager who priced it": 403,
+        "the buyer (no permission)": 403
+      },
+      "version 1 ends (replaced items)": [
+        "2026-12-31"
+      ],
+      "after activation: prices and estimates off the oracle": 0,
+      "order made before activation, after it": "650.00 (version 1)",
+      "order after activation: RM-01 on 2026-12-31": "650.00 (version 1)",
+      "order after activation: RM-01 on 2027-01-01": "672.00 (version 2)",
+      "order after activation: RM-02 on 2027-01-04": "496.00 (version 2)",
+      "a price of RM-01 on a second contract from": {
+        "same day (2027-03-31)": 409,
+        "next day (2027-04-01)": 200
+      },
+      "second contract activated by who stored it / by the director": "403 / 200",
+      "audit rows (action, person)": 6,
+      "another company: contract / activate / list": {
+        "contract": 404,
+        "activate": 404,
+        "list": []
+      },
+      "mutation checks (rule broken on purpose: caught?)": {
+        "whoever priced a version may activate it": "caught",
+        "prices may share a day": "caught"
+      }
+    },
+    "findings": [],
+    "notes": []
+  },
+  {
+    "id": "E51",
+    "title": "Control changes wait for a second administrator; nobody approves their own change or their own access",
+    "requirement": "D-22 (second administrator): a change to rules, rule versions, policies, tolerances, automation, roles, limits, logins and managers applies only when a different administrator approves it; the proposer never approves; a rejection keeps the old value; stopping automation is immediate; an unapproved change expires after seven days; one change at a time per setting; the history shows maker and approver; nobody widens or approves their own access",
+    "status": "PASS",
+    "seconds": 55.1,
+    "metrics": {
+      "kinds of change checked / correct": "11 / 11",
+      "per kind": {
+        "policy (budget_policy)": "ok",
+        "tolerance (price_pct)": "ok",
+        "approval rule version (REQ-02 to the purchase manager)": "ok",
+        "buying route version": "ok",
+        "supplier selection version": "ok",
+        "touchless rule version": "ok",
+        "role given (Store to the buyer)": "ok",
+        "approval limit (plant head, orders)": "ok",
+        "automation level (rfq.award to act alone)": "ok",
+        "person deactivated (AP)": "ok",
+        "manager changed (storekeeper)": "ok"
+      },
+      "kill switch: gate before / on at once / off waits / after approval": "True / 200 True / 202 True / 200 True",
+      "rejected: value kept / approve later": "0.00 / 409",
+      "expiry: days to expire / approve after / value": "7 / 409 / 5",
+      "duplicate pending change / another setting": "409 / 202",
+      "add a person as Admin": 403,
+      "own access, at once": {
+        "give yourself a role": 403,
+        "set your own limit": 403,
+        "deactivate yourself": 409
+      },
+      "admin2 approves a change to their own (role, limit, login, manager)": {
+        "role": true,
+        "limit": true,
+        "login": true,
+        "manager": true
+      },
+      "mutation checks (rule broken on purpose: caught?)": {
+        "the proposer may approve": "caught",
+        "a change applies before approval": "caught",
+        "the person a change is for may approve it": "caught",
+        "a change waits thirty days": "caught"
+      }
+    },
+    "findings": [],
+    "notes": []
+  },
+  {
+    "id": "E52",
+    "title": "Bank accounts: verified by a second person against a proof before anything is paid into them",
+    "requirement": "DF-03 / F1: a new or changed supplier bank account is unverified; it is never planned into a payment run, advanced or written to a bank file until a person other than the one who entered or asked for it verifies it (Finance, an allowed method from `bank_verification_methods`, a proof file); a bank change after a run is approved takes that supplier out, recomputes the total and voids a file already made; lists show the last four digits; the audit never holds the whole number; another company sees nothing",
+    "status": "PASS",
+    "seconds": 35.3,
+    "metrics": {
+      "approved bank changes left unverified": 2,
+      "advances due (unverified supplier / verified supplier)": "False / True",
+      "run 1: suppliers paid / oracle, total / oracle": "4 / 4, 39226.00 / 39226.00",
+      "bank file lines into an unverified account": 0,
+      "verification attempts refused as the oracle says": "9 of 9",
+      "verified by Finance with method and proof": "2 of 2",
+      "run 2 after verification: suppliers paid / oracle": "2 / 2",
+      "run 1 after the change: status / total / oracle / file void": "approved / 7236.00 / 7236.00 / True",
+      "profiles and lists with a whole account number": "none",
+      "whole account numbers in the proposals list": 0,
+      "whole account numbers in the audit log": 0,
+      "audit rows": {
+        "supplier.bank_change": 3,
+        "supplier.bank_verify": 2,
+        "payment_run.supplier_removed": 1
+      },
+      "mutation checks (rule broken on purpose: caught?)": {
+        "the profile shows the whole number": "caught",
+        "the asker verifies their own account": "caught",
+        "a bank change leaves the run and its file alone": "caught",
+        "an unverified account is planned": "caught"
+      }
+    },
+    "findings": [],
+    "notes": []
+  },
+  {
+    "id": "E53",
+    "title": "PO makers never approve: not the order, its price, a supplier's price rise, nor as a deputy",
+    "requirement": "C1 (v1.1): the people who made a purchase order (its buyer, submitter, reviser, the awarder of its quotation, who changed its buying route) never approve it, accept its price or a supplier's price rise (even within tolerance), nor stand in as a deputy; the chain skips them and goes up a tier; in the band with no approver only a touchless order is approved by the rule, any other goes to a person; accepting a price is not making the order; a refused person changes nothing",
+    "status": "PASS",
+    "seconds": 55.2,
+    "metrics": {
+      "oracle: band people (PO-02 / PO-03 / price rise)": "['U08'] / ['U09'] / U08",
+      "maker refused on every path (kinds x paths)": "20 of 20",
+      "ways of making an order checked": "buyer, submitter, reviser, awarder, route changer",
+      "no-approver band, not touchless: status / rule / approvers": "submitted / PO-02 / ['U08']",
+      "real buyer / real submitter skipped": "True / True",
+      "accepting a price leaves the acceptor free to approve": "8 of 8",
+      "mutation checks (rule broken on purpose: caught?)": {
+        "the awarder approves": "caught",
+        "the buyer accepts a rise within the tolerance": "caught",
+        "a maker accepts the price above the estimate": "caught"
+      }
+    },
+    "findings": [],
+    "notes": []
+  },
+  {
+    "id": "E54",
+    "title": "A maker of a purchase order never approves it, by any route (C1), written without the implementation",
+    "requirement": "C1, D43, AT-03: the buyer, submitter, reviser, awarder and route changer of an order never approve it, accept its price above the estimate or accept a supplier's price rise on it (screen, proposal, link, deputy); all makers named means the next band; no band left means refused with a reason; only the touchless policy approves with no person; a checker is not a maker; a refused attempt leaves it waiting for the right person",
+    "status": "PASS",
+    "seconds": 157.1,
+    "metrics": {
+      "deputy routing observed for orders (control)": true,
+      "order approval emails checked / with a signed approval link": "27 / 0",
+      "cases where a rule ignoring makers gives another answer": "8 of 14",
+      "cases where a maker would be the only approver (must be refused)": [
+        "C9 director awards, PO-03 (no band left)",
+        "C10 purchase manager awards above the estimate",
+        "C12 supplier price rise on an order the purchase manager made"
+      ],
+      "cases": {
+        "C1 buyer awards, PO-02": "screen; makers ['U03']; expected Sanjay Rao; broken rule Sanjay Rao; actual Sanjay Rao; PASS",
+        "C2 buyer awards, PO-01 not touchless": "screen; makers ['U03']; expected Sanjay Rao; broken rule Sanjay Rao; actual Sanjay Rao; PASS",
+        "C3 purchase manager awards, PO-02": "screen; makers ['U03', 'U08']; expected Meera Iyer; broken rule Sanjay Rao; actual Meera Iyer; PASS",
+        "C4 purchase manager awards, PO-01": "screen; makers ['U03', 'U08']; expected Meera Iyer; broken rule Sanjay Rao; actual Meera Iyer; PASS",
+        "C5 purchase manager revises, PO-02": "screen; makers ['U03', 'U08']; expected Meera Iyer; broken rule Sanjay Rao; actual Meera Iyer; PASS",
+        "C6 purchase manager changes the route, PO-02": "screen; makers ['U03', 'U08']; expected Meera Iyer; broken rule Sanjay Rao; actual Meera Iyer; PASS",
+        "C7 buyer awards and is the approver's deputy": "deputy; makers ['U03']; expected Sanjay Rao; broken rule Sanjay Rao; actual Sanjay Rao; PASS",
+        "C8 purchase manager awards and is the director's deputy": "deputy; makers ['U03', 'U08']; expected Meera Iyer; broken rule Sanjay Rao; actual Meera Iyer; PASS",
+        "C9 director awards, PO-03 (no band left)": "screen; makers ['U03', 'U09']; expected refused; broken rule Meera Iyer; actual refused (409): PO-CKN-2627-00010 is draft, not waiting for approval; PASS",
+        "C10 purchase manager awards above the estimate": "proposal (price above estimate); makers ['U03', 'U08']; expected refused; broken rule Sanjay Rao; actual refused; still waiting; PASS",
+        "C11 purchase manager accepted the price (checker)": "screen; makers ['U03']; expected Sanjay Rao; broken rule Sanjay Rao; actual Sanjay Rao; PASS",
+        "C12 supplier price rise on an order the purchase manager made": "proposal (supplier price); makers ['U03', 'U08']; expected refused; broken rule Sanjay Rao; actual refused; price 345.0000 (was 345.0000); 0 proposal(s) waiting for []; PASS",
+        "C13 supplier price rise, the approver is not a maker": "proposal (supplier price); makers ['U03']; expected Sanjay Rao; broken rule Sanjay Rao; actual Sanjay Rao; PASS",
+        "C14 contract line within the touchless policy": "policy; makers []; expected policy; broken rule policy; actual policy; PASS"
+      },
+      "checks": 120
+    },
+    "findings": [],
+    "notes": [
+      "C1 buyer awards, PO-02: U03 refused on PO-CKN-2627-00001 on the screen: 409 {\"detail\":\"it is not your turn: PO-CKN-2627-00001 is waiting for Sanjay Rao\"}",
+      "C2 buyer awards, PO-01 not touchless: U03 refused on PO-CKN-2627-00002 on the screen: 409 {\"detail\":\"it is not your turn: PO-CKN-2627-00002 is waiting for Sanjay Rao\"}",
+      "C3 purchase manager awards, PO-02: U08 refused on PO-CKN-2627-00003 on the screen (he awarded the quotation): 409 {\"detail\":\"it is not your turn: PO-CKN-2627-00003 is waiting for Meera Iyer\"}",
+      "C3 purchase manager awards, PO-02: U03 refused on PO-CKN-2627-00003 on the screen: 409 {\"detail\":\"it is not your turn: PO-CKN-2627-00003 is waiting for Meera Iyer\"}",
+      "C4 purchase manager awards, PO-01: U08 refused on PO-CKN-2627-00004 on the screen (he awarded it; the 'auto' band went up to him): 409 {\"detail\":\"it is not your turn: PO-CKN-2627-00004 is waiting for Meera Iyer\"}",
+      "C5 revision by the purchase manager: 200 {\"version\":2,\"status\":\"submitted\",\"total\":\"138768.00\",\"reapproval\":true,\"material\":[],\"approval_carried\":false,\"supplier_told\":false}",
+      "C5 purchase manager revises, PO-02: U08 refused on PO-CKN-2627-00005 on the screen (he revised it): 409 {\"detail\":\"it is not your turn: PO-CKN-2627-00005 is waiting for Meera Iyer\"}",
+      "C6 route change agreed by the plant head: 200 {\"id\":10,\"status\":\"approved\",\"execution\":\"ok\",\"result\":{\"line_no\":1,\"supplier\":\"SUP-003\",\"request_no\":\"REQ-CKN-2627-0000",
+      "C6 purchase manager changes the route, PO-02: U08 refused on PO-CKN-2627-00006 on the screen (he changed the route of its line): 409 {\"detail\":\"it is not your turn: PO-CKN-2627-00006 is waiting for Meera Iyer\"}",
+      "U08 named U03 deputy from 2026-11-06",
+      "C7: PO-CKN-2627-00007 waits for Sanjay Rao; steps [('Sanjay Rao', 'pending', None)]",
+      "C7 buyer awards and is the approver's deputy: U03 refused on PO-CKN-2627-00007 as the purchase manager's deputy: 409 {\"detail\":\"it is not your turn: PO-CKN-2627-00007 is waiting for Sanjay Rao\"}",
+      "U09 named U08 deputy from 2026-11-06",
+      "C8: PO-CKN-2627-00008 waits for Meera Iyer; steps [('Meera Iyer', 'pending', None)]",
+      "C8 purchase manager awards and is the director's deputy: U08 refused on PO-CKN-2627-00008 as the director's deputy: 409 {\"detail\":\"it is not your turn: PO-CKN-2627-00008 is waiting for Meera Iyer\"}",
+      "deputy control: PO-CKN-2627-00009 (598024.00) waits for Sanjay Rao; steps [('Meera Iyer', 'pending', 'Sanjay Rao')]",
+      "C9: PO-CKN-2627-00010 is draft; the order shows ['Nobody may approve it: nobody who did not make the order can approve it; add an approver to the order rules', None, None]; named in ['/api/exceptions', '/api/exceptions', '/api/notifications']",
+      "C11 purchase manager accepted the price (checker): U03 refused on PO-CKN-2627-00012 on the screen: 409 {\"detail\":\"it is not your turn: PO-CKN-2627-00012 is waiting for Sanjay Rao\"}",
+      "PO-CKN-2627-00003: the buyer accepted the supplier's price 362.25: 409 {\"detail\":\"everyone the price variance rule names made this order, so none of them may accept its price; the rule has to name someone else\"}",
+      "PO-CKN-2627-00001: the buyer accepted the supplier's price 914.05: 200 {\"status\":\"waiting_approval\",\"proposal_id\":22,\"approver\":\"Sanjay Rao\"}",
+      "No order approval email carries a signed /approve/ link (they are task notices), so the link path for orders is checked only as: no approval email for an order ever goes to one of its makers"
+    ]
+  },
+  {
+    "id": "E55",
+    "title": "Tolerance versions: each match records the version in force on the day received, and past decisions reproduce",
+    "requirement": "Task 3.2, D-17, X1 rules 6-7: tolerances are versioned as a set from a date; an invoice is judged under the version in force on its received_on and the match stores that version (match row, invoice, audit 'tolerance vN'); a re-match after a later version gives the same result and version; a change waits for a second administrator and starts today or later, never before the latest start; one company never sees another's versions",
+    "status": "PASS",
+    "seconds": 166.4,
+    "metrics": {
+      "dataset versions": [
+        "v1 2000-01-01..2026-06-30",
+        "v2 2026-07-01.."
+      ],
+      "history invoices: version right / scored": "476 / 476",
+      "history invoices: result right / scored (edges left out)": "475 / 475 (1 either/both edges)",
+      "oracle and answer key disagree": 11,
+      "invoices whose verdict differs between v1 and v2 (clean of the 3.1 edge)": [
+        "PI-2526-000160 2026-03-05 v1 matched / v2 blocked",
+        "PI-2627-000097 2026-06-17 v1 matched / v2 blocked",
+        "PI-2627-000192 2026-08-17 v1 matched / v2 blocked"
+      ],
+      "bearings 3% over received 2026-06-30": "matched v[1] (oracle matched v1)",
+      "bearings 3% over received 2026-07-01": "blocked v[2] (oracle blocked v2)",
+      "refused (past start, unknown key)": {
+        "start in the past": 422,
+        "unknown key": 404
+      },
+      "a second tolerance change while one waits": 409,
+      "a second change to the same tolerance while one waits": 409,
+      "re-matched after version 3": {
+        "PI-2526-000160": "409: matched v1 (before matched); shown [1]",
+        "PI-2627-000097": "409: matched v1 (before matched); shown [1]",
+        "PI-2627-000192": "200: blocked v2 (before blocked); shown [2]",
+        "PI-2627-000281": "409: matched v1 (before matched); shown [1]",
+        "PI-2627-000282": "200: blocked v2 (before blocked); shown [2]"
+      },
+      "exact invoice received tomorrow": "matched v[3]",
+      "Brightwave versions on screen": [
+        [
+          1,
+          "2000-01-01"
+        ],
+        [
+          2,
+          "2027-01-01"
+        ]
+      ],
+      "Brightwave laptop invoice received 2026-12-31": "matched v[1]",
+      "Brightwave laptop invoice received 2027-01-01": "matched v[2]",
+      "mutations caught": {
+        "the latest version instead of the dated one": true,
+        "the version not stored": true
+      },
+      "invoices that tell the latest-version reader apart": 305,
+      "checks": "63 of 63 passed"
+    },
+    "findings": [],
+    "notes": [
+      "11 scored invoices where this oracle's simple replay differs from the answer key; the platform was held to the key",
+      "1 history invoices have a line within % but not within rupees (or the reverse): task 3.1, not scored (OP-2)"
+    ]
+  },
+  {
+    "id": "E56",
+    "title": "Prospects quote, count only when their identity is checked by someone else, and never reach an order early",
+    "requirement": "Task 4.4, D-03 R1-R12, T-Q1-1..9: duplicates (GSTIN, PAN, bank, sanctions) refused, shared contacts or addresses flagged; the identity check by neither registerer nor inviter; only valid, independent, eligible quotes count; an award to a checked prospect is conditional and makes no order until activation; a lapsed award opens a buyer task and awards nobody else; an expired quote cannot be re-selected; an inactive supplier never gets an order; an open RFQ keeps its quotation-count rule; another company sees none of it",
+    "status": "PASS",
+    "seconds": 126.0,
+    "metrics": {
+      "SUP-009 flags shown": [
+        [
+          "same_address",
+          "SUP-005"
+        ],
+        [
+          "same_contact",
+          "SUP-005"
+        ]
+      ],
+      "registrations refused": {
+        "SUP-007's PAN under a new name": "422 refused: same PAN (a PAN is one legal person) as SUP-007, which is blocked",
+        "SUP-007's bank account": "422 refused: same bank account as SUP-007, which is blocked",
+        "SUP-003's GSTIN": "422 refused: same GSTIN as SUP-003"
+      },
+      "registrations made": {
+        "SUP-007's contact email": "200 SUP-010 flags [('blocked_match', 'SUP-007')]",
+        "the buyer's own phone": "200 SUP-011 flags [('staff_contact', 'U03')]",
+        "clean prospect 7": "200 SUP-012 flags []",
+        "clean prospect 8": "200 SUP-013 flags []",
+        "clean prospect 9": "200 SUP-014 flags []"
+      },
+      "copper RFQ: invitations refused": {
+        "blocked SUP-007": 422,
+        "PKG prospect SUP-008": 422,
+        "active SUP-005": 422
+      },
+      "copper RFQ: counts (platform / oracle)": {
+        "SUP-005": "True / True",
+        "SUP-009": "False / False",
+        "SUP-012": "False / False",
+        "SUP-013": "False / False"
+      },
+      "copper RFQ: min_quotes, rule": "2, category RAW",
+      "copper RFQ: line value, agree_above, agreement proposals": "135750, 25000, 1",
+      "SUP-008 identity check refused": {
+        "the buyer who registered it": 403,
+        "the purchase manager who invited it": 403,
+        "a method not in the list": 422,
+        "no proof file": 422
+      },
+      "SUP-008: orders after activation, bank accounts": "1, 0",
+      "award day, day before the deadline, deadline": "2026-11-25, 2026-12-08, 2026-12-09",
+      "deadline: awards, buyer tasks": "[('SUP-014', True, datetime.datetime(2026, 11, 23, 1, 8, 28, 849709, tzinfo=zoneinfo.ZoneInfo(key='Etc/UTC')))], [647]",
+      "open RFQ min_quotes before / after a route change": "(2, 'category RAW') / (2, 'category RAW')",
+      "an RFQ made after the change": "(3, 'buying_route v2')",
+      "SUP-001 orders waiting when it is blocked": [
+        "PO-CKN-2627-00002"
+      ],
+      "contract line for blocked SUP-001: orders issued, refusals audited": "[], 4",
+      "mutations caught": {
+        "an unchecked quote counted": true,
+        "identity check by the inviter allowed": true,
+        "an order made from a conditional award": true
+      },
+      "checks": "100 of 100 passed"
+    },
+    "findings": [],
+    "notes": [
+      "sanction_entry.csv is empty: the sanctions refusal is not tried (the spec plants no listed name)",
+      "R6's payment side (a run refuses an unverified account) is E52's; here only: the order needs no bank account",
+      "Not tried (spec gaps): the agent tool refusals of R3/R12 (no tool name given), 'two flagged suppliers count as one', a category min_quotes edit endpoint"
+    ]
+  },
+  {
+    "id": "E57",
+    "title": "A regional supplier approval or contract price is never used outside its scope; the delivery location decides",
+    "requirement": "Task 12.4, D44, D40, D48: approvals and contract prices may carry a location or region; contract lookup, estimate, buying route, RFQ invitees and the quote must-have use the line's delivery location; RFQs are per category and location; prices of one supplier and item may not overlap where their scopes intersect; a scoped price is activated by someone other than its maker; a category scope change is a second person's decision; audited",
+    "status": "PASS",
+    "seconds": 102.5,
+    "metrics": {
+      "Apex grid: price view cells off the oracle": 0,
+      "estimates / routes off the oracle": "0 / 0",
+      "RM-01 at Chakan / Sanand (estimate source, route)": "('contract CNT-0001', 'contract') / ('last price paid on PO-CKN-2627-00001', 'rfq')",
+      "Sanand RM-01 RFQ RFQ-2627-00002: invitees (platform / oracle)": "['SUP-002', 'SUP-003', 'SUP-005'] / ['SUP-002', 'SUP-003', 'SUP-005', 'SUP-006']",
+      "Sanand PK-01 RFQ RFQ-2627-00007: invitees (platform / oracle)": "[] / []",
+      "quote from SUP-001 (Maharashtra only) on Sanand RFQ-2627-00002": "entry 409; must-have shown False; award 409",
+      "prices added to CNT-0001 for RM-01": {
+        "GJ 685.00": "200 ",
+        "everywhere 690.00": "409 the price would overlap the draft price of RM-01 on CNT-0001",
+        "location and region": "422 a price applies at one location or in one region, not both"
+      },
+      "after activation: price view cells off the oracle": 0,
+      "Brightwave grid: price view cells off the oracle": 0,
+      "Brightwave housekeeping at OFF-HYD (estimate source, route)": [
+        "standard price",
+        "rfq"
+      ],
+      "cases that tell a broken rule apart": {
+        "contract lookup": 31,
+        "must-have": 1
+      },
+      "checks": "29 of 29 passed"
+    },
+    "findings": [],
+    "notes": [
+      "The price view's contract section stands in for the contract option (the spec gives its sections, not its JSON keys)"
+    ]
+  },
+  {
+    "id": "E58",
+    "title": "Strategic reviews open on their triggers; price triggers only above every threshold, on verified fresh evidence",
+    "requirement": "Task 12.5, D40, D41, D52, O2: the price-gap test (gap %, Rs a unit, saving at the relevant quantity, sources) holds only when every part is strictly above the versioned threshold; only verified, fresh, in-region, convertible benchmarks count; plan, expiry and buyer triggers always open; one open review per business key; every evaluation is written with its rule version; the contract stays valid; a threshold change waits for a second administrator",
+    "status": "FAIL",
+    "seconds": 86.8,
+    "metrics": {
+      "LP-01: contract, market, gap": "62000.00, 58900.0000, (Decimal('3100'), Decimal('5.0000'))",
+      "LP-01 relevant quantity (orders on the platform)": "10.0000",
+      "LP-01 at 5.0000%: evaluations written, reviews": "1, 0",
+      "LP-01 at 58,899: gap, saving, reviews": "Rs 3101 5.0016%, Rs 31010.00, 0",
+      "buyer triggers on LP-01 (joined)": "False, True",
+      "RM-05 shafts: an upper bound on the relevant quantity from the demand inputs": "370.000",
+      "RM-05 evaluations written": 4,
+      "RM-03 benchmark reasons (45 days, 46 days, unverified)": {
+        "fresh": "{'id': 52, 'item_code': 'RM-03', 'item_name': 'Impeller 1 HP', 'price': '150.000",
+        "stale": "{'id': 53, 'item_code': 'RM-03', 'item_name': 'Impeller 1 HP', 'price': '149.000",
+        "raw": "{'id': 54, 'item_code': 'RM-03', 'item_name': 'Impeller 1 HP', 'price': '148.000"
+      },
+      "expiry reviews on day 61 / day 60 / day 60 again": "0 / 1 / 1 (2027-01-29, 2027-01-30)",
+      "threshold changes refused": {
+        "negative": 422,
+        "over 100%": 422,
+        "in the past": 422
+      },
+      "evaluation version today / tomorrow": "{1} / {2}",
+      "cases that tell a broken rule apart": {
+        "ge": 1,
+        "any": 2
+      },
+      "checks": "50 of 53 passed"
+    },
+    "findings": [
+      {
+        "severity": "high",
+        "text": "LP-01 at 5.0016% with saving Rs 31010.0000: 0 open reviews, expected 1"
+      },
+      {
+        "severity": "medium",
+        "text": "the open review does not show the engine's gap 5.0016%: []"
+      },
+      {
+        "severity": "medium",
+        "text": "review.open not audited"
+      }
+    ],
+    "notes": [
+      "Relevant quantity when nothing was ordered (requirements plus plan) is bounded here, not computed exactly (OP-15 leaves the BOM horizon open)"
+    ]
+  },
+  {
+    "id": "E59",
+    "title": "Price types are kept apart; only verified, fresh, in-region, convertible benchmarks count, and never as a price",
+    "requirement": "Task 13.1, D41, D52: contract price, quote, last price paid, price history, standard price and benchmark shown in their own sections; a benchmark carries source, date, region, unit and status, counts only when verified, fresh, in region and convertible, is verified by someone other than who entered it, is never edited once verified, and is never read by an estimate, route, order or touchless check; uploads list bad rows and skip repeats",
+    "status": "PASS",
+    "seconds": 95.2,
+    "metrics": {
+      "RM-01 at PLT-CKN: benchmark reasons off the oracle": "0 of 13",
+      "RM-01 at PLT-SND: benchmark reasons off the oracle": "0 of 13",
+      "RM-08 at PLT-CKN: benchmark reasons off the oracle": "0 of 12",
+      "PK-01 at PLT-CKN: benchmark reasons off the oracle": "0 of 12",
+      "RM-08 counting benchmarks on 20 Nov (oracle / unverified-counted / platform)": "0 / 1 / 0",
+      "dataset benchmarks listed right (status, age)": "49 of 49",
+      "verification": {
+        "the approver who entered it": 403,
+        "a buyer": 403,
+        "reject with no reason": 422,
+        "another approver": 200,
+        "verified twice": 409,
+        "reject a verified one": 409
+      },
+      "upload 1 (loaded, skipped, changed, rejected lines)": "4, 0, [], [4, 6, 8]",
+      "upload 2": "0, 4",
+      "estimate, source, route, touchless before / after halving every benchmark": {
+        "RM-01": "(Decimal('650.0000'), 'contract CNT-0001', 'contract', True) / (Decimal('650.0000'), 'contract CNT-0001', 'contract', True)",
+        "RM-08": "(Decimal('905.9100'), 'last price paid on H-PO-CKN-2627-00199', 'rfq', None) / (Decimal('905.9100'), 'last price paid on H-PO-CKN-2627-00199', 'rfq', None)",
+        "SP-01": "(Decimal('210.0000'), 'last price paid on H-PO-CKN-2627-00176', 'rfq', None) / (Decimal('210.0000'), 'last price paid on H-PO-CKN-2627-00176', 'rfq', None)"
+      },
+      "LP-01 market gap (oracle on 6 Nov)": "(Decimal('3100'), Decimal('5.0000'))",
+      "mutations caught": {
+        "an unverified benchmark counted": true,
+        "a benchmark used as the estimate": true
+      },
+      "checks": "54 of 54 passed"
+    },
+    "findings": [],
+    "notes": [
+      "a verified benchmark has no edit route ({'PUT': 409, 'PATCH': 405}); the spec's 409 has no endpoint named",
+      "Not checked: the price-history values per month and price lists (rule 5 names no aggregate and no section for them)"
+    ]
+  },
+  {
+    "id": "E60",
+    "title": "MRP results become material requests; net lines buy in full; reservation earliest need-by first",
+    "requirement": "Task 6.4 (block 1 spec section 3): every open MRP requirement gets a material request line; one request per MRP plan and location ('<plan>/<location>', source mrp, no product, need-by the earliest line, never moved off a Sunday); gross lines net stock like production orders, earliest need-by first across orders and plans; net lines never take free stock in place of buying; the same file again loads nothing; a re-sent plan is a change (open purchase requests cut); tenant isolation",
+    "status": "PASS",
+    "seconds": 83.6,
+    "metrics": {
+      "mutations caught": [
+        "MRP results skipped by the material requests",
+        "a net line sets free stock aside"
+      ],
+      "MRP lines checked (Chakan + Sanand)": 20,
+      "material request lines compared at each step": 40,
+      "M2 changes applied": 10,
+      "checks": 92,
+      "failed": 0
+    },
+    "findings": [],
+    "notes": [
+      "Spec gap: the shape of the import's `material_requests` list is not specified for a request made by an import; only the new Sanand request in the table is checked (E65 checks the list for a closed request)."
+    ]
+  },
+  {
+    "id": "E61",
+    "title": "ERP cuts take open purchase requests first, earlier dates take nothing held, bad changes are refused",
+    "requirement": "Task 6.3, Q21 (block 1 spec 4.1-4.5): a known row with new values is applied; a cut takes open purchase request cover first (not yet with the buyer), then the reservation, released stock handed on earliest need-by first; an earlier date moves open request lines and takes no stock held for another order; a later date moves only the material request; refused rows carry the spec's reasons and the valid rows of the same file apply; dry run writes nothing; every change audited; a second import changes nothing; tenant isolation",
+    "status": "PASS",
+    "seconds": 167.7,
+    "metrics": {
+      "A1 dry-run changes listed": 11,
+      "mutations caught": [
+        "reservation released before cutting the purchase request",
+        "an order moved earlier takes stock set aside for a later one"
+      ],
+      "checks": 200,
+      "failed": 0
+    },
+    "findings": [],
+    "notes": [
+      "Spec gap: when a header moves an order's need-by and the same import's lines carry the new date, the spec does not say whether those line rows count as changes or as loaded before; A3's change count is checked only as at least one, its effects exactly.",
+      "Spec gap: whether one changed row (a header cancel, a joiner row) is one change record or one per requirement is not fixed; `changed` is checked as rows changed, the records as at least that many.",
+      "Not exercised: an earlier date when a purchase order promises later (OP-4 expedite case); no spec scenario puts an order with the buyer before an earlier change."
+    ]
+  },
+  {
+    "id": "E62",
+    "title": "A cancel after the buyer has it raises one case per document, owned, escalated and due on the company calendar",
+    "requirement": "Task 6.3, Q21 (block 1 spec 4.2, 4.4, 5.2): a cancelled ERP order releases its reservations (handed on earliest need-by first) and cuts purchase requests not yet with the buyer; with the buyer or on a PO, one demand_change case per document for the excess (owner the document's buyer, escalation the owner's manager, due in demand_change_case_days working days on the company calendar), on Exceptions with its amount; closing by the assignee only, once, audited; the manual cancel follows the same rules; tenant isolation",
+    "status": "PASS",
+    "seconds": 98.4,
+    "metrics": {
+      "mutations caught": [
+        "a case raised for a line not yet with the buyer",
+        "a cancel leaves the order's own open purchase requests uncut",
+        "due date on a Mon-Fri calendar without holidays (NOT separated)"
+      ],
+      "cases checked": 6,
+      "checks": 190,
+      "failed": 1
+    },
+    "findings": [
+      {
+        "severity": "low",
+        "text": "mutation 'due date on Mon-Fri without holidays': no case's due date told the calendars apart (['both', 'both', 'both', 'both', 'both', 'both'])"
+      }
+    ],
+    "notes": [
+      "Spec gap: the working hours of the company calendar are not given, so a due date is checked by its day: 2 working days after the day the case was made (1 when it was made before the working day began).",
+      "Spec gap: the Exceptions 'amount' is 'paise' (spec 5.2): read as rupees to the paisa or a whole number of paise.",
+      "Spec gap: a joiner case's title is not given; it is checked to say 'cancelled' and name its document.",
+      "Spec gap: whether a store outcome on a buyer case is an 'unknown outcome' (422) is not said; checked as low.",
+      "Spec gap: the next step of a buyer case on a request with no document yet is not given; it is not checked.",
+      "Spec gap: the case owner when a document's buyer is not a person with the Buyer role is the category's buyer, else the first Buyer; both demo companies have one buyer, so the owner is that person."
+    ]
+  },
+  {
+    "id": "E63",
+    "title": "An increase buys on a new request, never takes stock held for another order, checks only the changed items",
+    "requirement": "Task 6.3, Q21 'up re-runs the store check' (block 1 spec 4.2, 4.3): need raised; the store check runs at the end of the import for the changed item-locations only (all open lines there, earliest need-by first) with submit; stock set aside for another order is never taken; a submitted request never grows, so the increase is a new request; other orders' reservations unchanged; a second import changes nothing; tenant isolation",
+    "status": "PASS",
+    "seconds": 81.3,
+    "metrics": {
+      "mutations caught": [
+        "an increase takes stock set aside for a later order (A4)",
+        "the submitted request grown instead of a new one (A4)",
+        "the store check after an increase not scoped to the changed items",
+        "the submitted request grown instead of a new one (B3)"
+      ],
+      "A4 new request": {
+        "RM-01": "10",
+        "RM-03": "10",
+        "RM-05": "10",
+        "RM-06": "20",
+        "RM-07": "10",
+        "RM-08": "18",
+        "RM-09": "10",
+        "RM-10": "10",
+        "RM-11": "2",
+        "PK-01": "10"
+      },
+      "B3 new request": {
+        "LP-02": "1",
+        "MN-01": "1",
+        "DK-01": "1",
+        "HS-01": "1",
+        "KB-01": "1",
+        "SW-01": "1"
+      },
+      "checks": 109,
+      "failed": 0
+    },
+    "findings": [],
+    "notes": [
+      "The scope probe (MO-2's request rejected before the increase) is this eval's own case for spec 4.2's 'store check for the changed item-locations only; all open lines at those places'."
+    ]
+  },
+  {
+    "id": "E64",
+    "title": "Changes after issue: a store case for what was issued too many, issued lines reopen when the need goes up",
+    "requirement": "Task 6.3, Q21, OP-14, OP-15 (block 1 spec 4.2, 4.4, 4.5): a cut below what was issued closes the line as issued with the new need and raises one store case (owner the first store person, escalating to their manager, due in working days) for issued minus need, never a negative reservation; a cancel after part issue keeps the issued quantity, cancels the material request and raises a store case; a request line cut exactly to its cover is cancelled and the reservation untouched; an increase after issue reopens the line with need minus issued short",
+    "status": "PASS",
+    "seconds": 108.1,
+    "metrics": {
+      "mutations caught": [
+        "no store case for issued too many",
+        "an issued line not reopened when the need goes up"
+      ],
+      "edges at the issued quantity": "30 (equal), 31 (one above), 29 (one below)",
+      "checks": 206,
+      "failed": 0
+    },
+    "findings": [],
+    "notes": [
+      "Spec gap: a change up to exactly the issued quantity on an issued line ('goes back to open' with nothing short, or stays issued) is not decided; at 30 the eval checks only no case, nothing set aside and nothing bought.",
+      "Spec gap: a store case's document number (the material request number is assumed by its link '#/material-requests') and its title on a cancel are not given; the cut's title is checked against the spec's example."
+    ]
+  },
+  {
+    "id": "E65",
+    "title": "A moved start date cancels the old request and makes a new one that takes the released stock first",
+    "requirement": "Task 6.3, OP-11, DF-19 (block 1 spec 3.1 rule 8, 4.1-4.3, 5.3, 6.4 B4): a joiner row cancelled and re-sent with a new start date cancels the old material request and cuts its open purchase request (emptied: cancelled); the new row's lines get a new material request (listed in the import's report), which takes the released stock at once, earliest need-by first; the next store check buys what is still short by the new date; a folder import and file-by-file uploads end the same; a second import changes nothing; tenant isolation",
+    "status": "PASS",
+    "seconds": 68.8,
+    "metrics": {
+      "mutations caught": [
+        "new lines for a cancelled material request skipped (DF-19)",
+        "the moved row loaded as extra demand without the cancel"
+      ],
+      "checks": 57,
+      "failed": 0
+    },
+    "findings": [],
+    "notes": [
+      "Spec gap: whether the CLI's 'loaded N rows' counts a row that only cancels (and the new row that replaces it) is not said; the new row is accepted as loaded 0 or 1 there, the changed and left-out counts exactly.",
+      "Not exercised: new lines for an issued material request (the same DF-19 rule; no spec scenario issues a whole request before a new line arrives)."
     ]
   },
   {
@@ -63,7 +1886,7 @@
     "title": "A later masters import keeps second-person controls: status, bank, policies, versions, history, nothing deleted",
     "requirement": "Task 0.6, DF-16, D-22, rule 8 (block 0c spec 3.1-3.5): the first import loads everything; any later import matches rows by key, never deletes, never changes a supplier's status or an existing supplier's bank details, adds new suppliers as drafts with unverified accounts, leaves out possible duplicates, never applies policies, approval rules or opening stock, adds price versions and contracts as drafts, keeps approvers; every added or changed row audited; a dry run writes nothing; a repeat changes nothing; tenant isolation. Decisions of 22 Nov: the admin API makes no Admin login and gives no role or limit without a second administrator",
     "status": "PASS",
-    "seconds": 18.7,
+    "seconds": 41.8,
     "metrics": {
       "first import: audit rows / mode": "1 / ['first']",
       "first import: tables whose rows differ from the file": "none",
@@ -71,13 +1894,13 @@
       "rows the company holds differently from the file, untouched by the scenario": {
         "supplier_document": 1
       },
-      "dry run: exit code / first line": "1 / update by key (dry run, nothing written): would add 6, would change 4, unchanged 690, not in the file 13 (kept), in 0.3 s; 4 left out, 14 warnings",
-      "import: exit code / first line": "1 / update by key: added 6, changed 4, unchanged 690, not in the file 13 (kept), in 0.31 s; 4 left out, 14 warnings",
+      "dry run: exit code / first line": "1 / update by key (dry run, nothing written): would add 6, would change 4, unchanged 690, not in the file 13 (kept), in 0.48 s; 4 left out, 14 warnings",
+      "import: exit code / first line": "1 / update by key: added 6, changed 4, unchanged 690, not in the file 13 (kept), in 0.58 s; 4 left out, 14 warnings",
       "oracle delta: added / changed / removed": "{'supplier': 1, 'supplier_address': 1, 'supplier_bank_account': 1, 'supplier_contact': 1, 'contract': 1, 'price_record': 1} / {'department': 1, 'item': 1, 'supplier': 1, 'supplier_contact': 1} / none",
       "warnings expected / printed / missing": "13 / 14 / 0",
       "controls after the import (spec 3.5)": "kept",
       "audit: imports / row_add / row_change": "1 / 6 / 4",
-      "the same copy again: first line": "update by key: added 0, changed 0, unchanged 700, not in the file 13 (kept), in 0.19 s; 4 left out, 14 warnings",
+      "the same copy again: first line": "update by key: added 0, changed 0, unchanged 700, not in the file 13 (kept), in 0.44 s; 4 left out, 14 warnings",
       "admin API (decisions of 22 Nov)": {
         "Admin login": "refused (403)",
         "role": "proposed; maker approves 403, other admin 200; 0 -> 1",
@@ -101,11 +1924,11 @@
     "title": "The app runs without owner rights: its own login, insert-only audit by grant, nothing it could switch off",
     "requirement": "Task 1.7, D-25, DF-37 (block 0c spec 4.1-4.5, 5): every runtime path (API, worker, CLI, engines) signs in as the app login, which is no superuser, makes no database or role, bypasses no row security and owns nothing; it may select, insert, update and delete business tables, only select and insert audit_event and setup_change, only select alembic_version and the control tenant tables; every forbidden statement fails with 42501 and changes nothing; stored tenant URLs hold no password; health says restricted; the owner still migrates, and tables it makes later reach the app by default privileges",
     "status": "PASS",
-    "seconds": 15.2,
+    "seconds": 61.8,
     "metrics": {
       "app login / control database": "p2p_eval_m2_control_app / p2p_eval_m2_control",
-      "flow: request / approved by / jobs taken / orders": "REQ-CKN-2627-00001 / ['planthead 200'] / 8 / ['PO-CKN-2627-00001']",
-      "jobs: total / refused by the database / failed otherwise": "16 / 0 / 0",
+      "flow: request / approved by / jobs taken / orders": "REQ-CKN-2627-00001 / ['planthead 200'] / 9 / ['PO-CKN-2627-00001']",
+      "jobs: total / refused by the database / failed otherwise": "17 / 0 / 0",
       "runtime engines sign in as": {
         "tenants.control_engine()": "p2p_eval_m2_control_app",
         "routing.engine_for(slug)": "p2p_eval_m2_control_app",
@@ -117,8 +1940,8 @@
         "database_login": "restricted"
       },
       "as the app: refused statements (42501 with the spec's text)": "10 of 10 (company), 2 of 2 (control)",
-      "as the app: tables checked for the spec's grants": 157,
-      "stored company connections / with a password or user": "1 / 0",
+      "as the app: tables checked for the spec's grants": 161,
+      "stored company connections / with a password or user": "57 / 0",
       "tenant migrate-all as the owner: exit code": 0,
       "a table the owner makes after migrating: the app may": [
         "DELETE",
@@ -129,7 +1952,7 @@
       "no APP_DATABASE_PASSWORD": "MissingAppLogin: APP_DATABASE_PASSWORD is not set: the app signs in to the database with its own restricted login. Add it to .env (see .env.example), then run p",
       "modules using the owner's login outside tenants, demo and cli": "none",
       "mutation checks (rule broken on purpose: caught?)": {
-        "the runtime engines use the owner URL": "caught (174 findings)",
+        "the runtime engines use the owner URL": "caught (178 findings)",
         "the grant on audit_event includes update or delete": "caught (1 findings)",
         "default privileges missing": "caught (1 findings)"
       }
@@ -142,7 +1965,7 @@
     "title": "Held stock (quarantine, blocked) is never set aside, issued or counted; decisions hand usable stock on at once",
     "requirement": "Task 4.1 (block 2 spec 3, 9.3 Q1-Q3): three qualities; held stock never reserved, issued or counted; an inspection receipt waits in quarantine and is not invoiceable; rejected at inspection goes to blocked; a manual hold of set-aside stock gives back the latest need first, then the store check buys; a decision to usable sets stock aside at once; holds API fields and errors; audit stock.hold / stock.hold_decide; ledger equals the quality view; tenant isolation",
     "status": "PASS",
-    "seconds": 36.3,
+    "seconds": 87.7,
     "metrics": {
       "mutations caught": [
         "blocked stock counted as on hand",
@@ -163,7 +1986,7 @@
     "title": "Late supply never covers an earlier need: at risk, not bought twice, one case for the buyer (Q17)",
     "requirement": "Task 6.1, Q17 (block 2 spec 4, 9.3 T1-T4, BT1-BT2): supply counts only if due by the latest arrival (need-by less the buffer in working days on the location calendar; a passed date is today); free stock goes first to short + at risk; only the short part is bought; one late_supply case per PO and material request (owner the buyer, escalation to the manager, due late_supply_case_days, buffer recorded), resolved by the system, closing rules; Exceptions row; tenant isolation",
     "status": "PASS",
-    "seconds": 70.5,
+    "seconds": 220.4,
     "metrics": {
       "mutations caught": [
         "date-blind cover",
@@ -193,7 +2016,7 @@
     "title": "Safety stock is never set aside or issued without the manager's approved override (C4)",
     "requirement": "Task 6.2, C4 (block 2 spec 5, 9.3 S1-S2): free = usable - set aside - safety stock; a manual issue above that is 409 with needs_override, available and safety_stock; an override is a proposal approved only by the asker's manager chain holding request.approve (never the asker); approved, it issues or sets aside and cuts the open request; safety stock changes wait for a second administrator; replenishment after the issue; audit; tenant isolation",
     "status": "PASS",
-    "seconds": 22.0,
+    "seconds": 48.8,
     "metrics": {
       "mutations caught": [
         "safety stock ignored in reservation",
@@ -214,7 +2037,7 @@
     "title": "The store check runs every morning and after short-close, cancel, promise and rejection, never re-raising a rejection",
     "requirement": "Task 6.5 (block 2 spec 6, 9.3 E1-E2, decision OP-14 of 22 Nov): job store_check daily 05:30 IST when auto_store_check, drafts unless store_check_submit, always queues the next run, audited, idempotent; events (close-balance, cancel, acknowledgement, rejection) re-run evaluation and a scoped store check; a rejected shortfall is not re-raised automatically but is by the button; tenant isolation",
     "status": "PASS",
-    "seconds": 56.7,
+    "seconds": 165.6,
     "metrics": {
       "mutations caught": [
         "no store check after a short-close",
@@ -236,7 +2059,7 @@
     "title": "Replenishment counts only the stock part of open orders (DF-25): production orders never block a restock",
     "requirement": "Task 6.7, DF-25 (block 2 spec 7, 9.3 D1): an open PO line counts as on order for stock only by its request line's stock part (base qty less linked material request quantities); a line with no request line counts fully; a restock order still blocks a second restock; a second run makes nothing; tenant isolation",
     "status": "PASS",
-    "seconds": 21.9,
+    "seconds": 71.2,
     "metrics": {
       "mutations caught": [
         "PO lines for production counted as restock on order"
@@ -254,7 +2077,7 @@
     "title": "The planning agent explains shortages from tool results only; anything ungrounded falls back to the facts",
     "requirement": "Task 11b.1, D49, rule 2 (block 2 spec 8): six read-only tools; an explanation is accepted only if its schema is valid, every short or at-risk line is present, each line's causes equal the engine's, and every number, date and document number appears in a tool result (no small-number exemption), else facts only; off by default (no model call), switched on by two administrators, kill switch; one explanation per snapshot; traced; permission and tenant",
     "status": "PASS",
-    "seconds": 39.8,
+    "seconds": 111.7,
     "metrics": {
       "mutations caught": [
         "grounding check skipping numbers under 10",
@@ -276,7 +2099,7 @@
     "title": "Two store checks and a count at once never set stock aside twice or buy twice (AT-09)",
     "requirement": "AT-09 (part), block 2 spec 6 and 11: concurrent demand and reservations: no double reservation or buying; set aside never above usable - safety per place; one purchase request per material request; the result equals the serial one",
     "status": "PASS",
-    "seconds": 30.6,
+    "seconds": 90.0,
     "metrics": {
       "mutations caught": [
         "the store-check lock removed",
@@ -295,41 +2118,93 @@
     "id": "E78",
     "title": "Company states: setup, cutover, live, suspended; who may sign in; user creation in two databases is safe",
     "requirement": "Task 7.1, D-04 (states Setup / Cutover / Live / Suspended and what each allows), D-22 (go-live by two administrators), DF-36 (user creation writes both databases safely; no Admin login made by one administrator)",
-    "status": "FAIL",
-    "seconds": 20.2,
-    "metrics": {},
-    "findings": [
-      {
-        "severity": "high",
-        "text": "company cutover: exit 1, state setup: cutover failed: tables neither carried nor left in the archive: budget_period_lock, budget_year_end, forward_buy, forward_buy_rule, po_approved_version\n"
-      }
-    ],
-    "notes": []
+    "status": "PASS",
+    "seconds": 108.6,
+    "metrics": {
+      "mutation: a suspended company still signs in": "caught",
+      "sign-in by state (status per person)": {
+        "setup": {
+          "admin": 200,
+          "admin2": 200,
+          "finance": 200,
+          "store": 200,
+          "production": 200,
+          "director": 200
+        },
+        "cutover": {
+          "admin": 200,
+          "admin2": 200,
+          "finance": 200,
+          "store": 403,
+          "production": 403,
+          "director": 403
+        },
+        "live": {
+          "admin": 200,
+          "store": 200
+        },
+        "suspended": {
+          "admin": 403,
+          "admin2": 403,
+          "finance": 403,
+          "store": 403,
+          "production": 403,
+          "director": 403
+        }
+      },
+      "moves": [
+        [
+          "setup",
+          "cutover"
+        ],
+        [
+          "cutover",
+          "live"
+        ],
+        [
+          "live",
+          "suspended"
+        ],
+        [
+          "suspended",
+          "live"
+        ]
+      ],
+      "user repair": {
+        "exit": 0,
+        "fixes": [
+          "provisioned",
+          "login_removed"
+        ]
+      },
+      "mutation: profile committed before the login": "caught",
+      "checks": "113 of 113 passed"
+    },
+    "findings": [],
+    "notes": [
+      "POST /api/admin/users role Admin answered 403 (block 0c's choice); the 0d spec says 422"
+    ]
   },
   {
     "id": "E79",
     "title": "Setup is archived at cutover; live starts from a clean database with the configuration carried over",
     "requirement": "Task 7.2, D-05 (testing in setup, archived at cutover; cutover rebuilds a clean live database), OP-6 (new database, the test database kept as an archive), OP-7 (what is carried), OP-22 (queued jobs cancelled)",
-    "status": "FAIL",
-    "seconds": 26.2,
+    "status": "PASS",
+    "seconds": 165.8,
     "metrics": {
       "setup test documents": {
         "request": "REQ-CKN-2627-00001",
         "po": "PO-CKN-2627-00001",
         "receipt": "GRN-CKN-2627-00001",
         "invoice": "PI-2627-000001"
-      }
-    },
-    "findings": [
-      {
-        "severity": "high",
-        "text": "company cutover: exit 1, state setup: cutover failed: tables neither carried nor left in the archive: budget_period_lock, budget_year_end, forward_buy, forward_buy_rule, po_approved_version\n"
       },
-      {
-        "severity": "high",
-        "text": "one tenant_archive row expected: []"
-      }
-    ],
+      "archive": "p2p_tm2_e79c92b93fb__setup_202611230712",
+      "carried tables compared / different": "57 / 0",
+      "mutation: platform stock movements carried": "caught",
+      "mutation: transactions carried into live": "caught",
+      "checks": "53 of 53 passed"
+    },
+    "findings": [],
     "notes": []
   },
   {
@@ -337,7 +2212,7 @@
     "title": "Readiness checks find every gap, including separation coverage, before a company may cut over or go live",
     "requirement": "Task 7.3 (readiness checks including separation coverage: every rule that needs a second or different person has enough eligible people), Plan line 1086 (go-live readiness requires two administrators), FR32 (five different people for the five duties)",
     "status": "PASS",
-    "seconds": 27.8,
+    "seconds": 72.3,
     "metrics": {
       "apex: requesters warned (platform / oracle)": "{} / {}",
       "brightwave: requesters warned (platform / oracle)": "{} / {}",
@@ -363,57 +2238,100 @@
     "id": "E81",
     "title": "Cutover import: open orders, receipts, invoices and advances loaded with checks, control totals, nothing twice",
     "requirement": "Task 7.4 (cutover import of open POs, receipts, invoices and advances, with checks), OP-9 (part-paid invoices refused), OP-10 (receipts post no stock), OP-11 (invoices re-matched by the platform's rules), OP-12 (year-to-date purchases for tax at source), OP-13 (carrier request per PO)",
-    "status": "FAIL",
-    "seconds": 25.0,
-    "metrics": {},
-    "findings": [
-      {
-        "severity": "high",
-        "text": "apex: company cutover exit 1: cutover failed: tables neither carried nor left in the archive: budget_period_lock, budget_year_end, forward_buy, forward_buy_rule, po_approved_version\n"
-      },
-      {
-        "severity": "high",
-        "text": "brightwave: company cutover exit 1: cutover failed: tables neither carried nor left in the archive: budget_period_lock, budget_year_end, forward_buy, forward_buy_rule, po_approved_version\n"
-      }
-    ],
+    "status": "PASS",
+    "seconds": 128.4,
+    "metrics": {
+      "planted rows left out (dry run)": "10 of 10",
+      "mutation: control totals not compared": "caught",
+      "mutation: cutover receipts post stock": "caught",
+      "apex: orders / invoices / open payable": "31 / 44 / 605557.00",
+      "apex: received not invoiced on 2026-10-31": "3600.00",
+      "brightwave: orders / invoices / open payable": "22 / 21 / 2115400.00",
+      "brightwave: received not invoiced on 2026-10-31": "0",
+      "checks": "608 of 608 passed"
+    },
+    "findings": [],
     "notes": []
   },
   {
     "id": "E82",
     "title": "Imports follow the company state; opening stock and bank accounts are locked after go-live",
     "requirement": "Task 7.6, D-02 (imports depend on company state; opening stock and verified accounts locked after go-live), Base WP-7 (imports refused after go-live), block 0c update mode underneath",
-    "status": "FAIL",
-    "seconds": 21.2,
-    "metrics": {},
-    "findings": [
-      {
-        "severity": "high",
-        "text": "company cutover exit 1: cutover failed: tables neither carried nor left in the archive: budget_period_lock, budget_year_end, forward_buy, forward_buy_rule, po_approved_version\n"
-      }
-    ],
+    "status": "PASS",
+    "seconds": 100.9,
+    "metrics": {
+      "mutation: a new opening-stock key added in live": "caught",
+      "mutation: import stock in live replaces the history": "caught",
+      "imports by state (exit codes)": {
+        "setup": {
+          "masters": "exit 0",
+          "stock": "exit 0",
+          "demand": "exit 0",
+          "cutover": "exit 2"
+        },
+        "cutover": {
+          "masters": "exit 0",
+          "stock": "exit 0",
+          "demand": "exit 0",
+          "cutover": "exit 0"
+        },
+        "live": {
+          "masters": "exit 0",
+          "stock": "exit 2",
+          "demand": "exit 0",
+          "cutover": "exit 2"
+        },
+        "suspended": {
+          "masters": "exit 2",
+          "stock": "exit 2",
+          "demand": "exit 2",
+          "cutover": "exit 2"
+        }
+      },
+      "checks": "41 of 41 passed"
+    },
+    "findings": [],
     "notes": []
   },
   {
     "id": "E83",
     "title": "A company goes from setup to live and pays its cutover invoices in the first live payment run",
     "requirement": "Task 7.7 (evals: Setup to Live), Base WP-7 (a company goes Setup to Live; imports refused after go-live), D-04, D-05, D-22 (go-live by two administrators), OP-12 (year-to-date purchases for tax at source), plan acceptance gate 9 (the pilot client rehearses cutover)",
-    "status": "FAIL",
-    "seconds": 44.0,
+    "status": "PASS",
+    "seconds": 156.6,
     "metrics": {
-      "apex": {},
-      "brightwave": {},
-      "checks": "8 of 10 passed"
-    },
-    "findings": [
-      {
-        "severity": "high",
-        "text": "apex: company cutover exit 1, state setup: cutover failed: tables neither carried nor left in the archive: budget_period_lock, budget_year_end, forward_buy, forward_buy_rule, po_approved_version\n"
+      "apex": {
+        "planted year to date": {
+          "supplier": "SUP-005",
+          "ytd": "5000000.00",
+          "open taxable": "206426.45"
+        },
+        "mutation: go-live with a readiness blocker": "caught",
+        "first run: cutover invoices": 43,
+        "tax at source: invoices judged / not judged": "39 / 4",
+        "mutation: year to date ignored": "caught",
+        "first live documents": {
+          "request": "REQ-CKN-2627-00001",
+          "po": "PO-CKN-2627-00204",
+          "receipt": "GRN-CKN-2627-00273",
+          "invoice": "PI-2627-000281"
+        }
       },
-      {
-        "severity": "high",
-        "text": "brightwave: company cutover exit 1, state setup: cutover failed: tables neither carried nor left in the archive: budget_period_lock, budget_year_end, forward_buy, forward_buy_rule, po_approved_version\n"
-      }
-    ],
+      "brightwave": {
+        "planted year to date": {},
+        "mutation: go-live with a readiness blocker": "caught",
+        "first run: cutover invoices": 20,
+        "tax at source: invoices judged / not judged": "8 / 12",
+        "first live documents": {
+          "request": "REQ-BLR-2627-00001",
+          "po": "PO-BLR-2627-00121",
+          "receipt": "GRN-BLR-2627-00103",
+          "invoice": "PI-2627-000156"
+        }
+      },
+      "checks": "108 of 108 passed"
+    },
+    "findings": [],
     "notes": []
   },
   {
@@ -421,7 +2339,7 @@
     "title": "The budget counts each request line once: at its estimate until ordered, then at the order's price",
     "requirement": "Task 3.7, FR27 (block 3 spec 3.3 BG0/BG1, 4.1, 4.5, 4.6): used = held by requests (open or sourcing lines of submitted or approved requests) + held by orders (open order balance before GST, less actuals) + spent; the request checked excluded; final prices; variance left = budget - the three parts, per location too; a cancelled order puts the estimate back; GET /api/budgets/check fields, 404, 403; tenant isolation",
     "status": "PASS",
-    "seconds": 21.8,
+    "seconds": 75.1,
     "metrics": {
       "A0 values by GL (oracle)": {
         "MO-1": {
@@ -452,7 +2370,7 @@
     "title": "Stock spends its budget when accepted at receipt, at the order price; services and charges when paid",
     "requirement": "D-10 (block 3 spec 3.3 BG1, 4.1, 4.2): a stocked line's actual = accepted x order price in the acceptance month (source receipt), nothing at gate entry, never the rejected part; held by orders falls by the actual; a balance closed holds nothing; payment adds only charges for stocked lines and the taxable value of a service in the invoice's month; audit budget.actual once per receipt or invoice; tenant isolation",
     "status": "PASS",
-    "seconds": 24.6,
+    "seconds": 86.3,
     "metrics": {
       "checks": 56,
       "failed": 0,
@@ -469,7 +2387,7 @@
     "title": "A locked budget month is frozen: nothing posts into it, it is locked in order, and late postings move on",
     "requirement": "D-09 (block 3 spec 3.3 PL1, 4.3, 4.4, 4.6, 4.7): lock only ended months, in order, once, with a reason, by budget.manage; a late actual goes to the first open month keeping event_period (audit budget.actual_moved); adjustments and imported budget rows for a locked month are refused; periods API and CLI; tenant isolation",
     "status": "PASS",
-    "seconds": 24.2,
+    "seconds": 85.1,
     "metrics": {
       "checks": 67,
       "failed": 0
@@ -485,7 +2403,7 @@
     "title": "Year end locks the year, records the open commitments it carries, and the new year counts them",
     "requirement": "D-09, OP-5 (block 3 spec 3.3 YE1, 4.3, 4.6, 4.7): close allowed from 1 April by budget.manage; locks every month of the FY not yet locked; carried per GL, cost centre, location (held by requests, held by orders) and total; 409 twice, 422 early or for a later FY; GET years/{fy} = the close; open commitments count in the new FY, unspent budget lapses; CLI close-year; audit budget.year_close; tenant isolation",
     "status": "PASS",
-    "seconds": 19.8,
+    "seconds": 45.7,
     "metrics": {
       "checks": 49,
       "failed": 0
@@ -500,7 +2418,7 @@
     "title": "Budget supplements, returns and transfers are proposals another finance person approves",
     "requirement": "D-09, OP-8 (block 3 spec 4.3, 4.6): POST /api/budgets/adjustments by budget.manage -> 201 pending proposal; the proposer never approves; on approval `budget` rows of kind adjustment with reason and proposal id (a transfer two rows summing 0); open periods only; 422 for bad amounts, holders, GL, reason; the check and the variance read the new budget; audit budget.adjust; tenant isolation",
     "status": "PASS",
-    "seconds": 19.1,
+    "seconds": 45.1,
     "metrics": {
       "checks": 33,
       "failed": 0
@@ -516,7 +2434,7 @@
     "title": "Forward-buy recommendations equal an independent oracle: trend, dip, cover, months, limits and money",
     "requirement": "Task 13.5 (block 3 spec 3.4 FB1-FB5, FB8, 5.1-5.4, 5.6): price now = newest counting benchmark; trend = least squares of 12 monthly averages; dip above min_gap_pct; cover from usable stock and open supply; months 1..max_cover with net per unit above 0; storage and budget limits; whole packs from the latest month; recommend only when net > min_net_saving_inr; one live record per item and location (superseded, lapsed); every evaluation in rule_evaluation; preview writes nothing; tenant isolation",
     "status": "PASS",
-    "seconds": 40.0,
+    "seconds": 103.9,
     "metrics": {
       "FB1 qty / net (platform)": "746.0000 / 44982.36",
       "FB1 qty / net (oracle)": "746.0000 / 44982.36",
@@ -535,7 +2453,7 @@
     "title": "A forward buy is accepted by the buyer and approved by the person the rule names, as a new linked request",
     "requirement": "Task 13.5 (block 3 spec 3.4 FB6, 5.4, 5.6): accept (po.create) with a reason and whole packs up to the recommendation; a forward_buy.approve proposal and task for the forward_buy rule's person, never the buyer; revalidation 409 with new_id; approval writes a planning request (stock part all, anchor's need-by, department, estimate) through the normal chain and budget check; the anchor never grows; reject with a reason, not offered again until a newer benchmark; audit; tenant isolation",
     "status": "PASS",
-    "seconds": 37.2,
+    "seconds": 108.7,
     "metrics": {
       "checks": 91,
       "failed": 0
@@ -550,7 +2468,7 @@
     "title": "Contract, capex, disabled and stale-priced items are never recommended; Brightwave's coffee saves too little",
     "requirement": "Task 13.5 (block 3 spec 3.4 FB7/FB8, 5.1-5.3, 7): eligibility (stocked goods, not capex, rule enabled, no contract price in force), no_fresh_benchmark without a delivered fresh benchmark, not_below_trend, saving_too_small, shelf life; the preview writes nothing; a forward-buy request counts as stock on order for replenishment; tenant isolation",
     "status": "PASS",
-    "seconds": 22.4,
+    "seconds": 80.6,
     "metrics": {
       "FB7 qty / net (oracle)": "22.0000 / 1960.80 (shelf_life)",
       "checks": 45,
@@ -568,7 +2486,7 @@
     "title": "The forward-buy explanation is the template with the record's own numbers, or an AI text that invents none",
     "requirement": "Task 13.5, rule 2 (block 3 spec 5.5): the template sentence with numbers only from the record; the AI step (one call, summary <= 600 characters, at most 3 risks) passes an evidence check of every number and date or the template stays; explanation_source template or ai; audit; tenant isolation",
     "status": "PASS",
-    "seconds": 20.6,
+    "seconds": 57.1,
     "metrics": {
       "checks": 22,
       "failed": 0,
@@ -576,8 +2494,192 @@
     },
     "findings": [],
     "notes": [
-      "the AI explanation: Buying 746\u202fkg now at Rs\u202f828.00 a kg saves Rs\u202f63,511.45 before holding and Rs\u202f18,529.09 to hold the stock at 1.5\u202f% a month, for a net saving of Rs\u202f44,982.36. The purchase covers February to April\u202f2027 at about 248.71\u202fkg a month, tying up Rs\u202f6,86,320.00 until April\u202f2027. Risks: price may fall further;",
+      "the AI explanation: Copper winding wire is now Rs 828.00 a kg, 8.36% below its 12\u2011month trend of Rs 903.50, and buying 746 kg now will cover February to April 2027 at about 248.71 kg a month, saving Rs 63,511.45 before holding and Rs 18,529.09 to hold the stock at 1.5% a month, for a net saving of Rs 44,982.36. Risks: ",
       "Spec gap: the template's numbers 12 (the trend window) and 1.5% (the rule's holding cost) are not record fields in 5.6; the number check accepts them from the rule in force."
+    ]
+  },
+  {
+    "id": "E95",
+    "title": "Mail is recorded before it is sent, and leaves exactly once (outbox)",
+    "requirement": "Task 11a.1, DF-23 (spec 2.2): every outgoing mail is an `email_message` row queued in the caller's transaction (secret parts sealed), sent by one locked sender after commit or by the `email` job; a rollback sends nothing; an SMTP outage leaves it queued and it is sent once later; two senders never double it; no body or link in a job",
+    "status": "PASS",
+    "seconds": 45.7,
+    "metrics": {
+      "checks": 48,
+      "failed": 0,
+      "messages": 11
+    },
+    "findings": [],
+    "notes": [
+      "Spec gap: how old the `email` job must be before an absent row counts as rolled back is measured from the job (10 minutes, spec 2.2); the eval runs the job 11 minutes after it was made.",
+      "Spec gap: the 24-hour `failed` state and its `email_failed` task (OP-4) need a clock 24 hours on; not run here.",
+      "The mail server is the evals' fake (as every eval); 'Mailpit' in the spec reads as 'the messages that left'."
+    ]
+  },
+  {
+    "id": "E96",
+    "title": "A request for quotation reaches each supplier once, even with several senders at once",
+    "requirement": "DF-28 email half (spec 2.2): send_rfq queues every supplier's mail and sets invited_at and message_id in one transaction under the RFQ lock, commits once, then sends; a second sender finds nobody left; a refused address does not hold up the others and its error is shown on the RFQ page",
+    "status": "PASS",
+    "seconds": 50.1,
+    "metrics": {
+      "checks": 18,
+      "failed": 0,
+      "suppliers": 3
+    },
+    "findings": [],
+    "notes": [
+      "Spec gap: whether the later senders write their own `rfq.send` audit row (with queued 0) is not said; the eval requires exactly one row with suppliers queued and lists others as low.",
+      "When `rfq.send` is automatic for the company, sourcing has already sent; the race then runs the two extra senders only."
+    ]
+  },
+  {
+    "id": "E97",
+    "title": "Events are recorded once by their source key; repeats route nothing new",
+    "requirement": "D39 rule 1 (spec 2.2): `event` unique on (type, key); `events.record` returns the existing row with new false; an incoming mail is one `email.received` event keyed by its Message-ID whose router queues the same reading job once (key email:<id>); a store check with unchanged figures records and queues nothing new",
+    "status": "PASS",
+    "seconds": 43.5,
+    "metrics": {
+      "checks": 26,
+      "failed": 0,
+      "model calls": 9
+    },
+    "findings": [],
+    "notes": [
+      "Spec gap: the event's `payload` and `occurred_at` for an incoming mail are not given (the Date header or the time it was read); the eval checks type, key and source only.",
+      "Spec gap: whether the planning router opens a workflow for a request with nothing short or at risk is not said; the eval counts workflows per request that has an event."
+    ]
+  },
+  {
+    "id": "E98",
+    "title": "One workflow per business key; a stale recommendation is refused at confirmation and refreshed",
+    "requirement": "D39 rules 4 and 5 (spec 2.3): `workflows.join_or_start` gives one open workflow per (kind, business key), later events join it and queue no second job (key workflow:<id>); before a person's confirmation runs, the recommendation's basis is recomputed: changed figures give 409, the proposal withdrawn, the record stale and a refresh event; unchanged figures let it run",
+    "status": "PASS",
+    "seconds": 41.5,
+    "metrics": {
+      "checks": 27,
+      "failed": 0
+    },
+    "findings": [],
+    "notes": [
+      "Spec gap: the runtime's recommendation (kind tool.<name>) has no basis registered by the platform, and the spec does not say what revalidation does for a kind with no basis; the eval registers its own basis for it.",
+      "Spec gap: the business key of a runtime recommendation (a write tool's) is not named; the eval only requires it to be non-empty.",
+      "Spec gap: a write tool asked for before any read tool gives empty evidence, which `record` refuses; the scripted agent reads first."
+    ]
+  },
+  {
+    "id": "E99",
+    "title": "Each recommendation keeps its evidence, engine figures, rule versions, run and confirmer, frozen",
+    "requirement": "D39 rule 7 (spec 2.4): one record of what was recommended, on what evidence, the engine's numbers, the rule versions, the run and the proposal; who confirmed it and when; the evidence cannot change; the person who directed the agent cannot confirm; read by audit.view holders of the same company only",
+    "status": "PASS",
+    "seconds": 44.8,
+    "metrics": {
+      "checks": 33,
+      "failed": 0
+    },
+    "findings": [],
+    "notes": [
+      "Spec gap: the response shapes of the recommendation API are listed as fields; the eval reads them as a JSON object (the detail) and a list or an object holding one (the list).",
+      "Spec gap: the exception `decide` raises for a second decision is named only by its status (409); any error is accepted."
+    ]
+  },
+  {
+    "id": "E100",
+    "title": "Agent runs and model calls are traced to the person, job, capability, run and document",
+    "requirement": "Task 11a.4 (spec 2.5): agent_run records capability, started_by, user_id and via; every model_call made inside a run carries its run_id, capability and user; an AI step's calls carry the document (entity, entity_id) and capability; the run viewer lists a run's model calls; prompts are not stored (OP-10)",
+    "status": "PASS",
+    "seconds": 37.1,
+    "metrics": {
+      "checks": 39,
+      "failed": 0,
+      "model calls": 4
+    },
+    "findings": [],
+    "notes": [
+      "audit.VIA is absent or not a context variable: the dev switcher's via was not checked.",
+      "Spec gap: `audit.VIA` (the dev switcher) does not exist in the base this eval was written on; the via check runs only when it exists and is a context variable.",
+      "Spec gap: the entity name an AI step records (the email, the RFQ or the draft) is not named; the eval requires both entity and entity_id to be filled."
+    ]
+  },
+  {
+    "id": "E101",
+    "title": "Each AI capability is switched off at once by one administrator and on only by two, with the D54 checks",
+    "requirement": "Task 11a.5 (spec 2.6): seven capabilities, monitoring off at first; off is immediate and hands its work to a person; on needs the checks and a second administrator; the gate and every job of a capability refuse while it is off and say why; the kill switch stays separate",
+    "status": "PASS",
+    "seconds": 30.2,
+    "metrics": {
+      "checks": 58,
+      "failed": 0
+    },
+    "findings": [],
+    "notes": [
+      "Spec gap: the status for the proposer approving their own switch-on is not named (existing proposal segregation); any refusal (not 200) is accepted if the capability stays off.",
+      "Spec gap: owner roles are written as names ('AP', 'Purchase Manager'); the eval accepts a holder of the role or a person with those words in their designation."
+    ]
+  },
+  {
+    "id": "E102",
+    "title": "Switching a capability off hands every piece of its open work to a person; nothing runs on",
+    "requirement": "D54 check 5 (spec 2.6): at switch-off, queued jobs fail with the reason and become ai_handover tasks, open workflows and proposal-less recommendations are handed over with one task each to an active owner, waiting runs stop and are never resumed, nothing calls a model afterwards, switching on again re-runs nothing; planning's queued explanations are dropped with no task",
+    "status": "PASS",
+    "seconds": 43.0,
+    "metrics": {
+      "checks": 98,
+      "failed": 0,
+      "model calls": 0
+    },
+    "findings": [],
+    "notes": [
+      "Spec gap: 2.6 step 3 hands over every open workflow of a capability with a task, while E102's row says planning makes no task; the eval requires no task for planning's queued jobs and accepts a handed-over planning workflow with or without one.",
+      "Spec gap: a waiting run's hand-over makes no task (its proposal is already a person's); the eval checks the run is failed and the proposal pending.",
+      "Spec gap: the task payload's `ref` for each kind of item (email id, workflow key, recommendation id) is not fixed; tasks are matched by capability and count, workflows by `workflow.task_id`."
+    ]
+  },
+  {
+    "id": "E103",
+    "title": "Model calls are priced from the price file and stop at the company's monthly cap",
+    "requirement": "DF-32 (spec 2.7): cost = tokens x the price in force (Decimal, 6 places); a company's month spend is its own; a call whose worst case would pass the cap is refused before the provider is asked (CostCapReached, a ModelError: planning gives facts only, an AI step a review); an unpriced model is refused when a cap is set; one warning per month past the warning percent; the cost card adds up to the model_call rows",
+    "status": "PASS",
+    "seconds": 39.9,
+    "metrics": {
+      "checks": 52,
+      "failed": 0,
+      "paid calls": 7
+    },
+    "findings": [],
+    "notes": [
+      "Spec gap: the worst case of a call ('estimate at the output price') depends on the token estimate, which the spec does not fix; the eval checks the boundary from the spend side: under the cap a call may run, at or past it none does.",
+      "Spec gap: the shape of MODEL_PRICES is not given; the eval tries JSON rows of the file's columns and falls back to costs.EXTRA.",
+      "The eval's price row was given through MODEL_PRICES."
+    ]
+  },
+  {
+    "id": "E104",
+    "title": "Replaying jobs, mail, imports and the daily commands after a full demo makes no duplicates",
+    "requirement": "Task 11a.7 (spec 2.2, 4): jobs keyed by their business key (one waiting per key), events keyed by their source, mail recorded once in the outbox; replaying any of them, or re-running the daily commands, changes no count of documents, mail, tasks, notifications, notes, recommendations, events or workflows",
+    "status": "PASS",
+    "seconds": 44.1,
+    "metrics": {
+      "stages": 15,
+      "checks": 75,
+      "failed": 0,
+      "n requests": 16,
+      "n rfqs": 3,
+      "n orders": 10,
+      "n mail out": 54,
+      "n tasks": 14,
+      "n notifications": 48,
+      "n planning notes": 0,
+      "n recommendations": 0,
+      "n events": 0,
+      "n workflows": 0,
+      "n quote drafts": 0,
+      "n invoices": 5
+    },
+    "findings": [],
+    "notes": [
+      "Spec gap: populate leaves items below their reorder point on purpose (`low_items_left`); the first replenish after it rightly makes requests, so the snapshot is taken after one settling pass, not straight after populate.",
+      "Spec gap: 're-enqueue every done job with its key' is read as the jobs that have a key; a job with no key (a timer, a one-off) has no business key to deduplicate on."
     ]
   },
   {
@@ -585,7 +2687,7 @@
     "title": "An order's approval is of the version the approver saw; the approved version is recorded",
     "requirement": "Task 0.2, DF-07 (block 4 spec 4.1 rules 1-3, 4.3, V1): each step carries the version of its round; approve and reject with a stale version are 409 and write nothing; approving records po.approved_version and one po_approved_version snapshot (total, band, rule, approver, lines) in the same step; audit po.approve with version and with_code; omitted version approves the current one; amounts against the oracle and the truth file; tenant check",
     "status": "PASS",
-    "seconds": 22.4,
+    "seconds": 38.8,
     "metrics": {
       "truth rows compared": 2,
       "V1 totals v1 / v2 / v4": "128148.00 / 106790.00 / 117469.00",
@@ -608,7 +2710,7 @@
     "title": "A material change after approval is approved again; anything else carries the approval (Q19)",
     "requirement": "Task 0.2, Q19, AT-08 (block 4 spec 4.1 rules 4-7 and 9, V2, V2b): a change is measured from the last approved version; material means approval again (submitted, ack cleared, new round with the new version, reasons and baseline on the revision); otherwise the approval carries (approved_version unchanged, ack cleared, new respond link); sending a version changed materially after approval is refused; tenant check",
     "status": "PASS",
-    "seconds": 21.4,
+    "seconds": 45.2,
     "metrics": {
       "V2b totals v2 / v3": "106790.00 / 106790.00",
       "truth rows compared": 4,
@@ -630,7 +2732,7 @@
     "title": "Changes add up from the approved version: dates, quantities, earlier dates",
     "requirement": "Task 0.2, DF-07, OP-2, OP-5, OP-22 (block 4 spec 4.1 rule 4, 4.3, V3): every revision is compared with the last approved version; two +2 day slips make the second material; a quantity back below the approved one is not; an earlier date beyond tolerance is; +2 then -2 is not; reasons on the revision and in the history; tenant check",
     "status": "PASS",
-    "seconds": 21.1,
+    "seconds": 53.0,
     "metrics": {
       "V3 revisions": {
         "V3 +2 days (16 Dec)": "v2 not material",
@@ -660,7 +2762,7 @@
     "title": "Supplier price rises add up from the first approved price; above 2% the price approver decides",
     "requirement": "DF-08, OP-3, OP-16 (block 4 spec 4.2, 4.3, V4, V4b): a supplier's price is judged exactly from the first approved price; the buyer alone accepts up to supplier_price_pct in all; above it the buyer's acceptance makes the po.supplier_price proposal valued (new - base) x quantity for the price_variance person; C1 kept; base_value and rise_pct shown; amounts against the oracle and the truth file; tenant check",
     "status": "PASS",
-    "seconds": 24.5,
+    "seconds": 62.5,
     "metrics": {
       "V4 925.00: within / value": "False / 2400.00",
       "V4b 923.10 / 923.11": "within / out, value 2173.20",
@@ -683,7 +2785,7 @@
     "title": "A revised order is never touchless: a person approves the change",
     "requirement": "Rev s5, OP-7 (block 4 spec 4.1 rules 3 and 8, V5): a touchless order's approval by the rule records its first approved version ('rule:PO-01', the contract price); after a material revision the touchless tests run again, touchless.revision fails with its text, the order is not approved by the rule but waits for the next band's person (the purchase manager), who approves the new version; tenant check",
     "status": "PASS",
-    "seconds": 18.4,
+    "seconds": 42.8,
     "metrics": {
       "V5": "PO-CKN-2627-00001: 1890.00 in PO-01; after +5 days submitted, step U08",
       "mutations caught": [
@@ -704,7 +2806,7 @@
     "title": "Every decision from an email link needs a one-time code (D-07)",
     "requirement": "D-07, OP-9, OP-10 (block 4 spec 5.1, O1): approve, reject and return from /approve/{token} each need a valid code whatever the amount; the code is mailed only to the login the link names and never shown on the page or in another mail; wrong codes count down and lock after five; a code works once, for one step of one round for one person; expired codes are refused; the email and page carry the code note and the app link; audit otp.* and 'emailed link'; Apex and Brightwave; a link re-signed for another company decides nothing; tenant check",
     "status": "PASS",
-    "seconds": 21.0,
+    "seconds": 42.0,
     "metrics": {
       "Apex requests (value, first approver)": {
         "REQ-CKN-2627-00001": "11400.00 U07",
@@ -730,7 +2832,7 @@
     "title": "Approving an order above Rs 5,00,000 needs a one-time code for that version",
     "requirement": "Task 1.2, D-07, OP-11, OP-14, OP-15 (block 4 spec 5.2, O2, O2b): needs_code = total with GST above approval_otp_above; approve without, with a wrong or another version's code is 409 and writes nothing; the code goes only to the person whose turn it is, ref <po>:<version>:<round>:<step>, resend gap 30 s; the right code approves (with_code true, otp.use); reject needs none; at or below the limit no code (409 'needs no code'); totals against the oracle and the truth file; tenant check",
     "status": "PASS",
-    "seconds": 23.4,
+    "seconds": 53.0,
     "metrics": {
       "O2 / O2b totals": "533950.00 / 512592.00",
       "truth rows compared": 2,

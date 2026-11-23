@@ -27,13 +27,9 @@ Orders are approved by tier, shown in the list of **Purchase orders**: up to Rs 
 
 Payment runs, releasing a blocked invoice, supplier changes, held orders and goods received without an order (also on **Receive without order**) are under **Admin** → **Approvals**. Click **Approve** or **Reject**. Nothing runs until you do.
 
-## Check suppliers and contracts
+## Suppliers, contracts, prospects and market prices
 
-**Vendors** → open a vendor → **Verify** a document after you compare it with the original. **Contracts** → open a draft → **Activate this contract**.
-
-## Prospects, regions and market prices
-
-A prospect's identity is checked on its vendor page (**Identity check**: method, the PAN or GST certificate scan, a note) by someone other than the buyer who registered or invited it. A flag (a contact, address or mail domain shared with another supplier) is cleared with a reason only after you have looked into it. Checking identity does not activate the supplier: activation is still its own approval. **Approved for** on a vendor page shows where a supplier may supply each category; a change asked by someone else waits for you in **Approvals**. Under **Contracts** → **Market prices**, verify or reject the benchmarks others entered (never your own).
+**Vendors** → open a vendor → **Verify** a document after you compare it with the original. **Contracts** → open a draft → **Activate this contract**. A prospect's identity is checked on its vendor page (**Identity check**: method, the PAN or GST certificate scan, a note) by someone other than the buyer who registered or invited it. A flag (a contact, address or mail domain shared with another supplier) is cleared with a reason only after you have looked into it. Checking identity does not activate the supplier: activation is still its own approval. **Approved for** on a vendor page shows where a supplier may supply each category; a change asked by someone else waits for you in **Approvals**. Under **Contracts** → **Market prices**, verify or reject the benchmarks others entered (never your own).
 
 ## What you cannot do
 
@@ -42,8 +38,6 @@ You cannot decide what you asked for, entered or proposed. You cannot verify a d
 ## If you are stuck
 
 If you will be away, open **Settings** (the gear at the top) → **Away? Name a deputy**, pick an approver and the days, and click **Name deputy**. Approvals that come up meanwhile go to them. To change who approves for good, ask the Admin (**Company setup** → **Approvers**).
-
-## Exceptions
 
 **Exceptions** lists everything stuck that needs a person, oldest first, with the reason, who must act, the next step and the age in working days; tick **Only mine** for what waits on you. Approvals you were reminded about, goods that came with no order and other decisions show there.
 

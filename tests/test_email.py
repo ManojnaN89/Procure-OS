@@ -149,6 +149,7 @@ def test_our_outgoing_mail_carries_the_reply_address_and_a_reply_without_a_tag_i
     out_id = emails.send_linked_email(
         db, "sales@steel.example", f"Please quote {rfq}", "Details attached.", linked_type="rfq", linked_ref=rfq
     )
+    emails.commit_and_send(db)
     wait_for(f"Please quote {rfq}")
     sent = httpx.get("http://127.0.0.1:8025/api/v1/search", params={"query": f"subject:{rfq}"}, timeout=5).json()[
         "messages"

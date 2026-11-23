@@ -21,6 +21,7 @@ from p2p.platform.sod import Actor
 TAG = re.compile(r"^(RFQ|PO|INV|REQ|GRN)-[\w-]+$", re.IGNORECASE)
 TYPES = {"RFQ": "rfq", "PO": "po", "INV": "invoice", "REQ": "request", "GRN": "grn"}
 MAILER = Actor("service", "mailbox")
+_QUEUED = "linked_mail_queued"  # Message-IDs queued in a session and not yet tried
 
 
 def plus_address(kind: str, ref: str) -> str:
@@ -51,10 +52,9 @@ def send_linked_email(
     case_id: int | None = None,
     attachments: list[tuple[str, str, bytes]] | None = None,
 ) -> str:
-    """Queue an email whose replies will be linked back to the RFQ, PO or invoice, and commit it with the caller's work
-    so far (as this function always has: some callers end their work here). It is sent right after that commit, and the
-    `email` job retries it if the mail server is down (platform/outbox.py). Returns the Message-ID. A caller that must
-    keep several mails in one transaction uses `outbox.queue_email` itself."""
+    """Queue an email whose replies will be linked back to the RFQ, PO or invoice. Does not commit: the caller commits it
+    together with its own change, then calls `send_queued` (or `commit_and_send`) to send it at once; the `email` job
+    retries it if the mail server is down (platform/outbox.py). A rollback drops it. Returns the Message-ID."""
     message_id = outbox.queue_email(
         db,
         to=to,
@@ -67,9 +67,22 @@ def send_linked_email(
         attachments=attachments,
         reply_to=plus_address(linked_type, linked_ref),
     )
-    db.commit()
-    outbox.send_now(outbox.tenant_of(db), [message_id], engine=db.get_bind().engine)
+    db.info.setdefault(_QUEUED, []).append(message_id)
     return message_id
+
+
+def send_queued(db: Session) -> list[str]:
+    """After the caller's commit: send at once the linked mail this session queued (a mail rolled back is not found)."""
+    ids: list[str] = db.info.pop(_QUEUED, [])
+    if ids:
+        outbox.send_now(outbox.tenant_of(db), ids, engine=db.get_bind().engine)
+    return ids
+
+
+def commit_and_send(db: Session) -> list[str]:
+    """Commit the caller's work with the mail it queued, then send that mail."""
+    db.commit()
+    return send_queued(db)
 
 
 def ingest(db: Session, tenant: str, incoming: IncomingMail) -> int | None:

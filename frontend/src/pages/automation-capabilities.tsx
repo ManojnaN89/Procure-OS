@@ -11,7 +11,7 @@ type Capability = {
 	code: string;
 	label: string;
 	enabled: boolean;
-	decisions: { decision_type: string; level: string }[];
+	decisions: { decision_type: string; label: string; level: string }[];
 	checks: Record<string, unknown> | null;
 	changed_at: string | null;
 	changed_by: string | null;
@@ -123,7 +123,7 @@ export function CapabilitiesCard({ reason }: { reason: string }) {
 							</Td>
 							<Td className="text-xs">
 								{cap.decisions
-									.map((x) => `${x.decision_type}: ${x.level}`)
+									.map((x) => `${x.label}: ${x.level}`)
 									.join(", ") || "-"}
 							</Td>
 							<Td className="text-xs">

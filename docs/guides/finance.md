@@ -36,15 +36,11 @@ If AP asked to pay a blocked invoice anyway, you may decide it under **Admin** â
 
 ## What you cannot do, and if you are stuck
 
-You cannot approve a run you proposed. You cannot make the bank file before approval. A small supplier's invoice may have an earlier due date than the terms say (the law caps it). The run page shows each due date.
+You cannot approve a run you proposed. You cannot make the bank file before approval. A small supplier's invoice may have an earlier due date than the terms say (the law caps it). The run page shows each due date. **Exceptions** lists everything stuck that needs a person, oldest first, with the reason, who must act, the next step and the age in working days; tick **Only mine** for what waits on you. A release you may decide shows there as yours.
 
 ## Watch the budgets
 
 Open **Control tower**. Under **Budgets, this financial year so far** each cost centre and account shows its budget, what requests already hold, what was spent, and what is left. A figure in red is over budget.
-
-## Exceptions
-
-**Exceptions** lists everything stuck that needs a person, oldest first, with the reason, who must act, the next step and the age in working days; tick **Only mine** for what waits on you. A release you may decide shows there as yours.
 
 ## Budgets: months, year end and adjustments
 

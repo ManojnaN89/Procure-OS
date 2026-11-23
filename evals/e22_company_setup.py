@@ -203,6 +203,8 @@ def run(ctx) -> Outcome:
             ]
             good = [e for e in edge if e != p["value"]][:2]
             bad = [str(lo - 1), str(hi + 1), "abc", "NaN", "Infinity", ""] + (["1.5"] if kind == "int" else [])
+            if p["default"] == "":  # empty means "none" for this setting (e.g. the AI cost cap, AI foundation spec 2.7)
+                bad.remove("")
         for value in bad:
             checked += 1
             r = client.put(f"{SETUP}/policies/{key}", json={"value": value, "reason": "probe"}, headers=admin)

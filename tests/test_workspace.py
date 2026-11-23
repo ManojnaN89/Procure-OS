@@ -319,7 +319,7 @@ def test_a_budget_nearly_used_alerts_approvers_and_finance(store: Session, outbo
     x(text("update request_line set est_price = 720000"))
     store.commit()
     assert alerts.run(store, slug, today=TODAY).opened == ["budget_used:G1"]  # exactly 90%
-    assert _notified(store, people["Approver"])[0][0] == "GL G1: 90% of the budget so far this year is committed"
+    assert _notified(store, people["Approver"])[0][0] == "GL G1: 90% of the budget so far this year is used"
     assert len(_notified(store, people["Finance"])) == 1
 
 

@@ -112,7 +112,7 @@ POLICIES: dict[str, tuple[str, str, str, str, str, float | None, float | None, t
         "while a budget is set",
         "",
         0,
-        None,
+        100000,  # an input check (a typo guard), not a business limit
         (),
     ),
     "ai_cost_warn_pct": (

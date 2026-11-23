@@ -156,16 +156,6 @@ def test_given_a_row_that_adds_when_it_fits_then_its_role_joins_the_chain_with_i
 # ---- each step keeps its rule row; the approval email ------------------------------------------------------------
 
 
-def _jobs(slug: str, kind: str) -> list[dict[str, Any]]:
-    with tenants.control_engine().connect() as c:
-        return [
-            dict(r[0])
-            for r in c.execute(
-                text("select payload from job where tenant_slug = :t and kind = :k order by id"), {"t": slug, "k": kind}
-            )
-        ]
-
-
 def _step(db: Session, no: str) -> dict[str, Any]:
     return dict(
         db.execute(
@@ -456,7 +446,7 @@ def test_given_a_forwarded_link_then_the_code_goes_only_to_the_named_login_and_n
     assert mail_sent["to"].startswith("stores") and code not in page.text  # only the named person's mailbox has it
     assert code not in client.get(f"/approve/{token}").text
     assert f"/#/requisitions/{no}" in page.text and "Open the request in the app" in page.text
-    (mail_job,) = [j for j in _jobs(db.info["slug"], "send_email") if no in j["subject"]]
+    (mail_job,) = [j for j in queued_mails(db) if no in j["subject"]]  # the approval mail, in the outbox
     assert f"/#/requisitions/{no}" in mail_job["body"] and "needs a one-time code" in mail_job["body"]
     assert f"/#/requisitions/{no}" in mail_job["html"]
 

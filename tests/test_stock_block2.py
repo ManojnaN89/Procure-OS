@@ -4,7 +4,7 @@ scripted model, and one company never reaching another's holds, cases or notes."
 
 import json
 from collections.abc import Iterator
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime, tzinfo
 from decimal import Decimal
 from typing import Any
 
@@ -16,7 +16,7 @@ from test_ai_steps import Scripted
 
 from p2p.agents import autonomy, planning
 from p2p.ai_steps.gateway import Gateway
-from p2p.formulas.calendar import business_today
+from p2p.formulas.calendar import IST, business_today, pin_today
 from p2p.main import app
 from p2p.orders import changes
 from p2p.platform import permissions, proposals, setting_changes, tenants
@@ -452,3 +452,19 @@ def test_a_call_to_a_tool_outside_the_six_is_not_trusted(world: Any) -> None:
     gw, _ = _gateway(_turn(tool="release_hold", args={"hold_id": 1, "to_usable": "1"}), *_faithful(r, mr))
     got = planning.explain(r.s, r.slug, r.uid("U02"), mr, gw)
     assert got.status == "facts_only" and any("release_hold" in x for x in got.reasons), got.reasons
+
+
+def test_a_case_opened_on_a_pinned_day_counts_from_noon_even_when_the_pin_is_the_real_day_before_work(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # found on 23 Nov 2026 at 04:12: the scenarios pinned to that real day got due dates one working day early
+    class Early(datetime):
+        @classmethod
+        def now(cls, tz: tzinfo | None = None) -> "Early":
+            return cls(2026, 11, 23, 4, 12, tzinfo=IST)
+
+    monkeypatch.setattr(supply_cases, "datetime", Early)
+    pin_today(date(2026, 11, 23))
+    assert supply_cases._now() == datetime(2026, 11, 23, 12, tzinfo=IST)
+    pin_today(None)
+    assert supply_cases._now() == datetime(2026, 11, 23, 4, 12, tzinfo=IST)  # not pinned: the clock

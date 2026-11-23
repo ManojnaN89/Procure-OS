@@ -776,14 +776,11 @@ def _remit(db: Session, payment: dict[str, Any], paid_on: date, utr: str) -> Non
         + (f"\nTax deducted at source: {format_inr(payment['tds_amount'])}\n" if D(payment["tds_amount"]) else "")
         + f"\nRegards,\nAccounts, {company}\n"
     )
-    try:
-        emails.send_linked_email(
-            db, contact[0], f"Payment advice {payment['no']}", body, linked_type="invoice", linked_ref=payment["no"]
-        )
-        db.execute(
-            text("update payment set remittance_sent_at = :n where no = :p"),
-            {"n": datetime.now(UTC), "p": payment["no"]},
-        )
-        db.commit()
-    except OSError:
-        db.rollback()  # the payment stands; the advice can be sent again
+    emails.send_linked_email(
+        db, contact[0], f"Payment advice {payment['no']}", body, linked_type="invoice", linked_ref=payment["no"]
+    )
+    db.execute(
+        text("update payment set remittance_sent_at = :n where no = :p"),
+        {"n": datetime.now(UTC), "p": payment["no"]},
+    )
+    emails.commit_and_send(db)  # the advice is kept with the payment; a refused mail is retried by the email job

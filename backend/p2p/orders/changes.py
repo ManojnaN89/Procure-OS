@@ -15,7 +15,6 @@ All of it is a person's decision with a reason; every change writes an audit row
 
 import json
 import logging
-import smtplib
 from dataclasses import dataclass
 from datetime import date
 from decimal import Decimal
@@ -71,7 +70,8 @@ def _reason(reason: str | None) -> str:
 def tell_supplier(
     db: Session, po: dict[str, Any], subject: str, body: str, attachments: list[tuple[str, str, bytes]] | None = None
 ) -> bool:
-    """Email the supplier's main contact. A mail fault never undoes the change: the page says the supplier was not told."""
+    """Email the supplier's main contact: commits the mail and sends it (the change itself is already committed). False
+    when there is no address; a refused mail stays queued for the email job and never undoes the change."""
     contact = db.execute(
         text(
             "select email, name from supplier_contact where supplier_code = :c and email is not null "
@@ -82,20 +82,16 @@ def tell_supplier(
     if contact is None:
         return False
     company = db.execute(text("select coalesce(short_name, legal_name) from company limit 1")).scalar() or "Our company"
-    try:
-        emails.send_linked_email(
-            db,
-            contact[0],
-            subject,
-            f"Dear {contact[1] or 'Sir or Madam'},\n\n{body}\n\nRegards,\nProcurement, {company}\n",
-            linked_type="po",
-            linked_ref=po["no"],
-            attachments=attachments,
-        )
-    except (OSError, smtplib.SMTPException):
-        db.rollback()
-        log.warning("could not tell the supplier about %s", po["no"], exc_info=True)
-        return False
+    emails.send_linked_email(
+        db,
+        contact[0],
+        subject,
+        f"Dear {contact[1] or 'Sir or Madam'},\n\n{body}\n\nRegards,\nProcurement, {company}\n",
+        linked_type="po",
+        linked_ref=po["no"],
+        attachments=attachments,
+    )
+    emails.commit_and_send(db)
     return True
 
 

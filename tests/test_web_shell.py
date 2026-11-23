@@ -311,10 +311,12 @@ def test_company_setup_opens_every_tab_for_the_admin(company: Company, browser: 
             "Buying route",
             "Supplier selection",
             "Touchless orders",
+            "Forward buying",  # block 3: the forward-buy rule, like the touchless rule
             "Price thresholds",
             "Single-source items",
             "Policies",
             "History",
+            "Go-live",  # block 0d: company state and readiness
         ]
     )
     expect(page.get_by_role("button", name="Add person")).to_be_visible()  # People opens first
@@ -326,8 +328,10 @@ def test_company_setup_opens_every_tab_for_the_admin(company: Company, browser: 
         ("Buying route", "Save new buying route version"),
         ("Supplier selection", "Save new selection rule version"),
         ("Touchless orders", "Save new touchless version"),
+        ("Forward buying", "Save new forward-buy version"),
         ("Single-source items", "Mark single source"),
         ("Policies", "Save tolerance"),
+        ("Go-live", "Check again"),
     ):
         page.get_by_role("tab", name=tab).click()
         expect(page.get_by_role("button", name=probe)).to_be_visible()
@@ -484,7 +488,8 @@ def test_the_kill_switch_stops_everything_and_switches_back(company: Company, br
     expect(page.get_by_text("checking the supplier agent")).to_be_visible()
 
     page.get_by_label(REASON).fill("check finished")
-    page.get_by_role("button", name="Switch off").click()
+    # exact: the kill switch's own button, not a capability's "Switch off now" (AI foundation)
+    page.get_by_role("button", name="Switch off", exact=True).click()
     expect(page.get_by_text("The kill switch is ON: nothing runs automatically.")).to_be_visible()  # waits
     _second_admin_approves(page, company)
     page.reload()

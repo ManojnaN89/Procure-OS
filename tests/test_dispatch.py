@@ -1,9 +1,11 @@
 """Sending an approved order to the supplier, and the supplier's acknowledgement."""
 
 from datetime import UTC, date, datetime
+from typing import Any
 
 import pytest
 from fastapi.testclient import TestClient
+from outbox_support import sent_mail
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 from test_orders import TODAY, D, _headers, _logins, _price, _request, _source, shop  # noqa: F401 - fixtures
@@ -12,7 +14,7 @@ from test_sourcing import Outbox, db, outbox  # noqa: F401 - fixtures
 from p2p.agents import autonomy
 from p2p.main import app
 from p2p.orders import dispatch, service, workflow
-from p2p.platform import sod, tenants, worker
+from p2p.platform import audit, sod, tenants, worker
 
 client = TestClient(app)
 
@@ -88,16 +90,47 @@ def test_a_held_order_a_blocked_supplier_or_missing_address_stops_the_send(shop:
     assert outbox.sent == [] and shop.execute(text("select status from po")).scalar_one() == "approved"
 
 
-def test_a_failed_email_leaves_the_order_approved_to_be_sent_again(shop: Session, outbox: Outbox) -> None:  # noqa: F811
+def test_a_failed_email_stays_queued_and_the_email_job_sends_the_order_once(shop: Session, outbox: Outbox) -> None:  # noqa: F811
+    # the outbox (11a.1, OP-3): the order is sent with its mail kept; a mail server that refuses it now does not undo the
+    # order, the mail keeps the error and the email job sends it later, once
     po_no = _approved_order(shop, _logins(shop))
     outbox.refuse = {"s1@supplier.example"}
 
-    with pytest.raises(dispatch.DispatchError, match="failed"):
-        dispatch.send_po(shop, po_no)
-
-    assert shop.execute(text("select status, sent_at from po")).one() == ("approved", None)
-    outbox.refuse = set()
     assert dispatch.send_po(shop, po_no) == "s1@supplier.example"
+
+    assert shop.execute(text("select status from po")).scalar_one() == "sent" and outbox.sent == []
+    queued = sent_mail(shop, f"Purchase order {po_no}")
+    assert (queued["status"], queued["attempts"]) == ("queued", 1) and "refused" in queued["last_error"]
+    outbox.refuse = set()
+    worker.run_once(tenant=shop.info["slug"])
+    worker.run_once(tenant=shop.info["slug"])
+    assert [m["to"] for m in outbox.sent if m["subject"] == f"Purchase order {po_no}"] == ["s1@supplier.example"]
+    assert sent_mail(shop, f"Purchase order {po_no}")["status"] == "sent"
+
+
+def test_a_fault_after_the_mail_is_queued_and_before_the_commit_leaves_no_mail_and_no_row(
+    shop: Session, outbox: Outbox, monkeypatch: pytest.MonkeyPatch
+) -> None:  # noqa: F811
+    # the outbox (11a.1, DF-23): the mail is kept or dropped with the order's own change, never sent without it
+    po_no = _approved_order(shop, _logins(shop))
+    record = audit.record
+
+    def fails_on_send(*args: Any, **kw: Any) -> None:
+        if args[2] == "po.send":
+            raise RuntimeError("the server stopped")
+        record(*args, **kw)
+
+    monkeypatch.setattr(audit, "record", fails_on_send)
+    with pytest.raises(RuntimeError, match="stopped"):
+        dispatch.send_po(shop, po_no)
+    monkeypatch.setattr(audit, "record", record)
+    shop.rollback()
+
+    assert shop.execute(text("select status from po")).scalar_one() == "approved"
+    subject = f"Purchase order {po_no}"
+    assert shop.execute(text("select count(*) from email_message where subject = :s"), {"s": subject}).scalar_one() == 0
+    worker.run_once(tenant=shop.info["slug"])  # its email job finds no mail to send
+    assert [m for m in outbox.sent if m["subject"] == subject] == []
 
 
 def test_the_supplier_acknowledges_with_a_date_and_a_late_promise_is_flagged(shop: Session, outbox: Outbox) -> None:  # noqa: F811

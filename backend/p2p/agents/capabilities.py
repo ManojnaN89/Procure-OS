@@ -20,6 +20,7 @@ from fastapi import HTTPException
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
+from p2p.agents import autonomy
 from p2p.formulas.words import count
 from p2p.platform import audit, setting_changes, tasks, tenants, users, workflows
 from p2p.platform.setting_changes import Change
@@ -371,7 +372,7 @@ def listing(db: Session, tenant: str) -> list[dict[str, Any]]:
         out.append(
             {
                 "code": code, "label": cap.label, "enabled": bool(r[1]) if r else False,
-                "decisions": [{"decision_type": d, "level": levels.get(d, "propose")} for d in cap.decisions],
+                "decisions": [{"decision_type": d, "label": autonomy.LABELS[d], "level": levels.get(d, "propose")} for d in cap.decisions],
                 "checks": r[2] if r else None, "changed_at": r[3].isoformat() if r and r[3] else None,
                 "changed_by": r[4] if r else None, "waiting": waiting.get(code),
                 "open_work": {

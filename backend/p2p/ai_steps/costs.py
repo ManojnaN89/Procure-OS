@@ -122,12 +122,12 @@ def _setting(db: Session, key: str) -> str | None:
 
 
 def cap(db: Session) -> Decimal | None:
-    value = _setting(db, CAP_KEY)
+    value = _setting(db, "ai_monthly_cost_cap_usd")
     return None if value is None else Decimal(value)
 
 
 def warn_pct(db: Session) -> int:
-    value = _setting(db, WARN_KEY)
+    value = _setting(db, "ai_cost_warn_pct")
     return int(value) if value is not None else DEFAULT_WARN_PCT
 
 

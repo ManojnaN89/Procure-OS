@@ -22,7 +22,7 @@ from sqlalchemy.orm import Session
 
 from p2p.approvals.workflow import name_of, org_code_of
 from p2p.formulas import material as rules
-from p2p.formulas.calendar import IST, business_today
+from p2p.formulas.calendar import IST, business_today, today_is_pinned
 from p2p.formulas.money import format_qty, round_money
 from p2p.platform import audit, permissions, reference, settings, tasks
 from p2p.platform.sod import user
@@ -54,11 +54,11 @@ class Evaluated:
 
 
 def _now() -> datetime:
-    """The business date at this time of day, or at noon when the business date is not the calendar's today (a pinned
-    date): due dates come out the same whenever it runs."""
-    real = datetime.now(IST)
-    today = business_today()
-    return real if real.date() == today else datetime.combine(today, time(12), tzinfo=IST)
+    """The time now, or noon on a pinned business date (also when it is pinned to the real day): due dates then come
+    out the same whatever the clock says."""
+    if today_is_pinned():
+        return datetime.combine(business_today(), time(12), tzinfo=IST)
+    return datetime.now(IST)
 
 
 def at_risk_parts(c: rules.Cover, dated: supply_dates.LineCover) -> list[tuple[rules.Part, Decimal]]:

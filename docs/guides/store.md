@@ -23,9 +23,7 @@ Items marked for inspection wait. They are in the store as **quarantine** (Inven
 
 ## Issue stock and count the shelf
 
-Open **Inventory**. On the row of the item click **Issue** to take stock out for use: enter the quantity and who it went to (a department, a machine or a job). You cannot issue more than the books show.
-
-After counting the shelf click **Count**: enter what you counted and why it differs. The system works out the difference and corrects the books. Count only usable stock: held lots are counted by their hold. Both are kept in the audit log with your name.
+Open **Inventory**. On the row of the item click **Issue** to take stock out for use: enter the quantity and who it went to (a department, a machine or a job). You cannot issue more than the books show. After counting the shelf click **Count**: enter what you counted and why it differs. The system works out the difference and corrects the books. Count only usable stock: held lots are counted by their hold. Both are kept in the audit log with your name.
 
 Safety stock is kept back: an issue that would use it is refused with "Only 2 is free; 2 is safety stock". Click **Ask to use safety stock** and say why; your manager (Vikram Joshi at Apex) approves it on My work, then the issue is posted. On **Material requests** a line short only because of safety stock has **Use safety stock** for the same request.
 

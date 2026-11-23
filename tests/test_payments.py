@@ -6,6 +6,7 @@ from decimal import Decimal
 
 import pytest
 from fastapi.testclient import TestClient
+from outbox_support import sent_mail
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 from test_invoices import S1_GSTIN, TODAY, _goods, _headers, _invoice, _row, ledger  # noqa: F401 - fixtures
@@ -19,7 +20,7 @@ from p2p.invoices import payment
 from p2p.invoices.service import InvoiceError
 from p2p.main import app
 from p2p.masters import suppliers
-from p2p.platform import permissions, proposals, users
+from p2p.platform import permissions, proposals, users, worker
 from p2p.platform.sod import user
 
 D = Decimal
@@ -609,7 +610,10 @@ def test_an_order_with_goods_still_to_come_is_not_closed_when_what_was_invoiced_
     assert ledger.execute(text("select status from po")).scalar_one() == "part_received"
 
 
-def test_a_failed_remittance_email_does_not_undo_the_payment(ledger: Session, outbox: Outbox) -> None:  # noqa: F811
+def test_a_failed_remittance_email_does_not_undo_the_payment_and_the_email_job_sends_it_once(
+    ledger: Session, outbox: Outbox
+) -> None:  # noqa: F811
+    # the outbox (11a.1): the advice is kept with the payment; a refusal leaves it queued with the error for the email job
     finance, owner, _ = _people(ledger)
     _, inv_no, _ = _two_suppliers(ledger)
     run = _paid_run(ledger, finance, owner)
@@ -618,7 +622,15 @@ def test_a_failed_remittance_email_does_not_undo_the_payment(ledger: Session, ou
     payment.mark_paid(ledger, run, finance, paid_on=date(2026, 11, 12))
 
     assert _row(ledger, inv_no)["status"] == "paid"
-    assert ledger.execute(text("select remittance_sent_at from payment")).scalar_one() is None
+    pay_no = ledger.execute(text("select no from payment")).scalar_one()
+    assert [m for m in outbox.sent if m["subject"] == f"Payment advice {pay_no}"] == []
+    queued = sent_mail(ledger, f"Payment advice {pay_no}")
+    assert (queued["status"], queued["attempts"]) == ("queued", 1) and "refused" in queued["last_error"]
+    outbox.refuse = set()
+    worker.run_once(tenant=ledger.info["slug"])
+    worker.run_once(tenant=ledger.info["slug"])
+    assert [m["to"] for m in outbox.sent if m["subject"] == f"Payment advice {pay_no}"] == ["s1@supplier.example"]
+    assert sent_mail(ledger, f"Payment advice {pay_no}")["status"] == "sent"
 
 
 # ---- the screens' API -------------------------------------------------------------------------

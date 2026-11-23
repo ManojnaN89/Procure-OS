@@ -390,7 +390,7 @@ def handle_email(db: Session, tenant: str, email_id: int, gateway: Any, *, as_of
         after={"ref": ref, "supplier": supplier, "kind": reading.type, "status": handled.status, "action": handled.action},
         model=model, prompt_version=step.PROMPT_VERSION,
     )  # fmt: skip
-    db.commit()
+    emails.commit_and_send(db)
     return handled
 
 
@@ -784,11 +784,7 @@ def _send(db: Session, supplier: str, po_no: str, subject: str, body: str) -> bo
     contact = _contact(db, supplier)
     if contact is None:
         return False
-    try:
-        emails.send_linked_email(db, contact[0], subject, body, linked_type="po", linked_ref=po_no)
-    except OSError:
-        db.rollback()
-        return False
+    emails.send_linked_email(db, contact[0], subject, body, linked_type="po", linked_ref=po_no)  # sent after the commit
     return True
 
 
@@ -883,7 +879,7 @@ def chase_run(db: Session, tenant: str, *, as_of: date, now: datetime | None = N
             db, AGENT, "supplier.chase", "po", po_no, after={"kind": kind, "how": "task", "task": task}, reason=why
         )
         result.tasks.append((po_no, kind))
-    db.commit()
+    emails.commit_and_send(db)
     return result
 
 

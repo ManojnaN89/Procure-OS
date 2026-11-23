@@ -44,10 +44,6 @@ When readiness has no blocker, write the reason at the top and press **Propose g
 - **Stop all automation** is the kill switch. It stops every automatic action at once. People can still work by hand. **Switch off** puts it back once a second administrator approves.
 - Start at recommend. Raise a decision to automatic only after its record shows no wrong results.
 
-## Look at what happened
+## What happened, and if you are stuck
 
-**Audit** (who did what), **Agent runs**, **Rule decisions** and **Model calls** show what the programs did and which rule version they used.
-
-## If you are stuck
-
-A refused change says why. A change that needs a reason does nothing until the reason box has text.
+**Audit** (who did what), **Agent runs**, **Rule decisions** and **Model calls** show what the programs did and which rule version they used. A refused change says why. A change that needs a reason does nothing until the reason box has text.
