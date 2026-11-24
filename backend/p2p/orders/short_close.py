@@ -132,7 +132,7 @@ def _flags(db: Session, po: dict[str, Any], lines: list[dict[str, Any]]) -> list
                 closure_rules.Flag(
                     "unmet_need",
                     closure_rules.unmet_need_words(
-                        str(mr["item_code"] or ln["item_code"] or ""),
+                        str(ln["description"] or mr["item_code"] or ln["item_code"] or ""),
                         qty,
                         mr["uom"] or ln["uom"],
                         mr["need_by"],

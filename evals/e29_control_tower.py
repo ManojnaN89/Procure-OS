@@ -21,6 +21,7 @@ from replay import insert, replay
 from sqlalchemy import text
 
 ID = "E29"
+# Block 13 (spec 10.1): savings are potential and realised from the price measures, never the first quote.
 TITLE = "The control tower, the key figures and the alerts agree with an independent recount"
 REQUIREMENT = (
     "Plan P1-21/P1-23: every role sees what needs it and nothing else; the control tower shows every case by stage, location "
@@ -722,7 +723,7 @@ def check_homes(world: Any, tower_counts: dict[str, int], wrong: list[str]) -> d
         k = client.get("/api/kpis", headers=world.headers("Finance")).json()
         seen["kpi_keys"] = sorted(k)
     finally:
-        pin_today(None)
+        pin_today(TODAY)
     return seen
 
 

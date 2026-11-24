@@ -30,6 +30,7 @@ from block1 import D, js
 from lib import Outcome
 
 ID = "E87"
+# Block 13 (spec 10.1): the lock keeps the month's period_close snapshot and final export (R7.3).
 TITLE = "A locked budget month is frozen: nothing posts into it, it is locked in order, and late postings move on"
 REQUIREMENT = (
     "D-09 (block 3 spec 3.3 PL1, 4.3, 4.4, 4.6, 4.7): lock only ended months, in order, once, with a reason, by "
@@ -130,6 +131,13 @@ def _run(ctx: Any) -> Outcome:  # one story, told in order
         check(apex.code_of(body.get("locked_by")) in (fin, None) or body.get("locked_by") == fin,
               f"locked_by {body.get('locked_by')}, expected {fin}", "medium")  # fmt: skip
         check(apex.audit_count("budget.period_lock") == audit0 + 1, "locking 2026-11: not one budget.period_lock audit row")
+        # block 13 R7.3: the lock also keeps the month's snapshot and its final export
+        check([r[0] for r in apex.q("select period from period_close")] == ["2026-11"],
+              f"period_close holds {apex.q('select period from period_close')}, expected 2026-11")
+        check(bool(apex.q("select checklist, grni, grni_total from period_close where period = '2026-11'")),
+              "period_close has no checklist or frozen GRNI")
+        check(len(apex.q("select id from accounting_export where period = '2026-11'")) == 1,
+              "the month close kept no final accounting export")
         r = apex.lock("2026-11", fin)
         check(r.status_code == 409, f"locking 2026-11 again answered {r.status_code}, expected 409")
         locked.add("2026-11")

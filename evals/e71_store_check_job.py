@@ -11,7 +11,8 @@ Scenarios:
   two administrators) the job sets nothing aside and buys nothing but queues the next run; set true, the job at 05:30 on
   6 Nov gives block 1's A0 (Rs 72,930 / 2,09,700 / 3,69,490) as requests left as drafts, audits `store_check.run`, queues
   the next run at 05:30 India time the next day; a second run changes nothing (one more `store_check.run` row only).
-- E1 (on T1: MO-1's castings late): 30 arrive on 8 Dec, the buyer closes the balance: MO-1 30 set aside and a new
+- E1 (on T1: MO-1's castings late): 30 arrive on 8 Dec, the buyer closes the balance: the pegged short-close is high
+  risk and waits for the purchase manager (block 13 R1.3); after that person approves, MO-1 30 set aside and a new
   request for MO-1 RM-01 20 (Rs 13,000) made by the event, no button.
 - PO cancel (on T1): the buyer cancels the castings order: the event buys MO-1's 50 again (Rs 32,500).
 - T1's late promise: the acknowledgement alone (no button, no job) flags MO-1's castings at risk and opens the case.
@@ -31,6 +32,7 @@ import lib
 from lib import Outcome
 
 ID = "E71"
+# Block 13 (spec 10.1): a short-close of a pegged line waits for the purchase manager, then the event runs.
 TITLE = "The store check runs every morning and after short-close, cancel, promise and rejection, never re-raising a rejection"
 REQUIREMENT = (
     "Task 6.5 (block 2 spec 6, 9.3 E1-E2, decision OP-14 of 22 Nov): job store_check daily 05:30 IST when "
@@ -197,6 +199,15 @@ def _e1(out: Outcome, check: b.Checker, co: s2.Co) -> None:
         r = co.call(co.role("buyer"), "POST", f"/api/purchase-orders/{po}/close-balance",
                     {"reason": "Deccan's furnace is down"})  # fmt: skip
     check(r.status_code == 200, f"E1: close-balance answered {r.status_code}: {r.text[:200]}")
+    asked = r.json()
+    check(asked.get("status") == "waiting_approval", f"E1: a pegged short-close is {asked.get('status')}, expected "
+          "waiting_approval for the purchase manager (block 13 R1.3)")  # fmt: skip
+    check(not (co.requests_now() - before), "E1: the event bought the balance before the short-close was approved")
+    with b.on_day(arrive):
+        r = co.call(co.designation("Purchase Manager"), "POST",
+                    f"/api/admin/proposals/{asked.get('proposal_id')}/approve", {})  # fmt: skip
+    check(r.status_code == 200, f"E1: the purchase manager approving the short-close answered {r.status_code}: "
+          f"{r.text[:200]}")  # fmt: skip
     made = st.drop_order("MO-1", "RM-01")
     quiet.drop_order("MO-1", "RM-01")
     check(made == {("MO-1", "RM-01"): Decimal(20)}, f"E1: the oracle buys {made}, spec MO-1 RM-01 20 (self-check)",

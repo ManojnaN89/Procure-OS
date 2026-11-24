@@ -37,6 +37,15 @@ MATRIX = [
     ("POST", "/api/purchase-orders/NOPE/acknowledge", {}, {"Buyer"}),
     ("POST", "/api/purchase-orders/NOPE/cancel", {"reason": "x"}, {"Buyer"}),
     ("POST", "/api/purchase-orders/NOPE/close-balance", {"reason": "x"}, {"Buyer"}),
+    # Block 13 (spec 10.1): short-close, GSTR-2B, standard prices, close and reconciliation writes keep their roles.
+    ("GET", "/api/purchase-orders/NOPE/close-balance/preview", None, {"Buyer"}),
+    ("POST", "/api/purchase-orders/NOPE/short-closes/1/withdraw", {}, set(ROLES)),
+    ("POST", "/api/gst/gstr2b", {}, {"AP", "Finance"}),
+    ("POST", "/api/prices/standard", {"item": "A", "price": "1", "effective_from": "2026-12-01", "reason": "x"},
+     {"Finance"}),  # fmt: skip
+    ("POST", "/api/close/periods/2026-11/close", {"reason": "x"}, {"Finance"}),
+    ("POST", "/api/reconciliation/bank-lines/999999/not-ours", {"reason": "x"}, {"Finance"}),
+    ("POST", "/api/reconciliation/vendor-statements/999/lines/1/resolve", {"note": "x"}, {"AP"}),
     ("POST", "/api/purchase-orders/NOPE/revise", {"reason": "x", "lines": [{"line_no": 1, "qty": "1"}]}, {"Buyer"}),
     ("POST", "/api/purchase-orders/NOPE/receive", {"lines": [{"line_no": 1, "qty_received": "1"}]}, {"Store"}),
     (

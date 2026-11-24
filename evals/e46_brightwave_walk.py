@@ -30,6 +30,7 @@ from lib import Outcome
 from sqlalchemy import text
 
 ID = "E46"
+# Block 13 (spec 10.1): orders wait for the bank and close on settlement, with closed_at and closed lines (D-12).
 TITLE = "The IT services company (Brightwave) through all 13 steps in a browser: services, a serialised laptop, two-way match"
 REQUIREMENT = (
     "Phase 1 done-when: both demo companies run through all 13 steps in the browser; services are confirmed by the "
@@ -584,6 +585,13 @@ def _run(ctx: Any) -> Outcome:  # noqa: C901 - one story, step by step
                 expect(page.locator("#fileText")).to_contain_text("payment_no")
             d.mark(12)
             d.sync()
+            c.true(
+                "orders wait for the bank before closing (block 13 R2)",
+                all(
+                    r[0] not in ("closed", "cancelled") and r[1] is None
+                    for r in q("select status, closed_at from po")
+                ),
+            )
             pays = q("select no, supplier_code, amount from payment where run_no = :r order by no", r=run_no)
             c.same("one payment per supplier", sorted(r[1] for r in pays), sorted({r[1] for r in pos.values()}))
 
@@ -608,6 +616,11 @@ def _run(ctx: Any) -> Outcome:  # noqa: C901 - one story, step by step
             d.mark(13)
             c.same("every invoice is paid", sorted({r[0] for r in q("select status from invoice")}), ["paid"])
             c.same("every order is closed", sorted({r[0] for r in q("select status from po")}), ["closed"])
+            c.true(
+                "every order carries its closure date and its lines closed (block 13 R2.4)",
+                all(r[0] is not None for r in q("select closed_at from po"))
+                and sorted({r[0] for r in q("select status from po_line where status <> 'cancelled'")}) == ["closed"],
+            )
 
             # ---------------------------------------------------------------- 13. reconciliation: the service order's trace, nothing left open
             entries = [r[0] for r in q("select no from service_entry where po_no = :p order by no", p=house_po)]

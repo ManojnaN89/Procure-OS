@@ -121,8 +121,10 @@ def _compatible(db: Session, item: str | None, uom: str | None) -> bool:
     )
 
 
-def record(db: Session, through_date: date, actor: Actor | None = None) -> dict[str, Any]:
-    """Every measure that can be worked out up to the date; a second run adds nothing (R6)."""
+def record(db: Session, through_date: date, actor: Actor | None = None, *, commit: bool = True) -> dict[str, Any]:
+    """Every measure that can be worked out up to the date; a second run adds nothing (R6).
+
+    `commit=False` leaves the rows and their audit in the caller's transaction (the month close, R7.3)."""
     actor = actor or audit.SYSTEM
     mode = settings.value(db, "ppv_recognition", "invoice")
     added = {name: 0 for name in LABELS}
@@ -221,7 +223,8 @@ def record(db: Session, through_date: date, actor: Actor | None = None) -> dict[
         after={"through": through_date.isoformat(), "added": added, "no_standard": skipped[:50],
                "recognition": mode},
     )  # fmt: skip
-    db.commit()
+    if commit:
+        db.commit()
     return {"through": through_date.isoformat(), "added": added, "no_standard": skipped}
 
 
@@ -252,7 +255,7 @@ def _potential(db: Session, through: date, added: dict[str, int]) -> None:
         )  # fmt: skip
 
 
-def market_gap(db: Session, period_end: date, actor: Actor | None = None) -> dict[str, int]:
+def market_gap(db: Session, period_end: date, actor: Actor | None = None, *, commit: bool = True) -> dict[str, int]:
     """At the month's end, one evidence row per active contract price with a counting benchmark (PV3, OP-16)."""
     actor = actor or audit.SYSTEM
     added = 0
@@ -295,7 +298,8 @@ def market_gap(db: Session, period_end: date, actor: Actor | None = None) -> dic
             added += 1
     audit.record(db, actor, "price_measure.run", "price_measure", f"market_gap {period_end}",
                  after={"measure": "market_gap", "period": _period(period_end), "added": added})  # fmt: skip
-    db.commit()
+    if commit:
+        db.commit()
     return {"market_gap": added}
 
 
@@ -345,8 +349,7 @@ def kpis(db: Session) -> dict[str, Any]:
             text("select count(distinct source_ref) from price_measure where measure = 'saving_potential'")
         ).scalar_one()
     )
-    return {"potential": str(potential), "realised": str(realised), "awards": awards,
-            "as_of": business_today().isoformat()}  # fmt: skip
+    return {"potential": str(potential), "realised": str(realised), "awards": awards}
 
 
 # ---- the daily job (06:45 IST) --------------------------------------------------------------------

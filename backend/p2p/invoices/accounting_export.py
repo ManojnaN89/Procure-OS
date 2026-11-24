@@ -260,9 +260,12 @@ def build(db: Session, period: str, *, grni: list[dict[str, Any]] | None = None)
     """Every voucher of the month, each balanced."""
     end = _month_end(period)
     maps = _ledgers(db, end)
-    vouchers = _purchase_vouchers(db, period, maps) + _payment_vouchers(db, period, maps)
-    if grni is not None:
-        vouchers += _accruals(db, period, grni, maps)
+    try:
+        vouchers = _purchase_vouchers(db, period, maps) + _payment_vouchers(db, period, maps)
+        if grni is not None:
+            vouchers += _accruals(db, period, grni, maps)
+    except journal.UnmappedLedger as exc:
+        raise ExportError(str(exc)) from None
     for v in vouchers:
         if not v.balanced:
             raise ExportError(f"voucher {v.no} does not balance: debit {v.debit}, credit {v.credit}")

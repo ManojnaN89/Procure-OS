@@ -102,3 +102,62 @@ def test_given_a_received_but_uninvoiced_line_when_checked_then_money_is_not_set
     assert seen["supply_done"] is True and seen["settled"] is False
     assert [b["code"] for b in seen["blockers"]] == ["not_invoiced"]
     assert seen["blockers"][0]["words"] == "line 1: 10 received, not invoiced"
+
+
+def test_given_a_draft_return_on_the_order_line_when_the_money_is_checked_then_it_blocks_until_closed(
+    ledger: Session, owner_session: object
+) -> None:
+    """Block 9's return header has no order; the order link is its line (the interface H9-2)."""
+    po_no, _ = _goods(ledger, qty="10", price="100", received="6")
+    from p2p.platform import db_logins  # noqa: PLC0415 - the test makes block 9's tables
+
+    with owner_session(ledger.info["slug"]) as own:  # type: ignore[operator]
+        own.execute(text("create table supplier_return (no text primary key, status text not null)"))
+        own.execute(text("create table supplier_return_line (id bigserial primary key, return_no text not null, "
+                         "po_no text, po_line_no integer, outcome text)"))  # fmt: skip
+        own.execute(
+            text(
+                "grant select, insert, update, delete on supplier_return, supplier_return_line "
+                f"to {db_logins.app_role_name()}"
+            )
+        )  # noqa: S608 - our own role name
+        own.commit()
+    ledger.execute(text("insert into supplier_return (no, status) values ('RTN-1', 'draft')"))
+    ledger.execute(text("insert into supplier_return_line (return_no, po_no, po_line_no) values ('RTN-1', :p, 1)"),
+                  {"p": po_no})  # fmt: skip
+    ledger.commit()
+
+    assert [b["code"] for b in closure.state(ledger, po_no)["blockers"] if b["code"] == "return_open"] == [
+        "return_open"
+    ]
+
+    ledger.execute(text("update supplier_return set status = 'dispatched' where no = 'RTN-1'"))
+    ledger.commit()
+    assert any(b["code"] == "return_open" for b in closure.state(ledger, po_no)["blockers"])
+
+    ledger.execute(text("update supplier_return_line set outcome = 'replace' where return_no = 'RTN-1'"))
+    ledger.commit()
+    assert not any(b["code"] == "return_open" for b in closure.state(ledger, po_no)["blockers"])
+
+
+def test_given_an_open_recovery_claim_on_the_order_when_the_money_is_checked_then_it_blocks(
+    ledger: Session, owner_session: object
+) -> None:
+    """Block 9 owns recovery_claim; block 12 settles it (H12-4)."""
+    po_no, _ = _goods(ledger, qty="10", price="100", received="6")
+    from p2p.platform import db_logins  # noqa: PLC0415
+
+    with owner_session(ledger.info["slug"]) as own:  # type: ignore[operator]
+        own.execute(text("create table recovery_claim (no text primary key, po_no text, po_line_no integer, "
+                         "status text not null, qty numeric(18,4))"))  # fmt: skip
+        own.execute(text(f"grant select, insert, update, delete on recovery_claim to {db_logins.app_role_name()}"))
+        own.commit()
+    ledger.execute(text("insert into recovery_claim (no, po_no, po_line_no, status, qty) "
+                        "values ('RCL-1', :p, 1, 'open', 1)"), {"p": po_no})  # fmt: skip
+    ledger.commit()
+
+    assert [b["code"] for b in closure.state(ledger, po_no)["blockers"] if b["code"] == "claim_open"] == ["claim_open"]
+
+    ledger.execute(text("update recovery_claim set status = 'settled' where no = 'RCL-1'"))
+    ledger.commit()
+    assert not any(b["code"] == "claim_open" for b in closure.state(ledger, po_no)["blockers"])

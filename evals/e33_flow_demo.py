@@ -24,6 +24,7 @@ import yaml
 from lib import Outcome
 
 ID = "E33"
+# Block 13 (spec 10.1): an order is received after supply and closes only on settlement, with closed_at (D-12).
 TITLE = "The main demo company completes the whole flow, from low stock to a paid invoice, with separate people for each job"
 REQUIREMENT = (
     "Phase 1: request, approval, price or quotation, order with GST, receipt, invoice match, payment run, closing; "
@@ -419,6 +420,8 @@ def _run(ctx: Any) -> Outcome:
         all(r[0] == "received" for r in q("select status from po")),
         f"every order should be fully received: {[r[0] for r in q('select status from po')]}",
     )
+    check(all(r[0] is None for r in q("select closed_at from po")),
+          "an order closed before its money was settled (block 13 R2)")
     stock_after = {r[0]: lib.D(r[1]) for r in q("select item_code, on_hand from stock_level")}
     for code, qty, _ in expected_lines.values():
         check(
@@ -524,6 +527,10 @@ def _run(ctx: Any) -> Outcome:
         all(r[0] == "closed" for r in q("select status from po")),
         f"every order should be closed: {[r[0] for r in q('select status from po')]}",
     )
+    check(all(r[0] is not None for r in q("select closed_at from po")),
+          "a closed order has no closed_at (block 13 R2.4)")
+    check(all(r[0] == "closed" for r in q("select status from po_line where status <> 'cancelled'")),
+          "an order closed but a line did not (block 13 R2.4)")
     check(all(r[0] is not None for r in q("select utr from payment")), "every payment should carry a bank reference")
     check(
         sum(1 for m in box.sent if "payment" in (m.get("subject") or "").lower()) >= 4,

@@ -177,8 +177,10 @@ def close(db: Session, period: str, user_id: int, reason: str, today: date | Non
         raise PeriodCloseError(f"{period} was locked before month-end close existed", 409)
     end = month_end(period)
     warnings = _warnings(db, period, end)
-    price_measures.record(db, end, user(user_id))
-    price_measures.market_gap(db, end, user(user_id))
+    # R7.3: the close is one transaction. The measures, the frozen snapshot, the final export, the period_close row
+    # and the lock commit together; a failure in any of them leaves the month open.
+    price_measures.record(db, end, user(user_id), commit=False)
+    price_measures.market_gap(db, end, user(user_id), commit=False)
     grni, grni_total = _grni(db, end)
     made = accounting_export.final(db, period, user_id, grni=grni)
     who = budget_periods._who(db, user_id)  # noqa: SLF001 - the lock's writer is the same person

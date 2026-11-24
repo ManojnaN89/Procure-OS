@@ -9,8 +9,9 @@ Scenario (Apex Pumps): A0 and BG1's orders (MO-1: RM-01 50 at 650, RM-06 60 at 3
 2026 the store receives the 40 kg of wire (accepted at once): one `budget_actual` row of Rs 35,200, source receipt,
 period 2026-11; MO-2's check moves Rs 35,200 from held by orders to spent, committed unchanged. The 60 bearings arrive
 (inspection required): nothing at gate entry; inspection accepts 58, rejects 2: Rs 2,204, the rejected 2 never; the
-line holds Rs 76 until its balance is closed, then 0. The wire's invoice (taxable 35,200, freight 500) is paid: one row
-of Rs 500 (source payment), nothing more for the wire. A service (SV-01, GL 5240, CC-MNT) is ordered and confirmed:
+line holds Rs 76 until its balance is closed, then 76 stays committed until the order closes (block 13 R2.7), and the
+pegged short-close goes to the purchase manager (R1.3). The wire's invoice (taxable 35,200, freight 500) is paid: one
+row of Rs 500 (source payment), nothing more for the wire. A service (SV-01, GL 5240, CC-MNT) is ordered and confirmed:
 held by orders until it is paid, then an actual of its taxable value in the invoice's month. One `budget.actual` audit
 row per receipt or invoice. Ends with a tenant check against Brightwave.
 
@@ -28,11 +29,13 @@ from block1 import D, Z, js
 from lib import Outcome
 
 ID = "E86"
+# Block 13 (spec 10.1): a pegged short-close waits for the purchase manager and keeps its commitment until close.
 TITLE = "Stock spends its budget when accepted at receipt, at the order price; services and charges when paid"
 REQUIREMENT = (
     "D-10 (block 3 spec 3.3 BG1, 4.1, 4.2): a stocked line's actual = accepted x order price in the acceptance month "
     "(source receipt), nothing at gate entry, never the rejected part; held by orders falls by the actual; a balance "
-    "closed holds nothing; payment adds only charges for stocked lines and the taxable value of a service in the "
+    "closed stays committed until the order closes (block 13 R2.7) and its pegged short-close needs the purchase "
+    "manager; payment adds only charges for stocked lines and the taxable value of a service in the "
     "invoice's month; audit budget.actual once per receipt or invoice; tenant isolation"
 )
 PREFIX = "e86"
@@ -140,11 +143,19 @@ def _run(ctx: Any) -> Outcome:  # one story, told in order
         r = apex.call(apex.buyer(), "POST", f"/api/purchase-orders/{bearings['po_no']}/close-balance",
                       {"reason": "eval: the 2 rejected are not replaced"})  # fmt: skip
         check(r.status_code == 200, f"closing the bearings' balance answered {r.status_code} {r.text[:200]}")
+        asked = js(r)
+        check(asked.get("status") == "waiting_approval", f"a pegged short-close is {asked.get('status')}, expected "
+              "waiting_approval for the purchase manager (block 13 R1.3)")  # fmt: skip
+        r = apex.call(apex.designation("Purchase Manager"), "POST",
+                      f"/api/admin/proposals/{asked.get('proposal_id')}/approve", {})  # fmt: skip
+        check(r.status_code == 200, f"the purchase manager approving the short-close answered {r.status_code}: "
+              f"{r.text[:200]}")  # fmt: skip
         mo2_check("BG1 after the bearings' balance closed", actual["RM-08"] + actual["RM-06"])
         line_now = apex.ordered_lines(reqs["MO-1"]).get("RM-06")
         if line_now is not None:
-            check(b3.open_value(line_now, actual["RM-06"]) == 0, f"after close_balance the bearings line holds "
-                  f"{b3.open_value(line_now, actual['RM-06'])} by the spec's formula: {line_now}")  # fmt: skip
+            # R2.7: a short-closed line stays committed until its order closes
+            check(b3.open_value(line_now, actual["RM-06"]) == D("76"), f"after close_balance the bearings line holds "
+                  f"{b3.open_value(line_now, actual['RM-06'])}, expected 76 until the order closes: {line_now}")  # fmt: skip
 
     # ---- the wire's invoice with freight, and a service, paid ----
     svc = apex.service_order(check, "SV-01", b3.RECEIPT_DAY)

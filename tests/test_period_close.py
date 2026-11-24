@@ -145,3 +145,24 @@ def test_given_a_document_dated_in_a_closed_month_when_exported_later_then_it_la
     assert accounting_export.file(closing, "2026-11", "final", 1)["content"] == november
     assert late.no in december["content"] and "2026-11" in december["content"]
     assert done["grni_total"] == "0.00"
+
+
+def test_given_an_export_that_cannot_be_made_when_the_month_is_closed_then_nothing_of_the_close_stands(
+    closing: Session,
+) -> None:
+    """R7.3: the measures, snapshot, export, close row and lock are one transaction."""
+    pin_today(date(2026, 12, 3))
+    po_no, _ = _goods(closing, qty="10", price="100")
+    _invoice(closing, po_no, "10", "100", number="ATOM-1")
+    closing.execute(text("delete from ledger_map where purpose = 'payable_other'"))
+    closing.commit()
+
+    with pytest.raises(accounting_export.ExportError, match="map 'payable_other'"):
+        period_close.close(closing, "2026-11", 1, "Should not half-close", today=date(2026, 12, 3))
+    closing.rollback()
+
+    assert closing.execute(text("select count(*) from period_close")).scalar_one() == 0
+    assert closing.execute(text("select count(*) from budget_period_lock where period = '2026-11'")
+                          ).scalar_one() == 0  # fmt: skip
+    assert closing.execute(text("select count(*) from accounting_export")).scalar_one() == 0
+    assert closing.execute(text("select count(*) from price_measure")).scalar_one() == 0

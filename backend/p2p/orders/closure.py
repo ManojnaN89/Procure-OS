@@ -142,21 +142,18 @@ def _open_notes(db: Session, po_no: str) -> list[rules.OpenNote]:
 
 
 def _open_returns(db: Session, po_no: str) -> list[rules.OpenReturn]:
-    # NEEDS block 9: supplier_return (status draft, or dispatched with a line outcome unset).
+    # NEEDS block 9: supplier_return is block 9's table. Its header carries no order; the order line is on
+    # supplier_return_line (`return_no`, `po_no`, `po_line_no`, `outcome`).
     if not _has_table(db, "supplier_return"):
         return []
-    try:
-        rows = db.execute(
-            text(
-                "select no from supplier_return where po_no = :p and (status = 'draft' or (status = 'dispatched' "
-                "and exists (select 1 from supplier_return_line l where l.return_no = supplier_return.no "
-                "and l.outcome is null))) order by no"
-            ),
-            {"p": po_no},
-        ).all()
-    except Exception:  # noqa: BLE001 - block 9 owns the shape
-        db.rollback()
-        return []
+    rows = db.execute(
+        text(
+            "select distinct r.no from supplier_return r join supplier_return_line l on l.return_no = r.no "
+            "where l.po_no = :p and (r.status = 'draft' or (r.status = 'dispatched' and l.outcome is null)) "
+            "order by r.no"
+        ),
+        {"p": po_no},
+    ).all()
     return [rules.OpenReturn(str(r[0])) for r in rows]
 
 
@@ -164,32 +161,25 @@ def _open_excesses(db: Session, po_no: str) -> list[rules.OpenExcess]:
     # NEEDS block 9: receipt_excess waiting, proposed or returning.
     if not _has_table(db, "receipt_excess"):
         return []
-    try:
-        rows = db.execute(
-            text(
-                "select qty, gr_no from receipt_excess where po_no = :p "
-                "and status in ('waiting', 'proposed', 'returning') order by gr_no"
-            ),
-            {"p": po_no},
-        ).all()
-    except Exception:  # noqa: BLE001 - block 9 owns the shape
-        db.rollback()
-        return []
+    rows = db.execute(
+        text(
+            "select qty, gr_no from receipt_excess where po_no = :p "
+            "and status in ('waiting', 'proposed', 'returning') order by gr_no"
+        ),
+        {"p": po_no},
+    ).all()
     return [rules.OpenExcess(Decimal(r[0]), str(r[1])) for r in rows]
 
 
 def _open_claims(db: Session, po_no: str) -> list[rules.OpenClaim]:
-    # NEEDS block 12: recovery_claim.status settled/cancelled.
+    # NEEDS block 9: recovery_claim and its open rows are block 9's; block 12 adds the debit note and moves a claim to
+    # `settled` (and a cancelled one stays cancelled), so only those two statuses are not in this blocker.
     if not _has_table(db, "recovery_claim"):
         return []
-    try:
-        rows = db.execute(
-            text("select no from recovery_claim where po_no = :p and status = 'open' order by no"),
-            {"p": po_no},
-        ).all()
-    except Exception:  # noqa: BLE001 - block 9 owns the shape
-        db.rollback()
-        return []
+    rows = db.execute(
+        text("select no from recovery_claim where po_no = :p and status = 'open' order by no"),
+        {"p": po_no},
+    ).all()
     return [rules.OpenClaim(str(r[0])) for r in rows]
 
 
