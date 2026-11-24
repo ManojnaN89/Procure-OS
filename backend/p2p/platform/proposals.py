@@ -38,6 +38,21 @@ Executor = Callable[[Session, dict[str, Any], Actor], dict[str, Any] | None]
 EXECUTORS: dict[str, Executor] = {}
 
 
+Closer = Callable[[Session, int, dict[str, Any], Actor], None]
+CLOSERS: dict[str, Closer] = {}  # what a proposal's action does when it ends rejected or expired (9.3.3)
+
+
+def closer(action: str) -> Callable[[Closer], Closer]:
+    """Register what happens to the document when a proposal of this action is rejected or expires (block 9's excess
+    acceptance goes back to waiting; later blocks register payment runs and short closes)."""
+
+    def wrap(fn: Closer) -> Closer:
+        CLOSERS[action] = fn
+        return fn
+
+    return wrap
+
+
 Guard = Callable[[Session, dict[str, Any], Actor], None]
 GUARDS: dict[str, Guard] = {}
 
@@ -267,6 +282,7 @@ def reject(db: Session, proposal_id: int, user_id: int, reason: str, *, now: dat
 
     recommendations.on_decision(db, dict(p.payload or {}), user_id, accepted=False, note=reason)
     _set(db, proposal_id, "rejected", user_id, now or datetime.now(UTC), reason)
+    _ended(db, proposal_id, str(p.action), dict(p.payload or {}), sod.user(user_id))
 
 
 def withdraw(db: Session, proposal_id: int, user_id: int | None, note: str) -> None:
@@ -283,14 +299,22 @@ def expire_due(db: Session, now: datetime | None = None, *, action: str | None =
     rows = db.execute(
         text(
             "update proposal set status = 'expired', decided_at = :n where status = 'pending' and expires_at <= :n "
-            "and (cast(:a as text) is null or action = :a) returning id"
+            "and (cast(:a as text) is null or action = :a) returning id, action, payload"
         ),
         {"n": now or datetime.now(UTC), "a": action},
     ).all()
     for r in rows:
         audit.record(db, audit.SYSTEM, "proposal.expired", "proposal", r[0])
+        _ended(db, int(r[0]), str(r[1]), dict(r[2] or {}), audit.SYSTEM)
     db.commit()
     return len(rows)
+
+
+def _ended(db: Session, proposal_id: int, action: str, payload: dict[str, Any], actor: Actor) -> None:
+    """The action's own end hook: the same transaction (a rejected excess goes back to waiting)."""
+    fn = CLOSERS.get(action)
+    if fn is not None:
+        fn(db, proposal_id, payload, actor)
 
 
 def _authorize(db: Session, p: Any, user_id: int, proposer: Actor) -> None:

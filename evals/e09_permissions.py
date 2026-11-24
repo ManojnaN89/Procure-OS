@@ -8,7 +8,7 @@ ID = "E09"
 TITLE = "Every write action is open to exactly the roles the plan names"
 REQUIREMENT = "Rule 7 and the plan: requester, buyer, approver and administrator duties are separate; nobody else can do them; nobody can without logging in"
 
-ROLES = ["Admin", "Requester", "Buyer", "Approver", "Store", "AP", "Finance"]
+ROLES = ["Admin", "Requester", "Buyer", "Approver", "Store", "Quality", "AP", "Finance"]
 
 # (method, path, body, the roles the plan lets do it). Identifiers do not exist: the permission check comes first, so a
 # role that is allowed gets 404, 409 or 422 and a role that is not gets 403.
@@ -43,8 +43,16 @@ MATRIX = [
         "POST",
         "/api/receipts/NOPE/inspect",
         {"lines": [{"line_no": 1, "qty_accepted": "1", "qty_rejected": "0"}]},
-        {"Store"},
+        {"Store", "Quality"},  # block 9 (spec 9.1, 10.1): grn.inspect is Quality's and Store's
     ),
+    ("POST", "/api/receipts/NOPE/reverse", {"reason": "x"}, {"Store"}),
+    ("POST", "/api/returns", {"reason": "x", "lines": []}, {"Store"}),
+    ("POST", "/api/returns/NOPE/dispatch", {"challan": "x", "vehicle": "y"}, {"Store"}),
+    ("POST", "/api/returns/NOPE/outcome", {"lines": {"1": "replace"}}, {"Buyer"}),
+    ("POST", "/api/returns/NOPE/cancel", {"reason": "x"}, {"Store"}),
+    ("POST", "/api/receipt-excess/1/accept", {"version": 1, "reason": "x"}, {"Buyer"}),
+    ("POST", "/api/receipt-excess/1/return", {"reason": "x"}, {"Buyer"}),
+    ("POST", "/api/inventory/holds/1/scrap", {"qty": "1", "reason": "x"}, {"Store", "Quality"}),
     ("POST", "/api/invoices", {"supplier_code": "S", "number": "N", "date": "2026-11-06", "lines": []}, {"AP"}),
     ("POST", "/api/invoices/NOPE/rematch", None, {"AP"}),
     ("POST", "/api/invoices/NOPE/release", {"reason": "x"}, {"AP"}),

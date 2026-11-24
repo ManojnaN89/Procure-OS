@@ -18,7 +18,7 @@ from typing import Any
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
-from p2p.formulas.budget import post_period, receipt_actual
+from p2p.formulas.budget import post_period, receipt_actual, receipt_reversal_actual
 from p2p.platform import audit
 from p2p.platform.sod import Actor
 
@@ -104,6 +104,49 @@ def post_receipt(
         locked_periods(db),
     )
     audit.record(db, actor, "budget.actual", "goods_receipt", gr_no, after={"rows": [row]})
+    return row
+
+
+def post_reversal(
+    db: Session, gr_no: str | None, po_no: str, line_no: int, qty: Decimal, as_of: date, source: str, actor: Actor
+) -> dict[str, Any] | None:
+    """A receipt reversal or a counted return takes back what a stocked line spent: minus at the order price in the
+    month of the event (`source` receipt_reversal or return). Nothing for a line that is not stocked. The caller
+    commits."""
+    ln = _line(db, po_no, line_no)
+    if ln is None or not ln["stocked"]:
+        return None
+    amount = receipt_reversal_actual(qty, D(ln["unit_price"]))
+    if amount is None:
+        return None
+    row = _insert(
+        db,
+        actor,
+        {
+            "invoice_no": None,
+            "source": source,
+            "gr_no": gr_no,
+            "po_no": po_no,
+            "po_line_no": line_no,
+            "request_no": ln["request_no"],
+            "request_line_no": ln["request_line_no"],
+            "cost_centre_code": ln["cost_centre_code"],
+            "gl_code": ln["gl_code"],
+            "location_code": ln["ship_to_location"],
+            "event_period": _month(as_of),
+            "amount": amount,
+        },
+        _month(as_of),
+        locked_periods(db),
+    )
+    audit.record(
+        db,
+        actor,
+        "budget.actual",
+        "goods_receipt" if gr_no else "po_line",
+        gr_no or f"{po_no}/{line_no}",
+        after={"rows": [row]},
+    )
     return row
 
 

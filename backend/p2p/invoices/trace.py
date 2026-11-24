@@ -262,14 +262,15 @@ def _orders(db: Session, pos: set[str], who: People) -> list[dict[str, Any]]:
 
 def _receipts(db: Session, pos: set[str], who: People) -> list[dict[str, Any]]:
     return [
-        _item(r["no"], r["accepted_on"] or r["gate_entry_at"], r["inspection_status"], qty=r["accepted"],
-              amount=r["value"], who=who(r["received_by"]),
-              detail=f"for {r['po_no']}; {r['received']} received, {r['rejected']} rejected")
+        _item(r["no"], r["accepted_on"] or r["gate_entry_at"], r["status"] if r["status"] == "reversed"
+              else r["inspection_status"], qty=r["accepted"], amount=r["value"], who=who(r["received_by"]),
+              detail=f"for {r['po_no']}; {r['received']} received, {r['rejected']} rejected"
+              + (f"; reversed on {r['reversed_on']:%d %b %Y}: {r['reversal_reason']}" if r["reversed_on"] else ""))
         for r in _rows(
             db,
-            "select g.no, g.po_no, g.accepted_on, g.gate_entry_at, g.inspection_status, g.received_by, "
-            "sum(l.qty_received) as received, sum(coalesce(l.qty_accepted, 0)) as accepted, "
-            "sum(coalesce(l.qty_rejected, 0)) as rejected, "
+            "select g.no, g.po_no, g.accepted_on, g.gate_entry_at, g.inspection_status, g.received_by, g.status, "
+            "g.reversed_on, g.reversal_reason, sum(l.qty_received) as received, "
+            "sum(coalesce(l.qty_accepted, 0)) as accepted, sum(coalesce(l.qty_rejected, 0)) as rejected, "
             "sum(round(coalesce(l.qty_accepted, 0) * pl.unit_price, 2)) as value from goods_receipt g "
             "join gr_line l on l.gr_no = g.no join po_line pl on pl.po_no = l.po_no and pl.line_no = l.po_line_no "
             "where g.po_no = any(:p) group by g.no order by g.gate_entry_at, g.no",
@@ -280,12 +281,14 @@ def _receipts(db: Session, pos: set[str], who: People) -> list[dict[str, Any]]:
 
 def _service_entries(db: Session, pos: set[str], who: People) -> list[dict[str, Any]]:
     return [
-        _item(r["no"], r["accepted_on"], "confirmed", qty=r["qty_accepted"], amount=r["amount_accepted"],
-              who=who(r["accepted_by"]), detail=f"for {r['po_no']} line {r['po_line_no']}, by {r['via']}")
+        _item(r["no"], r["accepted_on"], r["status"] if r["status"] == "reversed" else "confirmed",
+              qty=r["qty_accepted"], amount=r["amount_accepted"], who=who(r["accepted_by"]),
+              detail=f"for {r['po_no']} line {r['po_line_no']}, by {r['via']}"
+              + (f"; reversed on {r['reversed_on']:%d %b %Y}" if r["reversed_on"] else ""))
         for r in _rows(
             db,
-            "select no, po_no, po_line_no, accepted_on, qty_accepted, amount_accepted, accepted_by, via "
-            "from service_entry where po_no = any(:p) order by accepted_on, no",
+            "select no, po_no, po_line_no, accepted_on, qty_accepted, amount_accepted, accepted_by, via, status, "
+            "reversed_on from service_entry where po_no = any(:p) order by accepted_on, no",
             p=list(pos),
         )
     ]  # fmt: skip

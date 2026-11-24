@@ -7,6 +7,7 @@ One short page per role, in plain words. The app shows the right one on its **He
 - [Approver](approver.md)
 - [Buyer](buyer.md)
 - [Store](store.md)
+- [Quality](quality.md)
 - [AP clerk](ap-clerk.md)
 - [Finance](finance.md)
 - [Admin: rules and automation controls](admin.md)

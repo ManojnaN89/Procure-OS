@@ -546,18 +546,25 @@ def test_flow(co: Company, when: str, wrong: list[str], qty: Decimal = Decimal(2
             co.call(buyer, "POST", f"/api/purchase-orders/{po}/acknowledge", {"note": "eval: confirmed by phone"})
     lines = co.q("select line_no, qty, unit_price from po_line where po_no = :n order by line_no", n=po)
     store = co.holders("store")[0]
+    # block 9 (spec 9.2 and 10.1): one unit above the order is held in quarantine as excess, never refused
+    item_row = next(i for i in master(co.dataset, "item") if i["code"] == item)
+    over = Decimal(1) if item_row.get("inspection_required") != "true" and len(lines) == 1 else Decimal(0)
+    received = [{**ln, "qty_received": D(ln["qty"]) + over} for ln in lines]
     got = co.call(
         store,
         "POST",
         f"/api/purchase-orders/{po}/receive",
         {"challan": f"DC-{str(po)[-5:]}", "vehicle": "MH12AB1234",
-         "lines": [{"line_no": ln["line_no"], "qty_received": str(ln["qty"])} for ln in lines]},
+         "lines": [{"line_no": ln["line_no"], "qty_received": str(ln["qty_received"])} for ln in received]},
     )  # fmt: skip
     if got.status_code != 200:
         wrong.append(f"{when}: receiving {po} answered {got.status_code} {got.text[:200]}")
+    elif over and not D(js(got).get("excess", {}).get(str(lines[0]["line_no"])) or 0) > 0:
+        wrong.append(f"{when}: one unit above {po} was not held as excess: {js(got).get('excess')}")
+    quality = co.holders("quality")[0]  # block 9 (spec 9.1, 10.1): the receiver never inspects
     for gr in co.q("select no from goods_receipt where po_no = :n and inspection_status = 'pending'", n=po):
         co.call(
-            store,
+            quality,
             "POST",
             f"/api/receipts/{gr['no']}/inspect",
             {

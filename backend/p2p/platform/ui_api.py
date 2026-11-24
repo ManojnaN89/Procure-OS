@@ -1615,12 +1615,48 @@ def get_purchase_order(no: str, db: Db, ctx: Ctx) -> dict[str, Any]:
         "can_resend_link": can_dispatch and r["status"] == "sent",
         "can_receive": r["status"] in goods.RECEIVABLE and can_anywhere(db, ctx.user_id, "grn.create"),
         "receipts": [
-            {"id": g["no"], "inspection": g["inspection_status"], "at": _iso(g["gate_entry_at"])}
+            {
+                "id": g["no"],
+                "inspection": g["inspection_status"],
+                "at": _iso(g["gate_entry_at"]),
+                "status": g["status"],
+                "source": g["source"],
+            }
             for g in _rows(
                 db,
-                "select no, inspection_status, gate_entry_at from goods_receipt where po_no = :n order by no",
+                "select no, inspection_status, gate_entry_at, status, source from goods_receipt "
+                "where po_no = :n order by no",
                 n=no,
             )
+        ],
+        "excess": [
+            {
+                "id": e["id"],
+                "gr_no": e["gr_no"],
+                "line": e["po_line_no"],
+                "qty": _qty(e["qty"]),
+                "uom": e["uom"],
+                "status": e["status"],
+            }
+            for e in _rows(db, "select * from receipt_excess where po_no = :n order by id", n=no)
+        ],
+        "returns": [
+            {
+                "no": r["no"],
+                "status": r["status"],
+                "source": r["source"],
+                "on": r["dispatched_on"].isoformat() if r["dispatched_on"] else None,
+            }
+            for r in _rows(
+                db,
+                "select distinct r.no, r.status, r.source, r.dispatched_on from supplier_return r "
+                "join supplier_return_line l on l.return_no = r.no where l.po_no = :n order by r.no",
+                n=no,
+            )
+        ],
+        "claims": [
+            {"no": c["no"], "qty": _qty(c["qty"]), "total": str(c["total"]), "status": c["status"]}
+            for c in _rows(db, "select * from recovery_claim where po_no = :n order by no", n=no)
         ],
         "waiting_for": r["waiting_for"],
         "buyer_gstin": r["buyer_gstin"],
@@ -1767,7 +1803,7 @@ def _receipt_error(call: Callable[[], dict[str, Any]]) -> dict[str, Any]:
         message = str(exc)
         if "does not exist" in message:
             raise HTTPException(404, message) from None
-        raise HTTPException(403 if message.startswith("segregation") else 409, message) from None
+        raise HTTPException(409, message) from None
 
 
 def _late(line: dict[str, Any], today: date) -> bool:
@@ -1833,7 +1869,7 @@ def goods_waiting(db: Db, ctx: Ctx) -> list[dict[str, Any]]:
 def list_receipts(db: Db, ctx: Ctx) -> list[dict[str, Any]]:
     rows = _rows(
         db,
-        "select g.no, g.po_no, g.location_code, g.gate_entry_at, g.inspection_status, g.received_by, "
+        "select g.no, g.po_no, g.location_code, g.gate_entry_at, g.inspection_status, g.received_by, g.status, g.source, "
         "coalesce(s.trade_name, s.legal_name) as supplier, (select count(*) from gr_line l where l.gr_no = g.no) as lines "
         "from goods_receipt g join po on po.no = g.po_no join supplier s on s.code = po.supplier_code "
         "order by g.created_at desc, g.no desc limit 500",
@@ -1847,10 +1883,24 @@ def list_receipts(db: Db, ctx: Ctx) -> list[dict[str, Any]]:
             "received_at": _iso(r["gate_entry_at"]),
             "inspection": r["inspection_status"],
             "received_by": r["received_by"],
+            "status": r["status"],
+            "source": r["source"],
             "lines": r["lines"],
         }
         for r in rows
     ]
+
+
+def _can_inspect(db: Session, ctx: routing.TenantContext, g: dict[str, Any]) -> bool:
+    if g["inspection_status"] != "pending" or g["status"] != "posted":
+        return False
+    if not can_anywhere(db, ctx.user_id, "grn.inspect"):
+        return False
+    me = approvals.org_code_of(db, ctx.user_id)
+    if me == g["received_by"] or str(ctx.user_id) == str(g["posted_by"]):
+        return False
+    po = db.execute(text("select * from po where no = :n"), {"n": g["po_no"]}).mappings().one()
+    return goods.conflict_of(db, dict(po), ctx.user_id) is None
 
 
 @router.get("/receipts/{no}")
@@ -1865,6 +1915,28 @@ def get_receipt(no: str, db: Db, ctx: Ctx) -> dict[str, Any]:
         "join po_line d on d.po_no = l.po_no and d.line_no = l.po_line_no where l.gr_no = :n order by l.po_line_no",
         n=no,
     )
+    excess = {
+        int(r["po_line_no"]): r for r in _rows(db, "select * from receipt_excess where gr_no = :n order by id", n=no)
+    }
+    returns = _rows(
+        db,
+        "select distinct r.no, r.status, r.dispatched_on from supplier_return r "
+        "join supplier_return_line l on l.return_no = r.no where l.gr_no = :n order by r.no",
+        n=no,
+    )
+    po = _rows(db, "select * from po where no = :n", n=g["po_no"])[0]
+    from p2p.receiving import reversal  # noqa: PLC0415 - the window is read for this receipt only
+
+    posted = reversal._posted_on(g)  # noqa: SLF001 - the same day the reversal service counts from
+    last = reversal.window_end(db, posted, g["location_code"])
+    conflict = goods.conflict_of(db, dict(po), ctx.user_id)
+    can_reverse = (
+        g["status"] == "posted"
+        and g["source"] == "platform"
+        and po["status"] not in ("closed", "cancelled")
+        and conflict is None
+        and can_anywhere(db, ctx.user_id, "grn.create")
+    )
     return {
         "id": g["no"],
         "po_no": g["po_no"],
@@ -1878,7 +1950,17 @@ def get_receipt(no: str, db: Db, ctx: Ctx) -> dict[str, Any]:
         "inspection": g["inspection_status"],
         "accepted_on": g["accepted_on"].isoformat() if g["accepted_on"] else None,
         "remarks": g["remarks"],
-        "can_inspect": g["inspection_status"] == "pending" and can_anywhere(db, ctx.user_id, "grn.create"),
+        "status": g["status"],
+        "source": g["source"],
+        "external_ref": g["external_ref"],
+        "inspected_by": g["inspected_by"],
+        "inspected_at": _iso(g["inspected_at"]),
+        "reversed_on": g["reversed_on"].isoformat() if g["reversed_on"] else None,
+        "reversal_reason": g["reversal_reason"],
+        "window_end": last.isoformat(),
+        "can_inspect": _can_inspect(db, ctx, g),
+        "can_reverse": can_reverse,
+        "reverse_by": "proposal" if business_today() > last else "store",
         "lines": [
             {
                 "line_no": ln["po_line_no"],
@@ -1888,9 +1970,28 @@ def get_receipt(no: str, db: Db, ctx: Ctx) -> dict[str, Any]:
                 "received": _qty(ln["qty_received"]),
                 "accepted": _qty(ln["qty_accepted"]),
                 "rejected": _qty(ln["qty_rejected"]),
+                "excess": _qty(ln["qty_excess"]),
+                "excess_status": excess.get(int(ln["po_line_no"]), {}).get("status"),
                 "reason": ln["reject_reason"],
+                "serials": [
+                    {"serial": s["serial"], "status": s["status"]}
+                    for s in _rows(
+                        db,
+                        "select serial, status from serial_number where gr_no = :g and po_line_no = :l order by serial",
+                        g=no,
+                        l=int(ln["po_line_no"]),
+                    )
+                ],
             }
             for ln in lines
+        ],
+        "returns": [
+            {
+                "no": r["no"],
+                "status": r["status"],
+                "dispatched_on": r["dispatched_on"].isoformat() if r["dispatched_on"] else None,
+            }
+            for r in returns
         ],
     }
 
@@ -1910,6 +2011,7 @@ def receive_goods(
                 _decimal(raw["qty_rejected"], "qty_rejected") if raw.get("qty_rejected") not in (None, "") else None,
                 raw.get("reject_reason"),
                 [str(s) for s in raw.get("serials") or []] or None,
+                [str(s) for s in raw.get("rejected_serials") or []] or None,
             )
             for raw in raw_lines
         ]
@@ -1924,7 +2026,7 @@ def receive_goods(
     )
 
     def post() -> dict[str, Any]:
-        done = goods.post_receipt(db, no, lines, header, ctx.user_id, as_of=business_today())
+        done = goods.post_receipt(db, no, lines, header, ctx.user_id, as_of=business_today(), tenant=ctx.slug)
         goods.tell_requesters(db, ctx.slug, done.no)
         goods.reserve_arrived(db, ctx.slug, done.no)
         return {
@@ -1932,6 +2034,8 @@ def receive_goods(
             "po_status": done.po_status,
             "pending_inspection": done.pending_inspection,
             "accepted": {k: str(v) for k, v in done.accepted.items()},
+            "excess": {k: str(v) for k, v in done.excess.items()},
+            "return_no": done.return_no,
         }
 
     return _receipt_error(post)
@@ -1939,7 +2043,7 @@ def receive_goods(
 
 @router.post("/receipts/{no}/inspect")
 def inspect_goods(
-    no: str, payload: dict[str, Any], db: Db, ctx: Annotated[routing.TenantContext, Depends(require("grn.create"))]
+    no: str, payload: dict[str, Any], db: Db, ctx: Annotated[routing.TenantContext, Depends(require("grn.inspect"))]
 ) -> dict[str, Any]:
     raw_lines = payload.get("lines")
     if not isinstance(raw_lines, list) or not raw_lines:
@@ -1951,6 +2055,7 @@ def inspect_goods(
                 _decimal(raw.get("qty_accepted"), "qty_accepted"),
                 _decimal(raw.get("qty_rejected", 0), "qty_rejected"),
                 raw.get("reason"),
+                [str(s) for s in raw.get("rejected_serials") or []] or None,
             )
             for raw in raw_lines
         ]
@@ -1958,16 +2063,33 @@ def inspect_goods(
         raise HTTPException(422, "each line needs a line_no, qty_accepted and qty_rejected") from None
 
     def decide() -> dict[str, Any]:
-        done = goods.inspect(db, no, decisions, ctx.user_id, as_of=business_today())
+        done = goods.inspect(db, no, decisions, ctx.user_id, as_of=business_today(), tenant=ctx.slug)
         goods.tell_requesters(db, ctx.slug, done.no, inspected=True)
         goods.reserve_arrived(db, ctx.slug, done.no)
         return {
             "receipt": done.no,
             "po_status": done.po_status,
             "accepted": {k: str(v) for k, v in done.accepted.items()},
+            "excess": {k: str(v) for k, v in done.excess.items()},
         }
 
     return _receipt_error(decide)
+
+
+@router.post("/receipts/{no}/reverse")
+def reverse_receipt(
+    no: str, payload: dict[str, Any], db: Db,
+    ctx: Annotated[routing.TenantContext, Depends(require("grn.create"))],
+) -> dict[str, Any]:  # fmt: skip
+    """Reverse a whole receipt: at once inside the correction window, else a proposal (9.7)."""
+    from p2p.receiving import reversal  # noqa: PLC0415 - the reversal service is block 9's
+
+    try:
+        return reversal.reverse_receipt(
+            db, ctx.slug, no, ctx.user_id, str(payload.get("reason") or ""), as_of=business_today()
+        )
+    except reversal.ReversalError as exc:
+        raise HTTPException(exc.status, str(exc)) from None
 
 
 def _dispatch_action(call: Callable[[], dict[str, Any]]) -> dict[str, Any]:

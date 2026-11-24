@@ -23,6 +23,7 @@ from p2p.formulas import matching
 from p2p.formulas.calendar import IST, BusinessCalendar
 from p2p.formulas.kpis import working_days_between
 from p2p.invoices.service import asked_or_confirmed
+from p2p.orders import document as po_document
 from p2p.orders.workflow import NO_APPROVER
 from p2p.platform import alerts, permissions
 from p2p.platform.rows import rows as _rows
@@ -47,6 +48,10 @@ KINDS: dict[str, str] = {
     "po_ack_overdue": "Orders not acknowledged after the reminders",
     "supplier_ack_confirm": "Acknowledgements to record",
     "supplier_sender_check": "Supplier order emails not read",
+    "receipt_excess": "Goods above an order",
+    "return_outcome": "Returns to decide",
+    "inspection": "Receipts to inspect",
+    "return_draft": "Returns to dispatch",
 }
 SOURCING_NEXT: dict[str, tuple[str, str]] = {  # task kind (block 6): the permission that acts, next step
     "rfq_no_response": (
@@ -76,6 +81,10 @@ ORDER_NEXT: dict[str, tuple[str, str]] = {  # task kind (block 8): the permissio
 }
 
 AP = ("AP", "invoice.match", "Ask the supplier for a corrected invoice")
+RECEIPT_NEXT: dict[str, tuple[str, str]] = {  # task kind (block 9): the permission that acts, next step
+    "receipt_excess": ("po.create", "Accept them by revising the order, or return them"),
+    "return_outcome": ("po.create", "Agree with the supplier whether the goods will be replaced"),
+}
 INVOICE_NEXT: dict[str, tuple[str, str, str]] = {  # the block reason: owner, the permission that acts, next step
     matching.PRICE: (
         "AP",
@@ -214,6 +223,34 @@ def _unordered(db: Session) -> Iterator[Stuck]:
                 **common, reason=reason + f" (ordered on {po}, {r['po_status']})", owner="Buyer", act="po.send",
                 see=see, next_step=f"Get {po} approved and sent; the store then receives the goods on it",
             )  # fmt: skip
+
+
+def _receipts(db: Session) -> Iterator[Stuck]:
+    """Receipts waiting for an inspection by someone other than the receiver (SEP-16), and draft returns to dispatch."""
+    for r in _rows(
+        db,
+        "select g.no, g.po_no, g.location_code, g.received_by, (g.gate_entry_at at time zone 'Asia/Kolkata')::date as day "
+        "from goods_receipt g where g.inspection_status = 'pending' and g.status = 'posted' order by g.no",
+    ):
+        name = po_document.delivery_place(db, str(r["location_code"]))[0]
+        yield Stuck(
+            "inspection", r["no"], f"#/receiving/{r['no']}",
+            f"Receipt {r['no']} of {r['po_no']} at {name} has waited for its inspection since {r['day']:%d %b %Y}",
+            "Quality", "Record what the inspection accepted and rejected", r["day"],
+            act="grn.inspect", see=("grn.inspect", "grn.create"), check=partial(_not_received_by, db, r["received_by"]),
+        )  # fmt: skip
+    for r in _rows(
+        db, "select no, supplier_code, reason, created_at from supplier_return where status = 'draft' order by no"
+    ):
+        supplier = db.execute(
+            text("select coalesce(trade_name, legal_name) from supplier where code = :c"), {"c": r["supplier_code"]}
+        ).scalar()
+        yield Stuck(
+            "return_draft", r["no"], f"#/returns/{r['no']}",
+            f"Return {r['no']} to {supplier} is a draft: {r['reason']}", "Store",
+            "Give the challan and the vehicle and dispatch it", _day(r["created_at"]), act="grn.create",
+            see=("grn.create", "po.create"),
+        )  # fmt: skip
 
 
 def _services(db: Session, today: date) -> Iterator[Stuck]:
@@ -355,7 +392,9 @@ def _ai_handover(db: Session) -> Iterator[Stuck]:
         )  # fmt: skip
 
 
-def _sourcing_cases(db: Session, nexts: dict[str, tuple[str, str]] = SOURCING_NEXT) -> Iterator[Stuck]:
+def _sourcing_cases(
+    db: Session, nexts: dict[str, tuple[str, str]] = SOURCING_NEXT, *, owner_prefix: str = ""
+) -> Iterator[Stuck]:
     """The sourcing cases of block 6 (an RFQ closed short, a reply not read, a quote expired before its order, a
     contract line held for path A or B) and the order cases of block 8 (an order not acknowledged after the reminders,
     an acknowledgement by email to record, an order email not read). Each is an open task of its buyer."""
@@ -373,9 +412,10 @@ def _sourcing_cases(db: Session, nexts: dict[str, tuple[str, str]] = SOURCING_NE
             or p.get("po_no")
             or (f"{p.get('request_no')}/{p.get('line_no')}" if p.get("request_no") else r["id"])
         )
+        owner = name_of(db, code) if code else "Not assigned"
         yield Stuck(
             str(r["kind"]), ref, str(p.get("link") or "#/exceptions"), str(r["title"]),
-            name_of(db, code) if code else "Not assigned", step, _day(r["created_at"]), act=act,
+            f"{owner_prefix}: {owner}" if owner_prefix else owner, step, _day(r["created_at"]), act=act,
             people=frozenset({code}) if code else frozenset(), see=(act,),
         )  # fmt: skip
 
@@ -384,6 +424,7 @@ def collect(db: Session, today: date, calendar: BusinessCalendar) -> list[Stuck]
     """Every stuck case in the company, whoever must act."""
     return [
         *_invoices(db),
+        *_receipts(db),
         *_unordered(db),
         *_services(db, today),
         *_approvals(db),
@@ -395,6 +436,7 @@ def collect(db: Session, today: date, calendar: BusinessCalendar) -> list[Stuck]
         *_ai_handover(db),
         *_sourcing_cases(db),
         *_sourcing_cases(db, ORDER_NEXT),
+        *_sourcing_cases(db, RECEIPT_NEXT, owner_prefix="Buyer"),
     ]
 
 

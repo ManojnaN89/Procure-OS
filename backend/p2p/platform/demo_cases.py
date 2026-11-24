@@ -71,6 +71,7 @@ LATER = (
     "period RFQ: award waiting for the director",
     "quotation request with a negotiation brief",
     "quotation request closed short, a case for the buyer",
+    "goods above an order, waiting for the buyer",
 )
 STAGES = EARLY + LATER
 
@@ -467,6 +468,20 @@ def _later(run: _Run) -> None:
     _stage(run, LATER[6], blocked["invoice"])
     _period(run)
     _quotes(run)
+
+    # Goods above an order: the store takes in two more than ordered and they wait for the buyer (block 9)
+    _, po = run.contract_order("RM-02", 10, "Bearings for the fitters")
+    run.approve_order(po)
+    run.send_order(po)
+    run.call(
+        STORE, "POST", f"/api/purchase-orders/{po}/receive",
+        {"challan": f"DC-{po[-5:]}", "vehicle": "MH12AB1234",
+         "lines": [{"line_no": 1, "qty_received": "12"}]},
+    )  # fmt: skip
+    waiting = run.q("select id from receipt_excess where po_no = :p and status = 'waiting'", p=po)
+    if not waiting:
+        raise demo.DemoError(f"the two bearings above {po} should wait for the buyer")
+    _stage(run, LATER[13], po)
 
 
 def _period(run: _Run) -> None:

@@ -15,7 +15,7 @@ from p2p.platform.sod import Actor
 
 hasher = PasswordHasher()
 MIN_PASSWORD_LENGTH = 10
-ROLES = ("Requester", "Approver", "Buyer", "Store", "AP", "Finance", "Admin")
+ROLES = ("Requester", "Approver", "Buyer", "Store", "Quality", "AP", "Finance", "Admin")
 
 
 ADMIN_BY_SYSTEM_ONLY = "add the person with another role, then give the Admin role: another administrator approves it"

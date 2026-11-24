@@ -91,6 +91,12 @@ def receipt_actual(accepted: Decimal, unit_price: Decimal) -> Decimal | None:
     return (accepted * unit_price).quantize(PAISE, rounding=ROUND_HALF_UP)
 
 
+def receipt_reversal_actual(qty: Decimal, unit_price: Decimal) -> Decimal | None:
+    """What a receipt reversal or a counted return takes back: minus what the accepted quantity spent (task 3.6)."""
+    amount = receipt_actual(qty, unit_price)
+    return None if amount is None else -amount
+
+
 def next_period(period: str) -> str:
     y, m = int(period[:4]), int(period[5:])
     return f"{y + m // 12}-{m % 12 + 1:02d}"

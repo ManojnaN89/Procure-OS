@@ -92,6 +92,14 @@ def _new_hold(
     )  # fmt: skip
 
 
+def _close(db: Session, hold_id: int, doc: str) -> None:
+    """Close a hold and say what closed it: the return challan, the scrap, or the receipt it came with."""
+    db.execute(
+        text("update stock_hold set left_qty = 0, closed_at = now(), closed_by_doc = :d where id = :i"),
+        {"d": doc, "i": hold_id},
+    )
+
+
 def _who(db: Session, user_id: int) -> str:
     return org_code_of(db, user_id) or f"user:{user_id}"
 
@@ -268,7 +276,9 @@ def holds(db: Session, *, item: str | None = None, location: str | None = None) 
     rows = db.execute(
         text(
             "select h.id, h.item_code, i.name as item_name, h.location_code, h.quality, h.qty, h.left_qty, h.reason, "
-            "h.reference, h.source, h.gr_no, h.held_by, h.held_at from stock_hold h join item i on i.code = h.item_code "
+            "h.reference, h.source, h.gr_no, h.gr_line_no, h.held_by, h.held_at, "
+            "(select g.po_no from goods_receipt g where g.no = h.gr_no) as po_no from stock_hold h "
+            "join item i on i.code = h.item_code "
             "where h.closed_at is null and (cast(:i as text) is null or h.item_code = :i) "
             "and (cast(:l as text) is null or h.location_code = :l) order by h.held_at, h.id"
         ),
@@ -307,10 +317,12 @@ def receive_into_quarantine(
 
 
 def inspect_hold(
-    db: Session, gr_no: str, line_no: int, accepted: Decimal, rejected: Decimal, reason: str | None, by: str, on: date
-) -> int | None:
-    """The inspection decides a lot in quarantine: accepted to usable, rejected to blocked with the reason. The caller
-    commits. Returns the blocked hold, if any."""
+    db: Session, gr_no: str, line_no: int, counted: Decimal, excess: Decimal, rejected: Decimal,
+    reason: str | None, by: str, on: date,
+) -> tuple[int | None, int | None]:  # fmt: skip
+    """The inspection decides a lot in quarantine: the counted part to usable, the excess stays in quarantine as the
+    buyer's (a child hold, source `excess`), the rejected part to blocked with the reason. The caller commits. Returns
+    the blocked hold and the excess hold, if any."""
     row = (
         db.execute(
             text(
@@ -323,9 +335,153 @@ def inspect_hold(
         .first()
     )
     if row is None:
-        return None
+        return None, None
+    h = dict(row)
     db.execute(
-        text("select pg_advisory_xact_lock(hashtext(:k))"), {"k": f"stock:{row['item_code']}:{row['location_code']}"}
+        text("select pg_advisory_xact_lock(hashtext(:k))"), {"k": f"stock:{h['item_code']}:{h['location_code']}"}
     )
     why = (reason or "").strip() or f"Rejected at the inspection of {gr_no}"
-    return _apply(db, dict(row), accepted, rejected, why, by, gr_no, on)
+    if counted:
+        _requalify(
+            db,
+            h["item_code"],
+            h["location_code"],
+            counted,
+            "quarantine",
+            "usable",
+            gr_no,
+            on,
+            _cost(db, h["item_code"], h["location_code"], gr_no),
+        )
+    blocked = None
+    if rejected:
+        _requalify(db, h["item_code"], h["location_code"], rejected, "quarantine", "blocked", gr_no, on, None)
+        blocked = _new_hold(
+            db, h["item_code"], h["location_code"], "blocked", rejected, why, gr_no, "decision", by,
+            gr=(gr_no, line_no), parent=int(h["id"]),
+        )  # fmt: skip
+    excess_hold = None
+    if excess:
+        # the units stay in quarantine: only the hold changes hands, to the buyer's excess
+        excess_hold = _new_hold(
+            db, h["item_code"], h["location_code"], "quarantine", excess,
+            f"Above the order on {gr_no}: waiting for the buyer", gr_no, "excess", by,
+            gr=(gr_no, line_no), parent=int(h["id"]),
+        )  # fmt: skip
+    _close(db, int(h["id"]), gr_no)
+    return blocked, excess_hold
+
+
+def receive_excess(
+    db: Session, gr_no: str, line_no: int, item: str, location: str, qty: Decimal, cost: Decimal | None, by: str,
+    on: date,
+) -> int:  # fmt: skip
+    """Goods above the order go into stock as quarantine at posting and wait for the buyer (C3). The caller commits."""
+    db.execute(text("select pg_advisory_xact_lock(hashtext(:k))"), {"k": f"stock:{item}:{location}"})
+    db.execute(
+        text(
+            "insert into stock_movement (id, item_code, location_code, date, type, qty, unit_cost, ref_doc, source, "
+            "quality) values (:id, :i, :l, :d, 'receipt', :q, :c, :r, 'platform', 'quarantine')"
+        ),
+        {"id": f"SM-{gr_no}-{line_no}-X", "i": item, "l": location, "d": on, "q": qty, "c": cost, "r": gr_no},
+    )
+    return _new_hold(
+        db, item, location, "quarantine", qty, f"Above the order on {gr_no}: waiting for the buyer", gr_no, "excess",
+        by, gr=(gr_no, line_no),
+    )  # fmt: skip
+
+
+def release_excess(db: Session, hold_id: int, by: str, on: date) -> Decimal:
+    """The buyer accepted goods above the order: their hold's units go from quarantine to usable, at the receipt's cost.
+    Commits nothing (the acceptance's transaction). Returns the quantity."""
+    h = _locked_hold(db, hold_id)
+    if h["source"] != "excess":
+        db.rollback()
+        raise QualityError(409, f"hold {hold_id} is not an excess hold")
+    if h["closed_at"] is not None or Decimal(h["left_qty"]) <= 0:
+        db.rollback()
+        raise QualityError(409, f"hold {hold_id} is already closed")
+    qty = Decimal(h["left_qty"])
+    db.execute(
+        text("select pg_advisory_xact_lock(hashtext(:k))"), {"k": f"stock:{h['item_code']}:{h['location_code']}"}
+    )
+    cost = _cost(db, h["item_code"], h["location_code"], h["gr_no"])
+    _requalify(
+        db, h["item_code"], h["location_code"], qty, "quarantine", "usable", str(h["gr_no"] or hold_id), on, cost
+    )
+    _close(db, hold_id, str(h["gr_no"] or hold_id))
+    return qty
+
+
+def scrap(db: Session, user_id: int, hold_id: int, qty: Decimal, reason: str, *, today: date | None = None) -> Decimal:
+    """Blocked stock that cannot be returned is scrapped, with a reason (OP-12). Commits. Returns what is left on the
+    hold."""
+    today = today or business_today()
+    why = (reason or "").strip()
+    if not why:
+        raise QualityError(422, "say why the stock is scrapped")
+    qty = Decimal(qty).quantize(QTY)
+    if qty <= 0:
+        raise QualityError(422, "the quantity must be more than zero")
+    h = _locked_hold(db, hold_id)
+    if h["closed_at"] is not None or Decimal(h["left_qty"]) <= 0:
+        db.rollback()
+        raise QualityError(409, f"hold {hold_id} is already closed")
+    if h["quality"] != "blocked":
+        db.rollback()
+        raise QualityError(409, f"hold {hold_id} is {h['quality']}: only blocked stock is scrapped")
+    if qty > Decimal(h["left_qty"]):
+        db.rollback()
+        raise QualityError(409, f"only {Decimal(h['left_qty']).normalize():f} is left on hold {hold_id}")
+    db.execute(
+        text("select pg_advisory_xact_lock(hashtext(:k))"), {"k": f"stock:{h['item_code']}:{h['location_code']}"}
+    )
+    actor = user(user_id)
+    cost = _cost(db, h["item_code"], h["location_code"], h["gr_no"])
+    db.execute(
+        text(
+            "insert into stock_movement (id, item_code, location_code, date, type, qty, unit_cost, ref_doc, source, "
+            "quality) values (:id, :i, :l, :d, 'scrap', :q, :c, :ref, 'platform', 'blocked')"
+        ),
+        {
+            "id": f"SM-SCR-{hold_id}-{uuid.uuid4().hex[:8]}", "i": h["item_code"], "l": h["location_code"],
+            "d": today, "q": qty, "c": cost, "ref": f"SCRAP-{hold_id}",
+        },
+    )  # fmt: skip
+    left = Decimal(h["left_qty"]) - qty
+    if left == 0:
+        _close(db, hold_id, f"SCRAP-{hold_id}")
+    else:
+        db.execute(text("update stock_hold set left_qty = :l where id = :i"), {"l": left, "i": hold_id})
+    serials = _scrapped_serials(db, h, qty, today)
+    audit.record(
+        db, actor, "stock.scrap", "stock_hold", hold_id,
+        before={"left_qty": str(h["left_qty"])},
+        after={"qty": str(qty), "left_qty": str(left), "value": str((qty * cost).quantize(Decimal("0.01"))) if cost
+               else None, "serials": serials},
+        reason=why,
+    )  # fmt: skip
+    db.commit()
+    return left
+
+
+def _scrapped_serials(db: Session, h: dict[str, Any], qty: Decimal, on: date) -> list[str]:
+    """The serial numbers of the units scrapped: the ones on the receipt line still received."""
+    if not h["gr_no"] or not h["gr_line_no"]:
+        return []
+    rows = [
+        r[0]
+        for r in db.execute(
+            text(
+                "select serial from serial_number where gr_no = :g and po_line_no = :l and status = 'received' "
+                "order by serial limit :n for update"
+            ),
+            {"g": h["gr_no"], "l": h["gr_line_no"], "n": int(qty)},
+        )
+    ]
+    if rows:
+        db.execute(
+            text("update serial_number set status = 'scrapped' where serial = any(:s) and item_code = :i"),
+            {"s": rows, "i": h["item_code"]},
+        )
+    return rows

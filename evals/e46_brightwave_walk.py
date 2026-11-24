@@ -39,10 +39,10 @@ REQUIREMENT = (
 TODAY = date(2026, 11, 6)
 PAY_DAY = date(2026, 12, 21)
 DOMAIN = "brightwave.example"
-KEYS = ("employee", "facilities", "buyer", "ap", "finance", "depthead", "ithead", "cfo")
+KEYS = ("employee", "facilities", "itsupport", "buyer", "ap", "finance", "depthead", "ithead", "cfo")
 CODE_OF = {
     "U01": "employee", "U02": "facilities", "U03": "buyer", "U04": "ap", "U05": "finance",
-    "U07": "depthead", "U08": "ithead", "U09": "cfo",
+    "U07": "depthead", "U08": "ithead", "U09": "cfo", "U11": "itsupport",
 }  # fmt: skip
 HEADSET_QUOTES = {"SUP-002": "2350", "SUP-001": "2450"}  # typed in by the buyer
 SERIAL = "BW-LP01-0001"
@@ -470,7 +470,10 @@ def _run(ctx: Any) -> Outcome:  # noqa: C901 - one story, step by step
                 d.sync()
             c.same("every order is acknowledged", sorted({r[0] for r in q("select status from po")}), ["acknowledged"])
 
-            # ---------------------------------------------------------------- 9. receipt: the laptop with its serial, the headsets
+            # ---------------------------------------------------------------- 9. receipt: the laptop with its serial, the headsets;
+            # the headsets need inspection and quality@ (U11) decides it, never the receiver (block 9, spec 9.1 and 10.1)
+            db.execute(text("update item set inspection_required = true where code = 'HS-01'"))
+            db.commit()
             for no, qty in ((laptop_po, 1), (head_po, 5)):
                 with d.step(
                     "facilities",
@@ -486,6 +489,18 @@ def _run(ctx: Any) -> Outcome:  # noqa: C901 - one story, step by step
                     card.locator(".recv-challan").fill(f"DC/{no[-4:]}")
                     card.locator(".recv-send").click()
                     expect(page.locator("#appContent")).to_contain_text("GRN-")
+                if no == head_po:
+                    c.same(
+                        "the headsets wait for inspection: nothing counts yet",
+                        q("select inspection_status from goods_receipt where po_no = :p", p=no)[0][0],
+                        "pending",
+                    )
+                    head_gr = one("select no from goods_receipt where po_no = :p", p=no)
+                    with d.step("itsupport", f"opens {head_gr} waiting for inspection and records it") as page:
+                        d.go("itsupport", f"receiving/{head_gr}")
+                        expect(page.locator("#appContent")).to_contain_text("waiting for inspection")
+                        page.locator("#inspectBtn").click()
+                        expect(page.locator("#appContent")).to_contain_text("inspection passed")
                 if no == laptop_po:
                     d.mark(9)
                 d.sync()

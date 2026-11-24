@@ -36,6 +36,7 @@ const UnorderedView = {
         <div style="margin-top:8px;"><div class="btn btn-primary btn-sm" id="unoRecord">Record and ask the purchase manager</div></div>
         <div id="unoNote" style="font-size:12px;color:var(--warning-text);margin-top:6px;"></div>
       </div>
+      <div id="unoAction"></div>
       <div class="table-wrap" id="unoList"><div class="empty-state">Loading…</div></div>
     `;
     document.getElementById("unoRecord").addEventListener("click", () => this.record());
@@ -76,20 +77,38 @@ const UnorderedView = {
   },
 
   async act(id, act) {
-    const body = {};
-    if (act === "reject") {
-      body.reason = window.prompt("Why are the goods rejected? (they go back to the supplier)") || "";
-      if (!body.reason.trim()) return;
+    const panel = document.getElementById("unoAction");
+    const fields = {
+      reject: `<label>Why are the goods rejected? (they go back to the supplier)<input class="ua-reason" style="width:100%"></label>`,
+      order: `<label>Price per unit agreed with the supplier, before GST<input class="ua-price" inputmode="decimal" style="width:160px"></label><div class="cell-muted" id="uaValue" style="font-size:12px;"></div>`,
+      returned: `<label>Return challan no.<input class="ua-challan" style="width:180px"></label><label>Vehicle no.<input class="ua-vehicle" style="width:180px"></label>`,
+    };
+    if (!fields[act]) return;
+    panel.innerHTML = `<div class="panel" style="margin-bottom:12px;"><div class="form-grid">${fields[act]}</div>
+      <div class="form-actions"><div class="btn btn-primary btn-sm" id="uaGo">Confirm</div><div class="btn btn-secondary btn-sm" id="uaCancel">Cancel</div></div>
+      <div id="uaNote" style="font-size:12px;color:var(--warning-text);"></div></div>`;
+    const price = panel.querySelector(".ua-price");
+    if (price) {
+      price.addEventListener("input", () => {
+        const row = [...document.querySelectorAll("#unoList tr[data-id]")].find((tr) => tr.dataset.id === id);
+        const qty = Number((row?.querySelector("td:nth-child(4)")?.textContent || "0").trim().split(" ")[0]) || 0;
+        document.getElementById("uaValue").textContent = `Line value before GST: ${formatCurrency(qty * Number(price.value || 0))}`;
+      });
     }
-    if (act === "order") {
-      body.unit_price = window.prompt("Price per unit agreed with the supplier (before GST)") || "";
-      if (!body.unit_price.trim()) return;
-    }
-    if (act === "returned") body.ref = window.prompt("Return challan number (optional)") || "";
-    const res = await API.postJSON(`/api/unordered-receipts/${encodeURIComponent(id)}/${act}`, body);
-    if (res.ok) return this.load();
-    const note = document.getElementById("unoActNote");
-    if (note) note.textContent = res.data.detail || "That did not go through.";
+    panel.querySelector("#uaCancel").addEventListener("click", () => { panel.innerHTML = ""; });
+    panel.querySelector("#uaGo").addEventListener("click", async () => {
+      const body = {};
+      if (act === "reject") body.reason = panel.querySelector(".ua-reason").value.trim();
+      if (act === "order") body.unit_price = panel.querySelector(".ua-price").value.trim();
+      if (act === "returned") {
+        body.challan = panel.querySelector(".ua-challan").value.trim();
+        body.vehicle = panel.querySelector(".ua-vehicle").value.trim();
+        if (!body.challan || !body.vehicle) { document.getElementById("uaNote").textContent = "A challan number and a vehicle are needed."; return; }
+      }
+      const res = await API.postJSON(`/api/unordered-receipts/${encodeURIComponent(id)}/${act}`, body);
+      if (res.ok) { panel.innerHTML = ""; return this.load(); }
+      document.getElementById("uaNote").textContent = res.data.detail || "That did not go through.";
+    });
   },
 
   async record() {

@@ -37,6 +37,53 @@ def split(received: Decimal, rejected: Decimal | None) -> SplitResult:
     return SplitResult(received - rej, rej)
 
 
+def needs_inspection(item_flag: bool, category_flag: bool) -> bool:
+    """A line needs inspection when its item says so or its category does (plan 3.8, OP-3: either one)."""
+    return bool(item_flag) or bool(category_flag)
+
+
+@dataclass(frozen=True)
+class ExcessSplit:
+    counted: Decimal  # what may be received against the order
+    excess: Decimal  # the rest of the goods, held for the buyer
+
+
+def split_excess(good: Decimal, room: Decimal) -> ExcessSplit:
+    """The good units a receipt brought split into what the order may still take and what is above it (C3, 4.2).
+
+    Units rejected at the gate are not `good`: they went back. Nothing or less than the room is all counted.
+    """
+    if good < 0:
+        raise ValueError("the quantity kept must not be negative")
+    if room < 0:
+        raise ValueError("the room left must not be negative")
+    counted = min(good, room)
+    return ExcessSplit(counted, good - counted)
+
+
+def check_rejected_serials(
+    rejected: Decimal, serials: list[str], received_serials: list[str], line_no: int
+) -> list[str]:
+    """The serial numbers of the units rejected, one for each, each among those received on the line (DF-31).
+
+    Returns them trimmed and in capitals. Raises ValueError with the words the screen shows.
+    """
+    clean = [s.strip().upper() for s in serials if s and s.strip()]
+    received = {s.strip().upper() for s in received_serials if s and s.strip()}
+    if rejected != rejected.to_integral_value():
+        raise ValueError(f"line {line_no}: a serialised item is rejected in whole units")
+    units = int(rejected)
+    if len(clean) != units:
+        raise ValueError(f"line {line_no}: name the {count(units, 'serial number')} rejected, from those received")
+    twice = sorted({s for s in clean if clean.count(s) > 1})
+    if twice:
+        raise ValueError(f"line {line_no}: given twice: {', '.join(twice)}")
+    unknown = sorted(set(clean) - received)
+    if unknown:
+        raise ValueError(f"line {line_no}: not received on this line: {', '.join(unknown)}")
+    return clean
+
+
 def line_status(ordered: Decimal, accepted_total: Decimal) -> str:
     """A line is received once the accepted quantity reaches the ordered quantity; some accepted is a part receipt."""
     if accepted_total >= ordered:

@@ -177,7 +177,7 @@ def main(argv: list[str] | None = None) -> int:
     urepair.add_argument("tenant")
     company_cli.add_parsers(sub)
     imp = sub.add_parser("import").add_subparsers(dest="cmd", required=True)
-    for name in ("masters", "stock", "demand"):
+    for name in ("masters", "stock", "demand", "receipts"):
         one = imp.add_parser(name)
         one.add_argument("tenant")
         one.add_argument("dataset")
@@ -466,6 +466,7 @@ def main(argv: list[str] | None = None) -> int:
 
         from p2p.masters.importer import ImportReport, import_masters
         from p2p.masters.report import update_lines
+        from p2p.receiving import erp_receipts
         from p2p.receiving.stock import import_movements
         from p2p.requests import demand
 
@@ -476,6 +477,19 @@ def main(argv: list[str] | None = None) -> int:
                     report = demand.import_demand(
                         db, Path(args.dataset), dry_run=args.dry_run, kind=args.kind, tenant=args.tenant
                     )
+                elif args.cmd == "receipts":
+                    receipts = erp_receipts.import_receipts(db, args.tenant, Path(args.dataset), dry_run=args.dry_run)
+                    verb = "would load" if args.dry_run else "loaded"
+                    print(
+                        f"{verb} {receipts.loaded.get('goods_receipt', 0)} receipt lines; "
+                        f"{receipts.already} already, {len(receipts.changed_rows)} changed, "
+                        f"{len(receipts.rejected)} left out, {receipts.reversed} reversed ({receipts.seconds} s)"
+                    )
+                    for line_change in receipts.changed_rows:
+                        print(f"  change    {line_change}")
+                    for problem in receipts.rejected[:25]:
+                        print(f"  left out  row {problem.line}: {problem.reason}")
+                    return 1 if receipts.rejected else 0
                 else:
                     load = import_masters if args.cmd == "masters" else import_movements
                     report = load(db, Path(args.dataset), dry_run=args.dry_run)

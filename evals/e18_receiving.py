@@ -29,20 +29,33 @@ def run(ctx) -> Outcome:
 
     out = Outcome(True)
     world = lib.build_world("e18")
-    # the plant's catalogue has no item that needs inspection, so some stocked items are marked in this company
+    # the plant's catalogue has no item that needs inspection, so some stocked items and one category are marked here
+    # (block 9 spec 9.1 and 10.1: the item flag or the category flag)
     stocked = sorted(r["code"] for r in rows("master", "item") if r["stocked"] == "true")
     flagged = set(stocked[::6])
+    categories = sorted({r["category_code"] for r in rows("master", "item") if r["category_code"]})
+    category_flagged = {categories[len(categories) // 2]}
     world.db.execute(text("update item set inspection_required = true where code = any(:c)"), {"c": sorted(flagged)})
+    world.db.execute(
+        text("update item_category set inspection_required = true where code = any(:c)"), {"c": sorted(category_flagged)}
+    )
     world.db.commit()
     state = pipeline.run_pipeline(world)
     world, db = state.world, state.world.db
     db.commit()  # the API runs in its own session: nothing may stay open here
     client = TestClient(app)
-    buyer, store = world.headers("Buyer"), world.headers("Store")
+    buyer, store, quality = world.headers("Buyer"), world.headers("Store"), world.headers("Quality")
 
     # the oracle's own reading of the dataset
     items = {
-        r["code"]: dict(r, inspection_required="true" if r["code"] in flagged else r["inspection_required"])
+        r["code"]: dict(
+            r,
+            inspection_required=(
+                "true"
+                if r["code"] in flagged or r["category_code"] in category_flagged
+                else r["inspection_required"]
+            ),
+        )
         for r in rows("master", "item")
     }
     tolerance: dict[str, Fraction] = {}
@@ -90,6 +103,7 @@ def run(ctx) -> Outcome:
     before_stock = on_hand()
     expected_stock: dict[tuple[str, str], Fraction] = defaultdict(Fraction)
     expected_accepted: dict[tuple[str, int], Fraction] = defaultdict(Fraction)
+    expected_excess: dict[tuple[str, int], Fraction] = defaultdict(Fraction)
     scenario_count: dict[str, int] = defaultdict(int)
     wrong: list[str] = []
 
@@ -106,7 +120,7 @@ def run(ctx) -> Outcome:
         ratio = Fraction(base_qty) / Fraction(ordered) if base_qty else Fraction(1)
         stocked = item["stocked"] == "true"
         inspect = item["inspection_required"] == "true"
-        kind = ["full", "over_limit", "partial_then_rest", "reject", "over_refused"][n % 5]
+        kind = ["full", "over_limit", "partial_then_rest", "reject", "over_excess"][n % 5]
         if inspect:
             kind = "inspect"
         scenario_count[kind] += 1
@@ -123,17 +137,23 @@ def run(ctx) -> Outcome:
                 wrong.append(f"{po}/{line} full receipt answered {r.status_code} {r.text[:80]}")
                 continue
             credit(Fraction(ordered))
-        elif kind in ("over_limit", "over_refused"):
+        elif kind in ("over_limit", "over_excess"):
             top = limit(item_code, ordered)
-            if kind == "over_refused":
-                too_much = top + Decimal("0.0001")
-                before = db.execute(text("select count(*) from goods_receipt")).scalar_one()
+            if kind == "over_excess":
+                # block 9 (spec 9.2, 10.1): one unit above the room is held in quarantine as excess, not refused
+                too_much = top + Decimal("1")
                 r = post(po, line, too_much)
-                if (
-                    r.status_code != 409
-                    or db.execute(text("select count(*) from goods_receipt")).scalar_one() != before
-                ):
-                    wrong.append(f"{po}/{line}: {too_much} (limit {top}) was not refused: {r.status_code}")
+                if r.status_code != 200:
+                    wrong.append(f"{po}/{line}: {too_much} (limit {top}) was refused: {r.status_code} {r.text[:80]}")
+                    continue
+                body = r.json()
+                if Decimal(body.get("accepted", {}).get(str(line), "0")) != top or Decimal(
+                    body.get("excess", {}).get(str(line), "0")
+                ) != Decimal("1"):
+                    wrong.append(f"{po}/{line}: the excess was not split from the counted goods: {body}")
+                expected_excess[key] += Fraction(1)
+                credit(Fraction(top))
+                continue
             r = post(po, line, top)
             if r.status_code != 200:
                 wrong.append(f"{po}/{line}: the limit {top} itself was refused: {r.status_code} {r.text[:80]}")
@@ -185,7 +205,7 @@ def run(ctx) -> Outcome:
                         }
                     ]
                 },
-                headers=store,
+                headers=quality,  # block 9 (spec 9.1, 10.1): the receiver cannot inspect their own receipt
             )
             if ins.status_code != 200:
                 wrong.append(f"{po}/{line} inspection answered {ins.status_code} {ins.text[:80]}")
@@ -251,7 +271,10 @@ def run(ctx) -> Outcome:
 
     # the books agree with themselves
     sums = db.execute(
-        text("select l.po_no, l.po_line_no, sum(coalesce(l.qty_accepted, 0)) from gr_line l group by 1, 2")
+        text(
+            "select l.po_no, l.po_line_no, sum(coalesce(l.qty_accepted, 0) - coalesce(l.qty_excess, 0)) "
+            "from gr_line l group by 1, 2"
+        )
     ).all()
     mismatched = [
         f"{p}/{ln}"

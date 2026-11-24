@@ -499,3 +499,38 @@ KINDS: dict[str, DemandFile] = {
         JoinerPlans(),
     )
 }  # fmt: skip
+
+
+class ErpGoodsReceipts(DemandFile):
+    """A client ERP's receipts (block 9, D-20): our template's columns, listed with the demand templates. Its loading is
+    `receiving/erp_receipts.py`, not the demand import (a receipt is a goods receipt, not demand)."""
+
+    kind = "goods_receipt"
+    title = "Goods receipts from the ERP (one row per receipt line)"
+    table = "goods_receipt"
+    columns = (
+        ("erp_receipt_no", "text"),
+        ("erp_line", "text"),
+        ("po_no", "text"),
+        ("po_line_no", "integer"),
+        ("received_on", "date"),
+        ("qty_received", "numeric"),
+        ("qty_rejected", "numeric"),
+        ("reject_reason", "text"),
+        ("challan", "text"),
+        ("received_by", "text"),
+        ("serials", "text"),
+        ("reverses", "text"),
+    )
+    required = ("erp_receipt_no", "erp_line")
+    key = ("external_ref", "external_line")
+    compared = ("qty_received", "qty_rejected")
+    example = ("ERP-GR-7001", "1", "PO-CKN-2627-00001", "1", "2026-12-07", "60", "", "", "DC/7001", "erp.user", "", "")
+
+    def doc(self, row: dict[str, Any]) -> tuple[str, str | None]:
+        return str(row["erp_receipt_no"]), str(row["erp_line"])
+
+
+ERP_RECEIPT = ErpGoodsReceipts()
+# every kind of file we give a template for: the demand files and the ERP's receipts
+TEMPLATES: dict[str, DemandFile] = {**KINDS, ERP_RECEIPT.kind: ERP_RECEIPT}

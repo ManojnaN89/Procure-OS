@@ -1,4 +1,4 @@
-"""E34: the whole application, as a person meets it: the main demo company (Apex Pumps, `apex`), its nine logins, a real
+"""E34: the whole application, as a person meets it: the main demo company (Apex Pumps, `apex`), its eleven logins, a real
 browser, the demo script followed to the letter from "Check stock levels" to a paid invoice, then every role guide followed as a brand-new
 user, and every screen of every role swept for errors, overflow and raw codes at laptop and phone width.
 
@@ -48,7 +48,7 @@ DOMAIN = "apexpumps.example"
 EMAILS = {  # key -> login; the key is the part before the @
     key: f"{key}@{DOMAIN}"
     for key in (
-        "production", "planthead", "director", "purchasemanager", "buyer", "store", "ap", "finance", "admin",
+        "production", "planthead", "director", "purchasemanager", "buyer", "store", "quality", "ap", "finance", "admin",
     )
 }  # fmt: skip
 NAMES = {
@@ -58,6 +58,7 @@ NAMES = {
     "purchasemanager": "Purchase Manager",
     "buyer": "Buyer",
     "store": "Storekeeper",
+    "quality": "Quality Inspector",
     "ap": "AP Executive",
     "finance": "Finance Manager",
     "admin": "System Administrator",
@@ -68,6 +69,7 @@ GUIDE_OF = {  # key -> (guide, the heading of the first task that role does from
     "purchasemanager": ("approver", "Approve an order"),
     "buyer": ("buyer", ""),
     "store": ("store", ""),
+    "quality": ("quality", ""),
     "ap": ("ap-clerk", ""),
     "finance": ("finance", ""),
     "admin": ("admin", ""),
@@ -968,10 +970,12 @@ def _run(ctx: Any) -> Outcome:
                             q("select status from po where no = :n", n=po)[0][0],
                             "acknowledged",
                         )
+                        seal_gr = one("select no from goods_receipt where po_no = :p order by no limit 1", p=po)
                         with d.step(
-                            "store",
+                            "quality",
                             "sees the receipt waiting for inspection; keeps every seal and clicks Record inspection",
-                        ) as page:
+                        ) as page:  # block 9 (spec 9.1, 10.1): quality@ inspects, never the receiver
+                            d.go("quality", f"receiving/{seal_gr}")
                             expect(page.locator("#appContent")).to_contain_text("waiting for inspection")
                             page.locator("#inspectBtn").click()
                             expect(page.locator("#appContent")).to_contain_text("inspection passed")

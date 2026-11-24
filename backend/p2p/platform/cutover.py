@@ -124,6 +124,8 @@ NOT_CARRIED = (
     "period_demand_line", "award_decision", "award_letter", "contract_link",
     # block 7: the versions of an order
     "po_version",
+    # block 9: goods above an order, returns and recovery claims (platform transactions)
+    "receipt_excess", "supplier_return", "supplier_return_line", "recovery_claim",
     # loaded fresh into the new database
     "ref_gst_rate", "ref_gst_state", "ref_holiday", "ref_hsn_sac", "ref_load", "ref_rbi_bank_rate", "ref_tds_section",
     "ref_uom",

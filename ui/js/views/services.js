@@ -31,11 +31,18 @@ const ServicesView = {
       ? data.lines.map((l) => this.card(l)).join("")
       : `<div class="empty-next"><strong>Nothing is waiting for your confirmation.</strong><br>A service appears here once its order has been sent to the supplier.</div>`;
     document.getElementById("svcDone").innerHTML = data.entries.length
-      ? `<table class="data-table"><thead><tr><th>ENTRY</th><th>ORDER</th><th>SERVICE</th><th>CONFIRMED</th><th>AMOUNT</th><th>ON</th><th>HOW</th></tr></thead><tbody>
-          ${data.entries.map((e) => `<tr><td class="cell-muted">${this.esc(e.id)}</td><td><a href="#/purchase-orders/${this.esc(e.po_no)}" style="color:var(--accent-tint);">${this.esc(e.po_no)}</a></td><td>${this.esc(e.name)}<div class="cell-muted" style="font-size:11px;">${this.esc(e.supplier)}</div></td><td>${this.esc(e.qty)} <span class="cell-muted">${this.esc(e.uom || "")}</span></td><td>${formatCurrency(e.amount)}</td><td class="cell-muted">${formatDate(e.on)}</td><td class="cell-muted">${this.esc(e.via === "app" ? "in the app" : "by email")}</td></tr>`).join("")}
-        </tbody></table>`
+      ? `<table class="data-table"><thead><tr><th>ENTRY</th><th>ORDER</th><th>SERVICE</th><th>CONFIRMED</th><th>AMOUNT</th><th>ON</th><th>HOW</th><th></th></tr></thead><tbody>
+          ${data.entries.map((e) => `<tr><td class="cell-muted">${this.esc(e.id)}</td><td><a href="#/purchase-orders/${this.esc(e.po_no)}" style="color:var(--accent-tint);">${this.esc(e.po_no)}</a></td><td>${this.esc(e.name)}<div class="cell-muted" style="font-size:11px;">${this.esc(e.supplier)}</div></td><td>${this.esc(e.qty)} <span class="cell-muted">${this.esc(e.uom || "")}</span></td><td>${formatCurrency(e.amount)}</td><td class="cell-muted">${formatDate(e.on)}</td><td class="cell-muted">${e.status === "reversed" ? `reversed on ${formatDate(e.reversed_on)}` : this.esc(e.via === "app" ? "in the app" : "by email")}</td><td>${e.can_reverse ? `<input class="svc-rev-why" placeholder="Why reverse it?" style="width:120px;"><div class="btn btn-secondary btn-sm svc-rev" data-id="${this.esc(e.id)}" style="margin-top:4px;">Reverse</div>` : ""}</td></tr>`).join("")}
+        </tbody></table><div id="svcRevNote" style="font-size:12px;color:var(--warning-text);margin-top:6px;"></div>`
       : `<div class="empty-state">You have not confirmed a service yet.</div>`;
     w.querySelectorAll(".svc-send").forEach((btn) => btn.addEventListener("click", () => this.send(btn.dataset.key)));
+    document.querySelectorAll(".svc-rev").forEach((btn) => btn.addEventListener("click", async () => {
+      const why = btn.parentElement.querySelector(".svc-rev-why").value.trim();
+      const res = await API.postJSON(`/api/services/entries/${encodeURIComponent(btn.dataset.id)}/reverse`, { reason: why });
+      if (res.ok && !res.data.proposal_id) return this.render(document.getElementById("appContent"));
+      const note = document.getElementById("svcRevNote");
+      if (note) note.textContent = res.ok ? `Asked the purchase manager (proposal ${res.data.proposal_id}).` : (res.data.detail || "The entry was not reversed.");
+    }));
   },
 
   card(l) {

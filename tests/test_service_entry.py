@@ -369,12 +369,12 @@ def test_given_an_approved_unordered_receipt_when_the_buyer_orders_it_then_the_s
 
     po_no = unordered.raise_order(svc, slug, no, logins["buyer"], D("100"), as_of=TODAY)
     with pytest.raises(unordered.UnorderedError, match="approved and sent"):
-        unordered.receive_on_order(svc, no, logins["stores"], as_of=TODAY)
+        unordered.receive_on_order(svc, slug, no, logins["stores"], as_of=TODAY)
     svc.rollback()
     if svc.execute(text("select status from po where no = :p"), {"p": po_no}).scalar_one() == "submitted":
         workflow.approve(svc, slug, po_no, logins["procurement"])
     dispatch.send_po(svc, po_no)
-    gr_no = unordered.receive_on_order(svc, no, logins["stores"], as_of=TODAY)
+    gr_no = unordered.receive_on_order(svc, slug, no, logins["stores"], as_of=TODAY)
 
     assert _state(svc, no) == "received" and _on_hand(svc) == D("3")  # the three now enter stock
     req = svc.execute(
@@ -395,16 +395,17 @@ def test_given_an_approved_unordered_receipt_when_the_buyer_orders_it_then_the_s
 def test_given_an_unordered_receipt_when_the_purchase_manager_rejects_it_then_the_goods_go_back_and_never_into_stock(
     svc: Session, outbox: Outbox
 ) -> None:  # noqa: F811
+    slug = svc.info["slug"]
     _, logins = _sent(svc)
     no = _unordered(svc, logins["stores"])
 
     unordered.reject(svc, no, logins["procurement"], "Nobody asked for these")
 
     assert _state(svc, no) == "rejected"
-    unordered.mark_returned(svc, no, logins["stores"], "RTN/5", as_of=TODAY)
+    unordered.mark_returned(svc, slug, no, logins["stores"], "RTN/5", "MH 12 XX 0000", as_of=TODAY)
     assert _state(svc, no) == "returned" and _on_hand(svc) == D("0")
     with pytest.raises(unordered.UnorderedError, match="only rejected goods"):
-        unordered.mark_returned(svc, no, logins["stores"], None, as_of=TODAY)
+        unordered.mark_returned(svc, slug, no, logins["stores"], None, None, as_of=TODAY)
     assert [r["no"] for r in unordered.listing(svc, open_only=True)] == []
 
 
@@ -430,3 +431,47 @@ def test_a_company_sees_only_its_own_service_lines_and_unordered_receipts(svc: S
         assert [ln["po_no"] for ln in here.json()["lines"]] == [po_no]
     finally:
         routing.clear_engine_cache()
+
+
+# ---- block 9: a service entry can be reversed --------------------------------------------------------
+
+
+def test_given_a_confirmed_service_when_its_confirmer_reverses_it_then_the_line_goes_back_and_no_budget_moves(
+    svc: Session, outbox: Outbox
+) -> None:  # noqa: F811
+    po_no, logins = _service_po(svc)
+    done = _confirm(svc, po_no, logins["keeper"])
+    assert _line(svc) == (D("10"), "received")
+
+    from p2p.receiving import reversal
+
+    got = reversal.reverse_service_entry(svc, svc.info["slug"], done.no, logins["keeper"], "Done for another site", as_of=TODAY)
+
+    assert got == {"status": "reversed"}
+    assert _line(svc) == (D("0"), "open")
+    assert svc.execute(text("select status from po where no = :p"), {"p": po_no}).scalar_one() == "sent"
+    assert svc.execute(text("select status, reversal_reason from service_entry")).one() == ("reversed", "Done for another site")
+    assert svc.execute(text("select count(*) from audit_event where action = 'service.reverse'")).scalar_one() == 1
+    assert svc.execute(text("select count(*) from budget_actual")).scalar_one() == 0
+
+
+def test_another_person_cannot_reverse_the_services_confirmation(svc: Session, outbox: Outbox) -> None:  # noqa: F811
+    po_no, logins = _service_po(svc)
+    done = _confirm(svc, po_no, logins["keeper"])
+
+    from p2p.receiving import reversal
+
+    with pytest.raises(reversal.ReversalError, match="only the person who confirmed the service"):
+        reversal.reverse_service_entry(svc, svc.info["slug"], done.no, logins["cfo"], "Not mine", as_of=TODAY)
+
+
+def test_a_service_already_invoiced_is_not_reversed(svc: Session, outbox: Outbox) -> None:  # noqa: F811
+    po_no, logins = _service_po(svc)
+    done = _confirm(svc, po_no, logins["keeper"])
+    svc.execute(text("update po_line set invoiced_qty = 10 where po_no = :p"), {"p": po_no})
+    svc.commit()
+
+    from p2p.receiving import reversal
+
+    with pytest.raises(reversal.ReversalError, match="is invoiced"):
+        reversal.reverse_service_entry(svc, svc.info["slug"], done.no, logins["keeper"], "Undo", as_of=TODAY)
