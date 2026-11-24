@@ -1181,7 +1181,7 @@ def _run(ctx: Any) -> Outcome:
                 for supplier in by_supplier:
                     expect(page.locator("#duePreview")).to_contain_text(suppliers[supplier]["trade_name"].split()[0])
                 page.locator("#planRun").click()
-                expect(page.locator("#appContent")).to_contain_text("Waiting for the owner")
+                expect(page.locator("#appContent")).to_contain_text("Waiting for the person")
             d.sync()
             run_no = one("select no from payment_run")
             pay_rows = q(
@@ -1199,7 +1199,7 @@ def _run(ctx: Any) -> Outcome:
             c.same(
                 "the proposer cannot approve the run",
                 demo_ui.api(
-                    "POST", f"/api/admin/proposals/{run_proposal}/approve", token("finance"), json={}
+                    "POST", f"/api/payment-runs/{run_no}/approve", token("finance"), json={"code": "000000"}
                 ).status_code,
                 403,
             )
@@ -1209,17 +1209,21 @@ def _run(ctx: Any) -> Outcome:
                 409,
             )
             with d.step(
-                "director", "opens Dashboard: Payment runs to approve; Admin, Approvals, clicks Approve"
+                "director", "opens Dashboard: Payment runs to approve; the run page; emails itself a code and approves"
             ) as page:
                 d.go("director", "dashboard")
                 expect(page.locator("#myWork")).to_contain_text("Payment runs to approve")
-                page.locator("#myWork a", has_text="Pay ").first.click()
+                page.locator("#myWork a", has_text=run_no).first.click()
                 page.wait_for_load_state("networkidle")
-                if "/admin/approvals" not in page.url:
-                    d.go_admin("director", "approvals")
-                card = page.locator(".space-y-3", has_text="Pay ").first
-                card.get_by_role("button", name="Approve", exact=True).click()
-                expect(page.locator(".space-y-3", has_text="Pay ")).to_have_count(0)
+                page.locator("#sendCode").click()
+                found = re.search(
+                    r"Your one-time code is (\d{6})",
+                    str([m for m in mails_to("director") if "payment run" in m["subject"]][-1]["body"]),
+                )
+                assert found, "no code was mailed to the director"
+                page.locator("#code").fill(found.group(1))
+                page.locator("#approveRun").click()
+                expect(page.locator("#appContent")).to_contain_text("Approved")
             d.sync()
             c.same("the run is approved", q("select status from payment_run where no = :n", n=run_no)[0][0], "approved")
             with d.step(

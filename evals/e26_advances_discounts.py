@@ -307,7 +307,7 @@ def _threshold(out: Outcome) -> None:
 
 
 def _discounts(out: Outcome, *, quick: bool) -> None:
-    from p2p.invoices import payment
+    from p2p.invoices import payment, runs
     from p2p.platform import proposals, users
 
     world = lib.build_world("e26b", with_stock=False)
@@ -445,13 +445,18 @@ def _discounts(out: Outcome, *, quick: bool) -> None:
         return cache[d]
 
     run_date = max(days_range, key=only_by_discount)
+    from p2p.formulas.calendar import business_today, pin_today, today_is_pinned
+
+    was_pinned, before = today_is_pinned(), business_today()
+    pin_today(run_date)  # the run is dated in the dataset's past; the eval works as on that day
+    lib.confirm_tds(world)
     want_set = expected_in_run_cache(run_date)
     pulled = only_by_discount(run_date)
     out.metrics["run date"] = run_date.isoformat()
     out.metrics["invoices pulled into the run only by their discount"] = pulled
     if pulled == 0:
         out.find("medium", "no run date had an invoice that is paid early for its discount")
-    run_no = payment.propose_run(db, run_date, finance, window_days=window, include_advances=False)
+    run_no = runs.propose_run(db, run_date, finance, window_days=window, include_advances=False)["run"]
     in_run = {
         x[0]
         for x in db.execute(
@@ -462,10 +467,17 @@ def _discounts(out: Outcome, *, quick: bool) -> None:
         )
     }
     if in_run != want_set:
+        reasons = {
+            h["no"]: h["reason"] for h in runs.held_back(db, run_date, window)
+        }
+        shown = [
+            f"{n}: {reasons.get(n) or runs.invoice_problem(db, n, run_date, window) or 'no problem'}"
+            for n in sorted(want_set - in_run)[:5]
+        ]
         out.find(
             "high",
             f"the run holds {len(in_run)} invoice(s) but the due-or-discount rule gives {len(want_set)}; "
-            f"{len(in_run - want_set)} too many (e.g. {sorted(in_run - want_set)[:2]}), {len(want_set - in_run)} missing (e.g. {sorted(want_set - in_run)[:2]})",
+            f"{len(in_run - want_set)} too many (e.g. {sorted(in_run - want_set)[:2]}), {len(want_set - in_run)} missing (e.g. {shown})",
         )
     by_no = {i["no"]: i for i in invoices}
     bad = 0
@@ -521,10 +533,18 @@ def _discounts(out: Outcome, *, quick: bool) -> None:
         db.execute(text("update org_user set email = :e where code = :c"), {"e": own, "c": code})
         users.create_user(world.slug, own, lib.PASSWORD, code, "Buyer")
     db.commit()
-    pid = db.execute(text("select proposal_id from payment_run where no = :n"), {"n": run_no}).scalar_one()
-    proposals.approve(db, pid, owner)
-    payment.generate_file(db, run_no, finance)
-    closed = payment.mark_paid(db, run_no, finance, paid_on=run_date, tenant=world.slug)
+    lib.approve_run(world, run_no)
+    runs.generate_file(db, run_no, finance)
+    lib.settle_run(world, run_no, run_date)
+    closed = [
+        str(x[0])
+        for x in db.execute(
+            text(
+                "select distinct entity_id from audit_event where action = 'po.close' and entity = 'po' "
+                "and after->>'status' = 'closed'"
+            )
+        )
+    ]
     db.commit()
 
     taken = {
@@ -585,3 +605,4 @@ def _discounts(out: Outcome, *, quick: bool) -> None:
     if closed and not notified:
         out.find("medium", "the run closed orders but nobody was told: the notice was not exercised")
     _ = r
+    pin_today(before if was_pinned else None)

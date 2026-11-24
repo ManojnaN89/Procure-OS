@@ -51,6 +51,12 @@ class BusinessCalendar:
             d += timedelta(days=1)
         return d
 
+    def on_or_before(self, d: date) -> date:
+        """The day itself when it is a working day, else the latest working day before it (never late)."""
+        while not self.is_working_day(d):
+            d -= timedelta(days=1)
+        return d
+
     def add_working_days(self, d: date, n: int) -> date:
         for _ in range(n):
             d = self.next_working_day(d)

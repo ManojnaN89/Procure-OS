@@ -562,20 +562,28 @@ def _run(ctx: Any) -> Outcome:  # noqa: C901 - one story, step by step
                 page.locator("#runWindow").fill("7")
                 page.locator("#previewRun").click()
                 page.locator("#planRun").click()
-                expect(page.locator("#appContent")).to_contain_text("Waiting for the owner")
+                expect(page.locator("#appContent")).to_contain_text("Waiting for the person")
             d.sync()
             run_no = one("select no from payment_run")
             pid = int(one("select id from proposal where action = 'payment_run.approve' and status = 'pending'"))
             c.same(
                 "finance cannot approve its own run",
-                demo_ui.api("POST", f"/api/admin/proposals/{pid}/approve", token("finance"), json={}).status_code,
+                demo_ui.api("POST", f"/api/payment-runs/{run_no}/approve", token("finance"), json={"code": "000000"}).status_code,
                 403,
             )
-            with d.step("cfo", "opens Admin, Approvals: the payment run; clicks Approve") as page:
-                d.go_admin("cfo", "approvals")
-                card = page.locator(".space-y-3", has_text="Pay ").first
-                card.get_by_role("button", name="Approve", exact=True).click()
-                expect(page.locator(".space-y-3", has_text="Pay ")).to_have_count(0)
+            with d.step("cfo", "opens the run from My work, emails itself a code and approves") as page:
+                d.go("cfo", "dashboard")
+                expect(page.locator("#myWork")).to_contain_text("Payment runs to approve")
+                page.locator("#myWork a", has_text=run_no).first.click()
+                page.wait_for_load_state("networkidle")
+                before = len(box.sent)
+                page.locator("#sendCode").click()
+                coded = [m for m in box.sent[before:] if "one-time code is " in m["body"]]
+                assert coded, "no code was mailed to the CFO"
+                found = re.search(r"one-time code is (\d{6})", coded[-1]["body"])
+                page.locator("#code").fill(found.group(1))
+                page.locator("#approveRun").click()
+                expect(page.locator("#appContent")).to_contain_text("Approved")
             d.sync()
             with d.step("finance", f"opens {run_no}: Make the bank file, Show the bank file") as page:
                 d.go("finance", f"payments/{run_no}")

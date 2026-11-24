@@ -22,6 +22,7 @@ from p2p.approvals.workflow import name_of, org_code_of
 from p2p.formulas import matching
 from p2p.formulas.calendar import IST, BusinessCalendar
 from p2p.formulas.kpis import working_days_between
+from p2p.formulas.money import format_inr
 from p2p.invoices.service import asked_or_confirmed
 from p2p.orders.workflow import NO_APPROVER
 from p2p.platform import alerts, permissions
@@ -47,6 +48,11 @@ KINDS: dict[str, str] = {
     "po_ack_overdue": "Orders not acknowledged after the reminders",
     "supplier_ack_confirm": "Acknowledgements to record",
     "supplier_sender_check": "Supplier order emails not read",
+    "payment_failed": "Payments the bank returned",
+    "payment_left_out": "Payments left out of a run",
+    "tds_to_confirm": "Tax at source to confirm",
+    "payment_unsettled": "Payments recorded, not settled",
+    "advance_unused": "Advances paid and not used",
 }
 SOURCING_NEXT: dict[str, tuple[str, str]] = {  # task kind (block 6): the permission that acts, next step
     "rfq_no_response": (
@@ -380,6 +386,97 @@ def _sourcing_cases(db: Session, nexts: dict[str, tuple[str, str]] = SOURCING_NE
         )  # fmt: skip
 
 
+def _payments(db: Session, today: date, calendar: BusinessCalendar) -> Iterator[Stuck]:
+    """The payment work stuck with a person: a returned payment to pay again, items left out of a run, tax at source
+    waiting for the tax owner, a recorded payment the bank has not settled, and an advance paid but not used."""
+    see = ("payment.approve", "payment.record", "tds.confirm")
+    for r in _rows(
+        db,
+        "select id, kind, title, assignee, payload, created_at, status, due_at from task "
+        "where kind = any(:k) and status in ('open', 'overdue') order by id",
+        k=["payment_failed", "payment_left_out"],
+    ):
+        code = org_code_of(db, int(r["assignee"]))
+        kind = "payment_failed" if r["kind"] == "payment_failed" else "payment_left_out"
+        yield Stuck(
+            kind,
+            str((r["payload"] or {}).get("run") or (r["payload"] or {}).get("payment") or r["id"]),
+            f"#/payments/{r['payload'].get('run', '')}" if (r["payload"] or {}).get("run") else "#/payments",
+            str(r["title"]),
+            name_of(db, code) if code else "Finance",
+            "Record the new payment, or plan the next run"
+            if kind == "payment_failed"
+            else "Name another approver or a deputy",
+            _day(r["created_at"]),
+            act="payment.record" if kind == "payment_failed" else "payment.approve",
+            people=frozenset({code}) if code else frozenset(),
+            see=see,
+        )
+    for r in _rows(
+        db,
+        "select t.id, t.invoice_no, t.section_code, t.amount, t.booked_on, i.supplier_code "
+        "from tds_entry t join invoice i on i.no = t.invoice_no where t.status = 'proposed' "
+        "and t.booked_on <= :d order by t.booked_on, t.id",
+        d=today,
+    ):
+        if working_days_between(_day(r["booked_on"]), today, calendar) <= 2:
+            continue
+        yield Stuck(
+            "tds_to_confirm",
+            r["invoice_no"],
+            f"#/invoices/{r['invoice_no']}",
+            f"Tax at source {r['section_code']} of {format_inr(Decimal(r['amount']))} on {r['invoice_no']} "
+            "has waited more than 2 working days",
+            "Tax owner",
+            "Confirm the section and the amount, or change the section with a reason",
+            _day(r["booked_on"]),
+            amount=Decimal(r["amount"]),
+            act="tds.confirm",
+            see=("tds.confirm", "payment.view"),
+        )
+    for r in _rows(
+        db,
+        "select p.no, p.recorded_at, p.amount, p.supplier_code, coalesce(s.trade_name, s.legal_name) as supplier "
+        "from payment p join supplier s on s.code = p.supplier_code where p.status = 'recorded' "
+        "and p.recorded_at <= :d order by p.recorded_at",
+        d=today,
+    ):
+        if working_days_between(_day(r["recorded_at"]), today, calendar) <= 3:
+            continue
+        yield Stuck(
+            "payment_unsettled",
+            r["no"],
+            "#/payments",
+            f"Payment {r['no']} to {r['supplier']} was recorded and the bank has not settled it after 3 working days",
+            "Finance",
+            "Import the bank statement or mark it failed",
+            _day(r["recorded_at"]),
+            amount=Decimal(r["amount"]),
+            act="payment.record",
+            see=("payment.record", "payment.view"),
+        )
+    for r in _rows(
+        db,
+        "select r.id, r.po_no, r.status, a.gross - a.used_gross as unused, po.status as po_status from advance_request r "
+        "join advance a on a.request_id = r.id join po on po.no = r.po_no "
+        "where r.status in ('paid', 'recovering') and a.gross > a.used_gross order by r.id",
+    ):
+        if r["po_status"] != "cancelled" and r["status"] != "recovering":
+            continue
+        yield Stuck(
+            "advance_unused",
+            r["po_no"],
+            f"#/purchase-orders/{r['po_no']}",
+            f"An advance of {format_inr(Decimal(r['unused']))} was paid on {r['po_no']} and is not used",
+            "Finance",
+            "Raise a debit note to recover what was not used",
+            today,
+            amount=Decimal(r["unused"]),
+            act="advance.request",
+            see=("advance.request", "payment.view"),
+        )
+
+
 def collect(db: Session, today: date, calendar: BusinessCalendar) -> list[Stuck]:
     """Every stuck case in the company, whoever must act."""
     return [
@@ -395,6 +492,7 @@ def collect(db: Session, today: date, calendar: BusinessCalendar) -> list[Stuck]
         *_ai_handover(db),
         *_sourcing_cases(db),
         *_sourcing_cases(db, ORDER_NEXT),
+        *_payments(db, today, calendar),
     ]
 
 

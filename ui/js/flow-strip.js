@@ -78,9 +78,9 @@ const FlowStrip = {
   forRun(r) {
     const s = String(r.status || "").toLowerCase();
     if (s === "paid") return this.html({ stage: 7, note: "The bank has paid; the suppliers have their payment advice" });
-    if (s === "proposed") return this.html({ stage: 6, note: "Waiting for the owner to approve the run" });
+    if (s === "proposed") return this.html({ stage: 6, note: "Waiting for the person the rule names to approve the run, with a code" });
     if (s === "approved") return this.html({ stage: 6, note: "Approved: finance makes the bank file" });
-    if (s === "file_generated") return this.html({ stage: 6, note: "Bank file made: finance marks the run paid once the bank has paid" });
+    if (s === "file_generated") return this.html({ stage: 6, note: "Bank file made: each payment is recorded, and the bank statement settles it" });
     if (s === "rejected" || s === "cancelled") return this.html({ stage: 6, stopped: s === "rejected" ? "Rejected" : "Cancelled" });
     return this.html({ stage: 6 });
   },

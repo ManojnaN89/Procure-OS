@@ -269,10 +269,11 @@ def enter_invoice(
             db.commit()
         return Entered(no, "cancelled", None, ["duplicate"], twin)
     if data.type != "invoice":
-        db.execute(text("update invoice set status = 'approved' where no = :n"), {"n": no})
+        # a note waits for a second person to approve it (block 12, 12.7.1; replaces block 10's interim "approved at entry")
+        db.execute(text("update invoice set status = 'received' where no = :n"), {"n": no})
         if commit:
             db.commit()
-        return Entered(no, "approved", None)
+        return Entered(no, "received", None)
     return match_invoice(db, no, actor, commit=commit)
 
 

@@ -210,6 +210,13 @@ def cancel(
         text("select request_no, request_line_no from po_line where po_no = :n and status <> 'cancelled'"),
         {"n": po_no},
     ).all()
+    from p2p.invoices import advances  # noqa: PLC0415 - block 12 adds the advance check to cancelling (12.6.5)
+
+    problem = advances.cancel_problem(db, po_no)
+    if problem:
+        db.rollback()
+        raise ChangeError(problem)
+    advances.cancel_with_order(db, po_no, user(user_id), why)
     workflow.cancel_order(db, po_no, f"Cancelled by {name_of(db, _code(db, user_id))}: {why}")
     if not reorder:
         for request_no, line_no in lines:

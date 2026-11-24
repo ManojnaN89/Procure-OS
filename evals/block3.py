@@ -1100,18 +1100,34 @@ class Co3(s2.Co):
         return no, {"status_code": r.status_code, **got}
 
     def pay(self, on: date) -> str:
-        """A payment run of what is due, proposed by finance, approved by the director, filed and marked paid that day."""
+        """A payment run of what is due, proposed by finance, approved by the director on its page, filed and settled by
+        the bank's statement that day (block 12)."""
+        from sqlalchemy import text
+
         with b.on_day(on):
             r = self.call(self.finance(), "POST", "/api/payment-runs", {"run_date": on.isoformat(), "window_days": 120})
             run = js(r).get("run")
             if not run:
                 return f"no run: {r.status_code} {r.text[:200]}"
-            pending = listed(js(self.call(self.director(), "GET", "/api/admin/proposals?status=pending")), "proposals")
-            for p in pending:
-                if str(p.get("action", "")).startswith("payment_run"):
-                    self.call(self.director(), "POST", f"/api/admin/proposals/{p['id']}/approve", {})
+            with lib.owner_session(self.slug) as owned:  # the evals have no mailbox for the one-time code
+                owned.execute(
+                    text("update org_setting set value = '999999999.00' where key = 'payment_run_otp_above'")
+                )
+                owned.commit()
+            try:
+                self.call(self.director(), "POST", f"/api/payment-runs/{run}/approve", {"code": None})
+            finally:
+                with lib.owner_session(self.slug) as owned:
+                    owned.execute(text("update org_setting set value = '0.00' where key = 'payment_run_otp_above'"))
+                    owned.commit()
             self.call(self.finance(), "POST", f"/api/payment-runs/{run}/file", {})
-            done = self.call(self.finance(), "POST", f"/api/payment-runs/{run}/paid", {"paid_on": on.isoformat()})
+            pays = self.q("select no, amount from payment where run_no = :r order by no", r=run)
+            rows = ["date,utr,narration,debit,credit"]
+            for n, (pay_no, amount) in enumerate(pays, start=1):
+                rows.append(f"{on.isoformat()},EVAL{on:%y%m%d}{n:04d},NEFT {pay_no} EVAL,{amount},0.00")
+            done = self.call(
+                self.finance(), "POST", "/api/payment-runs/statement", {"csv": "\n".join(rows) + "\n"}
+            )
             self.work()
         return str(run) if done.status_code == 200 else f"{run}: {done.status_code} {done.text[:200]}"
 

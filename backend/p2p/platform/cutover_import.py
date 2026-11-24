@@ -85,7 +85,7 @@ _SPEC: dict[str, tuple[tuple[tuple[str, str], ...], frozenset[str]]] = {
         ("payment_no", "text"), ("po_no", "text"), ("paid_on", "date"), ("gross", "numeric"), ("taxable", "numeric"),
         ("tds_amount", "numeric"), ("recovered_gross", "numeric"), ("recovered_taxable", "numeric"), ("utr", "text"),
     ), frozenset({"recovered_gross", "recovered_taxable", "utr"})),
-    "supplier_ytd": ((("supplier_code", "text"), ("fy", "text"), ("taxable", "numeric")), frozenset()),
+    "supplier_ytd": ((("supplier_code", "text"), ("fy", "text"), ("taxable", "numeric"), ("section", "text")), frozenset()),
     "control": ((("kind", "text"), ("count", "integer"), ("total", "numeric")), frozenset()),
 }  # fmt: skip
 FILES: dict[str, list[str]] = {name: [c for c, _ in cols] for name, (cols, _) in _SPEC.items()}
@@ -201,8 +201,8 @@ class _Company:
             self.invoiced[(str(po_no), int(line_no))] += D(qty)
         self.advances = keyed("select payment_no as k, po_no, gross from advance")
         self.ytd = {
-            (str(r[0]), str(r[1])): D(r[2])
-            for r in db.execute(text("select supplier_code, fy, taxable from cutover_supplier_ytd"))
+            (str(r[0]), str(r[1]), str(r[3])): D(r[2])
+            for r in db.execute(text("select supplier_code, fy, taxable, section from cutover_supplier_ytd"))
         }
 
 
@@ -451,7 +451,7 @@ class _Checker:
     # ---- year to date, invoices, advances
     def year_to_date(self) -> None:
         for n, y in self.f["supplier_ytd"]:
-            key = (y["supplier_code"], y["fy"])
+            key = (y["supplier_code"], y["fy"], y.get("section") or "194Q")
             if y["supplier_code"] not in self.m.suppliers:
                 self.leave("supplier_ytd", n, f"supplier {y['supplier_code']} not found")
             elif len(y["fy"]) != 7 or y["fy"][4] != "-" or not (y["fy"][:4] + y["fy"][5:]).isdigit():
@@ -749,14 +749,15 @@ class _Writer:
         db.execute(
             text(
                 "insert into payment (no, run_no, type, supplier_code, po_no, amount, tds_amount, msme_interest, mode, "
-                "reference, utr, paid_on) values (:n, :r, 'advance', :s, :p, :a, :t, 0, 'neft', :p, :u, :d)"
+                "reference, utr, paid_on, status, value_date, settled_at) values "
+                "(:n, :r, 'advance', :s, :p, :a, :t, 0, 'neft', :p, :u, :d, 'settled', :d, now())"
             ),
             {"n": a["payment_no"], "r": run_no, "s": order, "p": a["po_no"], "a": a["gross"] - tds, "t": tds, "u": a.get("utr"), "d": a["paid_on"]},
         )  # fmt: skip
         db.execute(
             text(
-                "insert into advance (payment_no, po_no, gross, taxable, used_gross, used_taxable, paid_on) "
-                "values (:n, :p, :g, :t, :ug, :ut, :d)"
+                "insert into advance (payment_no, po_no, gross, taxable, used_gross, used_taxable, paid_on, settled_on) "
+                "values (:n, :p, :g, :t, :ug, :ut, :d, :d)"
             ),
             {"n": a["payment_no"], "p": a["po_no"], "g": a["gross"], "t": a["taxable"], "ug": a.get("recovered_gross") or ZERO,
              "ut": a.get("recovered_taxable") or ZERO, "d": a["paid_on"]},
@@ -780,8 +781,8 @@ class _Writer:
 
     def ytd(self, y: Row) -> None:
         self.db.execute(
-            text("insert into cutover_supplier_ytd (supplier_code, fy, taxable) values (:s, :f, :t)"),
-            {"s": y["supplier_code"], "f": y["fy"], "t": y["taxable"]},
+            text("insert into cutover_supplier_ytd (supplier_code, fy, taxable, section) values (:s, :f, :t, :sec)"),
+            {"s": y["supplier_code"], "f": y["fy"], "t": y["taxable"], "sec": y.get("section") or "194Q"},
         )
 
 

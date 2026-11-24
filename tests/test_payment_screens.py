@@ -24,7 +24,7 @@ def test_finance_imports_the_statement_and_the_matching_run_is_settled(
     server: Any,
     browser: Any,  # noqa: F811
 ) -> None:
-    run, _, pay_no, _, _ = _run(ledger)
+    run, _, pay_no, _, _ = _run(ledger, outbox)
     page = open_app(browser, LAPTOP)
     sign_in(page, f"fin{ledger.info['sfx']}@x.example")
     page.goto(f"{URL}/#/payments/{run}")
@@ -32,11 +32,11 @@ def test_finance_imports_the_statement_and_the_matching_run_is_settled(
     # a statement with a wrong amount: nothing is settled and the line is listed for a person
     expect(page.locator("#importStmt")).to_be_visible()
     _upload(page, HEAD + f"2026-11-05,UTR1,{pay_no},1179.00,\n")
-    expect(page.locator("#stmtResult")).to_contain_text("0 payments matched")
+    expect(page.locator("#stmtResult")).to_contain_text("0 payments settled")
     expect(page.locator("#stmtResult")).to_contain_text("the amount differs")
     assert ledger.execute(text("select status from payment_run")).scalar_one() == "file_generated"
 
-    # the right statement settles the run and the page shows it paid
+    # the right statement settles the payment and the page shows it
     _upload(page, HEAD + f"2026-11-05,UTRSCREEN1,{pay_no},1180.00,\n")
     expect(page.locator("#appContent")).to_contain_text("UTRSCREEN1")
     ledger.rollback()
@@ -50,9 +50,9 @@ def test_the_import_panel_is_not_offered_to_someone_who_cannot_record_payments(
     server: Any,
     browser: Any,  # noqa: F811
 ) -> None:
-    run, _, _, _, _ = _run(ledger)
+    run, _, _, _, _ = _run(ledger, outbox)
     page = open_app(browser, LAPTOP)
-    sign_in(page, f"own{ledger.info['sfx']}@x.example")  # the owner approves runs but does not pay them
+    sign_in(page, f"pur{ledger.info['sfx']}@x.example")  # the named approver does not propose or pay runs
     page.goto(f"{URL}/#/payments/{run}")
 
     expect(page.locator("#appContent")).to_contain_text(run)

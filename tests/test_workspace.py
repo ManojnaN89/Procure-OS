@@ -430,10 +430,12 @@ def test_finance_sees_what_is_due_and_the_runs_to_pay_and_ap_the_goods_waiting_f
     ledger: Session, outbox: Outbox
 ) -> None:  # noqa: F811
     people = _roles(ledger)
+    ledger.execute(text("update item_category set default_tds_section = '194Q' where code = 'C1'"))
+    ledger.commit()
     po_no, _ = _goods(ledger, qty="10")
     assert _sections(ledger, people["AP"], "AP")["to_invoice"]["rows"][0]["id"] == po_no
     inv = _invoice(ledger, po_no, "10", "100")
-    ledger.execute(text("update invoice set due_date = :d where no = :n"), {"d": TODAY, "n": inv.no})
+    ledger.execute(text("update invoice set due_date = :d, pay_by = :d where no = :n"), {"d": TODAY, "n": inv.no})
     ledger.commit()
     assert "to_invoice" not in _sections(ledger, people["AP"], "AP")
 

@@ -12,7 +12,7 @@ From a stock shortage to a paid invoice. Each step has one person's name on it, 
 | 6 | Goods arrive and are checked | Store | **Goods receipt** → **Receive goods** |
 | 7 | The supplier's invoice is entered and matched to the order and the receipt | AP | **Invoices** → **Enter an invoice** |
 | 8 | Invoices due are put in a payment run, and the owner approves it | Finance, Approver | **Payments** → **Send the run for approval** |
-| 9 | The bank pays, the order closes, the supplier gets the payment advice | Finance | **Payments** → **The bank has paid this run** |
+| 9 | The bank pays, the order closes, the supplier gets the payment advice | Finance | **Payments** → **Record this payment** or **Import the bank statement** |
 
 ## Your start page
 

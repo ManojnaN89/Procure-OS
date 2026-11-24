@@ -49,14 +49,16 @@ def quarter_of(d):
 
 def due_date(term, s, inv_date, accepted_on):
     """When an invoice falls due: the payment terms from the invoice or acceptance date, and for a micro or small
-    enterprise no later than the MSME limit (the agreed days, at most 45, else 15 days from acceptance)."""
+    enterprise never later than the MSMED limit (the agreed days, at most 45, else 15 days from acceptance). The
+    earlier of the terms and the deadline stands (DF-30)."""
     base_date = inv_date if term["baseline"] == "invoice_date" else accepted_on
     due = base_date + timedelta(days=int(term["days"]))
     if s["msme_category"] in ("micro", "small"):
         if s["msme_agreement"] == "true":
-            due = min(due, accepted_on + timedelta(days=min(45, int(s["agreed_payment_days"]))))
+            deadline = accepted_on + timedelta(days=min(45, int(s["agreed_payment_days"])))
         else:
-            due = accepted_on + timedelta(days=15)
+            deadline = accepted_on + timedelta(days=15)
+        due = min(due, deadline)
     return due
 
 

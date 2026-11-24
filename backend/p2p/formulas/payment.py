@@ -1,11 +1,13 @@
 """When an invoice is due, what tax is held back, and what late payment to a small supplier costs. Plain rules on dates
 and Decimal money."""
 
+import re
 from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import date, timedelta
 from decimal import ROUND_HALF_UP, Decimal
 
+from p2p.formulas.calendar import BusinessCalendar
 from p2p.formulas.fy import financial_year
 
 TWO = Decimal("0.01")
@@ -42,7 +44,14 @@ TDS_194Q_THRESHOLD = Decimal("5000000")
 TDS_194Q_RATE = Decimal("0.1")
 TDS_NO_PAN_RATE = Decimal("5")
 NEW_ACT_FROM = date(2026, 4, 1)  # from this date the sections are quoted in the Income-tax Act 2025 form
-SECTION_LABEL = {"194Q": "393(1) Sl.8(ii) [194Q]"}
+SECTION_LABEL = {
+    "194Q": "393(1) Sl.8(ii) [194Q]",
+    "194C": "393(1) Sl.6(i) [194C]",
+    "194J(a)": "393(1) Sl.6(iii) [194J]",
+    "194J(b)": "393(1) Sl.6(iii) [194J]",
+}
+# a section quoted in the 2025 Act form from 1 April 2026, the 1961 form before it
+SECTION_1961 = {"194Q": "194Q", "194C": "194C", "194J(a)": "194J(a)", "194J(b)": "194J(b)"}
 
 
 def q2(x: Decimal) -> Decimal:
@@ -63,14 +72,20 @@ def due_date(
     """The payment terms' day count from their baseline (the invoice date, or the day the goods were accepted).
 
     A micro or small supplier must be paid within what was agreed in writing, never more than 45 days from acceptance,
-    and within 15 days if nothing was agreed in writing (the limits as the company has them).
+    and within 15 days if nothing was agreed in writing (the limits as the company has them). Whatever the terms say,
+    the earlier of the two dates stands (DF-30).
     """
     base = invoice_date if baseline == "invoice_date" else accepted_on
     due = base + timedelta(days=days)
     if msme_category in MSME_CATEGORIES:
         deadline = msme_deadline(accepted_on, msme_agreement, agreed_days, limits or MsmeLimits())
-        return min(due, deadline) if msme_agreement else deadline
+        return min(due, deadline)
     return due
+
+
+def pay_by(due: date, calendar: BusinessCalendar) -> date:
+    """The last day a run may pay an invoice and still be on time: its due date, or the working day before it (OP-3)."""
+    return calendar.on_or_before(due)
 
 
 def bank_rate(on: date, rates: Sequence[tuple[date, Decimal]]) -> Decimal:
@@ -131,6 +146,112 @@ def tds_on_goods(
 def quarter_label(on: date) -> str:
     """'2026-27 Q2': the financial year and its quarter (April to June is the first)."""
     return f"{financial_year(on)} Q{(on.month - 4) % 12 // 3 + 1}"
+
+
+# ---- tax at source on every section ------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class TdsSection:
+    """One row of the tax table as it applies on the booking date: the figures the decision used."""
+
+    id: int | None
+    code: str  # 194Q, 194C, 194J(a), 194J(b)
+    label: str  # as the books quote it on that date
+    rate_pct: Decimal
+    rate_no_pan_pct: Decimal
+    threshold_single: Decimal | None
+    threshold_annual: Decimal | None
+    base_rule: str  # 'entire amount' or 'excess over threshold'
+    payee_type: str = "ANY"
+
+
+def section_label(code: str, on: date) -> str:
+    """The section as the books quote it: the Income-tax Act 2025 form from 1 April 2026, else the 1961 form."""
+    if on >= NEW_ACT_FROM and code in SECTION_LABEL:
+        return SECTION_LABEL[code]
+    return SECTION_1961.get(code, code)
+
+
+def default_section(code: str, on: date) -> TdsSection:
+    """The statutory figures for a section, used only when the tax table has no row for the date."""
+    label = section_label(code, on)
+    if code == "194Q":
+        return TdsSection(None, code, label, TDS_194Q_RATE, TDS_NO_PAN_RATE, None, TDS_194Q_THRESHOLD,
+                          "excess over threshold")  # fmt: skip
+    if code == "194C":
+        return TdsSection(None, code, label, Decimal("2"), Decimal("20"), Decimal("30000"), Decimal("100000"),
+                          "entire amount", "Others")  # fmt: skip
+    if code == "194J(b)":
+        return TdsSection(None, code, label, Decimal("10"), Decimal("20"), None, Decimal("50000"), "entire amount")
+    return TdsSection(None, code, label, Decimal("2"), Decimal("20"), None, Decimal("50000"), "entire amount")
+
+
+def payee_type(pan: str | None) -> str:
+    """194C's two rates: an individual or Hindu undivided family (the PAN's fourth letter P or H), or anyone else."""
+    return "individual_huf" if pan and len(pan) >= 4 and pan[3].upper() in ("P", "H") else "others"
+
+
+def tds_for(
+    rule: TdsSection,
+    base: Decimal,
+    cumulative_before: Decimal,
+    single: Decimal,
+    *,
+    pan_inoperative: bool = False,
+    lower_rate: Decimal | None = None,
+    lower_limit: Decimal | None = None,
+) -> Tds:
+    """The tax to hold back under one section (2.5, OP-9).
+
+    `base` is this invoice's taxable value under the section; `cumulative_before` is what the supplier was booked for
+    under it this year; `single` is the order's value (the single-sum threshold). 194Q charges the part of the year
+    above the annual threshold. Every other section charges the whole base once the year is above its annual
+    threshold or the order is above its single-sum threshold, and nothing below both: exactly at a threshold is not
+    above it, and earlier sums are never made up (OP-9). A lower-rate certificate applies while it is valid and the
+    year stays inside its limit; a PAN the department says is inoperative takes the no-PAN rate.
+    """
+    after = cumulative_before + base
+    if rule.base_rule == "entire amount":
+        over_annual = rule.threshold_annual is None or after > rule.threshold_annual
+        over_single = rule.threshold_single is not None and single > rule.threshold_single
+        charged = base if (over_annual or over_single) else Decimal(0)
+    else:  # 194Q: only the part of the year's purchases above the threshold
+        threshold = rule.threshold_annual or Decimal(0)
+        charged = max(Decimal(0), after - max(threshold, cumulative_before))
+    rate = rule.rate_no_pan_pct if pan_inoperative else rule.rate_pct
+    if not pan_inoperative and lower_rate is not None and lower_limit is not None and after <= lower_limit:
+        rate = lower_rate
+    return Tds(rule.label, charged, rate, q2(charged * rate / 100))
+
+
+# ---- a bank reference --------------------------------------------------------------------------
+
+
+_UTR = re.compile(r"[A-Za-z0-9]{6,30}")
+
+
+def utr_ok(value: str | None) -> bool:
+    """A bank reference is letters and digits, 6 to 30 of them (a person or a bank line gives it, never the system)."""
+    return bool(value) and bool(_UTR.fullmatch(str(value).strip()))
+
+
+# ---- notes netted in a payment -----------------------------------------------------------------
+
+
+def offset(payable: Decimal, notes: Sequence[tuple[str, Decimal]]) -> tuple[list[tuple[str, Decimal]], Decimal]:
+    """How much of each note is used against what is still to pay, in the order given: never more than is due, never
+    a negative payment. Returns what each note used and what is left to pay (the rest of a note waits for a later run).
+    """
+    left = max(payable, Decimal(0))
+    used: list[tuple[str, Decimal]] = []
+    for ref, amount in notes:
+        take = min(max(amount, Decimal(0)), left)
+        if take <= 0:
+            continue
+        used.append((ref, take))
+        left -= take
+    return used, left
 
 
 # ---- advances -----------------------------------------------------------------------------------

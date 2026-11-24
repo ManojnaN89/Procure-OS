@@ -484,18 +484,19 @@ def _run(ctx: Any) -> Outcome:
         chain("payment_run", Decimal(1)) == "director", "the dataset's rule for payment runs should name the director"
     )
     refused(FINANCE, "POST", f"/api/payment-runs/{run_no}/file")  # not approved yet
-    waiting = [
-        p
-        for p in call(DIRECTOR, "GET", "/api/admin/proposals?status=pending").json()
-        if p["action"].startswith("payment_run")
-    ]
-    check(len(waiting) == 1, f"one payment run proposal should wait for the director, found {len(waiting)}")
-    if waiting:
-        proposal = waiting[0]["id"]
-        refused(FINANCE, "POST", f"/api/admin/proposals/{proposal}/approve", {})  # the proposer does not approve it
-        refused(AP, "POST", f"/api/admin/proposals/{proposal}/approve", {})
-        refused(ADMIN, "POST", f"/api/admin/proposals/{proposal}/approve", {})
-        call(DIRECTOR, "POST", f"/api/admin/proposals/{proposal}/approve", {})
+    # the director approves on the run's page, with the code mailed to them
+    sent = call(DIRECTOR, "POST", f"/api/payment-runs/{run_no}/code")
+    code = None
+    for mail in reversed(box.sent):
+        found = re.search(r"Your one-time code is (\d{6})", str(mail.get("body", "")))
+        if found:
+            code = found.group(1)
+            break
+    check(sent.status_code == 200 and code is not None, "the director was not sent a code for the run")
+    refused(FINANCE, "POST", f"/api/payment-runs/{run_no}/approve", {"code": code})
+    refused(AP, "POST", f"/api/payment-runs/{run_no}/approve", {"code": code})
+    refused(ADMIN, "POST", f"/api/payment-runs/{run_no}/approve", {"code": code})
+    call(DIRECTOR, "POST", f"/api/payment-runs/{run_no}/approve", {"code": code})
     refused(AP, "POST", f"/api/payment-runs/{run_no}/file")
     bank_file = call(FINANCE, "POST", f"/api/payment-runs/{run_no}/file").json()
     lines = [ln for ln in bank_file["file"].splitlines() if ln.strip()]
@@ -508,11 +509,23 @@ def _run(ctx: Any) -> Outcome:
         ),
         "the run should pay exactly what the four invoices add up to (no tax at source below the threshold)",
     )
-    refused(AP, "POST", f"/api/payment-runs/{run_no}/paid", {"paid_on": PAY_DAY.isoformat()})
-    refused(
-        FINANCE, "POST", f"/api/payment-runs/{run_no}/paid", {"paid_on": (PAY_DAY + timedelta(days=1)).isoformat()}
-    )  # not a future day
-    call(FINANCE, "POST", f"/api/payment-runs/{run_no}/paid", {"paid_on": PAY_DAY.isoformat()})
+    statement = ["date,utr,narration,debit,credit"]
+    for n, (pay_no, amount) in enumerate(rows, start=1):
+        utr = f"HDFC{PAY_DAY:%y%m%d}{n:08d}"
+        recorded = client.post(
+            f"/api/payments/{pay_no}/record",
+            data={"utr": utr, "value_date": PAY_DAY.isoformat()},
+            headers=who(FINANCE),
+        )
+        check(recorded.status_code == 200, f"finance could not record {pay_no}: {recorded.text[:160]}")
+        statement.append(f"{PAY_DAY.isoformat()},{utr},NEFT {pay_no} SUPPLIER,{amount},0.00")
+    settled = call(
+        FINANCE, "POST", "/api/payment-runs/statement", {"csv": "\n".join(statement) + "\n"}
+    ).json()
+    check(
+        len(settled.get("settled", [])) == len(rows),
+        f"the statement should settle {len(rows)} payment(s): {settled.get('for_a_person')}",
+    )
     work()
 
     # ---- 9. closed: invoices paid, orders closed, supplier told ----------------------------------------

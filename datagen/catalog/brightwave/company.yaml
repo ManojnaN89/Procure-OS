@@ -108,6 +108,7 @@ approval_rules: |
   POA-02,po_amendment,100000.01,999999999.00,ANY,ANY,ANY,ANY,cfo,1,2025-04-01,
   VAR-01,price_variance,0.00,999999999.00,ANY,ANY,ANY,ANY,cfo,1,2025-04-01,
   PAY-01,payment_run,0.00,999999999.00,ANY,ANY,ANY,ANY,cfo,1,2025-04-01,
+  ADV-01,advance,0.00,999999999.00,ANY,ANY,ANY,ANY,cfo,1,2025-04-01,
   SUP-01,supplier_activation,0.00,999999999.00,ANY,ANY,ANY,ANY,cfo,1,2025-04-01,
   FWD-01,forward_buy,0.00,999999999.00,ANY,ANY,ANY,ANY,cfo,1,2025-04-01,
 
@@ -141,7 +142,9 @@ settings:
   - [approval_otp_above, "500000.00", "Approving a purchase order above this value needs a code sent to the approver. Every decision from an email link needs a code whatever the value."]
   - [auto_approve_requires_budget, "true", Auto-approval only when budget is available]
   - [po_send_requires_confirmation, "true", A person confirms before a PO is sent to a supplier]
-  - [manual_mark_paid, "true", "Synthetic demo data only, Finance may record a payment by hand (off for every real company until settlement evidence is built)"]
+  - [payment_run_otp_above, "0.00", "Approving a payment run above this total needs a one-time code (0: every run that pays money)"]
+  - [tds_auto_confirm_zero, "true", "A zero TDS under the item category's own section needs no confirmation"]
+  - [rtgs_from, "200000.00", "A payment above this goes by RTGS, else NEFT"]
   - [grn_edit_window_days, "3", Days a goods receipt can be corrected after posting]
   - [invoice_receipt_mailbox, invoices@brightwave.example, Mailbox where supplier invoices arrive]
   - [request_mailbox, requests@brightwave.example, Mailbox where staff email requests]
@@ -477,6 +480,7 @@ cutover:
   advance_terms: {PO-BLR-2627-00120: ADV30N30}  # the AC maintenance order was agreed with 30% in advance
   advances:
     - {payment_no: PAY-2627-000160, po_no: PO-BLR-2627-00120, paid_on: "2026-10-30", pct: "30", utr: HDFC26103000000160}
+  supplier_ytd_services: {SUP-003: "38000.00"}  # software services this year: 194J(a), not 194Q (block 12, E169)
 
 # The period RFQ scenario of block 5 here: two suppliers for a category that wants three quotes (see apex/company.yaml).
 period_scenarios:

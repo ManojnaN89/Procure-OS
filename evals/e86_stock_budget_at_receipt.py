@@ -195,7 +195,7 @@ def _run(ctx: Any) -> Outcome:  # one story, told in order
     out.notes.append(
         "Setup, not a spec rule: SV-01 is bought directly from SUP-006 (agreed by the purchase manager) and the request "
         "line put on CC-MNT as the owner, since the request form takes no cost centre; the services are paid in one run "
-        "with the wire's invoice (Finance proposes, the director approves, `manual_mark_paid` as the demo has it)."
+        "with the wire's invoice (Finance proposes, the director approves on the run page, and the bank's statement settles it)."
     )
     out.notes.append(
         "Spec gap: 4.2 says the receipt actual's period is 'the month of the acceptance date'; for an inspection that is "

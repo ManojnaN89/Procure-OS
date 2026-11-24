@@ -205,3 +205,74 @@ def timed(fn: Callable[[], Any]) -> tuple[Any, float]:
 
 def pct(part: float, whole: float) -> float:
     return round(100 * part / whole, 2) if whole else 100.0
+
+
+def approve_run(world: World, run: str) -> None:
+    """Approve a run at every step by the person its rule names, with the code setting raised (the evals have no mailbox)."""
+    from p2p.invoices import runs
+
+    db = world.db
+    db.execute(
+        text(
+            "insert into org_setting (key, value, description) values "
+            "('payment_run_otp_above', '999999999.00', 'eval: no mailbox') "
+            "on conflict (key) do update set value = '999999999.00'"
+        )
+    )
+    db.commit()
+    try:
+        for _ in range(5):
+            page = runs.run_page(db, run)
+            step = page["current"]
+            if step is None:
+                break
+            uid = world.org_logins.get(str(step["approver"])) or world.logins["Approver"]
+            runs.approve_step(db, run, uid, None)
+            db.commit()
+        if db.execute(text("select status from payment_run where no = :r"), {"r": run}).scalar_one() != "approved":
+            raise AssertionError(f"{run} was not approved by the people its rule names")
+    finally:
+        db.execute(text("update org_setting set value = '0.00' where key = 'payment_run_otp_above'"))
+        db.commit()
+
+
+def confirm_tds(world: World) -> int:
+    """The tax owner confirms every row waiting (the evals are about what comes after TDS, not the section decisions)."""
+    from p2p.invoices import tds
+
+    ids = [int(r[0]) for r in world.db.execute(text("select id from tds_entry where status = 'proposed'"))]
+    if ids:
+        tds.confirm(world.db, ids, world.logins["Finance"])
+        world.db.commit()
+    return len(ids)
+
+
+def settle_run(world: World, run: str, on: date) -> list[str]:
+    """Record each payment with a reference and settle it from a statement line (block 12: never marked paid).
+    Returns the orders closed by this settlement."""
+    from p2p.formulas.calendar import business_today, pin_today, today_is_pinned
+    from p2p.invoices import bank_statement, settlement
+
+    db, finance = world.db, world.logins["Finance"]
+    pinned, before = today_is_pinned(), business_today()
+    pin_today(on)  # the eval pays a run dated after the pinned day: the bank's own day for the value date
+    try:
+        last_audit = int(db.execute(text("select coalesce(max(id), 0) from audit_event")).scalar_one())
+        pays = db.execute(text("select no, amount from payment where run_no = :r order by no"), {"r": run}).all()
+        rows_ = ["date,utr,narration,debit,credit"]
+        for n, (pay_no, amount) in enumerate(pays, start=1):
+            utr = f"EVAL{on:%y%m%d}{n:08d}"
+            settlement.record(db, str(pay_no), finance, utr=utr, value_date=on, evidence=None, tenant=world.slug)
+            rows_.append(f"{on.isoformat()},{utr},NEFT {pay_no} EVAL,{amount},0.00")
+        bank_statement.import_statement(db, "\n".join(rows_) + "\n", finance, today=on, tenant=world.slug)
+        return [
+            str(r[0])
+            for r in db.execute(
+                text(
+                    "select distinct entity_id from audit_event where id > :i and action = 'po.close' order by 1"
+                ),
+                {"i": last_audit},
+            )
+        ]
+    finally:
+        pin_today(before if pinned else None)

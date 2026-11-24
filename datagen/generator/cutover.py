@@ -52,7 +52,7 @@ COLUMNS: dict[str, list[str]] = {
         "payment_no", "po_no", "paid_on", "gross", "taxable", "tds_amount", "recovered_gross", "recovered_taxable",
         "utr",
     ],
-    "supplier_ytd": ["supplier_code", "fy", "taxable"],
+    "supplier_ytd": ["supplier_code", "fy", "taxable", "section"],
     "control": ["kind", "count", "total"],
 }  # fmt: skip
 TRUTH = ["company", "kind", "key", "expected", "reason_contains", "amount"]
@@ -244,8 +244,14 @@ class Cutover:
                 sign = -1 if i["type"] == "credit_note" else 1
                 bought[i["supplier_code"]] += sign * D(i["taxable"])
         self.files["supplier_ytd"] = [
-            {"supplier_code": s, "fy": fy, "taxable": money(v)} for s, v in sorted(bought.items())
+            {"supplier_code": s, "fy": fy, "taxable": money(v), "section": "194Q"} for s, v in sorted(bought.items())
         ]
+        # the year's technical services paid to SUP-006 (194J(a)), as the tax adviser's file has them (block 12, E169)
+        services = self.plan.get("supplier_ytd_services", {})
+        for supplier, taxable in sorted(services.items()):
+            self.files["supplier_ytd"].append(
+                {"supplier_code": supplier, "fy": fy, "taxable": money(D(taxable)), "section": "194J(a)"}
+            )
 
     def _control(self) -> None:
         f = self.files

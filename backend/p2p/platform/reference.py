@@ -214,6 +214,7 @@ def load_reference(db: Session, directory: Path | None = None) -> dict[str, int]
     for fname, scope_col in (
         ("holidays_central_2024_2025.csv", None),
         ("holidays_2026_central_gazetted.csv", None),
+        ("holidays_2027_central_gazetted.csv", None),
         ("holidays_state_MH_GJ_KA_2024_2026.csv", "state_code"),
     ):
         for r in _rows(d / fname):

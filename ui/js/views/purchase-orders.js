@@ -463,6 +463,7 @@ const PurchaseOrdersView = {
         </div>
         ${approvalActs ? "" : this.approvalPanel(po)}
         ${dispatchActs ? "" : this.dispatchPanel(po)}
+        <div class="panel" id="advancePanel"><div class="panel-title">Advance</div><div id="advanceBox" class="cell-muted" style="font-size:12.5px;">Loading…</div></div>
         ${this.touchlessPanel(po)}
         <div id="poChangesBox"></div>
         <div id="poVersionsBox"></div>
@@ -471,6 +472,7 @@ const PurchaseOrdersView = {
         <div id="poTraceBox" style="margin-top:12px;"></div>
       `;
       this.wire(po);
+      this.mountAdvance(po);
       TracePanel.mount(document.getElementById("poTraceBox"), po.id);
       this.mountChanges(po);
       this.mountVersions(po);
@@ -479,5 +481,31 @@ const PurchaseOrdersView = {
     } catch {
       container.innerHTML = `<div class="empty-state">Couldn't load this purchase order.</div>`;
     }
+  },
+
+  async mountAdvance(po) {
+    const box = document.getElementById("advanceBox");
+    if (!box) return;
+    try {
+      const rows = (await API.getJSON("/api/advances")).filter((r) => r.po_no === po.id);
+      const live = rows[0];
+      box.innerHTML = live
+        ? `An advance of ${formatCurrency(live.gross)} (${this.esc(live.pct)}%) is <strong>${this.esc(live.status)}</strong>${live.approver ? `; approved by ${this.esc(live.approver)}` : ""}.`
+        : `<div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;">
+             <input id="advancePct" type="number" min="1" max="100" value="30" style="width:70px;padding:5px;"> %
+             <input id="advanceReason" placeholder="why the advance is needed" style="padding:5px;width:180px;">
+             <div class="btn btn-secondary btn-sm" id="requestAdvance">Request the advance</div></div>
+           <div class="cell-muted" style="font-size:11.5px;margin-top:4px;">Only up to the percentage the payment terms carry; the purchase manager approves it, then a run pays it.</div>
+           <div id="advanceNote" style="font-size:12px;color:var(--warning-text);margin-top:4px;"></div>`;
+      const button = document.getElementById("requestAdvance");
+      if (button) button.addEventListener("click", async () => {
+        const res = await API.postJSON(`/api/purchase-orders/${encodeURIComponent(po.id)}/advance`, {
+          pct: document.getElementById("advancePct").value,
+          reason: document.getElementById("advanceReason").value,
+        });
+        if (res.ok) return this.mountAdvance(po);
+        document.getElementById("advanceNote").textContent = res.data.detail || "The advance was not requested.";
+      });
+    } catch { box.textContent = "Couldn't load the advance."; }
   },
 };
