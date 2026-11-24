@@ -351,7 +351,8 @@ def test_the_endpoint_explains_a_blocked_invoice_for_accounts_and_nobody_else(bo
     body = got.json()
     assert (body["cause"], body["fix"], body["source"]) == ("qty_mismatch", "wait_for_receipt", "agent")
     assert "Dear Contact S1," in body["vendor_email"]["body"]
-    again = client.get(f"/api/invoices/{no}/diagnosis", headers=_headers(slug, buyer, "Buyer")).json()["diagnosis"]
+    assert client.get(f"/api/invoices/{no}/diagnosis", headers=_headers(slug, buyer, "Buyer")).status_code == 403
+    again = client.get(f"/api/invoices/{no}/diagnosis", headers=_headers(slug, ap, "AP")).json()["diagnosis"]
     assert again["cause"] == "qty_mismatch" and again["vendor_body"] == body["vendor_email"]["body"]
     assert client.get("/api/invoices/NOPE/diagnosis", headers=_headers(slug, ap, "AP")).status_code == 404
     assert client.get(f"/api/invoices/{ok_invoice}/diagnosis", headers=_headers(slug, ap, "AP")).json() == {

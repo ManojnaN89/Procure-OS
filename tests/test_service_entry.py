@@ -233,21 +233,20 @@ def test_given_a_sent_service_nobody_confirmed_yet_then_its_invoice_can_be_enter
     assert held.reasons == [matching.SERVICE]
 
 
-def test_given_the_requester_confirmed_a_service_when_they_approve_its_blocked_invoice_then_segregation_refuses_it(
+def test_given_a_service_hold_when_the_requester_asks_to_release_it_then_it_is_refused_and_the_confirmation_clears_it(
     svc: Session, outbox: Outbox
 ) -> None:  # noqa: F811
     po_no, logins = _service_po(svc, requester="U2")  # the CFO asked for it; she may release blocked invoices
     _confirm(svc, po_no, logins["cfo"], "pct", "50")  # confirming her own service is her duty, and allowed
     held = _invoice(svc, po_no, user=logins["buyer"])  # all ten invoiced, five confirmed
     assert held.reasons == [matching.SERVICE]
-    pid = invoices.request_release(svc, held.no, "paid in advance by agreement", logins["buyer"])
 
-    proposals.approve(svc, pid, logins["cfo"])
+    with pytest.raises(invoices.InvoiceError, match="never released"):
+        invoices.request_release(svc, held.no, "paid in advance by agreement", logins["buyer"])
 
+    _confirm(svc, po_no, logins["cfo"], "pct", "50")  # the rest is confirmed: the match clears it by itself
     svc.expire_all()
-    run = svc.execute(text("select execution, result from proposal where id = :i"), {"i": pid}).one()
-    assert run[0] == "failed" and "segregation of duties" in run[1]["error"]
-    assert svc.execute(text("select status from invoice where no = :n"), {"n": held.no}).scalar_one() == "blocked"
+    assert svc.execute(text("select status from invoice where no = :n"), {"n": held.no}).scalar_one() == "approved"
 
 
 # ---- the emailed link -------------------------------------------------------------------------

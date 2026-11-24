@@ -6,11 +6,13 @@ from decimal import Decimal, InvalidOperation
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, HTTPException
+from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from p2p.agents import invoice_exceptions
 from p2p.formulas.calendar import business_today
 from p2p.formulas.money import format_qty
+from p2p.invoices import release as releases
 from p2p.invoices import service as invoices
 from p2p.platform import routing
 from p2p.platform.permissions import can_anywhere, require
@@ -84,6 +86,8 @@ def ready_to_invoice(db: Db, ctx: Ctx, supplier: str | None = None) -> list[dict
 
 @router.get("/invoices")
 def list_invoices(db: Db, ctx: Ctx, status: str | None = None) -> list[dict[str, Any]]:
+    if not invoices.can_read(db, ctx.user_id):
+        raise HTTPException(403, "Not allowed: invoice.view, invoice.match or invoice.approve")
     rows = _rows(
         db,
         "select i.no, i.type, i.supplier_code, coalesce(s.trade_name, s.legal_name) as supplier, i.supplier_invoice_no, "
@@ -122,6 +126,8 @@ def list_invoices(db: Db, ctx: Ctx, status: str | None = None) -> list[dict[str,
 
 @router.get("/invoices/{no}")
 def get_invoice(no: str, db: Db, ctx: Ctx) -> dict[str, Any]:
+    if not invoices.can_read(db, ctx.user_id, no):
+        raise HTTPException(403, "Not allowed: invoice.view, invoice.match or invoice.approve")
     rows = _rows(
         db,
         "select i.*, coalesce(s.trade_name, s.legal_name) as supplier from invoice i join supplier s on s.code = i.supplier_code "
@@ -131,7 +137,13 @@ def get_invoice(no: str, db: Db, ctx: Ctx) -> dict[str, Any]:
     if not rows:
         raise HTTPException(404, "Not found")
     i = rows[0]
-    lines = _rows(db, "select * from invoice_line where invoice_no = :n order by line_no", n=no)
+    lines = _rows(
+        db,
+        "select l.*, pl.gst_rate as order_gst_rate from invoice_line l "
+        "join po_line pl on pl.po_no = l.po_no and pl.line_no = l.po_line_no "
+        "where l.invoice_no = :n order by l.line_no",
+        n=no,
+    )
     charges = _rows(db, "select * from invoice_charge where invoice_no = :n order by id", n=no)
     results = _rows(
         db,
@@ -145,6 +157,7 @@ def get_invoice(no: str, db: Db, ctx: Ctx) -> dict[str, Any]:
         "and payload->>'invoice' = :n",
         n=no,
     )
+    line_by_no = {ln["line_no"]: ln for ln in lines}
     can_work = can_anywhere(db, ctx.user_id, "invoice.match")
     return {
         "id": i["no"],
@@ -194,10 +207,16 @@ def get_invoice(no: str, db: Db, ctx: Ctx) -> dict[str, Any]:
                 "line_no": r["invoice_line_no"],
                 "result": r["result"],
                 "reason": r["reason_codes"],
+                "reasons": list(r["reasons"] or ([r["reason_codes"]] if r["reason_codes"] else [])),
                 "price_var": _money(r["price_var"]),
                 "qty_var": None if r["qty_var"] is None else format_qty(r["qty_var"]),
+                "variance_value": _money(r["variance_value"]),
+                "rules": r["rules"],
                 "detail": r["detail"],
                 "resolution": r["resolution"],
+                "gst": invoices.gst_view(db, i, line_by_no[r["invoice_line_no"]])
+                if r["invoice_line_no"] in line_by_no
+                else None,
                 "tolerance": None
                 if r["tolerance_version"] is None
                 else {"version": r["tolerance_version"], "effective_from": r["tolerance_from"].isoformat()},
@@ -205,6 +224,9 @@ def get_invoice(no: str, db: Db, ctx: Ctx) -> dict[str, Any]:
             for r in results
         ],
         "tolerance_version": i["tolerance_version"],
+        "match_rules": i["match_rules"],
+        "variance_accepted": _money(i["variance_accepted"]),
+        "release": releases.release_view(db, no),
         "pending_release": pending[0] if pending else None,
         "can_enter": can_anywhere(db, ctx.user_id, "invoice.book"),
         "can_act": can_work and i["status"] == "blocked" and i["payment_block"] != "duplicate" and not pending,
@@ -297,10 +319,43 @@ def release(
     no: str, payload: dict[str, Any], db: Db, ctx: Annotated[routing.TenantContext, Depends(require("invoice.match"))]
 ) -> dict[str, Any]:
     def ask() -> dict[str, Any]:
-        pid = invoices.request_release(db, no, str(payload.get("reason") or ""), ctx.user_id)
-        return {"proposal_id": pid, "status": "waiting for approval"}
+        pid = invoices.request_release(db, no, str(payload.get("reason") or ""), ctx.user_id, tenant=ctx.slug)
+        p = (
+            db.execute(
+                text("select payload, status from proposal where id = :i"),
+                {"i": pid},
+            )
+            .mappings()
+            .one()
+        )
+        body = p["payload"] or {}
+        return {
+            "proposal_id": pid,
+            "status": p["status"],
+            "kind": body.get("kind"),
+            "variance": body.get("variance"),
+            "approver": body.get("approver"),
+        }
 
     return _error(ask)
+
+
+@router.post("/invoices/{no}/query")
+def send_query(
+    no: str, payload: dict[str, Any], db: Db, ctx: Annotated[routing.TenantContext, Depends(require("invoice.match"))]
+) -> dict[str, Any]:
+    """AP sends its edited query to the supplier: through the outbox, never from the agent (11.9.2)."""
+    subject = str(payload.get("subject") or "").strip()
+    body = str(payload.get("body") or "").strip()
+    if not subject or not body:
+        raise HTTPException(422, "a subject and a body are needed")
+    try:
+        sent = invoice_exceptions.send_query(db, ctx.slug, no, subject, body, ctx.user_id)
+    except invoices.InvoiceError as exc:
+        raise HTTPException(404 if "does not exist" in str(exc) else 409, str(exc)) from None
+    except invoice_exceptions.QueryError as exc:
+        raise HTTPException(409, str(exc)) from None
+    return sent
 
 
 @router.post("/invoices/{no}/cancel")

@@ -64,6 +64,7 @@ class Posted:
     po_status: str
     pending_inspection: list[int] = field(default_factory=list)
     accepted: dict[int, Decimal] = field(default_factory=dict)
+    rematched: list[str] = field(default_factory=list)  # blocked invoices matched again after the goods were accepted
 
 
 @dataclass
@@ -343,7 +344,8 @@ def post_receipt(db: Session, po_no: str, lines: list[LineIn], header: Header, u
         },
     )
     db.commit()
-    return Posted(gr_no, po_no, status, pending, accepted_by_line)
+    rematched = _rematch_accepted(db, po_no, list(accepted_by_line), gr_no)
+    return Posted(gr_no, po_no, status, pending, accepted_by_line, rematched)
 
 
 def inspect(db: Session, gr_no: str, decisions: list[Decision], user_id: int, *, as_of: date) -> Posted:
@@ -436,7 +438,15 @@ def inspect(db: Session, gr_no: str, decisions: list[Decision], user_id: int, *,
         },
     )
     db.commit()
-    return Posted(gr_no, po["no"], status, [], accepted_by_line)
+    rematched = _rematch_accepted(db, po["no"], list(accepted_by_line), gr_no)
+    return Posted(gr_no, po["no"], status, [], accepted_by_line, rematched)
+
+
+def _rematch_accepted(db: Session, po_no: str, line_nos: list[int], grn: str) -> list[str]:
+    """A receipt or an inspection raised what may be invoiced: the waiting quantity holds are matched again (block 11)."""
+    from p2p.invoices import rematch  # noqa: PLC0415 - invoices builds on receiving
+
+    return rematch.after_accepted(db, po_no, line_nos, grn=grn)
 
 
 def reserve_arrived(db: Session, tenant: str, gr_no: str) -> None:

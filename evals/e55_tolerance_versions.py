@@ -4,10 +4,10 @@ Independence: written from the block 0b spec (section 3), the plan and the datas
 `master/tolerance.csv` and `master/tolerance_version.csv` itself: a version is the whole set of (key, category) values
 from its start date to the day before the next version starts (never used when it is replaced before it starts); the
 version of an invoice is the one in force on its `received_on`. Each invoice is judged here, line by line, the way the
-spec says the code applies D-17 today: quantity invoiced so far within the accepted quantity plus `qty_pct`, and the price
-within `price_pct` **or** `price_abs` rupees on the line (a category value overrides ANY within the same version).
-Owner decision OP-2: the "both % and Rs" rule is task 3.1, so every line where the % test and the rupee test disagree is
-left out of the scoring (counted in a note), never judged either way.
+spec says the code applies D-17: quantity invoiced so far within the accepted quantity plus `qty_pct`, and the price
+within both `price_pct` **and** `price_abs` rupees on the line (a category value overrides ANY within the same version).
+Owner decision OP-2: the "both % and Rs" rule is task 3.1, so every line is judged by both tests and a line where they
+disagree is blocked.
 
 The whole history of the main demo company is replayed with `as_of = received_on`, each verdict compared with the
 dataset's answer key and each version with the oracle; the invoices whose verdict flips between version 1 and 2 must flip
@@ -63,20 +63,30 @@ class Tolerances:
     """Tolerance versions as the dataset writes them."""
 
     def __init__(self, tol: list[dict[str, str]], heads: list[dict[str, str]]) -> None:
-        starts: dict[int, date] = {int(h["version"]): date.fromisoformat(h["effective_from"]) for h in heads}
+        starts: dict[int, date] = {
+            int(h["version"]): date.fromisoformat(h["effective_from"]) for h in heads
+        }
         self.values: dict[int, dict[tuple[str, str], Decimal]] = defaultdict(dict)
         for r in tol:
             v = int(r.get("version") or 1)
-            starts.setdefault(v, date.fromisoformat(r.get("effective_from") or "2000-01-01"))
+            starts.setdefault(
+                v, date.fromisoformat(r.get("effective_from") or "2000-01-01")
+            )
             self.values[v][(r["key"], r.get("category_code") or "ANY")] = D(r["value"])
         numbers = sorted(starts)
         self.versions = []
         for i, v in enumerate(numbers):
             nxt = starts[numbers[i + 1]] if i + 1 < len(numbers) else None
-            self.versions.append(Version(v, starts[v], nxt - timedelta(days=1) if nxt else None))
+            self.versions.append(
+                Version(v, starts[v], nxt - timedelta(days=1) if nxt else None)
+            )
 
     def on(self, day: date) -> int | None:
-        found = [v.number for v in self.versions if (v.end is None or v.end >= v.start) and v.covers(day)]
+        found = [
+            v.number
+            for v in self.versions
+            if (v.end is None or v.end >= v.start) and v.covers(day)
+        ]
         return max(found) if found else None
 
     def latest_started(self, day: date) -> int:
@@ -88,10 +98,12 @@ class Tolerances:
         return got.get((key, category), got.get((key, "ANY"), D(0)))
 
 
-def judge(lines: list[dict[str, Any]], tol: Tolerances, version: int) -> tuple[str, set[str], bool]:
-    """(matched | blocked, reasons, edge): edge when a line's % and rupee price tests disagree (task 3.1, not scored)."""
+def judge(
+    lines: list[dict[str, Any]], tol: Tolerances, version: int
+) -> tuple[str, set[str], bool]:
+    """(matched | within_tolerance | blocked, reasons, edge): both price tests must hold (D-17)."""
     reasons: set[str] = set()
-    edge = False
+    within = False
     for ln in lines:
         cat = ln["category"]
         limit = ln["accepted"] * (1 + tol.value(version, "qty_pct", cat) / 100)
@@ -101,10 +113,13 @@ def judge(lines: list[dict[str, Any]], tol: Tolerances, version: int) -> tuple[s
         if over > 0:
             pct_ok = over * 100 <= tol.value(version, "price_pct", cat) * ln["po_price"]
             abs_ok = over * ln["qty"] <= tol.value(version, "price_abs", cat)
-            edge = edge or pct_ok != abs_ok
-            if not (pct_ok or abs_ok):
+            if pct_ok and abs_ok:
+                within = True
+            else:
                 reasons.add("price_variance")
-    return ("blocked" if reasons else "matched"), reasons, edge
+    if reasons:
+        return "blocked", reasons, False
+    return ("within_tolerance" if within else "matched"), reasons, False
 
 
 def history_lines(ds: Any) -> dict[str, list[dict[str, Any]]]:
@@ -113,7 +128,8 @@ def history_lines(ds: Any) -> dict[str, list[dict[str, Any]]]:
     po_lines = {(r["po_no"], r["line_no"]): r for r in ds("history", "po_line")}
     receipts = {r["no"]: r for r in ds("history", "goods_receipt")}
     events: list[tuple[datetime, int, str]] = [
-        (datetime.fromisoformat(r["gate_entry_at"]), 0, r["no"]) for r in receipts.values()
+        (datetime.fromisoformat(r["gate_entry_at"]), 0, r["no"])
+        for r in receipts.values()
     ]
     invoices = {r["no"]: r for r in ds("history", "invoice")}
     gr_lines: dict[str, list[dict[str, str]]] = defaultdict(list)
@@ -125,14 +141,18 @@ def history_lines(ds: Any) -> dict[str, list[dict[str, Any]]]:
     # the dataset's convention: an invoice is judged once the receipt that names it (supplier_invoice_ref) is posted,
     # even when the paper arrived a few hours before the goods (a replacement sent again the same day)
     receipt_for = {
-        (g["po_no"], g["supplier_invoice_ref"]): datetime.fromisoformat(g["gate_entry_at"])
+        (g["po_no"], g["supplier_invoice_ref"]): datetime.fromisoformat(
+            g["gate_entry_at"]
+        )
         for g in receipts.values()
         if g.get("supplier_invoice_ref")
     }
     for r in invoices.values():
         first_po = inv_lines[r["no"]][0]["po_no"] if inv_lines[r["no"]] else ""
         arrived = datetime.fromisoformat(r["received_at"])
-        arrived = max(arrived, receipt_for.get((first_po, r["supplier_invoice_no"]), arrived))
+        arrived = max(
+            arrived, receipt_for.get((first_po, r["supplier_invoice_no"]), arrived)
+        )
         events.append((arrived, 1, r["no"]))
     accepted: dict[tuple[str, str], Decimal] = defaultdict(Decimal)
     invoiced: dict[tuple[str, str], Decimal] = defaultdict(Decimal)
@@ -153,7 +173,9 @@ def history_lines(ds: Any) -> dict[str, list[dict[str, Any]]]:
             k = (ln["po_no"], ln["po_line_no"])
             lines.append(
                 {
-                    "category": items.get(pol["item_code"], {}).get("category_code", "ANY"),
+                    "category": items.get(pol["item_code"], {}).get(
+                        "category_code", "ANY"
+                    ),
                     "qty": D(ln["qty"]),
                     "net_price": D(ln["taxable"]) / D(ln["qty"]),
                     "po_price": D(pol["unit_price"]),
@@ -169,7 +191,9 @@ def history_lines(ds: Any) -> dict[str, list[dict[str, Any]]]:
 # ---- planting an order of our own (a copy of a history order, fully received) -----------------------------------------
 
 
-def clone_order(db: Any, ds: Any, src: dict[str, str], new_no: str, qty: Decimal, received: date) -> dict[str, Any]:
+def clone_order(
+    db: Any, ds: Any, src: dict[str, str], new_no: str, qty: Decimal, received: date
+) -> dict[str, Any]:
     """A copy of one history order line under a new number, `qty` ordered and accepted on `received`."""
     from replay import insert
 
@@ -184,7 +208,13 @@ def clone_order(db: Any, ds: Any, src: dict[str, str], new_no: str, qty: Decimal
     insert(db, "po_line", {**src, "po_no": new_no, "line_no": "1", "qty": qty, "cgst": half, "sgst": half, "igst": igst},
            {"received_qty": qty, "invoiced_qty": 0, "source": "award", "request_no": new_no, "request_line_no": 1,
             "taxable": taxable})  # fmt: skip
-    gr = next((r for r in ds("history", "goods_receipt") if r["po_no"] == src["po_no"]), None) or {}
+    gr = (
+        next(
+            (r for r in ds("history", "goods_receipt") if r["po_no"] == src["po_no"]),
+            None,
+        )
+        or {}
+    )
     at = datetime.combine(received - timedelta(days=5), time(10, 0), IST)
     insert(db, "goods_receipt", {**gr, "no": f"GRN-{new_no}", "po_no": new_no, "gate_entry_at": at.isoformat(),
                                  "accepted_on": (received - timedelta(days=5)).isoformat(), "inspection_status": "not_required",
@@ -196,7 +226,14 @@ def clone_order(db: Any, ds: Any, src: dict[str, str], new_no: str, qty: Decimal
 
 
 def enter(
-    db: Any, ap: int, order: dict[str, Any], qty: Decimal, price: Decimal, day: date, number: str, irn: bool
+    db: Any,
+    ap: int,
+    order: dict[str, Any],
+    qty: Decimal,
+    price: Decimal,
+    day: date,
+    number: str,
+    irn: bool,
 ) -> Any:
     """An invoice for the planted order, received on `day`, through the platform's own intake and match."""
     from p2p.invoices import service as invoices
@@ -253,10 +290,15 @@ def _run(ctx: lib.Ctx) -> Outcome:  # noqa: C901 - one scenario, step by step
         "version" not in (ds("master", "tolerance") or [{}])[0]
         or not (lib.DATASET / "master" / "tolerance_version.csv").exists()
     ):
-        out.find("high", "the dataset has no tolerance versions (tolerance.csv version column, tolerance_version.csv)")
+        out.find(
+            "high",
+            "the dataset has no tolerance versions (tolerance.csv version column, tolerance_version.csv)",
+        )
         return out
     tol = Tolerances(ds("master", "tolerance"), ds("master", "tolerance_version"))
-    out.metrics["dataset versions"] = [f"v{v.number} {v.start}..{v.end or ''}" for v in tol.versions]
+    out.metrics["dataset versions"] = [
+        f"v{v.number} {v.start}..{v.end or ''}" for v in tol.versions
+    ]
     check(
         tol.on(FLIP - timedelta(days=1)) == 1 and tol.on(FLIP) == 2,
         f"Apex versions are not v1 to 30 Jun, v2 from 1 Jul: {out.metrics['dataset versions']}",
@@ -272,12 +314,16 @@ def _run(ctx: lib.Ctx) -> Outcome:  # noqa: C901 - one scenario, step by step
     db.rollback()
     match_rows: dict[str, list[tuple[str, Any]]] = defaultdict(list)
     for inv, result, version in db.execute(
-        text("select invoice_no, result, tolerance_version from match_result order by id")
+        text(
+            "select invoice_no, result, tolerance_version from match_result order by id"
+        )
     ):
         match_rows[str(inv)].append((result, version))
-    inv_version = dict(db.execute(text("select no, tolerance_version from invoice")).all())
+    inv_version = dict(
+        db.execute(text("select no, tolerance_version from invoice")).all()
+    )
 
-    scored = edges = version_ok = result_ok = oracle_vs_key = 0
+    scored = version_ok = result_ok = oracle_vs_key = 0
     wrong_version: list[str] = []
     wrong_result: list[str] = []
     disagree: list[str] = []
@@ -285,16 +331,26 @@ def _run(ctx: lib.Ctx) -> Outcome:  # noqa: C901 - one scenario, step by step
     mutant_latest = mutant_none = 0
     for key, done in got.entered.items():
         inv = by_no[key]
-        if inv["type"] != "invoice" or key not in lines_of or getattr(done, "duplicate_of", None):
+        if (
+            inv["type"] != "invoice"
+            or key not in lines_of
+            or getattr(done, "duplicate_of", None)
+        ):
             continue
+        if (truth.get(key) or {}).get("planted") == "gst_mismatch":
+            continue  # the GST answer key is E19/E161's; this eval judges price and quantity only
         day = date.fromisoformat(inv["received_on"])
         want_v = tol.on(day)
         pno = got.platform_no[key]
-        versions_stored = {v for _, v in match_rows.get(pno, [])} | {inv_version.get(pno)}
+        versions_stored = {v for _, v in match_rows.get(pno, [])} | {
+            inv_version.get(pno)
+        }
         if versions_stored == {want_v}:
             version_ok += 1
         else:
-            wrong_version.append(f"{key} received {day}: stored {sorted(map(str, versions_stored))}, oracle v{want_v}")
+            wrong_version.append(
+                f"{key} received {day}: stored {sorted(map(str, versions_stored))}, oracle v{want_v}"
+            )
         if want_v != tol.latest_started(lib.TODAY) and versions_stored == {want_v}:
             mutant_latest += 1
         if None not in versions_stored:
@@ -303,15 +359,18 @@ def _run(ctx: lib.Ctx) -> Outcome:  # noqa: C901 - one scenario, step by step
         r2, _, e2 = judge(lines_of[key], tol, 2)
         if r1 != r2:
             flips.append((key, day, r1, r2))
-        result, reasons, edge = judge(lines_of[key], tol, want_v or 1)
-        if edge:
-            edges += 1
-            continue
+        result, reasons, _edge = judge(lines_of[key], tol, want_v or 1)
         scored += 1
         key_row = truth.get(key)
         platform = getattr(done, "result", None)
-        if key_row is not None and key_row.get("tolerance_version") and int(key_row["tolerance_version"]) != want_v:
-            disagree.append(f"{key}: answer key version {key_row['tolerance_version']}, oracle v{want_v}")
+        if (
+            key_row is not None
+            and key_row.get("tolerance_version")
+            and int(key_row["tolerance_version"]) != want_v
+        ):
+            disagree.append(
+                f"{key}: answer key version {key_row['tolerance_version']}, oracle v{want_v}"
+            )
         expected = key_row["result"] if key_row is not None else result
         if key_row is not None and key_row["result"] != result:
             oracle_vs_key += 1
@@ -321,40 +380,46 @@ def _run(ctx: lib.Ctx) -> Outcome:  # noqa: C901 - one scenario, step by step
             wrong_result.append(
                 f"{key} received {day} (v{want_v}): platform {platform}, answer key {expected}, oracle {result} {sorted(reasons)}"
             )
-    out.metrics["history invoices: version right / scored"] = f"{version_ok} / {version_ok + len(wrong_version)}"
-    out.metrics["history invoices: result right / scored (edges left out)"] = (
-        f"{result_ok} / {scored} ({edges} either/both edges)"
+    out.metrics["history invoices: version right / scored"] = (
+        f"{version_ok} / {version_ok + len(wrong_version)}"
     )
+    out.metrics["history invoices: result right / scored"] = f"{result_ok} / {scored}"
     out.metrics["oracle and answer key disagree"] = oracle_vs_key
     for w in wrong_version[:6]:
         out.find("high", f"history: {w}")
     for w in wrong_result[:6]:
         out.find("high", f"history: {w}")
     for w in disagree[:3]:
-        out.find("medium", f"the dataset's answer key and the tolerance files disagree: {w}")
+        out.find(
+            "medium", f"the dataset's answer key and the tolerance files disagree: {w}"
+        )
     if oracle_vs_key:
         out.notes.append(
             f"{oracle_vs_key} scored invoices where this oracle's simple replay differs from the answer key; the platform was held to the key"
         )
-    if edges:
-        out.notes.append(
-            f"{edges} history invoices have a line within % but not within rupees (or the reverse): task 3.1, not scored (OP-2)"
-        )
 
     # the planted edge invoices flip exactly at 1 Jul 2026
-    clean_flips = [f for f in flips if not judge(lines_of[f[0]], tol, 1)[2] and not judge(lines_of[f[0]], tol, 2)[2]]
-    out.metrics["invoices whose verdict differs between v1 and v2 (clean of the 3.1 edge)"] = [
+    clean_flips = [
+        f
+        for f in flips
+        if str((truth.get(f[0]) or {}).get("planted", "")).startswith("tolerance_edge")
+    ]
+    out.metrics["invoices whose verdict differs between v1 and v2"] = [
         f"{k} {d} v1 {a} / v2 {b}" for k, d, a, b in clean_flips
     ]
     check(
-        any(d < FLIP for _, d, _, _ in clean_flips) and any(d >= FLIP for _, d, _, _ in clean_flips),
+        any(d < FLIP for _, d, _, _ in clean_flips)
+        and any(d >= FLIP for _, d, _, _ in clean_flips),
         f"the dataset should plant invoices that flip between v1 and v2 on both sides of {FLIP}: {clean_flips}",
         "medium",
     )
     for key, day, r1, r2 in clean_flips:
         want = r1 if day < FLIP else r2
         platform = getattr(got.entered[key], "result", None)
-        check(platform == want, f"planted {key} received {day}: platform {platform}, the version in force says {want}")
+        check(
+            platform == want,
+            f"planted {key} received {day}: platform {platform}, the version in force says {want}",
+        )
 
     # ---- 2. the same lines received on 30 Jun and on 1 Jul -------------------------------------------------------------
     src = next(
@@ -362,14 +427,24 @@ def _run(ctx: lib.Ctx) -> Outcome:  # noqa: C901 - one scenario, step by step
             ln
             for ln in ds("history", "po_line")
             if ln["item_code"] == "RM-06"
-            and next(p for p in ds("history", "po") if p["no"] == ln["po_no"])["supplier_code"] == "SUP-002"
+            and next(p for p in ds("history", "po") if p["no"] == ln["po_no"])[
+                "supplier_code"
+            ]
+            == "SUP-002"
         ),
         None,
     )
     ap = world.logins["AP"]
     edge_invoices: dict[str, tuple[str, int]] = {}
-    if check(src is not None, "no history order of SUP-002 bearings (RM-06) to copy", "medium"):
-        qty, over = D(100), D(103)  # 3% over the accepted quantity at the order's own price
+    if check(
+        src is not None,
+        "no history order of SUP-002 bearings (RM-06) to copy",
+        "medium",
+    ):
+        qty, over = (
+            D(100),
+            D(103),
+        )  # 3% over the accepted quantity at the order's own price
         price = D(src["unit_price"])
         for tag, day in (("A", FLIP - timedelta(days=1)), ("B", FLIP)):
             order = clone_order(db, ds, src, f"PO-E55-{tag}", qty, day)
@@ -387,12 +462,17 @@ def _run(ctx: lib.Ctx) -> Outcome:  # noqa: C901 - one scenario, step by step
             want = judge([line], tol, version)[0]
             stored = (
                 db.execute(
-                    text("select distinct tolerance_version from match_result where invoice_no = :n"), {"n": done.no}
+                    text(
+                        "select distinct tolerance_version from match_result where invoice_no = :n"
+                    ),
+                    {"n": done.no},
                 )
                 .scalars()
                 .all()
             )
-            out.metrics[f"bearings 3% over received {day}"] = f"{done.result} v{stored} (oracle {want} v{version})"
+            out.metrics[f"bearings 3% over received {day}"] = (
+                f"{done.result} v{stored} (oracle {want} v{version})"
+            )
             check(
                 done.result == want,
                 f"bearings 3% over received {day}: platform {done.result}, oracle {want} under v{version}",
@@ -404,12 +484,18 @@ def _run(ctx: lib.Ctx) -> Outcome:  # noqa: C901 - one scenario, step by step
             edge_invoices[tag] = (done.no, version)
             trail = [a["rule_version"] for a in _audit(db, "invoice.match", done.no)]
             check(
-                bool(trail) and trail[-1] == f"tolerance v{version}",
+                bool(trail) and trail[-1].startswith(f"tolerance v{version}"),
                 f"{done.no}: invoice.match audit rule_version {trail}, expected 'tolerance v{version}'",
             )
 
     # ---- 3. version 3 from tomorrow, by two administrators -------------------------------------------------------------
-    admin2 = users.create_user(world.slug, f"admin2{world.slug}@eval.example", lib.PASSWORD, "Second Admin", "Admin")
+    admin2 = users.create_user(
+        world.slug,
+        f"admin2{world.slug}@eval.example",
+        lib.PASSWORD,
+        "Second Admin",
+        "Admin",
+    )
     h = {"admin": world.headers("Admin"), "ap": world.headers("AP"),
          "admin2": {"Authorization": f"Bearer {create_access_token(admin2, world.slug, 'Admin')}"}}  # fmt: skip
 
@@ -417,12 +503,18 @@ def _run(ctx: lib.Ctx) -> Outcome:  # noqa: C901 - one scenario, step by step
         r = client.get("/api/setup/tolerances", headers=headers)
         found = js(r) if r.status_code == 200 else {}
         if not pick(found, "versions"):
-            found = pick(js(client.get("/api/setup/policies", headers=headers)), "tolerances", default={})
+            found = pick(
+                js(client.get("/api/setup/policies", headers=headers)),
+                "tolerances",
+                default={},
+            )
         return list(pick(found, "versions", default=[]) or [])
 
     def put(key: str, body: dict[str, Any], who: str = "admin") -> Any:
         return client.put(
-            f"/api/setup/tolerances/{key}", json={"category": "ANY", "reason": "E55", **body}, headers=h[who]
+            f"/api/setup/tolerances/{key}",
+            json={"category": "ANY", "reason": "E55", **body},
+            headers=h[who],
         )
 
     before = versions(h["admin"])
@@ -431,7 +523,10 @@ def _run(ctx: lib.Ctx) -> Outcome:  # noqa: C901 - one scenario, step by step
           f"the screen's versions {shown} are not the dataset's {[(v.number, str(v.start)) for v in tol.versions]}")  # fmt: skip
     for v in before:
         n = int(v["version"])
-        vals = {(x["key"], x.get("category") or "ANY"): D(x["value"]) for x in v.get("values", [])}
+        vals = {
+            (x["key"], x.get("category") or "ANY"): D(x["value"])
+            for x in v.get("values", [])
+        }
         check(
             vals == tol.values.get(n, {}),
             f"version {n} values on screen {vals} differ from tolerance.csv {tol.values.get(n)}",
@@ -440,11 +535,19 @@ def _run(ctx: lib.Ctx) -> Outcome:  # noqa: C901 - one scenario, step by step
 
     refusals = {
         "start in the past": put(
-            "price_pct", {"value": "1.00", "effective_from": (lib.TODAY - timedelta(days=1)).isoformat()}
+            "price_pct",
+            {
+                "value": "1.00",
+                "effective_from": (lib.TODAY - timedelta(days=1)).isoformat(),
+            },
         ),
-        "unknown key": put("no_such_key", {"value": "1.00", "effective_from": TOMORROW.isoformat()}),
+        "unknown key": put(
+            "no_such_key", {"value": "1.00", "effective_from": TOMORROW.isoformat()}
+        ),
     }
-    out.metrics["refused (past start, unknown key)"] = {k: r.status_code for k, r in refusals.items()}
+    out.metrics["refused (past start, unknown key)"] = {
+        k: r.status_code for k, r in refusals.items()
+    }
     check(
         refusals["start in the past"].status_code == 422,
         f"a start date in the past answered {refusals['start in the past'].status_code}",
@@ -470,8 +573,13 @@ def _run(ctx: lib.Ctx) -> Outcome:  # noqa: C901 - one scenario, step by step
 
     check(D(shown(body.get("old")) or -1) == v2_price and D(shown(body.get("new")) or -1) == D("1.00"),
           f"the proposal shows old {body.get('old')} new {body.get('new')}; expected old {v2_price} (v2) and new 1.00", "medium")  # fmt: skip
-    check(len(versions(h["admin"])) == len(before), "a version was added before the second administrator approved")
-    second = put("qty_pct", {"value": "1.00", "effective_from": TOMORROW.isoformat()}, "admin2")
+    check(
+        len(versions(h["admin"])) == len(before),
+        "a version was added before the second administrator approved",
+    )
+    second = put(
+        "qty_pct", {"value": "1.00", "effective_from": TOMORROW.isoformat()}, "admin2"
+    )
     out.metrics["a second tolerance change while one waits"] = second.status_code
     # owner decision 10 (22 Nov 2026): the tolerance set is one setting, so a change to any other key while one waits
     # is refused too; a second change to the same key is checked below.
@@ -483,18 +591,35 @@ def _run(ctx: lib.Ctx) -> Outcome:  # noqa: C901 - one scenario, step by step
         late = js(second).get("proposal_id")
         if late:
             client.post(
-                f"/api/admin/proposals/{late}/reject", json={"reason": "E55: not this case"}, headers=h["admin"]
+                f"/api/admin/proposals/{late}/reject",
+                json={"reason": "E55: not this case"},
+                headers=h["admin"],
             )
-    same = put("price_pct", {"value": "1.50", "effective_from": TOMORROW.isoformat()}, "admin2")
-    out.metrics["a second change to the same tolerance while one waits"] = same.status_code
+    same = put(
+        "price_pct", {"value": "1.50", "effective_from": TOMORROW.isoformat()}, "admin2"
+    )
+    out.metrics["a second change to the same tolerance while one waits"] = (
+        same.status_code
+    )
     check(
-        same.status_code == 409, f"a second price_pct change while one waits answered {same.status_code}, expected 409"
+        same.status_code == 409,
+        f"a second price_pct change while one waits answered {same.status_code}, expected 409",
     )
     if pid:
-        own = client.post(f"/api/admin/proposals/{pid}/approve", json={}, headers=h["admin"])
-        check(own.status_code == 403, f"the maker approved their own tolerance change ({own.status_code})")
-        check(len(versions(h["admin"])) == len(before), "the maker's refused approval added a version")
-        done = client.post(f"/api/admin/proposals/{pid}/approve", json={}, headers=h["admin2"])
+        own = client.post(
+            f"/api/admin/proposals/{pid}/approve", json={}, headers=h["admin"]
+        )
+        check(
+            own.status_code == 403,
+            f"the maker approved their own tolerance change ({own.status_code})",
+        )
+        check(
+            len(versions(h["admin"])) == len(before),
+            "the maker's refused approval added a version",
+        )
+        done = client.post(
+            f"/api/admin/proposals/{pid}/approve", json={}, headers=h["admin2"]
+        )
         check(
             done.status_code == 200,
             f"the second administrator's approval answered {done.status_code} {done.text[:200]}",
@@ -503,7 +628,10 @@ def _run(ctx: lib.Ctx) -> Outcome:  # noqa: C901 - one scenario, step by step
     v3 = after.get(3)
     if check(v3 is not None, f"no version 3 after approval: {sorted(after)}"):
         want3 = {**tol.values[2], ("price_pct", "ANY"): D("1.00")}
-        got3 = {(x["key"], x.get("category") or "ANY"): D(x["value"]) for x in v3.get("values", [])}
+        got3 = {
+            (x["key"], x.get("category") or "ANY"): D(x["value"])
+            for x in v3.get("values", [])
+        }
         check(
             str(v3["effective_from"]) == TOMORROW.isoformat(),
             f"version 3 starts {v3['effective_from']}, expected {TOMORROW}",
@@ -518,7 +646,9 @@ def _run(ctx: lib.Ctx) -> Outcome:  # noqa: C901 - one scenario, step by step
             "version 2 should still be in force today",
             "medium",
         )
-        early = put("qty_pct", {"value": "1.00", "effective_from": lib.TODAY.isoformat()})
+        early = put(
+            "qty_pct", {"value": "1.00", "effective_from": lib.TODAY.isoformat()}
+        )
         check(
             early.status_code == 422,
             f"a start today, before the latest version's start ({TOMORROW}), answered {early.status_code}",
@@ -529,24 +659,41 @@ def _run(ctx: lib.Ctx) -> Outcome:  # noqa: C901 - one scenario, step by step
 
     # ---- 4. re-matching past invoices keeps the result and the version -----------------------------------------------
     rematched: dict[str, str] = {}
-    keep = [(got.platform_no[k], tol.on(d) or 1, getattr(got.entered[k], "result", None)) for k, d, _, _ in clean_flips]
+    keep = [
+        (got.platform_no[k], tol.on(d) or 1, getattr(got.entered[k], "result", None))
+        for k, d, _, _ in clean_flips
+    ]
     keep += [(no, v, None) for no, v in edge_invoices.values()]
     for no, version, _ in keep:
         db.rollback()
         before_rows = (
-            db.execute(text("select result from match_result where invoice_no = :n order by id"), {"n": no})
+            db.execute(
+                text(
+                    "select result from match_result where invoice_no = :n order by id"
+                ),
+                {"n": no},
+            )
             .scalars()
             .all()
         )
-        status = db.execute(text("select status from invoice where no = :n"), {"n": no}).scalar()
+        status = db.execute(
+            text("select status from invoice where no = :n"), {"n": no}
+        ).scalar()
         r = client.post(f"/api/invoices/{no}/rematch", headers=h["ap"])
         db.rollback()
         rows_ = db.execute(
-            text("select result, tolerance_version from match_result where invoice_no = :n order by id"), {"n": no}
+            text(
+                "select result, tolerance_version from match_result where invoice_no = :n order by id"
+            ),
+            {"n": no},
         ).all()
         latest = rows_[-1] if rows_ else (None, None)
         detail = js(client.get(f"/api/invoices/{no}", headers=h["ap"]))
-        shown_v = [pick(d["tolerance"], "version") for d in dicts(detail) if isinstance(d.get("tolerance"), dict)]
+        shown_v = [
+            pick(d["tolerance"], "version")
+            for d in dicts(detail)
+            if isinstance(d.get("tolerance"), dict)
+        ]
         rematched[no] = (
             f"{r.status_code}: {latest[0]} v{latest[1]} (before {before_rows[-1] if before_rows else '-'}); shown {shown_v}"
         )
@@ -570,27 +717,42 @@ def _run(ctx: lib.Ctx) -> Outcome:  # noqa: C901 - one scenario, step by step
     if src is not None and v3 is not None:
         with on_day(TOMORROW):
             order = clone_order(db, ds, src, "PO-E55-C", D(10), TOMORROW)
-            done = enter(db, ap, order, D(10), D(src["unit_price"]), TOMORROW, "E55/C", irn=False)
+            done = enter(
+                db, ap, order, D(10), D(src["unit_price"]), TOMORROW, "E55/C", irn=False
+            )
             db.commit()
         stored = (
             db.execute(
-                text("select distinct tolerance_version from match_result where invoice_no = :n"), {"n": done.no}
+                text(
+                    "select distinct tolerance_version from match_result where invoice_no = :n"
+                ),
+                {"n": done.no},
             )
             .scalars()
             .all()
         )
-        out.metrics["exact invoice received tomorrow"] = f"{done.result} v{list(stored)}"
-        check(list(stored) == [3], f"an invoice received {TOMORROW} stored version {stored}, expected 3")
+        out.metrics["exact invoice received tomorrow"] = (
+            f"{done.result} v{list(stored)}"
+        )
+        check(
+            list(stored) == [3],
+            f"an invoice received {TOMORROW} stored version {stored}, expected 3",
+        )
         trail = [a["rule_version"] for a in _audit(db, "invoice.match", done.no)]
         check(
-            bool(trail) and trail[-1] == "tolerance v3",
-            f"{done.no}: audit rule_version {trail}, expected 'tolerance v3'",
+            bool(trail) and trail[-1] == "tolerance v3; match rules 2",
+            f"{done.no}: audit rule_version {trail}, expected 'tolerance v3; match rules 2'",
         )
 
     # ---- 5. Brightwave: version 2 waits for 1 Jan 2027; each company sees only its own versions ----------------------
     bw = Company("brightwave", "e55", client)
-    bw_tol = Tolerances(bw.rows("master", "tolerance"), bw.rows("master", "tolerance_version"))
-    bw_seen = sorted((int(v["version"]), str(v["effective_from"])) for v in versions(bw.headers("U06")))
+    bw_tol = Tolerances(
+        bw.rows("master", "tolerance"), bw.rows("master", "tolerance_version")
+    )
+    bw_seen = sorted(
+        (int(v["version"]), str(v["effective_from"]))
+        for v in versions(bw.headers("U06"))
+    )
     want_bw = sorted((v.number, str(v.start)) for v in bw_tol.versions)
     out.metrics["Brightwave versions on screen"] = bw_seen
     check(
@@ -604,34 +766,62 @@ def _run(ctx: lib.Ctx) -> Outcome:  # noqa: C901 - one scenario, step by step
         "Brightwave version 2 has no ITH price_abs 1000.00 row",
         "medium",
     )
-    apex_seen = {(int(v["version"]), str(v["effective_from"])) for v in versions(h["admin"])}
+    apex_seen = {
+        (int(v["version"]), str(v["effective_from"])) for v in versions(h["admin"])
+    }
     check(
         not (apex_seen & {(2, "2027-01-01")}) and (2, "2026-07-01") not in bw_seen,
         "a company sees another company's tolerance versions",
     )
-    bw_src = next((ln for ln in bw.rows("history", "po_line") if ln["item_code"] == "LP-01"), None)
-    if check(bw_src is not None, "Brightwave has no LP-01 order in its history to copy", "medium"):
+    bw_src = next(
+        (ln for ln in bw.rows("history", "po_line") if ln["item_code"] == "LP-01"), None
+    )
+    if check(
+        bw_src is not None,
+        "Brightwave has no LP-01 order in its history to copy",
+        "medium",
+    ):
         bw_ds = bw.rows
         for tag, day in (("D", date(2026, 12, 31)), ("E", date(2027, 1, 1))):
             with on_day(day):
                 order = clone_order(bw.db, bw_ds, bw_src, f"PO-E55-{tag}", D(1), day)
                 done = enter(
-                    bw.db, bw.user_id("U04"), order, D(1), D(bw_src["unit_price"]), day, f"E55/{tag}", irn=True
+                    bw.db,
+                    bw.user_id("U04"),
+                    order,
+                    D(1),
+                    D(bw_src["unit_price"]),
+                    day,
+                    f"E55/{tag}",
+                    irn=True,
                 )
                 bw.db.commit()
-            stored = bw.q("select distinct tolerance_version from match_result where invoice_no = :n", n=done.no)
-            out.metrics[f"Brightwave laptop invoice received {day}"] = f"{done.result} v{[s[0] for s in stored]}"
+            stored = bw.q(
+                "select distinct tolerance_version from match_result where invoice_no = :n",
+                n=done.no,
+            )
+            out.metrics[f"Brightwave laptop invoice received {day}"] = (
+                f"{done.result} v{[s[0] for s in stored]}"
+            )
             check(
                 [s[0] for s in stored] == [bw_tol.on(day)],
                 f"Brightwave invoice received {day} stored version {stored}, expected {bw_tol.on(day)}",
             )
-        other = client.get(f"/api/invoices/{edge_invoices.get('A', ('x', 0))[0]}", headers=bw.headers("U04"))
-        check(other.status_code in (403, 404), f"Brightwave's AP read an Apex invoice ({other.status_code})")
+        other = client.get(
+            f"/api/invoices/{edge_invoices.get('A', ('x', 0))[0]}",
+            headers=bw.headers("U04"),
+        )
+        check(
+            other.status_code in (403, 404),
+            f"Brightwave's AP read an Apex invoice ({other.status_code})",
+        )
 
     # ---- 6. two broken rules the eval must tell from the right one ----------------------------------------------------
     caught = {
-        "the latest version instead of the dated one": mutant_latest > 0 and not wrong_version,
-        "the version not stored": mutant_none > 0 and mutant_none == version_ok + len(wrong_version),
+        "the latest version instead of the dated one": mutant_latest > 0
+        and not wrong_version,
+        "the version not stored": mutant_none > 0
+        and mutant_none == version_ok + len(wrong_version),
     }
     out.metrics["mutations caught"] = caught
     out.metrics["invoices that tell the latest-version reader apart"] = mutant_latest
@@ -644,7 +834,9 @@ def _run(ctx: lib.Ctx) -> Outcome:  # noqa: C901 - one scenario, step by step
 def _audit(db: Any, action: str, entity: str) -> list[dict[str, Any]]:
     db.rollback()
     found = db.execute(
-        text("select rule_version from audit_event where action = :a and entity_id = :e order by id"),
+        text(
+            "select rule_version from audit_event where action = :a and entity_id = :e order by id"
+        ),
         {"a": action, "e": entity},
     ).all()
     return [{"rule_version": r[0]} for r in found]

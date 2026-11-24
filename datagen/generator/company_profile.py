@@ -32,6 +32,7 @@ from history_check import history_problems  # noqa: E402
 from history_close import Closing  # noqa: E402
 from history_close import write as write_tables  # noqa: E402
 from history_money import Money  # noqa: E402
+from match_scenarios import write_truth as match_truth  # noqa: E402
 from approval_scenarios import check as check_approval  # noqa: E402
 from approval_scenarios import write_approval  # noqa: E402
 from period_scenarios import check as check_period  # noqa: E402
@@ -619,6 +620,7 @@ def write_history(profile: CompanyProfile, out: Path) -> dict[str, int]:
     """Twelve months of history that end at the profile's stock; the opening stock becomes the stock at its start."""
     hist = simulate(profile, out)
     tables = Closing(hist, Money(hist).run()).run()
+    tables.update(match_truth(profile))
     prices = {it["code"]: it["price"] for it in profile["items"]}
     return write_tables(out, tables, hist.opening, hist.start, hist.loc, prices)
 
@@ -1031,10 +1033,16 @@ def _change_problems(out: Path, files: dict[str, list[dict[str, str]]]) -> list[
             if (r["plan_no"], r["department"]) not in joiners:
                 problems.append(f"changes/{folder.name}: joiner plan {r['plan_no']}/{r['department']} was never loaded")
         if "production_order_line" in got:
-            sent = [o for o in got.get("production_order", []) if o["order_no"] in {ln["order_no"] for ln in got["production_order_line"]}]
+            sent = [
+                o
+                for o in got.get("production_order", [])
+                if o["order_no"] in {ln["order_no"] for ln in got["production_order_line"]}
+            ]
             wanted = [{**ln, "status": ""} for ln in production_lines(files.get("bom", []), sent)]
             if wanted != got["production_order_line"]:
-                problems.append(f"changes/{folder.name}: the lines are not the bill of materials times the order quantities")
+                problems.append(
+                    f"changes/{folder.name}: the lines are not the bill of materials times the order quantities"
+                )
     return problems
 
 

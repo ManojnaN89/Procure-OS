@@ -18,8 +18,8 @@ from p2p.formulas.kpis import BUCKETS, working_days_between
 from p2p.formulas.money import format_inr
 from p2p.formulas.words import count
 from p2p.invoices import payment
-from p2p.platform import alerts, control_tower, exceptions, reference, routing
-from p2p.platform.permissions import can_anywhere
+from p2p.platform import alerts, control_tower, exception_cases, exceptions, reference, routing
+from p2p.platform.permissions import can_anywhere, require
 from p2p.platform.rows import rows as _rows
 from p2p.requests import replenishment
 
@@ -105,14 +105,14 @@ def _approver(db: Session, user_id: int, org: str | None) -> list[dict[str, Any]
     # decisions that need a person with the right permission, but never the person who asked
     waiting = _rows(
         db,
-        "select p.id, p.action, p.summary, p.proposed_by_id, p.proposed_by_type from proposal p where p.status = 'pending' and exists "
+        "select p.id, p.action, p.summary, p.proposed_by_id, p.proposed_by_type, p.payload from proposal p where p.status = 'pending' and exists "
         "(select 1 from user_role ur join role_permission rp on rp.role = ur.role where ur.user_id = :u and rp.action = p.required_permission) "
         "order by p.id",
         u=user_id,
     )
     titles = {
         "payment_run.approve": ("payment_runs", "Payment runs to approve"),
-        "invoice.release_block": ("releases", "Blocked invoices to release"),
+        "invoice.release_block": ("releases", "Price variances to accept"),
         "supplier.set_status": ("suppliers", "Supplier changes to approve"),
         "po.accept_variance": ("variances", "Orders held for a price or ceiling"),
         "rfq.send": ("rfq_sends", "RFQs waiting to be sent"),
@@ -130,6 +130,11 @@ def _approver(db: Session, user_id: int, org: str | None) -> list[dict[str, Any]
             ).scalar()
             if entered == str(user_id):
                 continue
+            payload = p["payload"] or {}
+            if payload.get("kind") == "price":
+                me = org_code_of(db, user_id)
+                if me not in {str(payload.get("approver") or ""), str(payload.get("delegate") or "")}:
+                    continue  # only the person VAR-01 names (or their deputy) accepts the price
         grouped.setdefault(p["action"], []).append(p)
     for action, (key, title) in titles.items():
         if action in grouped:
@@ -580,6 +585,80 @@ def exception_list(db: Db, ctx: Ctx, kind: str | None = None, mine: bool = False
 @router.get("/kpis")
 def kpis(db: Db, ctx: Ctx) -> dict[str, Any]:
     return control_tower.kpis(db, reference.calendar_for(db))
+
+
+# ---- cases: the engine re-checks, the person reassigns, the administrator runs a failed job again ------------
+
+
+def _case_error(exc: Exception) -> HTTPException:
+    message = str(exc)
+    if "reason is needed" in message or "note is needed" in message or "handled_otherwise" in message:
+        return HTTPException(422, message)
+    return HTTPException(409, message)
+
+
+@router.post("/cases/{task_id}/recheck")
+def recheck_case(task_id: int, db: Db, ctx: Ctx) -> dict[str, Any]:
+    """Run the row's source again: gone means resolved; still stuck is refused with its reason (5.5)."""
+    try:
+        return {"resolution": exception_cases.recheck(db, ctx.slug, task_id)}
+    except exception_cases.CaseError as exc:
+        raise _case_error(exc) from None
+
+
+@router.post("/cases/{task_id}/reassign")
+def reassign_case(task_id: int, payload: dict[str, Any], db: Db, ctx: Ctx) -> dict[str, Any]:
+    try:
+        to = int(str(payload.get("to")))
+    except (TypeError, ValueError):
+        raise HTTPException(422, "to must be a login id") from None
+    try:
+        return exception_cases.reassign(db, ctx.slug, task_id, to, str(payload.get("reason") or ""), ctx.user_id)
+    except exception_cases.CasePermission as exc:
+        raise HTTPException(403, str(exc)) from None
+    except exception_cases.CaseError as exc:
+        raise _case_error(exc) from None
+
+
+@router.get("/cases/{task_id}/candidates")
+def case_candidates(task_id: int, db: Db, ctx: Ctx) -> list[dict[str, Any]]:
+    """The people who may take the case."""
+    case = db.execute(text("select assignee, escalation_chain from task where id = :i"), {"i": task_id}).first()
+    if case is None:
+        raise HTTPException(404, "Not found")
+    me = org_code_of(db, ctx.user_id)
+    chain = [int(x) for x in (case[1] or [])]
+    assignee_id = int(case[0]) if case[0] is not None else None
+    if assignee_id != ctx.user_id and ctx.user_id not in chain and me is not None:
+        from p2p.platform import permissions  # noqa: PLC0415
+
+        if "audit.view" not in permissions.granted(db, ctx.user_id):
+            raise HTTPException(403, "only the assignee or a person above them may see the candidates")
+    return exception_cases.candidates(db, task_id)
+
+
+@router.post("/cases/{task_id}/requeue")
+def requeue_case(
+    task_id: int, db: Db, ctx: Annotated[routing.TenantContext, Depends(require("admin.settings"))]
+) -> dict[str, Any]:
+    """Run a failed job again (5.4)."""
+    try:
+        return exception_cases.requeue(db, task_id, ctx.user_id)
+    except exception_cases.CaseError as exc:
+        raise _case_error(exc) from None
+
+
+@router.post("/cases/{task_id}/close")
+def close_case(task_id: int, payload: dict[str, Any], db: Db, ctx: Ctx) -> dict[str, Any]:
+    """A failed email a person handled otherwise; an exception case is never closed by hand (OP-12)."""
+    try:
+        return {
+            "resolution": exception_cases.close_email_failed(
+                db, task_id, str(payload.get("outcome") or ""), str(payload.get("note") or ""), ctx.user_id
+            )
+        }
+    except exception_cases.CaseError as exc:
+        raise _case_error(exc) from None
 
 
 @router.get("/alerts")

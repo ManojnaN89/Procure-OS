@@ -38,29 +38,49 @@ def create_task(
     email_note: str = "",
     email: bool = True,
     calendar: BusinessCalendar | None = None,
+    case_key: str | None = None,
+    step: str | None = None,
 ) -> int:
-    """Open a task; its due time is counted on `calendar` (a place's own working days), else the default calendar."""
+    """Open a task; its due time is counted on `calendar` (a place's own working days), else the default calendar.
+
+    `case_key` makes it the one open case of a stuck item (block 11): a second open task for the key is refused by the
+    unique index and the existing one is returned.
+    """
     now = now or datetime.now(UTC)
     due = sla_due(now, sla_hours, calendar or _calendar(db))
-    task_id = int(
-        db.execute(
-            text(
-                "insert into task (case_id, kind, title, assignee, sla_hours, due_at, escalation_chain, payload, "
-                "created_at) values (:c, :k, :t, :a, :h, :d, cast(:ch as jsonb), cast(:p as jsonb), :n) returning id"
-            ),  # created_at is the moment the due time is counted from, not the transaction's start
-            {
-                "n": now,
-                "c": case_id,
-                "k": kind,
-                "t": title,
-                "a": assignee,
-                "h": Decimal(str(sla_hours)),
-                "d": due,
-                "ch": json.dumps(escalation_chain or []),
-                "p": json.dumps(payload, default=str) if payload else None,
-            },
-        ).scalar_one()
-    )
+    created = db.execute(
+        text(
+            "insert into task (case_id, kind, title, assignee, sla_hours, due_at, escalation_chain, payload, "
+            "created_at, case_key, step) values (:c, :k, :t, :a, :h, :d, cast(:ch as jsonb), cast(:p as jsonb), :n, "
+            ":ck, :st) on conflict (case_key) where case_key is not null and status in ('open', 'overdue') "
+            "do nothing returning id"
+        ),  # created_at is the moment the due time is counted from, not the transaction's start
+        {
+            "n": now,
+            "c": case_id,
+            "k": kind,
+            "t": title,
+            "a": assignee,
+            "h": Decimal(str(sla_hours)),
+            "d": due,
+            "ch": json.dumps(escalation_chain or []),
+            "p": json.dumps(payload, default=str) if payload else None,
+            "ck": case_key,
+            "st": step,
+        },
+    ).scalar()
+    if created is None:
+        found = db.execute(text("select id from task where case_key = :k"), {"k": case_key}).scalar()
+        if found is None:
+            raise ValueError(f"the task for case {case_key} could not be opened")
+        created = found
+    task_id = int(created)
+    existing = db.execute(
+        text("select 1 from audit_event where action = 'task.create' and entity = 'task' and entity_id = :i"),
+        {"i": str(task_id)},
+    ).first()
+    if existing:  # the case was already open: nothing new was written
+        return task_id
     audit.record(db, actor, "task.create", "task", task_id, after={"assignee": assignee, "due_at": due, "kind": kind})
     if case_id:
         cases.log_event(db, case_id, "task_created", actor, {"task_id": task_id, "assignee": assignee})

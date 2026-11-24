@@ -53,7 +53,8 @@ HISTORY = {
 }
 TRUTH = {
     "truth_case": "case_id,type,documents,cause,expected_result,planted_on",
-    "truth_match_expected": "invoice_no,result,reason_codes,planted,tolerance_version",
+    "truth_match_expected": "invoice_no,result,reason_codes,reasons,rules,planted,tolerance_version",
+    "truth_match_block11": "scenario,figure,value",
     "truth_shortfall": "material_request_no,line_no,item_code,needed,on_hand,on_order,held_for_earlier,reserved,short,request_no,request_line_no",
     "truth_combined_lines": "po_no,po_line_no,request_no,request_line_no,item_code,qty,route",
     "truth_supplier_selection": "rfq_no,rfq_line_no,item_code,qty,value_counted,quotes_required,suppliers_asked,options,selected,reason",

@@ -159,8 +159,9 @@ tolerances:
     note: Set up with the company
     values:
       - [price_pct, "2.00", Invoice price above PO price by this percent is within tolerance]
-      - [price_abs, "500.00", Or by this many rupees per line]
+      - [price_abs, "500.00", And at most this many rupees per line]
       - [qty_pct, "0.00", Invoiced quantity above received quantity is not allowed]
+      - [tax_line_abs, "1.00", GST on an invoice line may differ from the order's by at most this many rupees per tax]
       - [small_diff_abs, "100.00", Total invoice difference up to this amount is accepted]
       - [receipt_over_pct, "0.00", Receipt above ordered quantity is not accepted]
       - [supplier_change_pct, "5.00", Supplier quantity change noted by the agent up to this percent]

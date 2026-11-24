@@ -32,7 +32,7 @@ You cannot enter a date in the future for the payment.
 
 ## Release a blocked invoice
 
-If AP asked to pay a blocked invoice anyway, you may decide it under **Admin** → **Approvals** if you did not enter it.
+If AP asked to pay a blocked invoice anyway, you may decide a tax or arithmetic block under **Admin** → **Approvals** if you did not enter it. A **price variance** is not yours: the price rule names the purchase manager (Apex) or the CFO (Brightwave), and it comes to that person under **My work** → **Price variances to accept**. A quantity or service hold is never released; it waits for the goods, the service confirmation or a corrected invoice.
 
 ## What you cannot do, and if you are stuck
 

@@ -10,7 +10,7 @@ read only.
 
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass
-from datetime import date, datetime
+from datetime import UTC, date, datetime
 from decimal import Decimal
 from functools import partial
 from typing import Any
@@ -47,6 +47,9 @@ KINDS: dict[str, str] = {
     "po_ack_overdue": "Orders not acknowledged after the reminders",
     "supplier_ack_confirm": "Acknowledgements to record",
     "supplier_sender_check": "Supplier order emails not read",
+    "email_failed": "Emails that could not be sent",
+    "held_stock": "Held stock to decide",
+    "job_failed": "Background jobs that failed",
 }
 SOURCING_NEXT: dict[str, tuple[str, str]] = {  # task kind (block 6): the permission that acts, next step
     "rfq_no_response": (
@@ -90,6 +93,8 @@ INVOICE_NEXT: dict[str, tuple[str, str, str]] = {  # the block reason: owner, th
     matching.IRN: AP,
     matching.GSTIN: AP,
     matching.TAX: AP,
+    matching.TAX_HEAD: AP,
+    matching.GST: AP,
     matching.ARITH: AP,
 }
 RELEASE = (
@@ -121,6 +126,8 @@ class Stuck:
     not_by: frozenset[str] = frozenset()  # logins that may not act on it (segregation of duties)
     check: Callable[[int], bool] | None = None  # a further test of whether a login may act
     case: dict[str, Any] | None = None  # a case the row's screen closes (a demand change): its task and outcomes
+    task_id: int | None = None  # the task this row already is (block 11: each stuck item is one case)
+    case_key: str | None = None  # the one open case per key (`<kind>:<ref>`, `job:<id>`, `email:<task id>`)
 
 
 def _day(ts: Any) -> date:
@@ -138,14 +145,46 @@ def _not_received_by(db: Session, received_by: str | None, user_id: int) -> bool
 # ---- the sources ------------------------------------------------------------------------------
 
 
+def _may_release(db: Session, invoice_no: str, price: bool, named: frozenset[str], user_id: int) -> bool:
+    """A release's approver may not have asked for or confirmed the invoice, received its goods, or made a price's order."""
+    if asked_or_confirmed(db, invoice_no, user_id):
+        return False
+    me = org_code_of(db, user_id)
+    if price and me not in named:
+        return False
+    if (
+        me
+        and db.execute(
+            text(
+                "select 1 from invoice_line il join gr_line gl on gl.po_no = il.po_no and gl.po_line_no = il.po_line_no "
+                "join goods_receipt g on g.no = gl.gr_no where il.invoice_no = :n and g.received_by = :me limit 1"
+            ),
+            {"n": invoice_no, "me": me},
+        ).first()
+    ):
+        return False
+    if price:
+        from p2p.orders import workflow as po_workflow  # noqa: PLC0415 - orders builds on the platform
+
+        for (po_no,) in db.execute(
+            text("select distinct po_no from invoice_line where invoice_no = :n"), {"n": invoice_no}
+        ):
+            po = dict(db.execute(text("select * from po where no = :p"), {"p": po_no}).mappings().one())
+            if me and me in po_workflow.makers(db, po):
+                return False
+    return True
+
+
 def _invoices(db: Session) -> Iterator[Stuck]:
     rows = _rows(
         db,
         "select i.no, i.supplier_invoice_no, i.total, i.received_on, i.block_reason, i.entered_by, "
-        "(select m.reason_codes from match_result m where m.invoice_no = i.no and m.result = 'blocked' "
-        "and m.resolved_at is null order by m.invoice_line_no nulls first limit 1) as code, "
-        "(select p.id from proposal p where p.action = 'invoice.release_block' and p.status = 'pending' "
-        "and p.payload->>'invoice' = i.no limit 1) as release "
+        "(select array_agg(distinct r) from match_result m, unnest(coalesce(m.reasons, array[m.reason_codes])) r "
+        " where m.invoice_no = i.no and m.result = 'blocked' and m.resolved_at is null) as reasons, "
+        "(select p.payload from proposal p where p.action = 'invoice.release_block' and p.status = 'pending' "
+        " and p.payload->>'invoice' = i.no limit 1) as release, "
+        "(select p.proposed_by_id from proposal p where p.action = 'invoice.release_block' and p.status = 'pending' "
+        " and p.payload->>'invoice' = i.no limit 1) as asker "
         "from invoice i where i.type = 'invoice' and i.status = 'blocked' and i.payment_block <> 'duplicate'",
     )
     for r in rows:
@@ -153,13 +192,33 @@ def _invoices(db: Session) -> Iterator[Stuck]:
         common = {"kind": "invoice", "ref": no, "link": f"#/invoices/{no}", "since": r["received_on"]}
         reason = r["block_reason"] or "Blocked by the match"
         amount = Decimal(r["total"])
+        reasons = list(r["reasons"] or [])
         if r["release"] is not None:
-            owner, act, step = RELEASE
+            payload = r["release"] if isinstance(r["release"], dict) else {}
+            price = payload.get("kind") == "price"
+            who = str(payload.get("approver") or "")
+            person = (
+                db.execute(text("select name, designation from org_user where code = :c"), {"c": who}).first()
+                if who
+                else None
+            )
+            owner = f"{person[1]}: {person[0]}" if person else RELEASE[0]
+            not_by = {str(r["entered_by"])} if r["entered_by"] else set()
+            if r["asker"] is not None:
+                not_by.add(str(r["asker"]))
             yield Stuck(
-                **common, reason=reason, owner=owner, next_step=step, amount=amount, act=act, see=see,
-                not_by=frozenset({str(r["entered_by"])}), check=partial(_not_asked_by, db, no),
+                **common, reason=reason, owner=owner, next_step=RELEASE[2], amount=amount,
+                act="invoice.approve", see=see, people=frozenset({who}) if who else frozenset(),
+                not_by=frozenset(not_by),
+                check=partial(
+                    _may_release,
+                    db,
+                    no,
+                    price,
+                    frozenset({who, str(payload.get("delegate") or "")}) - {""},
+                ),
             )  # fmt: skip
-        elif r["code"] == matching.SERVICE:
+        elif matching.SERVICE in reasons:
             people = frozenset(
                 str(c)
                 for p in _rows(
@@ -177,7 +236,7 @@ def _invoices(db: Session) -> Iterator[Stuck]:
                 next_step="Confirm the service that was done (Confirm services); the invoice is then matched again",
             )  # fmt: skip
         else:
-            owner, act, step = INVOICE_NEXT.get(r["code"] or "", AP)
+            owner, act, step = INVOICE_NEXT.get(reasons[0] if reasons else "", AP)
             yield Stuck(**common, reason=reason, owner=owner, next_step=step, amount=amount, act=act, see=see)
 
 
@@ -235,7 +294,7 @@ def _services(db: Session, today: date) -> Iterator[Stuck]:
 def _approvals(db: Session) -> Iterator[Stuck]:
     for r in _rows(
         db,
-        "select r.no, r.total_value, s.approver, s.delegate, s.opened_at, s.reminded_at from approval_step s "
+        "select r.no, r.total_value, s.approver, s.delegate, s.opened_at, s.reminded_at, s.task_id from approval_step s "
         "join request r on r.no = s.request_no where s.status = 'pending' and s.round = r.approval_round "
         "and r.status = 'submitted' and s.reminded_at is not null",
     ):
@@ -245,6 +304,7 @@ def _approvals(db: Session) -> Iterator[Stuck]:
             f"Waiting for approval; reminded on {_day(r['reminded_at']):%d %b %Y} and still not decided",
             f"Approver: {name_of(db, who)}", "Approve, reject or return the request", _day(r["opened_at"]),
             amount=Decimal(r["total_value"]), people=frozenset({who}), see=("request.approve",),
+            task_id=r["task_id"],
         )  # fmt: skip
 
 
@@ -300,6 +360,7 @@ def _demand(db: Session) -> Iterator[Stuck]:
                 "task_id": c["task_id"], "owner_kind": kind, "outcomes": list(demand_cases.OUTCOMES[kind]),
                 "note_needed": list(demand_cases.NOTE_NEEDED),
             },
+            task_id=c["task_id"],
         )  # fmt: skip
 
 
@@ -317,6 +378,103 @@ def _late_supply(db: Session) -> Iterator[Stuck]:
                 "task_id": c["task_id"], "owner_kind": "buyer", "outcomes": list(supply_cases.OUTCOMES),
                 "note_needed": list(supply_cases.NOTE_NEEDED), "close_url": f"/api/supply-risks/{c['task_id']}/close",
             },
+            task_id=c["task_id"],
+        )  # fmt: skip
+
+
+EMAIL_ACT = {"po": "po.send", "rfq": "rfq.create", "invoice": "invoice.match"}
+
+
+def _email_failed(db: Session) -> Iterator[Stuck]:
+    """A mail the outbox gave up on. Gone once a later mail for the same document has gone out (block 11, 5.3)."""
+    rows = _rows(
+        db,
+        "select id, title, assignee, payload, created_at from task where kind = 'email_failed' "
+        "and status in ('open', 'overdue') order by id",
+    )
+    for r in rows:
+        p = r["payload"] or {}
+        linked, ref = str(p.get("linked_type") or ""), p.get("ref")
+        if (
+            linked
+            and ref
+            and db.execute(
+                text(
+                    "select 1 from email_message where direction = 'out' and linked_type = :t and linked_id = :r "
+                    "and coalesce(sent_at, queued_at) > :at limit 1"
+                ),
+                {"t": linked, "r": str(ref), "at": r["created_at"]},
+            ).first()
+        ):
+            continue  # a newer mail for the document got through: the sweep resolves the case
+        act = EMAIL_ACT.get(linked, "admin.settings")
+        code = org_code_of(db, int(r["assignee"]))
+        link = {
+            "invoice": f"#/invoices/{ref}",
+            "po": f"#/purchase-orders/{ref}",
+            "rfq": f"#/rfqs/{ref}",
+        }.get(linked, "#/exceptions")
+        yield Stuck(
+            "email_failed", str(ref or r["id"]), link, str(r["title"]),
+            name_of(db, code) if code else "Not assigned",
+            "Check the address in supplier records and send the document again from its page",
+            _day(r["created_at"]), act=act, see=(act, "admin.settings"), task_id=r["id"],
+            case_key=f"email:{r['id']}",
+        )  # fmt: skip
+
+
+def _held_stock(db: Session) -> Iterator[Stuck]:
+    """Each open hold a person must decide (5.3). A receipt's quarantine waiting for inspection is its inspection row.
+
+    NEEDS block 9: a hold on an accepted excess (its `receipt_excess` task) and a hold on a draft return (its
+    `return_draft` row) are covered by those rows and must be left out here.
+    """
+    rows = _rows(
+        db,
+        "select h.id, h.item_code, h.location_code, h.quality, h.left_qty, h.held_at, "
+        "coalesce(i.name, h.item_code) as item from stock_hold h left join item i on i.code = h.item_code "
+        "where h.closed_at is null and h.left_qty > 0 and not (h.source = 'receipt' and exists ("
+        "select 1 from goods_receipt g where g.no = h.gr_no and g.inspection_status = 'pending')) order by h.id",
+    )
+    for r in rows:
+        next_step = (
+            "Decide the hold: release to usable or block"
+            if r["quality"] == "quarantine"
+            else "Return it to the supplier or scrap it"
+        )
+        yield Stuck(
+            "held_stock", f"HOLD-{r['id']}", "#/inventory",
+            f"{r['left_qty']} of {r['item']} at {r['location_code']} is held {r['quality']}", "Store",
+            next_step, _day(r["held_at"]), act="stock.quality", see=("stock.view", "stock.quality"),
+            case_key=f"held_stock:{r['id']}",
+        )  # fmt: skip
+
+
+def _job_failed(db: Session) -> Iterator[Stuck]:
+    """A background job that failed its last attempt: a case for the first administrator (5.4)."""
+    rows = _rows(
+        db,
+        "select id, title, assignee, payload, created_at from task where kind = 'job_failed' "
+        "and status in ('open', 'overdue') order by id",
+    )
+    from p2p.platform import tenants  # noqa: PLC0415 - the job lives in the control database
+
+    for r in rows:
+        p = r["payload"] or {}
+        job_id = p.get("job_id")
+        if job_id is not None:
+            with tenants.control_engine().connect() as c:
+                status = c.execute(text("select status from job where id = :i"), {"i": int(job_id)}).scalar()
+            if status == "done":
+                continue  # the sweep resolves the case now the job has run
+        code = org_code_of(db, int(r["assignee"]))
+        yield Stuck(
+            "job_failed", f"JOB-{job_id or r['id']}", "#/exceptions",
+            f"{p.get('kind', 'a job')} failed after {p.get('attempts', 0)} attempts: {p.get('last_error', '')}",
+            name_of(db, code) if code else "Administrator",
+            "Read the error, fix the cause, then Run again",
+            _day(r["created_at"]), act="admin.settings", see=("admin.settings",), task_id=r["id"],
+            case_key=f"job:{job_id or r['id']}",
         )  # fmt: skip
 
 
@@ -352,6 +510,7 @@ def _ai_handover(db: Session) -> Iterator[Stuck]:
             NEXT_BY_KIND.get(str(p.get("kind")), "Finish the work by hand, then close the task"), _day(r["created_at"]),
             act=AI_ACTS.get(str(p.get("capability"))), people=frozenset({code}) if code else frozenset(),
             see=("admin.settings", *((AI_ACTS[str(p.get("capability"))],) if str(p.get("capability")) in AI_ACTS else ())),
+            task_id=r["id"],
         )  # fmt: skip
 
 
@@ -376,7 +535,7 @@ def _sourcing_cases(db: Session, nexts: dict[str, tuple[str, str]] = SOURCING_NE
         yield Stuck(
             str(r["kind"]), ref, str(p.get("link") or "#/exceptions"), str(r["title"]),
             name_of(db, code) if code else "Not assigned", step, _day(r["created_at"]), act=act,
-            people=frozenset({code}) if code else frozenset(), see=(act,),
+            people=frozenset({code}) if code else frozenset(), see=(act,), task_id=r["id"],
         )  # fmt: skip
 
 
@@ -393,6 +552,9 @@ def collect(db: Session, today: date, calendar: BusinessCalendar) -> list[Stuck]
         *_demand(db),
         *_late_supply(db),
         *_ai_handover(db),
+        *_email_failed(db),
+        *_held_stock(db),
+        *_job_failed(db),
         *_sourcing_cases(db),
         *_sourcing_cases(db, ORDER_NEXT),
     ]
@@ -407,6 +569,40 @@ def _may_act(s: Stuck, user_id: int, me: str | None, granted: set[str]) -> bool:
     if s.act is None or s.act not in granted or str(user_id) in s.not_by:
         return False
     return s.check is None or s.check(user_id)
+
+
+def _case_fields(db: Session, s: Stuck) -> dict[str, Any] | None:
+    """The one open case of a row (block 11): its task, who has it, when it is due, whether it is late, its level."""
+    key = s.case_key or f"{s.kind}:{s.ref}"
+    row = None
+    if s.task_id is not None:
+        row = db.execute(
+            text(
+                "select id, assignee, due_at, status, escalation_level from task "
+                "where id = :i and status in ('open', 'overdue')"
+            ),
+            {"i": s.task_id},
+        ).first()
+    if row is None:
+        row = db.execute(
+            text(
+                "select id, assignee, due_at, status, escalation_level from task "
+                "where case_key = :k and status in ('open', 'overdue') order by id limit 1"
+            ),
+            {"k": key},
+        ).first()
+    if row is None:
+        return None
+    code = org_code_of(db, int(row[1]))
+    due = row[2]
+    return {
+        "task_id": row[0],
+        "assignee": code,
+        "assignee_name": name_of(db, code) if code else None,
+        "due_at": due.isoformat() if hasattr(due, "isoformat") else str(due),
+        "overdue": row[3] == "overdue" or due < datetime.now(UTC),
+        "level": row[4],
+    }
 
 
 def for_user(
@@ -431,12 +627,17 @@ def for_user(
         acts = _may_act(s, user_id, me, granted)
         if mine and not acts:
             continue
+        fields = _case_fields(db, s)
+        case = dict(s.case) if s.case else {}
+        if fields:
+            case.update(fields)
         out.append(
             {
                 "kind": s.kind, "kind_title": KINDS[s.kind], "ref": s.ref, "link": s.link, "reason": s.reason,
                 "owner": s.owner, "next_step": s.next_step, "since": s.since.isoformat(),
                 "age_days": working_days_between(s.since, today, calendar),
-                "amount": None if s.amount is None else str(s.amount), "mine": acts, "case": s.case,
+                "amount": None if s.amount is None else str(s.amount), "mine": acts, "case": case or None,
+                "task_id": (fields or {}).get("task_id") or s.task_id,
             }
         )  # fmt: skip
     out.sort(key=lambda r: (-r["age_days"], r["since"], r["kind"], r["ref"]))

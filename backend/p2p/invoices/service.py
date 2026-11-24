@@ -6,6 +6,7 @@ cancelled record that points at the original. A blocked invoice is released only
 entered it, through a proposal (rule 5); nothing here releases a block by itself.
 """
 
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
 from datetime import UTC, date, datetime
 from decimal import Decimal
@@ -16,12 +17,12 @@ from sqlalchemy.orm import Session
 
 from p2p.formulas import matching as rules
 from p2p.formulas.fy import financial_year
-from p2p.formulas.gst import Registration
+from p2p.formulas.gst import Registration, gst_split
 from p2p.formulas.money import format_inr
 from p2p.formulas.orders import line_amounts
 from p2p.formulas.words import count
 from p2p.invoices import tolerances
-from p2p.platform import audit, numbering, proposals
+from p2p.platform import audit, numbering
 from p2p.platform.sod import Actor, user
 from p2p.receiving.kinds import service_lines
 
@@ -276,6 +277,22 @@ def enter_invoice(
     return match_invoice(db, no, actor, commit=commit)
 
 
+def lock_lines(db: Session, keys: Iterable[tuple[str, int]]) -> None:
+    """Lock the order lines a match, a release or a booking touches, one po at a time and in line order (OP-8).
+
+    Every service that changes what may be invoiced takes the same locks, so two matches, a match and a receipt, or
+    a match and a release on one line run one after the other.
+    """
+    by_po: dict[str, set[int]] = {}
+    for po_no, line_no in keys:
+        by_po.setdefault(po_no, set()).add(line_no)
+    for po_no in sorted(by_po):
+        db.execute(
+            text("select 1 from po_line where po_no = :p and line_no = any(:ls) order by line_no for update"),
+            {"p": po_no, "ls": sorted(by_po[po_no])},
+        )
+
+
 def _available(db: Session, po_no: str, line_no: int, received: Decimal, excluding: str) -> Decimal:
     """What may still be invoiced on an order line: accepted at receipt, less what other booked invoices already took."""
     taken = db.execute(
@@ -288,17 +305,107 @@ def _available(db: Session, po_no: str, line_no: int, received: Decimal, excludi
     return received - Decimal(taken)
 
 
-def match_invoice(db: Session, no: str, actor: Actor, *, commit: bool = True) -> Entered:
-    """Compare the invoice with the order and the goods received; block it or approve it for payment."""
+def expected_gst(
+    *,
+    order_rate: Decimal,
+    taxable: Decimal,
+    registration: str | None,
+    supplier_state: str | None,
+    place_state: str | None,
+    reverse_charge: bool,
+) -> rules.TaxParts:
+    """The tax the order expects on a line, from its rate and the two states (the invoice's taxable value)."""
+    if not supplier_state or not place_state:
+        return rules.TaxParts()
+    split = gst_split(
+        taxable, order_rate, supplier_state, place_state, Registration(registration or "regular"),
+        reverse_charge=reverse_charge,
+    )  # fmt: skip
+    return rules.TaxParts(split.cgst, split.sgst, split.igst)
+
+
+def _line_gst(
+    ln: Mapping[Any, Any], inv: Any, sup: Mapping[Any, Any], tol: rules.Tolerance
+) -> tuple[list[str], rules.TaxParts]:
+    """The order's expected tax for one invoice line, and what is wrong with the line's rate and tax."""
+    order_rate = Decimal(ln["order_gst_rate"] or 0)
+    taxable = Decimal(ln["taxable"])
+    supplier_state = sup["state_code"] or (str(ln["order_supplier_gstin"])[:2] if ln["order_supplier_gstin"] else None)
+    place = str(inv["place_of_supply"] or ln["order_buyer_gstin"] or "")[:2] or None
+    expected = expected_gst(
+        order_rate=order_rate, taxable=taxable, registration=sup["gst_reg_type"], supplier_state=supplier_state,
+        place_state=place, reverse_charge=bool(inv["reverse_charge"]),
+    )  # fmt: skip
+    charged = rules.TaxParts(Decimal(ln["cgst"]), Decimal(ln["sgst"]), Decimal(ln["igst"]))
+    messages = rules.judge_gst(
+        order_rate, Decimal(ln["gst_rate"]), expected, charged, tol.tax_line_abs,
+        compare_amounts=not bool(inv["reverse_charge"]),
+    )  # fmt: skip
+    return [f"line {ln['line_no']}: {m}" for m in messages], expected
+
+
+def gst_view(db: Session, inv: Any, ln: dict[str, Any]) -> dict[str, Any]:
+    """The GST comparison the invoice screen shows for a line: the two rates and the expected and charged tax."""
+    sup = (
+        db.execute(text("select gst_reg_type, state_code from supplier where code = :c"), {"c": inv["supplier_code"]})
+        .mappings()
+        .one()
+    )
+    po = (
+        db.execute(text("select supplier_gstin, buyer_gstin from po where no = :p"), {"p": ln["po_no"]})
+        .mappings()
+        .one()
+    )
+    order_rate = Decimal(ln["order_gst_rate"] or 0)
+    supplier_state = sup["state_code"] or (str(po["supplier_gstin"])[:2] if po["supplier_gstin"] else None)
+    place = str(inv["place_of_supply"] or po["buyer_gstin"] or "")[:2] or None
+    expected = expected_gst(
+        order_rate=order_rate, taxable=Decimal(ln["taxable"]), registration=sup["gst_reg_type"],
+        supplier_state=supplier_state, place_state=place, reverse_charge=bool(inv["reverse_charge"]),
+    )  # fmt: skip
+    return {
+        "order_rate": str(order_rate),
+        "invoice_rate": str(Decimal(ln["gst_rate"])),
+        "expected": {"cgst": str(expected.cgst), "sgst": str(expected.sgst), "igst": str(expected.igst)},
+        "charged": {
+            "cgst": str(Decimal(ln["cgst"])),
+            "sgst": str(Decimal(ln["sgst"])),
+            "igst": str(Decimal(ln["igst"])),
+        },
+    }
+
+
+def match_invoice(
+    db: Session,
+    no: str,
+    actor: Actor,
+    *,
+    commit: bool = True,
+    reason: str | None = None,
+) -> Entered:
+    """Compare the invoice with the order and the goods received; block it or approve it for payment.
+
+    The invoice row is locked first, then its order lines in `(po_no, line_no)` order, and only then is what may still
+    be invoiced worked out, so nothing can over-invoice a line by running at the same time.
+    """
     inv = db.execute(text("select * from invoice where no = :n for update"), {"n": no}).mappings().one()
+    lock_lines(
+        db,
+        [
+            (r[0], r[1])
+            for r in db.execute(text("select po_no, po_line_no from invoice_line where invoice_no = :n"), {"n": no})
+        ],
+    )
     sup = db.execute(text("select * from supplier where code = :c"), {"c": inv["supplier_code"]}).mappings().one()
     lines = [
         dict(r)
         for r in db.execute(
             text(
-                "select l.*, pl.unit_price as order_price, pl.received_qty, pl.item_code, i.category_code "
+                "select l.*, pl.unit_price as order_price, pl.received_qty, pl.item_code, pl.gst_rate as order_gst_rate, "
+                "i.category_code, po.supplier_gstin as order_supplier_gstin, po.buyer_gstin as order_buyer_gstin "
                 "from invoice_line l join po_line pl on pl.po_no = l.po_no and pl.line_no = l.po_line_no "
-                "left join item i on i.code = pl.item_code where l.invoice_no = :n order by l.line_no"
+                "join po on po.no = l.po_no left join item i on i.code = pl.item_code "
+                "where l.invoice_no = :n order by l.line_no"
             ),
             {"n": no},
         ).mappings()
@@ -325,6 +432,7 @@ def match_invoice(db: Session, no: str, actor: Actor, *, commit: bool = True) ->
     tol_rows = tol_set.rows
     problem = rules.header_problem(header)
     verdicts: list[rules.LineVerdict] = []
+    gst_details: list[str | None] = []
     running: dict[tuple[str, int], Decimal] = {}
     services = {po_no: service_lines(db, po_no) for po_no in {ln["po_no"] for ln in lines}}
     for ln in lines:
@@ -333,42 +441,70 @@ def match_invoice(db: Session, no: str, actor: Actor, *, commit: bool = True) ->
             key, D(0)
         )
         tol = rules.tolerance_for(tol_rows, ln["category_code"])
-        verdicts.append(
-            rules.judge_line(
-                Decimal(ln["order_price"]),
-                Decimal(ln["unit_price"]) - Decimal(ln["discount"]),
-                Decimal(ln["qty"]),
-                available,
-                tol,
-                service=ln["po_line_no"] in services[ln["po_no"]],
-            )
+        verdict = rules.judge_line(
+            Decimal(ln["order_price"]),
+            Decimal(ln["unit_price"]) - Decimal(ln["discount"]),
+            Decimal(ln["qty"]),
+            available,
+            tol,
+            service=ln["po_line_no"] in services[ln["po_no"]],
         )
+        # The tax head (IGST against CGST and SGST) is block 10's header check; when it blocks, the amounts are not
+        # compared again per line. A composition supplier stays its header reason. (Block 10 adds the header check.)
+        # NEEDS block 10: `header_problem` returning `tax_head` (its 10.7.3); until then a line's amount reason stands.
+        gst_messages: list[str] = []
+        if problem not in (rules.TAX, rules.TAX_HEAD):
+            gst_messages, _ = _line_gst(ln, inv, sup, tol)
+        if gst_messages:
+            verdict = rules.LineVerdict(
+                rules.BLOCKED,
+                verdict.reason or rules.GST,
+                verdict.price_var,
+                verdict.qty_var,
+                (*verdict.reasons, rules.GST),
+                verdict.variance_value,
+            )
+        verdicts.append(verdict)
+        gst_details.append("; ".join(gst_messages) or None)
         running[key] = running.get(key, D(0)) + Decimal(ln["qty"])
-    result, reason = rules.overall(verdicts)
+    result, reason_code = rules.overall(verdicts)
+    if any(d for d in gst_details):
+        result, reason_code = rules.BLOCKED, reason_code or rules.GST
     arithmetic = rules.check_arithmetic(
         [rules.LineSums(Decimal(x["qty"]), Decimal(x["unit_price"]), Decimal(x["discount"]), Decimal(x["taxable"])) for x in lines],
         [Decimal(r[0]) for r in db.execute(text("select amount from invoice_charge where invoice_no = :n"), {"n": no})],
         Decimal(inv["taxable"]), tax, Decimal(inv["round_off"]), Decimal(inv["total"]),
     )  # fmt: skip
     if problem:
-        result, reason = rules.BLOCKED, problem
+        result, reason_code = rules.BLOCKED, problem
     elif result != rules.BLOCKED and arithmetic.problems:
-        result, reason = rules.BLOCKED, rules.ARITH
+        result, reason_code = rules.BLOCKED, rules.ARITH
+
+    invoice_reasons: list[str] = [problem] if problem else []
+    for v in verdicts:
+        for r in v.reasons:
+            if r not in invoice_reasons:
+                invoice_reasons.append(r)
+    if not problem and arithmetic.problems and rules.ARITH not in invoice_reasons:
+        invoice_reasons.insert(0, rules.ARITH)
 
     db.execute(text("delete from match_result where invoice_no = :n and resolved_at is null"), {"n": no})
-    for ln, v in zip(lines, verdicts, strict=True):
+    for ln, v, detail in zip(lines, verdicts, gst_details, strict=True):
         db.execute(
             text(
-                "insert into match_result (invoice_no, invoice_line_no, result, reason_codes, price_var, qty_var, "
-                "tolerance_version) values (:n, :l, :r, :c, :p, :q, :tv)"
+                "insert into match_result (invoice_no, invoice_line_no, result, reason_codes, reasons, price_var, qty_var, "
+                "variance_value, detail, rules, tolerance_version) values (:n, :l, :r, :c, :rs, :p, :q, :vv, :d, 2, :tv)"
             ),
             {
                 "n": no,
                 "l": ln["line_no"],
                 "r": v.result,
                 "c": v.reason,
+                "rs": list(v.reasons),
                 "p": v.price_var,
                 "q": v.qty_var,
+                "vv": v.variance_value,
+                "d": detail,
                 "tv": tol_set.version,
             },  # fmt: skip
         )
@@ -376,22 +512,28 @@ def match_invoice(db: Session, no: str, actor: Actor, *, commit: bool = True) ->
         detail = problem and f"{problem}: see the invoice and the order" or "; ".join(arithmetic.problems)
         db.execute(
             text(
-                "insert into match_result (invoice_no, result, reason_codes, detail, tolerance_version) "
-                "values (:n, 'blocked', :c, :d, :tv)"
+                "insert into match_result (invoice_no, result, reason_codes, reasons, detail, rules, tolerance_version) "
+                "values (:n, 'blocked', :c, :rs, :d, 2, :tv)"
             ),
-            {"n": no, "c": problem or rules.ARITH, "d": detail, "tv": tol_set.version},
+            {"n": no, "c": problem or rules.ARITH, "rs": [problem or rules.ARITH], "d": detail, "tv": tol_set.version},
         )
     if result == rules.BLOCKED:
-        kind = rules.BLOCK_KIND[reason or rules.PRICE]
-        why = _explain(reason, lines, verdicts, arithmetic.problems)
+        kind = "tax" if any(rules.BLOCK_KIND.get(r) == "tax" for r in invoice_reasons) else "match"
+        why = _explain(reason_code, lines, verdicts, gst_details, arithmetic.problems, problem)
         db.execute(
-            text("update invoice set status = 'blocked', payment_block = :k, block_reason = :w where no = :n"),
+            text(
+                "update invoice set status = 'blocked', payment_block = :k, block_reason = :w, match_rules = 2 "
+                "where no = :n"
+            ),
             {"k": kind, "w": why, "n": no},
         )
         status = "blocked"
     else:
         db.execute(
-            text("update invoice set status = 'approved', payment_block = 'none', block_reason = null where no = :n"),
+            text(
+                "update invoice set status = 'approved', payment_block = 'none', block_reason = null, match_rules = 2 "
+                "where no = :n"
+            ),
             {"n": no},
         )
         from p2p.invoices import payment  # noqa: PLC0415 - payment builds on this module
@@ -405,42 +547,65 @@ def match_invoice(db: Session, no: str, actor: Actor, *, commit: bool = True) ->
         "invoice.match",
         "invoice",
         no,
-        after={"result": result, "reason": reason, "status": status, "tolerance_version": tol_set.version},
-        rule_version=tol_set.label,
-    )
+        after={
+            "result": result, "reason": reason_code, "reasons": invoice_reasons, "status": status,
+            "tolerance_version": tol_set.version, "rules": 2,
+        },
+        reason=reason,
+        rule_version=f"{tol_set.label}; match rules 2",
+    )  # fmt: skip
     _refresh_invoiced(db, [(x["po_no"], x["po_line_no"]) for x in lines])
     if commit:
         db.commit()
-    return Entered(no, status, result, [reason] if reason else [])
+    return Entered(no, status, result, invoice_reasons)
 
 
 def _explain(
-    reason: str | None, lines: list[dict[str, Any]], verdicts: list[rules.LineVerdict], arithmetic: list[str]
+    reason: str | None,
+    lines: list[dict[str, Any]],
+    verdicts: list[rules.LineVerdict],
+    gst_details: list[str | None],
+    arithmetic: list[str],
+    header: str | None = None,
 ) -> str:
-    if reason == rules.PRICE:
-        v = next((x for x in verdicts if x.reason == rules.PRICE), None)
-        return (
-            f"Price above the order price on {count(sum(1 for x in verdicts if x.reason == rules.PRICE), 'line')}, by up to {format_inr(max((x.price_var for x in verdicts), default=D(0)))} per unit"
-            if v
-            else "Price above the order price"
+    """One sentence per reason, in the order the match records them."""
+    sentences: list[str] = []
+    if header:
+        if header == rules.TAX:
+            sentences.append("A supplier under the composition scheme or without GST registration cannot charge GST")
+        elif header == rules.IRN:
+            sentences.append("The supplier must issue an e-invoice and this one carries no IRN")
+        elif header in (rules.GSTIN,):
+            sentences.append(
+                "The GSTIN on the invoice does not match the supplier master or the order's delivery registration"
+            )
+        elif header == rules.TAX_HEAD:
+            sentences.append("The tax heads on the invoice do not match the supply: see the invoice and the order")
+        else:
+            sentences.append(str(header))
+    price_lines = [(ln["line_no"], v) for ln, v in zip(lines, verdicts, strict=True) if rules.PRICE in v.reasons]
+    if price_lines:
+        biggest = max(v.price_var for _, v in price_lines)
+        sentences.append(
+            f"Price above the order price on {count(len(price_lines), 'line')}, by up to {format_inr(biggest)} per unit"
         )
-    if reason == rules.QTY:
-        over = [(ln["line_no"], v.qty_var) for ln, v in zip(lines, verdicts, strict=True) if v.reason == rules.QTY]
-        return "Quantity invoiced is more than was received and accepted: " + ", ".join(
-            f"line {n} by {q}" for n, q in over
+    qty = [(ln["line_no"], v.qty_var) for ln, v in zip(lines, verdicts, strict=True) if rules.QTY in v.reasons]
+    if qty:
+        sentences.append(
+            "Quantity invoiced is more than was received and accepted: " + ", ".join(f"line {n} by {q}" for n, q in qty)
         )
-    if reason == rules.SERVICE:
-        over = [(ln["line_no"], v.qty_var) for ln, v in zip(lines, verdicts, strict=True) if v.reason == rules.SERVICE]
-        return "Service not confirmed: the requester has not confirmed the service invoiced on " + ", ".join(
-            f"line {n} ({q} more than confirmed)" for n, q in over
+    service = [(ln["line_no"], v.qty_var) for ln, v in zip(lines, verdicts, strict=True) if rules.SERVICE in v.reasons]
+    if service:
+        sentences.append(
+            "Service not confirmed: the requester has not confirmed the service invoiced on "
+            + ", ".join(f"line {n} ({q} more than confirmed)" for n, q in service)
         )
-    if reason == rules.IRN:
-        return "The supplier must issue an e-invoice and this one carries no IRN"
-    if reason == rules.GSTIN:
-        return "The GSTIN on the invoice does not match the supplier master or the order's delivery registration"
-    if reason == rules.TAX:
-        return "A supplier under the composition scheme or without GST registration cannot charge GST"
-    return "; ".join(arithmetic) or "The invoice does not add up"
+    gst = [d for d in gst_details if d]
+    if gst:
+        sentences.append("GST differs from the order: " + "; ".join(gst))
+    if arithmetic:
+        sentences.extend(arithmetic)
+    return "; ".join(sentences) or "The invoice does not add up"
 
 
 def _refresh_invoiced(db: Session, keys: list[tuple[str, int]]) -> None:
@@ -484,36 +649,11 @@ def cancel_invoice(db: Session, no: str, reason: str, user_id: int) -> None:
     db.commit()
 
 
-def request_release(db: Session, no: str, reason: str, user_id: int) -> int:
-    """Ask for a blocked invoice to be paid anyway. A person with the right to approve it decides (rule 5)."""
-    if not reason.strip():
-        raise InvoiceError("a reason is needed")
-    inv = db.execute(
-        text("select status, total, payment_block, block_reason, supplier_code from invoice where no = :n"), {"n": no}
-    ).first()
-    if inv is None:
-        raise InvoiceError(f"{no} does not exist")
-    if inv[0] != "blocked":
-        raise InvoiceError(f"{no} is {inv[0]}, not blocked")
-    if inv[2] == "duplicate":
-        raise InvoiceError("a duplicate is never paid")
-    pending = db.execute(
-        text(
-            "select 1 from proposal where action = 'invoice.release_block' and status = 'pending' and payload->>'invoice' = :n"
-        ),
-        {"n": no},
-    ).first()
-    if pending:
-        raise InvoiceError("a release for this invoice is already waiting for approval")
-    return proposals.propose(
-        db,
-        user(user_id),
-        action="invoice.release_block",
-        summary=f"Pay {no} despite the block ({inv[3]}). Reason: {reason.strip()}",
-        payload={"invoice": no, "reason": reason.strip()},
-        required_permission="invoice.approve",
-        risk="medium",
-    )
+def request_release(db: Session, no: str, reason: str, user_id: int, *, tenant: str | None = None) -> int:
+    """Ask for a blocked invoice to be paid anyway. The release rules live in `invoices/release.py` (block 11)."""
+    from p2p.invoices import release  # noqa: PLC0415 - the release builds on this module
+
+    return release.request_release(db, no, reason, user_id, tenant=tenant)
 
 
 def asked_or_confirmed(db: Session, no: str, user_id: int) -> bool:
@@ -536,46 +676,22 @@ def asked_or_confirmed(db: Session, no: str, user_id: int) -> bool:
     )
 
 
-@proposals.executor("invoice.release_block")
-def _release(db: Session, payload: dict[str, Any], actor: Actor) -> dict[str, Any]:
-    no, reason = str(payload["invoice"]), str(payload.get("reason") or "")
-    inv = db.execute(text("select status, entered_by from invoice where no = :n for update"), {"n": no}).first()
-    if inv is None or inv[0] != "blocked":
-        raise InvoiceError(f"{no} is no longer blocked")
-    if inv[1] == actor.id:
-        raise InvoiceError("segregation of duties: the person who entered the invoice cannot release its block")
-    if actor.kind == "user" and asked_or_confirmed(db, no, int(actor.id)):
-        raise InvoiceError(
-            "segregation of duties: the person who asked for or confirmed what is invoiced cannot also approve the invoice"
-        )
-    db.execute(text("update invoice set status = 'approved', payment_block = 'none' where no = :n"), {"n": no})
-    from p2p.invoices import payment  # noqa: PLC0415 - payment builds on this module
+READ_PERMISSIONS = ("invoice.view", "invoice.book", "invoice.match", "invoice.approve")
 
-    payment.book_invoice(db, no)
-    db.execute(
-        text(
-            "update match_result set resolved_by = :u, resolved_at = now(), resolution = :r "
-            "where invoice_no = :n and result = 'blocked' and resolved_at is null"
-        ),
-        {"u": actor.id, "r": reason, "n": no},
-    )
-    keys = [
-        (r[0], r[1])
-        for r in db.execute(text("select po_no, po_line_no from invoice_line where invoice_no = :n"), {"n": no})
-    ]
-    _refresh_invoiced(db, keys)
-    audit.record(
-        db,
-        actor,
-        "invoice.release_block",
-        "invoice",
-        no,
-        before={"status": "blocked"},
-        after={"status": "approved"},
-        reason=reason,
-    )
-    db.commit()
-    return {"invoice": no, "status": "approved"}
+
+def can_read(db: Session, user_id: int, no: str | None = None) -> bool:
+    """Who may see an invoice (11.10): an invoice permission, or a bill's own authoriser and step approvers.
+
+    Block 10 adds the bill readers (its authoriser and the people its approval names); until then an invoice is read
+    by the invoice permissions alone.
+    """
+    from p2p.platform import permissions  # noqa: PLC0415 - permissions does not build on invoices
+
+    granted = set(permissions.granted(db, user_id))
+    if granted & set(READ_PERMISSIONS):
+        return True
+    # NEEDS block 10: a bill's own authoriser and step approvers may read it too (10.11)
+    return False
 
 
 def rematch_invoice(db: Session, no: str, user_id: int) -> Entered:
@@ -589,3 +705,6 @@ def rematch_invoice(db: Session, no: str, user_id: int) -> Entered:
     if inv[0] != "blocked" or inv[1] != "invoice":
         raise InvoiceError(f"{no} is {inv[0]}; only a blocked invoice is matched again")
     return match_invoice(db, no, user(user_id))
+
+
+from p2p.invoices import release as _release  # noqa: E402, F401 - registers the release executor and guard

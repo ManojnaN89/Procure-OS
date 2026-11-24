@@ -27,17 +27,38 @@ S1_GSTIN, BUYER_GSTIN = "27AAAAA0000A1Z5", "29BBBBB0000B1Z5"
 TOL = m.Tolerance(price_pct=D("2"), price_abs=D("500"), qty_pct=D("0"))
 
 
-def test_the_price_limits_are_inclusive_and_either_one_lets_the_line_through() -> None:
-    assert m.judge_line(D("1000"), D("1020"), D("10"), D("10"), TOL).result == m.WITHIN  # 2.00% exactly
+def test_the_price_passes_only_when_both_the_percentage_and_the_rupee_limit_hold() -> None:
+    assert m.judge_line(D("1000"), D("1020"), D("10"), D("10"), TOL).result == m.WITHIN  # 2.00% and 200.00 exactly
     assert (
-        m.judge_line(D("1000"), D("1020.01"), D("10"), D("10"), TOL).result == m.WITHIN
-    )  # over 2% but 0.10 on the line
+        m.judge_line(D("1000"), D("1020.01"), D("10"), D("10"), TOL).reason == m.PRICE
+    )  # one paisa over 2%: the rupee test alone no longer lets it through (B2)
     assert (
-        m.judge_line(D("1000"), D("1050"), D("10"), D("10"), TOL).result == m.WITHIN
-    )  # 5% but exactly 500 on the line
+        m.judge_line(D("1000"), D("1050"), D("10"), D("10"), TOL).reason == m.PRICE
+    )  # exactly 500 on the line, but 5% is over the percentage: both must hold (B1, DF-12)
+    assert m.judge_line(D("1000"), D("1040"), D("10"), D("10"), TOL).reason == m.PRICE  # 4% and 400: one test fails
     assert (
-        m.judge_line(D("1000"), D("1050.01"), D("10"), D("10"), TOL).reason == m.PRICE
-    )  # one paisa a unit more: 500.10
+        m.judge_line(D("480"), D("483.01"), D("100"), D("100"), m.Tolerance(D("2"), D("300"), D("0"))).reason == m.PRICE
+    )  # 3.01 within 2% (9.60), but 301.00 is over the 300 rupee line limit (M's A)
+    assert m.judge_line(D("480"), D("483.00"), D("100"), D("100"), TOL).result == m.WITHIN  # exactly 300 (B1)
+    cheap = m.judge_line(D("1000"), D("990"), D("10"), D("10"), TOL)
+    assert (cheap.result, cheap.price_var, cheap.variance_value) == (m.MATCHED, D("-10"), D("0.00"))  # B3
+
+
+def test_the_variance_is_half_up_to_paise_and_the_limits_use_the_unrounded_product() -> None:
+    tol = m.Tolerance(D("2"), D("300"), D("0"))
+    verdict = m.judge_line(D("480"), D("482.995"), D("100"), D("100"), tol)
+    assert (verdict.result, verdict.variance_value) == (m.WITHIN, D("299.50"))  # H: 299.50 <= 300
+    line = m.judge_line(D("100"), D("100"), D("1000.0005"), D("1000"), m.Tolerance(D("0"), D("0"), D("0")))
+    assert line.reason == m.QTY  # B5: a ten-thousandth over accepted is blocked at 0%
+
+
+def test_a_line_keeps_every_reason_it_has() -> None:
+    verdict = m.judge_line(D("100"), D("140"), D("10"), D("6"), m.Tolerance(D("2"), D("50"), D("0")))
+
+    assert verdict.result == m.BLOCKED
+    assert verdict.reasons == (m.PRICE, m.QTY) and verdict.reason == m.PRICE  # B11
+    assert verdict.variance_value == D("400.00")
+
 
 
 def test_the_quantity_may_not_exceed_what_was_accepted_plus_the_quantity_tolerance() -> None:
@@ -136,6 +157,13 @@ def ledger(store: Session) -> Session:  # noqa: F811
             "insert into tolerance (key, value, category_code) values ('price_pct', '2', 'ANY'), ('price_abs', '500', 'ANY'), ('qty_pct', '0', 'ANY')"
         )
     )
+    x(
+        text(
+            "insert into approval_rule (rule_code, document, min_value, max_value, category_code, department_code, "
+            "spend_type, approver_chain, version, effective_from) values ('VAR-01', 'price_variance', 0, 999999999, "
+            "'ANY', 'ANY', 'ANY', 'procurement_head', 1, '2024-11-01')"
+        )
+    )
     for code in ("S1", "S2", "S3"):
         x(
             text(
@@ -222,13 +250,12 @@ def test_an_invoice_that_agrees_with_the_order_and_the_receipt_is_approved_and_b
 def test_a_price_a_little_over_is_within_tolerance_and_paid(ledger: Session, outbox: Outbox) -> None:  # noqa: F811
     po_no, _ = _goods(ledger, qty="10", price="100")
 
-    within = _invoice(ledger, po_no, "5", "102", number="A")  # 2% over on 5 of the 10
-    cheap_over = _invoice(
-        ledger, po_no, "5", "110", number="B"
-    )  # 10% over, but 50 on the line is inside the 500 allowed
+    within = _invoice(ledger, po_no, "5", "102", number="A")  # 2% over on 5 of the 10: both limits hold
+    over = _invoice(ledger, po_no, "5", "104", number="B")  # 4% over: 20 on the line, but the percentage fails
 
     assert (within.status, within.result) == ("approved", "within_tolerance")
-    assert (cheap_over.status, cheap_over.result) == ("approved", "within_tolerance")
+    assert (over.status, over.result, over.reasons) == ("blocked", "blocked", ["price_variance"])
+
 
 
 def test_a_price_over_both_limits_blocks_with_the_reason_and_the_kind_of_block(ledger: Session, outbox: Outbox) -> None:  # noqa: F811
@@ -256,10 +283,10 @@ def test_an_invoice_for_more_than_was_received_is_blocked_until_the_rest_arrives
     assert (done.status, done.reasons) == ("blocked", ["qty_over_received"])
     assert "more than was received" in _row(ledger, done.no)["block_reason"]
 
-    _receive(ledger, po_no, "4")  # the remainder arrives
-    again = invoices.rematch_invoice(ledger, done.no, 1)
+    posted = _receive(ledger, po_no, "4")  # the remainder arrives: the waiting invoice is matched again by itself
 
-    assert (again.status, again.result) == ("approved", "matched")
+    assert posted.rematched == [done.no]
+    assert _row(ledger, done.no)["status"] == "approved"
     with pytest.raises(invoices.InvoiceError, match="only a blocked invoice"):
         invoices.rematch_invoice(ledger, done.no, 1)  # an approved one is not matched again
 
@@ -444,11 +471,10 @@ def test_a_line_must_belong_to_an_order_of_that_supplier_that_can_be_invoiced(le
 # ---- blocks: release and cancel ---------------------------------------------------------------
 
 
-def test_a_block_is_released_only_by_another_person_through_a_proposal(ledger: Session, outbox: Outbox) -> None:  # noqa: F811
+def test_a_block_is_released_only_by_the_price_rule_person_through_a_proposal(ledger: Session, outbox: Outbox) -> None:  # noqa: F811
     po_no, logins = _goods(ledger, qty="10", price="1000")
     slug, sfx = ledger.info["slug"], ledger.info["sfx"]
     ap = users.create_user(slug, f"ap{sfx}@x.example", PASSWORD, "An AP", "AP")
-    boss = users.create_user(slug, f"fin{sfx}@x.example", PASSWORD, "A Finance", "Finance")
     done = _invoice(ledger, po_no, "10", "1060", user=ap)
     assert done.status == "blocked"
 
@@ -459,13 +485,17 @@ def test_a_block_is_released_only_by_another_person_through_a_proposal(ledger: S
         invoices.request_release(ledger, done.no, "again", ap)
     assert _row(ledger, done.no)["status"] == "blocked"  # asking pays nothing
 
-    proposals.approve(ledger, pid, boss)
+    proposals.approve(ledger, pid, logins["procurement"])  # the person VAR-01 names
 
     row = _row(ledger, done.no)
     assert (row["status"], row["payment_block"]) == ("approved", "none") and row["due_date"] is not None
+    assert row["variance_accepted"] == D("600.00")
     assert ledger.execute(
         text("select resolved_by, resolution from match_result where resolved_at is not null")
-    ).one() == (str(boss), "The supplier agreed the new price in writing")
+    ).one() == (str(logins["procurement"]), "The supplier agreed the new price in writing")
+    assert ledger.execute(
+        text("select resolution_kind from match_result where resolved_at is not null")
+    ).scalar_one() == "price_accepted"
     assert ledger.execute(text("select invoiced_qty from po_line")).scalar_one() == D(
         "10"
     )  # now it counts against the receipt
@@ -473,23 +503,23 @@ def test_a_block_is_released_only_by_another_person_through_a_proposal(ledger: S
         ledger.execute(text("select count(*) from audit_event where action = 'invoice.release_block'")).scalar_one()
         == 1
     )
+    assert (
+        ledger.execute(text("select count(*) from audit_event where action = 'invoice.variance_accepted'")).scalar_one()
+        == 1
+    )
 
 
-def test_the_person_who_entered_the_invoice_cannot_release_its_block(ledger: Session, outbox: Outbox) -> None:  # noqa: F811
-    po_no, _ = _goods(ledger, qty="10", price="1000")
+def test_an_invoice_entered_by_the_rule_person_has_nobody_who_may_accept_its_price(ledger: Session, outbox: Outbox) -> None:  # noqa: F811
+    po_no, logins = _goods(ledger, qty="10", price="1000")
     slug, sfx = ledger.info["slug"], ledger.info["sfx"]
-    boss = users.create_user(slug, f"fin{sfx}@x.example", PASSWORD, "A Finance", "Finance")
     other = users.create_user(slug, f"ap{sfx}@x.example", PASSWORD, "An AP", "AP")
-    done = _invoice(ledger, po_no, "10", "1060", user=boss)  # entered by the finance person
-    pid = invoices.request_release(ledger, done.no, "agreed", other)
+    done = _invoice(ledger, po_no, "10", "1060", user=logins["procurement"])  # entered by the rule's person
 
-    proposals.approve(ledger, pid, boss)
+    with pytest.raises(invoices.InvoiceError, match="names nobody who may accept this price"):
+        invoices.request_release(ledger, done.no, "agreed", other)  # the enterer is never the approver (rule 7)
 
     assert _row(ledger, done.no)["status"] == "blocked"
-    assert (
-        "cannot release its block"
-        in ledger.execute(text("select result::text from proposal where id = :i"), {"i": pid}).scalar_one()
-    )
+    assert ledger.execute(text("select count(*) from proposal")).scalar_one() == 0
 
 
 def test_the_person_who_asked_cannot_approve_and_someone_without_the_right_cannot_either(
@@ -594,14 +624,14 @@ def test_the_api_refuses_what_is_not_an_invoice(ledger: Session, outbox: Outbox,
     assert client.post("/api/invoices", json=body, headers=_headers(slug, ap, "AP")).status_code == 422
 
 
-def test_ap_works_a_blocked_invoice_over_the_api_and_finance_approves_the_release(
+def test_ap_works_a_blocked_invoice_over_the_api_and_the_price_rule_person_approves_the_release(
     ledger: Session, outbox: Outbox
 ) -> None:  # noqa: F811
-    po_no, _ = _goods(ledger, qty="10", price="1000")
+    po_no, logins = _goods(ledger, qty="10", price="1000")
     slug, sfx = ledger.info["slug"], ledger.info["sfx"]
     ap = users.create_user(slug, f"ap{sfx}@x.example", PASSWORD, "An AP", "AP")
-    boss = users.create_user(slug, f"fin{sfx}@x.example", PASSWORD, "A Finance", "Finance")
-    h_ap, h_boss = _headers(slug, ap, "AP"), _headers(slug, boss, "Finance")
+    boss = logins["procurement"]
+    h_ap, h_boss = _headers(slug, ap, "AP"), _headers(slug, boss, "Approver")
     body = {
         "supplier_code": "S1", "number": "API-2", "date": "2026-11-06", "supplier_gstin": S1_GSTIN, "buyer_gstin": BUYER_GSTIN,
         "lines": [{"po_no": po_no, "po_line_no": 1, "qty": "10", "unit_price": "1060"}],

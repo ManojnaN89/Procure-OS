@@ -37,6 +37,7 @@ class Money:
         self.invoices: list[dict[str, Any]] = []  # one per invoice row, with what payment needs
         self.seq: dict[tuple[str, str], int] = defaultdict(int)
         self.open_block = 0  # the receipt whose price problem is still blocked at the cutoff
+        self.gst_mode = 0  # the next planted GST problem: 0 a wrong rate, 1 an amount five rupees high
 
     # ---- invoices -------------------------------------------------------------------------------
 
@@ -81,6 +82,11 @@ class Money:
             "qty_mismatch",
             self.planted.get("qty_mismatch", 0),
         )
+        pick(
+            [d for d in early if d["doc"]["inspection_status"] != "failed"],
+            "gst_mismatch",
+            self.planted.get("gst_mismatch", 0),
+        )
         pick(early, "grni_month_end", self.planted.get("grni_month_end", 0))
         pick(early, "invoice_not_received", self.planted.get("invoice_not_received", 0))
         self.pick_edges(goods, chosen)
@@ -106,8 +112,8 @@ class Money:
                         if kind == "tolerance_edge_qty":
                             ok = (d["po"]["supplier_code"] == edge["supplier"] and o.item["code"] == edge["item"]
                                   and q >= 25)  # fmt: skip
-                        else:  # the rupee amount lets it through, the percentage (3 to 6% over) does not
-                            ok = D(6700) <= q2(o.price * q) <= D(13000)
+                        else:  # both tests: 1.5% to 1.9% over and Rs 301 to 499 on the line (DF-12, D-17)
+                            ok = D(15000) <= q2(o.price * q) <= D(26000) and q <= 150
                         if ok:
                             found.append((d, o))
                             break
@@ -149,22 +155,27 @@ class Money:
                 if plant == "tolerance_edge_qty":
                     qty = qty + max(D(1), (qty * D(self.edges["qty"]["pct"]) / 100).quantize(D(1)))
                 else:
-                    price = o.price + q2(D(self.edges["price"]["over"]) / qty)
+                    price = q2(o.price + self._edge_over(qty, o.price))
             if plant == "price_mismatch" and q2(o.price * qty) >= 10000 and not any(x[3] for x in lines):
                 price = q2(o.price * D(str(round(self.R.uniform(1.05, 1.1), 3))))
             if plant == "qty_mismatch" and k == 0:
                 qty = qty + max(D(1), D(math.ceil(qty * D("0.1"))))
+            price = q2(price)
             lines.append((o, qty, price, price != o.price))
         number = self.supplier_no(supplier["code"], day)
         row = self.book(draft, number, received, lines)
+        if plant == "gst_mismatch":
+            self.plant_gst(row)
         if draft["kind"] == "goods":
             draft["doc"]["supplier_invoice_ref"] = number
-        result, reason, version = self.judge(row, draft)
+        result, reason, version, reasons = self.judge(row, draft)
         row["_truth"] = {
             "result": result,
             "reason_codes": reason,
+            "reasons": reasons,
+            "rules": 2,
             "planted": plant
-            if plant in ("price_mismatch", "qty_mismatch", "tolerance_edge_qty", "tolerance_edge_price")
+            if plant in ("price_mismatch", "qty_mismatch", "tolerance_edge_qty", "tolerance_edge_price", "gst_mismatch")
             else "",
             "tolerance_version": version,
         }
@@ -220,22 +231,83 @@ class Money:
         self.invoices.append(row)
         return row
 
-    def judge(self, row: dict[str, Any], draft: dict[str, Any]) -> tuple[str, str, int]:
-        """The three-way match (two-way for a service): price against the order, quantity against what was accepted,
-        with the tolerance version in force on the day the invoice was received."""
+    def _edge_over(self, qty: Decimal, order_price: Decimal) -> Decimal:
+        """The per-unit rise that puts Rs 301 to 499 on this line at 1.5% to 1.9% of a Rs 15,000 to 26,000 line."""
+        value = q2(order_price * qty)
+        wanted = min(max(q2(value * D("0.017")), D("301")), D("499"))
+        per = (wanted / qty).quantize(D("0.01"))
+        while per * qty < D("301"):
+            per += D("0.01")
+        while per * qty > D("499"):
+            per -= D("0.01")
+        return per
+
+    def plant_gst(self, row: dict[str, Any]) -> None:
+        """One planted GST problem: a 5% item billed at 18%, or a CGST five rupees above the order's split."""
+        lines = [x for x in self.T["invoice_line"] if x["invoice_no"] == row["no"]]
+        line = lines[0]
+        value = D(line["taxable"])
+        intra = self.s.sup[row["supplier_code"]]["state_code"] == self.s.state
+        if self.gst_mode % 2 == 0:
+            rate = D("18") if D(line["gst_rate"]) != D("18") else D("5")
+            line["gst_rate"] = str(rate)
+        else:
+            rate = D(line["gst_rate"])
+        cgst = q2(value * rate / 200) if intra else ZERO
+        igst = ZERO if intra else q2(value * rate / 100)
+        if self.gst_mode % 2 == 1:
+            cgst = cgst + D("5.00")
+        line["cgst"], line["sgst"], line["igst"] = money(cgst), money(cgst), money(igst)
+        self.gst_mode += 1
+        taxable, cgst_total, sgst_total, igst_total = ZERO, ZERO, ZERO, ZERO
+        for x in [y for y in self.T["invoice_line"] if y["invoice_no"] == row["no"]]:
+            taxable, cgst_total, sgst_total, igst_total = (
+                taxable + D(x["taxable"]),
+                cgst_total + D(x["cgst"]),
+                sgst_total + D(x["sgst"]),
+                igst_total + D(x["igst"]),
+            )
+        gross = taxable + cgst_total + sgst_total + igst_total
+        total = gross.quantize(Decimal(1), ROUND_HALF_UP)
+        for target in (row, next(x for x in self.T["invoice"] if x["no"] == row["no"])):
+            target.update(cgst=money(cgst_total), sgst=money(sgst_total), igst=money(igst_total),
+                          round_off=money(total - gross), total=money(total))  # fmt: skip
+
+    def judge(self, row: dict[str, Any], draft: dict[str, Any]) -> tuple[str, str, int, str]:
+        """The three-way match (two-way for a service): price within both limits, quantity within what was accepted,
+        and the GST rate and each tax head against the order's split, under the version in force on the received day."""
         result, version = "matched", 0
-        for o, qty, price, _ in row["_lines"]:
+        reasons: list[str] = []
+        stored = {int(x["line_no"]): x for x in self.T["invoice_line"] if x["invoice_no"] == row["no"]}
+        for n, (o, qty, price, _) in enumerate(row["_lines"], start=1):
             version, tol = tolerance_on(self.s.m["tolerance"], self.s.m["tolerance_version"], row["received_on"],
                                         o.item["category_code"])  # fmt: skip
             available = next(q for x, q in draft["lines"] if x is o)
             diff = price - o.price
-            if diff > 0:
-                if not (diff <= o.price * tol["price_pct"] / 100 or diff * qty <= tol["price_abs"]):
-                    return "blocked", "price_variance", version
+            if diff > 0 and not (diff <= o.price * tol["price_pct"] / 100 and diff * qty <= tol["price_abs"]):
+                reasons.append("price_variance")
+            elif diff > 0:
                 result = "within_tolerance"
             if qty > available + available * tol["qty_pct"] / 100:
-                return "blocked", "qty_over_received", version
-        return result, "", version
+                reasons.append("qty_over_received")
+            line = stored[n]
+            order_rate = D(o.rate)
+            if D(line["gst_rate"]) != order_rate:
+                reasons.append("gst_mismatch")
+            else:
+                taxable = D(line["taxable"])
+                intra = self.s.sup[row["supplier_code"]]["state_code"] == self.s.state
+                want = (
+                    (q2(taxable * order_rate / 200), q2(taxable * order_rate / 200), ZERO)
+                    if intra
+                    else (ZERO, ZERO, q2(taxable * order_rate / 100))
+                )
+                got = (D(line["cgst"]), D(line["sgst"]), D(line["igst"]))
+                tolerance = Decimal(tol.get("tax_line_abs", "1.00"))
+                if any(abs(a - b) > tolerance for a, b in zip(got, want, strict=True)):
+                    reasons.append("gst_mismatch")
+        first = reasons[0] if reasons else ""
+        return ("blocked" if reasons else result), first, version, ";".join(reasons)
 
     def block(self, row: dict[str, Any], draft: dict[str, Any], lines: list[Any], plant: str, reason: str) -> None:
         """A blocked invoice: a price variance accepted by its approver; too much quantity sent back for a corrected
@@ -255,9 +327,14 @@ class Money:
             self.s.approve("price_variance", row["no"], value, decided, "ANY")
             row["status"], row["payment_block"], row["_ready"] = "approved", "none", self.s.later(decided, 1)
             return
-        self.s.case(plant, f"{row['no']};{po['no']}", "Invoiced quantity above the accepted quantity"
-                    + (f" (version {row['_truth']['tolerance_version']})" if plant != "qty_mismatch" else ""),
-                    "Blocked for quantity; the supplier sends a corrected invoice for what was accepted", received.date())  # fmt: skip
+        what = (
+            "Invoiced quantity above the accepted quantity"
+            if reason == "qty_over_received"
+            else ("GST on the invoice does not match the order")
+        )
+        self.s.case(plant, f"{row['no']};{po['no']}", what
+                    + (f" (version {row['_truth']['tolerance_version']})" if plant != "qty_mismatch" and plant != "gst_mismatch" else ""),
+                    "Blocked; the supplier sends a corrected invoice for what was accepted", received.date())  # fmt: skip
         row["status"], row["_ready"] = "cancelled", None
         again = dt_at(self.s.plus(decided.date(), self.R.randint(1, 3)), 11)
         if again <= self.end:
@@ -267,6 +344,8 @@ class Money:
             fixed["_truth"] = {
                 "result": "matched",
                 "reason_codes": "",
+                "reasons": "",
+                "rules": 2,
                 "planted": "corrected_invoice",
                 "tolerance_version": version,
             }

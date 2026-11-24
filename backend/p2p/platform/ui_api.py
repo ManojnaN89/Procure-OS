@@ -1932,6 +1932,7 @@ def receive_goods(
             "po_status": done.po_status,
             "pending_inspection": done.pending_inspection,
             "accepted": {k: str(v) for k, v in done.accepted.items()},
+            "rematched": done.rematched,
         }
 
     return _receipt_error(post)
@@ -1965,6 +1966,7 @@ def inspect_goods(
             "receipt": done.no,
             "po_status": done.po_status,
             "accepted": {k: str(v) for k, v in done.accepted.items()},
+            "rematched": done.rematched,
         }
 
     return _receipt_error(decide)

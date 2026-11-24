@@ -3,7 +3,7 @@
 You decide requests, orders and the sensitive things that no program may decide alone.
 
 ## What you see when you log in
-**Dashboard** → **My work**. Sections you may see: **Requests waiting for my approval**, **Orders waiting for my approval**, **Payment runs to approve**, **Blocked invoices to release**, **Supplier changes to approve**, **Orders held for a price or ceiling**, **RFQs waiting to be sent**.
+**Dashboard** → **My work**. Sections you may see: **Requests waiting for my approval**, **Orders waiting for my approval**, **Payment runs to approve**, **Price variances to accept**, **Supplier changes to approve**, **Orders held for a price or ceiling**, **RFQs waiting to be sent**.
 
 ## Approve a request
 1. Click the request in **My work**, or open **Requests**.
@@ -26,7 +26,10 @@ A buyer's proposed award of a period RFQ comes to the person who approves orders
 Once the supplier has accepted the contract's terms, a second person activates it (**My work** → **Contracts to activate**, then **Activate this contract**): never its maker and never whoever approved its award.
 
 ## Decide the rest
-Payment runs, releasing a blocked invoice, supplier changes, held orders and goods received without an order (also on **Receive without order**) are under **Admin** → **Approvals**. Click **Approve** or **Reject**. Nothing runs until you do.
+Payment runs, supplier changes, held orders and goods received without an order (also on **Receive without order**) are under **Admin** → **Approvals**. Click **Approve** or **Reject**. Nothing runs until you do.
+
+## Accepting a price variance
+A blocked invoice whose only problem is a price above the order comes to the person the price rule names for that value (Apex: the purchase manager; Brightwave: the CFO), under **My work** → **Price variances to accept**. The card shows the variance and the lines. **Approve** accepts the price and pays the invoice; **Reject** needs a reason. You may not accept the price of an order you made, an invoice you entered, or one you received the goods for, and nobody else may accept it: Finance still releases a tax or arithmetic block, but never a price. If the goods were invoiced by someone else while it waited, the release fails with the reason and AP matches the invoice again.
 
 ## Suppliers, contracts, prospects and market prices
 **Vendors** → open a vendor → **Verify** a document after you compare it with the original. **Contracts** → open a draft → **Activate this contract**. A prospect's identity is checked on its vendor page (**Identity check**: method, the PAN or GST certificate scan, a note) by someone other than the buyer who registered or invited it. A flag (a contact, address or mail domain shared with another supplier) is cleared with a reason only after you have looked into it. Checking identity does not activate the supplier: activation is still its own approval. **Approved for** on a vendor page shows where a supplier may supply each category; a change asked by someone else waits for you in **Approvals**. Under **Contracts** → **Market prices**, verify or reject the benchmarks others entered (never your own).

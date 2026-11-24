@@ -36,6 +36,7 @@ SEE = {  # the kind: permissions that let a role see it (the screen's specificat
     "unordered": {"grn.create", "grn.unordered_approve", "po.create"},
     "service": {"po.create"},
     "approval": {"request.approve"},
+    "held_stock": {"stock.view", "stock.quality"},
 }
 SUPPLIER_ACT = {"rfq": "rfq.create", "ack": "po.send", "late": "po.create"}
 
@@ -67,9 +68,11 @@ def oracle(db: Any, today: date) -> dict[tuple[str, str], dict[str, Any]]:
     name = {r["code"]: r["name"] for r in q("select code, name from org_user")}
     want: dict[tuple[str, str], dict[str, Any]] = {}
 
-    for i in q("select * from invoice where type = 'invoice' and status = 'blocked' and payment_block <> 'duplicate'"):
+    for i in q(
+        "select * from invoice where type = 'invoice' and status = 'blocked' and payment_block <> 'duplicate'"
+    ):
         release = q(
-            "select 1 from proposal where action = 'invoice.release_block' and status = 'pending' and payload->>'invoice' = :n",
+            "select payload from proposal where action = 'invoice.release_block' and status = 'pending' and payload->>'invoice' = :n",
             n=i["no"],
         )
         codes = [
@@ -81,7 +84,27 @@ def oracle(db: Any, today: date) -> dict[tuple[str, str], dict[str, Any]]:
             )
         ]
         if release:
-            owner, act = "Finance or an approver", "invoice.approve"
+            body = release[0]["payload"] or {}
+            if body.get("kind") == "price":
+                who = next(
+                    (
+                        r
+                        for r in q("select code, name, designation from org_user")
+                        if r["code"] == body.get("approver")
+                    ),
+                    None,
+                )
+                owner = (
+                    f"{who['designation']}: {who['name']}"
+                    if who
+                    else "the price rule's approver"
+                )
+                act = (
+                    None  # only the person named (or their deputy) acts; Finance cannot
+                )
+            else:
+                owner = "Finance or an approver"
+                act = "invoice.approve"
         elif codes and codes[0] == "service_not_confirmed":
             owner, act = "Requester", None
         else:
@@ -97,18 +120,41 @@ def oracle(db: Any, today: date) -> dict[tuple[str, str], dict[str, Any]]:
         "select u.*, p.status as proposal, o.status as po_status from unordered_receipt u "
         "left join proposal p on p.id = u.proposal_id left join po o on o.no = u.po_no"
     ):
-        state = "rejected" if u["status"] == "pending" and u["proposal"] in ("rejected", "expired") else u["status"]
+        state = (
+            "rejected"
+            if u["status"] == "pending" and u["proposal"] in ("rejected", "expired")
+            else u["status"]
+        )
         if state == "pending":
             owner, act = "Purchase manager", "grn.unordered_approve"
         elif state == "approved":
             owner, act = "Buyer", "po.create"
-        elif state == "rejected" or (state == "ordered" and u["po_status"] in RECEIVABLE):
+        elif state == "rejected" or (
+            state == "ordered" and u["po_status"] in RECEIVABLE
+        ):
             owner, act = "Store", "grn.create"
         elif state == "ordered":
             owner, act = "Buyer", "po.send"
         else:
             continue  # received or returned: done
-        want[("unordered", u["no"])] = {"owner": owner, "act": act, "since": u["received_on"], "reason": u["reason"]}
+        want[("unordered", u["no"])] = {
+            "owner": owner,
+            "act": act,
+            "since": u["received_on"],
+            "reason": u["reason"],
+        }
+
+    for h in q(
+        "select h.id, h.quality, h.left_qty, h.held_at, coalesce(i.name, h.item_code) as item from stock_hold h "
+        "left join item i on i.code = h.item_code where h.closed_at is null and h.left_qty > 0 "
+        "and not (h.source = 'receipt' and exists (select 1 from goods_receipt g where g.no = h.gr_no "
+        "and g.inspection_status = 'pending'))"
+    ):
+        want[("held_stock", f"HOLD-{h['id']}")] = {
+            "owner": "Store",
+            "act": "stock.quality",
+            "since": _day(h["held_at"]),
+        }
 
     for ln in q(
         "select l.po_no, l.need_by, r.requester from po_line l join po p on p.no = l.po_no "
@@ -134,22 +180,45 @@ def oracle(db: Any, today: date) -> dict[tuple[str, str], dict[str, Any]]:
     for p in q(
         "select * from proposal where status = 'pending' and action not in ('invoice.release_block', 'receipt.unordered')"
     ):
-        roles = [r["role"] for r in q("select role from role_permission where action = :a", a=p["required_permission"])]
+        roles = [
+            r["role"]
+            for r in q(
+                "select role from role_permission where action = :a",
+                a=p["required_permission"],
+            )
+        ]
         want[("proposal", f"Proposal {p['id']}")] = {
             "owner": " or ".join(sorted(roles)), "act": p["required_permission"], "since": _day(p["created_at"]),
         }  # fmt: skip
 
     closed = {
-        r["holiday_date"] for r in q("select holiday_date from ref_holiday where kind = 'closed' and scope = 'central'")
+        r["holiday_date"]
+        for r in q(
+            "select holiday_date from ref_holiday where kind = 'closed' and scope = 'central'"
+        )
     }
     for f in q("select no, due_date from rfq where status = 'sent' and due_date < :d and not exists (select 1 from quote x where x.rfq_no = rfq.no)", d=today):  # fmt: skip
-        want[("supplier", f["no"])] = {"owner": "Buyer", "act": SUPPLIER_ACT["rfq"], "since": f["due_date"]}
+        want[("supplier", f["no"])] = {
+            "owner": "Buyer",
+            "act": SUPPLIER_ACT["rfq"],
+            "since": f["due_date"],
+        }
     ack_days = int(
-        (q("select value from org_setting where key = 'supplier_ack_due_days'") or [{"value": "2"}])[0]["value"] or 2
+        (
+            q("select value from org_setting where key = 'supplier_ack_due_days'")
+            or [{"value": "2"}]
+        )[0]["value"]
+        or 2
     )
-    for p in q("select no, sent_at from po where status = 'sent' and sent_at is not null"):
+    for p in q(
+        "select no, sent_at from po where status = 'sent' and sent_at is not null"
+    ):
         if today > _add_working(_day(p["sent_at"]), ack_days, closed):
-            want[("supplier", p["no"])] = {"owner": "Buyer", "act": SUPPLIER_ACT["ack"], "since": _day(p["sent_at"])}
+            want[("supplier", p["no"])] = {
+                "owner": "Buyer",
+                "act": SUPPLIER_ACT["ack"],
+                "since": _day(p["sent_at"]),
+            }
     # block 8 spec 8.6.2: a line is due on its promised date, else its need-by date; a line with only a need-by counts
     late = q(
         "select l.po_no, min(coalesce(l.promised_date, l.need_by)) as oldest from po_line l join po on po.no = l.po_no "
@@ -159,8 +228,15 @@ def oracle(db: Any, today: date) -> dict[tuple[str, str], dict[str, Any]]:
         d=today,
     )
     for p in late:
-        want.setdefault(("supplier", p["po_no"]), {"owner": "Buyer", "act": SUPPLIER_ACT["late"], "since": p["oldest"]})
-        want[("supplier-late", p["po_no"])] = {"owner": "Buyer", "act": SUPPLIER_ACT["late"], "since": p["oldest"]}
+        want.setdefault(
+            ("supplier", p["po_no"]),
+            {"owner": "Buyer", "act": SUPPLIER_ACT["late"], "since": p["oldest"]},
+        )
+        want[("supplier-late", p["po_no"])] = {
+            "owner": "Buyer",
+            "act": SUPPLIER_ACT["late"],
+            "since": p["oldest"],
+        }
     for v in want.values():
         v["age"] = _working_days(v["since"], today, closed)
     return want
@@ -178,9 +254,13 @@ def _plant(world: Any, client: TestClient, out: Outcome) -> dict[str, str]:
     planted: dict[str, str] = {}
     store = world.headers("Store")
     item = db.execute(
-        text("select code, category_code from item where kind = 'goods' and active order by code limit 1")
+        text(
+            "select code, category_code from item where kind = 'goods' and active order by code limit 1"
+        )
     ).one()
-    supplier = db.execute(text("select code from supplier where status = 'active' order by code limit 1")).scalar_one()
+    supplier = db.execute(
+        text("select code from supplier where status = 'active' order by code limit 1")
+    ).scalar_one()
     loc = lib.location()
     body = {
         "supplier_code": supplier,
@@ -190,14 +270,20 @@ def _plant(world: Any, client: TestClient, out: Outcome) -> dict[str, str]:
         "reason": "E44: came without an order",
     }
     for label in ("unordered pending", "unordered approved", "unordered rejected"):
-        r = client.post("/api/unordered-receipts", headers=store, json={**body, "reason": f"E44 {label}"})
+        r = client.post(
+            "/api/unordered-receipts",
+            headers=store,
+            json={**body, "reason": f"E44 {label}"},
+        )
         if r.status_code != 200:
             out.find("high", f"could not plant {label}: {r.text[:160]}")
             continue
         planted[label] = r.json()["receipt"]
     if "unordered approved" in planted:
         client.post(
-            f"/api/unordered-receipts/{planted['unordered approved']}/approve", headers=world.org_headers(pm), json={}
+            f"/api/unordered-receipts/{planted['unordered approved']}/approve",
+            headers=world.org_headers(pm),
+            json={},
         )
     if "unordered rejected" in planted:
         client.post(
@@ -207,9 +293,16 @@ def _plant(world: Any, client: TestClient, out: Outcome) -> dict[str, str]:
         )
 
     # a service, asked for by an approver who has a login, due five days ago and not confirmed
-    template_po = dict(db.execute(text("select * from po order by no limit 1")).mappings().one())
+    template_po = dict(
+        db.execute(text("select * from po order by no limit 1")).mappings().one()
+    )
     template_line = dict(
-        db.execute(text("select * from po_line where po_no = :p limit 1"), {"p": template_po["no"]}).mappings().one()
+        db.execute(
+            text("select * from po_line where po_no = :p limit 1"),
+            {"p": template_po["no"]},
+        )
+        .mappings()
+        .one()
     )
     requester = approvers[-1]
     db.execute(
@@ -242,7 +335,12 @@ def _plant(world: Any, client: TestClient, out: Outcome) -> dict[str, str]:
             "insert into approval_step (request_no, round, step, role, approver, status, opened_at, reminded_at) "
             "values ('E44-WAIT', 1, 1, 'manager', :a, 'pending', :o, :o)"
         ),
-        {"a": pm, "o": datetime.combine(lib.TODAY - timedelta(days=3), datetime.min.time(), IST)},
+        {
+            "a": pm,
+            "o": datetime.combine(
+                lib.TODAY - timedelta(days=3), datetime.min.time(), IST
+            ),
+        },
     )
     planted["approval"] = "E44-WAIT"
     db.commit()
@@ -260,7 +358,9 @@ def _plant(world: Any, client: TestClient, out: Outcome) -> dict[str, str]:
         )
     ).scalar()
     if blocked:
-        invoices.request_release(db, blocked, "E44: agreed with the supplier", world.logins["AP"])
+        invoices.request_release(
+            db, blocked, "E44: agreed with the supplier", world.logins["AP"]
+        )
         db.commit()
         planted["release"] = blocked
     return planted
@@ -279,7 +379,10 @@ def run(ctx: lib.Ctx) -> Outcome:
 
     admin = client.get("/api/exceptions", headers=world.headers("Admin"))
     if admin.status_code != 200:
-        out.find("high", f"the administrator could not open the exceptions: {admin.status_code} {admin.text[:160]}")
+        out.find(
+            "high",
+            f"the administrator could not open the exceptions: {admin.status_code} {admin.text[:160]}",
+        )
         return out
     data = admin.json()
     today = date.fromisoformat(data["as_of"])
@@ -296,26 +399,37 @@ def run(ctx: lib.Ctx) -> Outcome:
 
     # 1. every planted case is there, with the owner the oracle names
     for label, ref in planted.items():
-        kind = {"release": "invoice", "service": "service", "approval": "approval", "proposal": "proposal"}.get(
-            label, "unordered"
-        )
+        kind = {
+            "release": "invoice",
+            "service": "service",
+            "approval": "approval",
+            "proposal": "proposal",
+        }.get(label, "unordered")
         if (kind, ref) not in got:
             out.find("high", f"the planted {label} ({ref}) is not on the screen")
     # 2. exactly the oracle's set, nothing extra, nothing missing (a late order may also be one not acknowledged)
     extra = [k for k in got if k not in want]
     missing = [k for k in want if k not in got]
     if extra:
-        out.find("high", f"{len(extra)} row(s) the oracle does not expect, e.g. {extra[:3]}")
+        out.find(
+            "high", f"{len(extra)} row(s) the oracle does not expect, e.g. {extra[:3]}"
+        )
     if missing:
         out.find("high", f"{len(missing)} expected row(s) missing, e.g. {missing[:3]}")
-    dupes = [k for k, v in got.items() if len(v) > 1 and not (k[0] == "supplier" and k[1] in late_only)]
+    dupes = [
+        k
+        for k, v in got.items()
+        if len(v) > 1 and not (k[0] == "supplier" and k[1] in late_only)
+    ]
     if dupes:
         out.find("high", f"{len(dupes)} case(s) listed twice, e.g. {dupes[:3]}")
     wrong_owner, wrong_age, wrong_reason = [], [], []
     for k, v in want.items():
         for r in got.get(k, []):
             if not r["owner"].startswith(v["owner"]):
-                wrong_owner.append(f"{k}: {r['owner']!r}, the oracle says {v['owner']!r}")
+                wrong_owner.append(
+                    f"{k}: {r['owner']!r}, the oracle says {v['owner']!r}"
+                )
             if (r["since"], r["age_days"]) != (v["since"].isoformat(), v["age"]):
                 wrong_age.append(
                     f"{k}: since {r['since']} age {r['age_days']}, the oracle says {v['since']} age {v['age']}"
@@ -324,13 +438,21 @@ def run(ctx: lib.Ctx) -> Outcome:
                 wrong_reason.append(f"{k}: {r['reason'][:80]!r}")
             if not r["next_step"]:
                 wrong_reason.append(f"{k}: no next step")
-    for name, bad in (("owner", wrong_owner), ("since or age", wrong_age), ("reason or next step", wrong_reason)):
+    for name, bad in (
+        ("owner", wrong_owner),
+        ("since or age", wrong_age),
+        ("reason or next step", wrong_reason),
+    ):
         if bad:
-            out.find("high", f"{len(bad)} row(s) with the wrong {name}; first: {bad[0]}")
+            out.find(
+                "high", f"{len(bad)} row(s) with the wrong {name}; first: {bad[0]}"
+            )
     ages = [r["age_days"] for r in rows]
     if ages != sorted(ages, reverse=True):
         out.find("high", "the rows are not oldest first")
-    out.metrics["rows checked (owner, reason, age)"] = sum(len(got.get(k, [])) for k in want)
+    out.metrics["rows checked (owner, reason, age)"] = sum(
+        len(got.get(k, [])) for k in want
+    )
 
     # 3. each role sees only what its permissions allow, and "mine" only what it must act on
     perms = defaultdict(set)
@@ -341,19 +463,32 @@ def run(ctx: lib.Ctx) -> Outcome:
         see_want = set()
         for k, v in want.items():
             kind = k[0]
-            visible = bool(perms[role] & SEE[kind]) if kind in SEE else v["act"] in perms[role]
+            visible = (
+                bool(perms[role] & SEE[kind])
+                if kind in SEE
+                else v["act"] in perms[role]
+            )
             if visible:
                 see_want.add(k)
-                if v["act"] in perms[role] and not (role == "AP" and v["act"] == "invoice.approve"):
+                if v["act"] in perms[role] and not (
+                    role == "AP" and v["act"] == "invoice.approve"
+                ):
                     mine_want.add(k)
-        if role == "Buyer":  # the buyer proposed the planted decision: never theirs to approve
+        if (
+            role == "Buyer"
+        ):  # the buyer proposed the planted decision: never theirs to approve
             mine_want.discard(("proposal", planted.get("proposal", "")))
         seen = {
-            (r["kind"], r["ref"]) for r in client.get("/api/exceptions", headers=world.headers(role)).json()["rows"]
+            (r["kind"], r["ref"])
+            for r in client.get("/api/exceptions", headers=world.headers(role)).json()[
+                "rows"
+            ]
         }
         mine = {
             (r["kind"], r["ref"])
-            for r in client.get("/api/exceptions?mine=true", headers=world.headers(role)).json()["rows"]
+            for r in client.get(
+                "/api/exceptions?mine=true", headers=world.headers(role)
+            ).json()["rows"]
         }
         if seen != see_want:
             out.find(
@@ -368,8 +503,15 @@ def run(ctx: lib.Ctx) -> Outcome:
         out.metrics[f"{role}: rows seen / mine"] = f"{len(seen)} / {len(mine)}"
 
     # 4. the people named: the service's requester and the waiting approver have it as their own
-    for kind, code in (("service", sorted(world.org_logins)[-1]), ("approval", sorted(world.org_logins)[0])):
-        rows_ = client.get(f"/api/exceptions?kind={kind}&mine=true", headers=world.org_headers(code)).json()["rows"]
+    for kind, code in (
+        ("service", sorted(world.org_logins)[-1]),
+        ("approval", sorted(world.org_logins)[0]),
+    ):
+        rows_ = client.get(
+            f"/api/exceptions?kind={kind}&mine=true", headers=world.org_headers(code)
+        ).json()["rows"]
         if planted.get(kind) not in {r["ref"] for r in rows_}:
-            out.find("high", f"the {kind} planted for {code} is not among their own rows")
+            out.find(
+                "high", f"the {kind} planted for {code} is not among their own rows"
+            )
     return out

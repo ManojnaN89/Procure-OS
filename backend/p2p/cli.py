@@ -216,6 +216,9 @@ def main(argv: list[str] | None = None) -> int:
     ask = sub.add_parser("confirm-services")
     ask.add_argument("tenant")
     ask.add_argument("--dry-run", action="store_true")
+    cases = sub.add_parser("cases").add_subparsers(dest="cmd", required=True)
+    sweep = cases.add_parser("sweep")
+    sweep.add_argument("tenant")
     demo = sub.add_parser("demo").add_subparsers(dest="cmd", required=True)
     reset = demo.add_parser("reset")
     reset.add_argument("name", help="a company with a profile in datagen/catalog (apex, brightwave)")
@@ -265,6 +268,18 @@ def main(argv: list[str] | None = None) -> int:
             worker.run_forever()
         except KeyboardInterrupt:
             pass
+        return 0
+    if args.group == "cases":
+        from sqlalchemy.orm import Session
+
+        from p2p.platform import exception_cases
+
+        with Session(routing.engine_for(args.tenant)) as db:
+            swept = exception_cases.sweep(db, args.tenant)
+        print(
+            f"{count(swept['open'], 'case')}: {swept['created']} opened, {swept['moved']} moved on, "
+            f"{swept['resolved']} resolved"
+        )
         return 0
     if args.group == "demo":
         from p2p.platform.demo import DemoError, company, reset_company

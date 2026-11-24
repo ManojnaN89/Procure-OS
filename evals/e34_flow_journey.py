@@ -1117,7 +1117,7 @@ def _run(ctx: Any) -> Outcome:
             d.mark(11)
             ui_api.use_gateway(model_gateway())
             reason = "The supplier raised its price from 1 November; the line needs these seals this month."
-            with d.step("ap", "clicks Ask to pay it anyway, writes the reason and clicks Send") as page:
+            with d.step("ap", "clicks Accept the price and pay, writes the reason and clicks Send") as page:
                 page.locator("#invRelease").click()
                 page.locator("#invReason").fill(reason)
                 page.locator("#invWhyOk").click()
@@ -1130,10 +1130,10 @@ def _run(ctx: Any) -> Outcome:
                 403,
             )
             with d.step(
-                "purchasemanager", "opens Dashboard: Blocked invoices to release; Admin, Approvals, clicks Approve"
+                "purchasemanager", "opens Dashboard: Price variances to accept; clicks Approve"
             ) as page:
                 d.go("purchasemanager", "dashboard")
-                expect(page.locator("#myWork")).to_contain_text("Blocked invoices to release")
+                expect(page.locator("#myWork")).to_contain_text("Price variances to accept")
                 page.locator("#myWork a", has_text=seal_inv).first.click()
                 page.wait_for_load_state("networkidle")
                 if "/admin/approvals" not in page.url:
