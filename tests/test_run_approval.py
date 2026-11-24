@@ -15,11 +15,9 @@ from test_payments import (
     _approve,
     _code,
     _due_on,
-    _earlier_purchase,
     _file,
     _people,
     _propose,
-    _statement_for,
     _two_suppliers,
 )
 from test_receiving import store  # noqa: F401 - fixtures
@@ -28,14 +26,11 @@ from test_sourcing import Outbox, db, outbox  # noqa: F401 - fixtures
 from p2p.formulas.calendar import pin_today
 from p2p.invoices import runs, settlement
 from p2p.invoices.service import InvoiceError
-from p2p.platform.sod import user
 
 D = Decimal
 
 
-def test_the_person_the_rule_names_approves_with_a_code_and_nobody_else_does(
-    ledger: Session, outbox: Outbox
-) -> None:  # noqa: F811
+def test_the_person_the_rule_names_approves_with_a_code_and_nobody_else_does(ledger: Session, outbox: Outbox) -> None:  # noqa: F811
     # given a proposed run, when Finance (its proposer) or another approver tries, then the run waits for U5;
     # when U5 tries without the code, then a code is demanded; with the right code the run is approved once
     finance, approver, _ = _people(ledger)
@@ -54,15 +49,12 @@ def test_the_person_the_rule_names_approves_with_a_code_and_nobody_else_does(
         runs.approve_step(ledger, run_no, approver, "000000")
     step = runs.approve_step(ledger, run_no, approver, _code(outbox))
     assert step == {"status": "approved", "step": 1, "next": None}
-    row = ledger.execute(
-        text("select status, approved_by from payment_run where no = :r"), {"r": run_no}
-    ).one()
+    row = ledger.execute(text("select status, approved_by from payment_run where no = :r"), {"r": run_no}).one()
     assert row[0] == "approved" and row[1] == "U5"
     assert ledger.execute(
         text("select approved_at is not null, code_id is not null from payment_run_approval where run_no = :r"),
         {"r": run_no},
     ).one() == (True, True)
-
 
 
 def test_a_run_leaves_out_an_invoice_its_approver_would_pay(ledger: Session, outbox: Outbox) -> None:  # noqa: F811
@@ -96,10 +88,14 @@ def test_a_chain_of_two_steps_needs_each_person_and_their_own_code(ledger: Sessi
     with pytest.raises(InvoiceError, match="this run waits for"):
         runs.send_code(ledger, run_no, second)  # the first step is not the director's
     assert _approve(ledger, outbox, run_no, first)["status"] == "proposed"
-    assert ledger.execute(text("select status from payment_run where no = :r"), {"r": run_no}).scalar_one() == "proposed"
+    assert (
+        ledger.execute(text("select status from payment_run where no = :r"), {"r": run_no}).scalar_one() == "proposed"
+    )
     assert _approve(ledger, outbox, run_no, second)["status"] == "approved"
     steps = ledger.execute(
-        text("select step, approver, approved_by, code_id is not null from payment_run_approval where run_no = :r order by step"),
+        text(
+            "select step, approver, approved_by, code_id is not null from payment_run_approval where run_no = :r order by step"
+        ),
         {"r": run_no},
     ).all()
     assert [(s[0], s[1], s[2]) for s in steps] == [(1, "U5", "U5"), (2, "U1", "U1")]
@@ -138,5 +134,3 @@ def test_the_person_who_approved_the_run_cannot_record_its_payment(ledger: Sessi
     pay_no = ledger.execute(text("select no from payment where run_no = :r"), {"r": run_no}).scalar_one()
     with pytest.raises(InvoiceError, match="this person approved the run"):
         settlement.record(ledger, pay_no, approver, utr="HDFC000001", value_date=date(2026, 11, 12), evidence=None)
-
-

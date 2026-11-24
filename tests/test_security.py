@@ -73,8 +73,14 @@ def test_the_demo_payment_tool_is_not_loaded_by_default_and_no_product_code_uses
 
 def test_the_decisions_a_person_always_makes_stay_with_a_person_whatever_the_settings_say(shop: Session) -> None:  # noqa: F811
     assert autonomy.LOCKED == {
-        "payment_run.approve", "payment.record", "payment.fail", "advance.approve", "tds.confirm",
-        "supplier.set_status", "invoice.release_block", "rfq.send",
+        "payment_run.approve",
+        "payment.record",
+        "payment.fail",
+        "advance.approve",
+        "tds.confirm",
+        "supplier.set_status",
+        "invoice.release_block",
+        "rfq.send",
     }
     for decision_type in autonomy.LOCKED:
         with pytest.raises(ValueError, match="always decided by a person"):

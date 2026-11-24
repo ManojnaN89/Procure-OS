@@ -51,7 +51,9 @@ def test_a_debit_line_with_the_payments_reference_and_amount_settles_that_paymen
 
     assert [s["payment"] for s in got["settled"]] == [pay_no] and got["for_a_person"] == []
     assert ledger.execute(text("select utr, value_date, status from payment where no = :n"), {"n": pay_no}).one() == (
-        "UTRBANK0001", date(2026, 11, 13), "settled",
+        "UTRBANK0001",
+        date(2026, 11, 13),
+        "settled",
     )
     assert (_row(ledger, inv_no)["status"], _row(ledger, inv_no)["paid_on"]) == ("paid", date(2026, 11, 13))
     assert ledger.execute(text("select status from payment_run where no = :r"), {"r": run_no}).scalar_one() == "paid"
@@ -86,7 +88,9 @@ def test_a_payment_settles_on_its_own_line_while_the_rest_of_the_run_waits(ledge
         ),
         1, as_of=TODAY,
     )  # fmt: skip
-    ledger.execute(text("update invoice set due_date = '2026-11-12', pay_by = '2026-11-12' where no = :n"), {"n": inv2.no})
+    ledger.execute(
+        text("update invoice set due_date = '2026-11-12', pay_by = '2026-11-12' where no = :n"), {"n": inv2.no}
+    )
     ledger.commit()
     # a new run holds only the second supplier (the first is already in its run)
     pin_today(date(2026, 11, 12))
@@ -116,7 +120,10 @@ def test_a_line_whose_amount_differs_is_not_applied_and_a_person_gets_a_task(led
 
     assert got["settled"] == [] and "the amount differs" in got["for_a_person"][0]["why"]
     assert got["task_id"]
-    assert ledger.execute(text("select status from payment_run where no = :r"), {"r": run_no}).scalar_one() == "file_generated"
+    assert (
+        ledger.execute(text("select status from payment_run where no = :r"), {"r": run_no}).scalar_one()
+        == "file_generated"
+    )
     assert _row(ledger, inv_no)["status"] == "approved"
 
 

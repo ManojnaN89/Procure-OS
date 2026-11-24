@@ -9,29 +9,22 @@ from decimal import Decimal
 import pytest
 from sqlalchemy import text
 from sqlalchemy.orm import Session
+from test_advances import _advance_terms, _order  # noqa: F401 - the advance world
 from test_invoices import TODAY, _goods, _invoice, _row, ledger  # noqa: F401 - fixtures
 from test_orders import shop  # noqa: F401 - fixtures
 from test_payments import (
-    _approve,
-    _code,
     _due_on,
     _earlier_purchase,
     _file,
     _people,
     _propose,
-    _statement_for,
-    _two_suppliers,
 )
 from test_receiving import store  # noqa: F401 - fixtures
 from test_sourcing import Outbox, db, outbox  # noqa: F401 - fixtures
 
 from p2p.formulas.calendar import pin_today
-from p2p.invoices import advances, bank_statement, runs, settlement, tds
-from p2p.invoices.service import InvoiceError
+from p2p.invoices import advances, bank_statement, runs, tds
 from p2p.platform import proposals
-from test_advances import _advance_terms, _order  # noqa: F401 - the advance world
-
-from p2p.platform.sod import user
 
 D = Decimal
 
@@ -46,7 +39,9 @@ def test_tax_at_source_is_proposed_per_section_and_holds_the_invoice_until_the_t
     po_no, _ = _goods(ledger, qty="10", price="100")
     done = _invoice(ledger, po_no, "10", "100", number="S1-1")
     row = ledger.execute(
-        text("select id, section, section_code, base, rate, amount, status, quarter from tds_entry where invoice_no = :n"),
+        text(
+            "select id, section, section_code, base, rate, amount, status, quarter from tds_entry where invoice_no = :n"
+        ),
         {"n": done.no},
     ).one()
     assert (row.section_code, row.base, row.rate, row.amount, row.status, row.quarter) == (
@@ -64,7 +59,6 @@ def test_tax_at_source_is_proposed_per_section_and_holds_the_invoice_until_the_t
     assert [r["no"] for r in runs.due_invoices(ledger, date(2026, 11, 6), 7)] == [done.no]
 
 
-
 def test_a_zero_tax_under_the_item_categorys_own_section_is_confirmed_by_the_rule(
     ledger: Session, outbox: Outbox
 ) -> None:  # noqa: F811
@@ -78,7 +72,6 @@ def test_a_zero_tax_under_the_item_categorys_own_section_is_confirmed_by_the_rul
     ).one()
     assert (row.base, row.amount, row.status, row.confirmed_by) == (D("0"), D("0.00"), "confirmed", "rule")
     assert _row(ledger, done.no)["tds_amount"] == D("0")
-
 
 
 def test_a_section_is_changed_only_with_a_reason_and_the_amount_is_worked_out_again(
@@ -103,8 +96,6 @@ def test_a_section_is_changed_only_with_a_reason_and_the_amount_is_worked_out_ag
 # ---- runs, the lock, the re-check -------------------------------------------------------------
 
 
-
-
 def test_an_approved_advance_is_paid_first_in_a_run_and_its_tax_is_booked_when_the_bank_settles_it(
     ledger: Session, outbox: Outbox
 ) -> None:  # noqa: F811
@@ -121,20 +112,20 @@ def test_an_approved_advance_is_paid_first_in_a_run_and_its_tax_is_booked_when_t
     assert ledger.execute(text("select count(*) from tds_entry where payment_no = :p"), {"p": pay.no}).scalar_one() == 0
     _file(ledger, outbox, run_no, finance, approver)
     pin_today(date(2026, 12, 2))
-    csv = (
-        "date,utr,narration,debit,credit\n"
-        f"2026-12-02,ADV0001,NEFT {pay.no} SUPPLIER,11505.00,0.00\n"
-    )
-    done = bank_statement.import_statement(
-        ledger, csv, finance, today=date(2026, 12, 2), tenant=ledger.info["slug"]
-    )
+    csv = f"date,utr,narration,debit,credit\n2026-12-02,ADV0001,NEFT {pay.no} SUPPLIER,11505.00,0.00\n"
+    done = bank_statement.import_statement(ledger, csv, finance, today=date(2026, 12, 2), tenant=ledger.info["slug"])
     assert [s["payment"] for s in done["settled"]] == [pay.no]
     row = ledger.execute(
         text("select section_code, base, amount, booked_on, status from tds_entry where payment_no = :p"), {"p": pay.no}
     ).one()
     assert (row.section_code, row.base, row.amount, row.booked_on, row.status) == (
-        "194Q", D("0"), D("0.00"), date(2026, 12, 2), "confirmed",
+        "194Q",
+        D("0"),
+        D("0.00"),
+        date(2026, 12, 2),
+        "confirmed",
     )
-    assert ledger.execute(text("select status from advance_request where id = :i"), {"i": asked["id"]}).scalar_one() == "paid"
-
-
+    assert (
+        ledger.execute(text("select status from advance_request where id = :i"), {"i": asked["id"]}).scalar_one()
+        == "paid"
+    )

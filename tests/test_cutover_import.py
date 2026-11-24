@@ -16,7 +16,8 @@ from fastapi.testclient import TestClient
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
-from p2p.invoices import payment, reconciliation, runs, service, tds as tds_rules
+from p2p.invoices import payment, reconciliation, runs, service
+from p2p.invoices import tds as tds_rules
 from p2p.main import app
 from p2p.platform import cutover, cutover_import, demo, numbering, ratelimit, routing, tenants, users
 from p2p.platform.company_state import StateError

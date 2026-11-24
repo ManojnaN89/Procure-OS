@@ -110,8 +110,12 @@ def test_a_lower_rate_certificate_holds_on_its_last_day_and_only_inside_its_limi
     # given a lower rate of 0.5% valid to 30 November and a limit of 1,00,000, when the year stays within the limit,
     # then the lower rate applies; the day after it lapses, the section's own rate applies
     rule = _rule("194J(a)", "2", annual="50000", single=None, base_rule="entire amount")
-    assert rules.tds_for(rule, D("10000"), D("60000"), D(0), lower_rate=D("0.5"), lower_limit=D("100000")).rate == D("0.5")
-    assert rules.tds_for(rule, D("10000"), D("60000"), D(0), lower_rate=D("0.5"), lower_limit=D("69999.99")).rate == D("2")
+    assert rules.tds_for(rule, D("10000"), D("60000"), D(0), lower_rate=D("0.5"), lower_limit=D("100000")).rate == D(
+        "0.5"
+    )
+    assert rules.tds_for(rule, D("10000"), D("60000"), D(0), lower_rate=D("0.5"), lower_limit=D("69999.99")).rate == D(
+        "2"
+    )
 
 
 def test_a_pan_the_department_calls_inoperative_takes_the_no_pan_rate() -> None:
@@ -122,7 +126,14 @@ def test_a_pan_the_department_calls_inoperative_takes_the_no_pan_rate() -> None:
 
 @pytest.mark.parametrize(
     ("value", "ok"),
-    [("HDFC26122400000101", True), ("ABC123", True), ("ABC12", False), ("AC-1234", False), ("A" * 31, False), ("", False)],
+    [
+        ("HDFC26122400000101", True),
+        ("ABC123", True),
+        ("ABC12", False),
+        ("AC-1234", False),
+        ("A" * 31, False),
+        ("", False),
+    ],
 )
 def test_a_bank_reference_is_letters_and_digits_six_to_thirty_long(value: str, ok: bool) -> None:
     # given a reference a person or a bank line gave, when checked, then only letters and digits of 6 to 30 pass

@@ -12,23 +12,16 @@ from sqlalchemy.orm import Session
 from test_invoices import TODAY, _goods, _invoice, _row, ledger  # noqa: F401 - fixtures
 from test_orders import shop  # noqa: F401 - fixtures
 from test_payments import (
-    _approve,
-    _code,
     _due_on,
-    _earlier_purchase,
-    _file,
     _people,
     _propose,
-    _statement_for,
     _two_suppliers,
 )
 from test_receiving import store  # noqa: F401 - fixtures
 from test_sourcing import Outbox, db, outbox  # noqa: F401 - fixtures
 
-from p2p.formulas.calendar import pin_today
-from p2p.invoices import notes, runs, settlement
+from p2p.invoices import notes
 from p2p.invoices.service import InvoiceError
-from p2p.platform.sod import user
 
 D = Decimal
 
@@ -48,7 +41,6 @@ def _credit_note(ledger_: Session, ref: str, qty: str, price: str, *, number: st
     return done.no
 
 
-
 def _po_of(ledger_: Session, invoice_no: str) -> str:
     return str(
         ledger_.execute(
@@ -57,11 +49,7 @@ def _po_of(ledger_: Session, invoice_no: str) -> str:
     )
 
 
-
-
-def test_a_credit_note_waits_for_a_second_person_and_is_netted_in_the_next_run(
-    ledger: Session, outbox: Outbox
-) -> None:  # noqa: F811
+def test_a_credit_note_waits_for_a_second_person_and_is_netted_in_the_next_run(ledger: Session, outbox: Outbox) -> None:  # noqa: F811
     # given a credit note entered by AP, when AP tries to approve it, then it is refused; Finance approves it,
     # and the next run pays the invoice less the note (Y10)
     finance, approver, ap = _people(ledger)
@@ -73,12 +61,13 @@ def test_a_credit_note_waits_for_a_second_person_and_is_netted_in_the_next_run(
     notes.approve(ledger, note, finance)
     _due_on(ledger, inv_no, date(2026, 11, 12))
     run_no = _propose(ledger, finance)
-    assert ledger.execute(text("select amount from payment where run_no = :r"), {"r": run_no}).scalar_one() == D("1062.00")
-    assert ledger.execute(text("select amount from payment_allocation where invoice_no = :n"), {"n": note}).scalar_one() == (
-        D("-118.00")
+    assert ledger.execute(text("select amount from payment where run_no = :r"), {"r": run_no}).scalar_one() == D(
+        "1062.00"
     )
+    assert ledger.execute(
+        text("select amount from payment_allocation where invoice_no = :n"), {"n": note}
+    ).scalar_one() == (D("-118.00"))
     assert approver and ap
-
 
 
 def test_a_debit_note_from_a_recovery_claim_is_named_on_the_claim_and_settles_it_when_paid(
@@ -89,5 +78,3 @@ def test_a_debit_note_from_a_recovery_claim_is_named_on_the_claim_and_settles_it
 
 
 # ---- the API and its reads --------------------------------------------------------------------
-
-

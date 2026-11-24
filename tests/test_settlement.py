@@ -14,10 +14,7 @@ from test_invoices import TODAY, _goods, _headers, _invoice, _row, ledger  # noq
 from test_notes import _credit_note
 from test_orders import shop  # noqa: F401 - fixtures
 from test_payments import (
-    _approve,
-    _code,
     _due_on,
-    _earlier_purchase,
     _file,
     _people,
     _propose,
@@ -28,10 +25,9 @@ from test_receiving import store  # noqa: F401 - fixtures
 from test_sourcing import Outbox, db, outbox  # noqa: F401 - fixtures
 
 from p2p.formulas.calendar import pin_today
-from p2p.invoices import bank_statement, notes, runs, settlement
+from p2p.invoices import bank_statement, notes, settlement
 from p2p.invoices.service import InvoiceError
 from p2p.main import app
-from p2p.platform.sod import user
 
 D = Decimal
 client = TestClient(app)
@@ -56,31 +52,25 @@ def test_a_payment_is_recorded_with_its_bank_reference_and_settled_only_by_the_b
     pin_today(date(2026, 11, 13))
     settlement.record(ledger, pay_no, finance, utr="HDFC26122400000101", value_date=date(2026, 11, 12), evidence=None)
     assert ledger.execute(text("select status, utr, value_date from payment where no = :n"), {"n": pay_no}).one() == (
-        "recorded", "HDFC26122400000101", date(2026, 11, 12),
+        "recorded",
+        "HDFC26122400000101",
+        date(2026, 11, 12),
     )
     assert _row(ledger, inv_no)["status"] == "approved"
     assert ledger.execute(text("select count(*) from budget_actual where source = 'payment'")).scalar_one() == 0
     assert any("HDFC26122400000101" in m["body"] for m in outbox.sent if m["subject"] == f"Payment advice {pay_no}")
 
     # when the bank statement names the payment, then it is settled and the invoice is paid and the case closed
-    csv = (
-        "date,utr,narration,debit,credit\n"
-        f"2026-11-12,HDFC26122400000101,NEFT {pay_no} SUPPLIER,1180.00,0.00\n"
-    )
-    done = bank_statement.import_statement(
-        ledger, csv, finance, today=date(2026, 11, 13), tenant=ledger.info["slug"]
-    )
+    csv = f"date,utr,narration,debit,credit\n2026-11-12,HDFC26122400000101,NEFT {pay_no} SUPPLIER,1180.00,0.00\n"
+    done = bank_statement.import_statement(ledger, csv, finance, today=date(2026, 11, 13), tenant=ledger.info["slug"])
     assert [s["payment"] for s in done["settled"]] == [pay_no]
     assert _row(ledger, inv_no)["status"] == "paid"
     assert ledger.execute(text("select status from payment_run where no = :r"), {"r": run_no}).scalar_one() == "paid"
     assert ledger.execute(text("select status from po where no = :p"), {"p": po_no}).scalar_one() == "closed"
     assert ledger.execute(text("select count(*) from budget_actual where source = 'payment'")).scalar_one() == 1
     # a second import of the same statement changes nothing
-    again = bank_statement.import_statement(
-        ledger, csv, finance, today=date(2026, 11, 13), tenant=ledger.info["slug"]
-    )
+    again = bank_statement.import_statement(ledger, csv, finance, today=date(2026, 11, 13), tenant=ledger.info["slug"])
     assert again["settled"] == [] and again["already_paid"]
-
 
 
 def test_marking_a_run_paid_by_hand_is_gone_and_a_reference_is_never_invented(ledger: Session, outbox: Outbox) -> None:  # noqa: F811
@@ -101,8 +91,10 @@ def test_marking_a_run_paid_by_hand_is_gone_and_a_reference_is_never_invented(le
         ledger, _statement_for(ledger, run_no, without_utr=pay_no), finance, today=date(2026, 11, 13),
         tenant=ledger.info["slug"],
     )  # fmt: skip
-    assert ledger.execute(text("select utr, status from payment where no = :n"), {"n": pay_no}).one() == (None, "settled")
-
+    assert ledger.execute(text("select utr, status from payment where no = :n"), {"n": pay_no}).one() == (
+        None,
+        "settled",
+    )
 
 
 def test_a_returned_payment_reopens_its_invoices_and_a_run_pays_them_again(ledger: Session, outbox: Outbox) -> None:  # noqa: F811
@@ -130,13 +122,15 @@ def test_a_returned_payment_reopens_its_invoices_and_a_run_pays_them_again(ledge
         bank_line_id=int(credit_line), tenant=ledger.info["slug"],
     )  # fmt: skip
     assert ledger.execute(text("select status, fail_reason from payment where no = :n"), {"n": pay_no}).one() == (
-        "failed", "beneficiary account closed",
+        "failed",
+        "beneficiary account closed",
     )
     assert (_row(ledger, inv_no)["status"], _row(ledger, inv_no)["in_run"]) == ("approved", None)
     assert ledger.execute(text("select count(*) from task where kind = 'payment_failed'")).scalar_one() == 1
     again = _propose(ledger, finance, date(2026, 11, 16))
-    assert ledger.execute(text("select amount from payment where run_no = :r"), {"r": again}).scalar_one() == D("1180.00")
-
+    assert ledger.execute(text("select amount from payment where run_no = :r"), {"r": again}).scalar_one() == D(
+        "1180.00"
+    )
 
 
 def test_a_reversed_settlement_takes_the_budget_back_and_reopens_the_order_line(
@@ -165,15 +159,14 @@ def test_a_reversed_settlement_takes_the_budget_back_and_reopens_the_order_line(
     )  # fmt: skip
     assert (_row(ledger, inv_no)["status"], _row(ledger, inv_no)["paid_on"]) == ("approved", None)
     assert ledger.execute(text("select status from po_line")).scalar_one() == "received"
-    amounts = ledger.execute(
-        text("select amount from budget_actual where source = 'payment' order by id")
-    ).scalars().all()
+    amounts = (
+        ledger.execute(text("select amount from budget_actual where source = 'payment' order by id")).scalars().all()
+    )
     assert any(D(a) > 0 for a in amounts) and any(D(a) < 0 for a in amounts)
     assert ledger.execute(text("select count(*) from audit_event where action = 'po.reopen'")).scalar_one() == 1
 
 
 # ---- notes ------------------------------------------------------------------------------------
-
 
 
 def test_a_bank_reference_must_be_unique_and_a_value_date_cannot_come_before_the_run(
@@ -206,9 +199,7 @@ def test_a_bank_reference_must_be_unique_and_a_value_date_cannot_come_before_the
         settlement.record(ledger, pay2, finance, utr="HDFC000001", value_date=date(2026, 11, 12), evidence=None)
 
 
-def test_a_payment_fully_covered_by_a_note_is_settled_when_the_file_is_made(
-    ledger: Session, outbox: Outbox
-) -> None:  # noqa: F811
+def test_a_payment_fully_covered_by_a_note_is_settled_when_the_file_is_made(ledger: Session, outbox: Outbox) -> None:  # noqa: F811
     # given a credit note as large as the invoice, when the run is filed, then the payment is 0.00 and settles with
     # nothing to pay, the invoice is paid, and no bank line is needed (12.3.4)
     finance, approver, _ = _people(ledger)
@@ -222,11 +213,15 @@ def test_a_payment_fully_covered_by_a_note_is_settled_when_the_file_is_made(
     assert pay_no.amount == D("0.00")
     _file(ledger, outbox, run_no, finance, approver)
     assert ledger.execute(text("select status, value_date from payment where no = :n"), {"n": pay_no.no}).one() == (
-        "settled", date(2026, 11, 12),
+        "settled",
+        date(2026, 11, 12),
     )
     assert _row(ledger, inv_no)["status"] == "paid"
     assert ledger.execute(text("select count(*) from bank_statement_line")).scalar_one() == 0
-    assert ledger.execute(
-        text("select after->>'how' from audit_event where action = 'payment.settle' and entity_id = :n"),
-        {"n": pay_no.no},
-    ).scalar_one() == "nothing to pay"
+    assert (
+        ledger.execute(
+            text("select after->>'how' from audit_event where action = 'payment.settle' and entity_id = :n"),
+            {"n": pay_no.no},
+        ).scalar_one()
+        == "nothing to pay"
+    )

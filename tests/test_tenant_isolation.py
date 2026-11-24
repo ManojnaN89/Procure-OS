@@ -25,7 +25,9 @@ def test_a_run_of_one_company_is_404_in_another_and_no_rows_are_shared(
     # then it is not there, and the second company has no payment, tax or advance row
     finance, _, _ = _people(ledger)
     _, inv_no = _two_suppliers(ledger)
-    ledger.execute(text("update invoice set due_date = '2026-11-12', pay_by = '2026-11-12' where no = :n"), {"n": inv_no})
+    ledger.execute(
+        text("update invoice set due_date = '2026-11-12', pay_by = '2026-11-12' where no = :n"), {"n": inv_no}
+    )
     ledger.commit()
     run_no = _propose(ledger, finance, date(2026, 11, 12))
     slug = "b" + uuid.uuid4().hex[:8]

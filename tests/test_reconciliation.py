@@ -57,7 +57,6 @@ def _paid_run(ledger_: Session, finance: int, owner: int, outbox_: Outbox) -> st
     return run
 
 
-
 def _audit(db_: Session, action: str) -> int:
     return int(db_.execute(text("select count(*) from audit_event where action = :a"), {"a": action}).scalar_one())
 
@@ -447,7 +446,7 @@ def test_given_a_bank_line_without_a_reference_when_a_person_confirms_it_then_th
 ) -> None:  # noqa: F811
     finance, owner, _ = _people(ledger)
     _two_suppliers(ledger)
-    run = _paid_run(ledger, finance, owner, outbox)
+    _paid_run(ledger, finance, owner, outbox)
     pay_no = ledger.execute(text("select no from payment")).scalar_one()
     csv = HEAD + "2026-11-05,UTRX1,NEFT ALPHA TRADERS,1180.00,\n"
 

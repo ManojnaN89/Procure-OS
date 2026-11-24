@@ -6,7 +6,6 @@ import re
 from datetime import date
 from decimal import Decimal
 
-import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import text
 from sqlalchemy.orm import Session
@@ -15,13 +14,9 @@ from test_orders import _logins, shop  # noqa: F401 - fixtures
 from test_receiving import store  # noqa: F401 - fixtures
 from test_sourcing import PASSWORD, Outbox, db, outbox  # noqa: F401 - fixtures
 
-from p2p.invoices import bank_statement, notes, payment, runs, settlement, tds
-from p2p.invoices.service import InvoiceError
-from p2p.formulas.calendar import pin_today
+from p2p.invoices import runs
 from p2p.main import app
-from p2p.masters import suppliers
-from p2p.platform import otp, permissions, proposals, users
-from p2p.platform.sod import user
+from p2p.platform import users
 
 D = Decimal
 client = TestClient(app)
@@ -56,7 +51,6 @@ def _payment_rules(ledger_: Session) -> None:
     ledger_.commit()
 
 
-
 def _people(ledger_: Session) -> tuple[int, int, int]:
     """Finance (proposes and records), the named approver (procurement head U5), and AP."""
     slug, sfx = ledger_.info["slug"], ledger_.info["sfx"]
@@ -77,7 +71,6 @@ def _people(ledger_: Session) -> tuple[int, int, int]:
     return finance, logins["procurement"], ap
 
 
-
 def _two_suppliers(ledger_: Session) -> tuple[str, str]:
     """An approved invoice of S1 due in a week: goods received against a sent order."""
     po_no, _ = _goods(ledger_, qty="10", price="100")
@@ -86,18 +79,13 @@ def _two_suppliers(ledger_: Session) -> tuple[str, str]:
     return po_no, inv.no
 
 
-
 def _due_on(ledger_: Session, invoice_no: str, on: date) -> None:
-    ledger_.execute(
-        text("update invoice set due_date = :d, pay_by = :d where no = :n"), {"d": on, "n": invoice_no}
-    )
+    ledger_.execute(text("update invoice set due_date = :d, pay_by = :d where no = :n"), {"d": on, "n": invoice_no})
     ledger_.commit()
-
 
 
 def _propose(ledger_: Session, finance: int, on: date = date(2026, 11, 6), **kw: object) -> str:
     return str(runs.propose_run(ledger_, on, finance, **kw)["run"])
-
 
 
 def _code(outbox_: Outbox) -> str:
@@ -108,11 +96,9 @@ def _code(outbox_: Outbox) -> str:
     raise AssertionError("no code was mailed")
 
 
-
 def _approve(ledger_: Session, outbox_: Outbox, run_no: str, approver: int) -> dict:
     runs.send_code(ledger_, run_no, approver)
     return runs.approve_step(ledger_, run_no, approver, _code(outbox_))
-
 
 
 def _file(ledger_: Session, outbox_: Outbox, run_no: str, finance: int, approver: int) -> str:
@@ -120,17 +106,13 @@ def _file(ledger_: Session, outbox_: Outbox, run_no: str, finance: int, approver
     return runs.generate_file(ledger_, run_no, finance)
 
 
-
 def _statement_for(ledger_: Session, run_no: str, *, without_utr: str | None = None) -> str:
     """The bank's debit lines for a run, naming each payment and its exact amount."""
     rows = ["date,utr,narration,debit,credit"]
-    for p in ledger_.execute(
-        text("select no, amount from payment where run_no = :r order by no"), {"r": run_no}
-    ).all():
+    for p in ledger_.execute(text("select no, amount from payment where run_no = :r order by no"), {"r": run_no}).all():
         ref = "" if p[0] == without_utr else f"UTR{p[0][-8:]}"
         rows.append(f"2026-11-12,{ref},NEFT {p[0]} SUPPLIER,{p[1]},0.00")
     return "\n".join(rows) + "\n"
-
 
 
 def _earlier_purchase(ledger_: Session, taxable: str, section: str = "194Q") -> None:
@@ -152,7 +134,6 @@ def _earlier_purchase(ledger_: Session, taxable: str, section: str = "194Q") -> 
 
 
 # ---- TDS at booking ---------------------------------------------------------------------------
-
 
 
 def test_no_agent_tool_writes_a_payment_run_tds_advance_or_note(ledger: Session) -> None:
@@ -210,5 +191,3 @@ def test_only_a_payment_permission_reads_what_is_due_and_the_named_person_approv
     assert approved.status_code == 200 and approved.json()["status"] == "approved"
     assert client.post(f"/api/payment-runs/{run_no}/file", headers=h_fin).status_code == 200
     assert client.get(f"/api/payment-runs/{run_no}", headers=h_fin).json()["has_file"] is True
-
-
