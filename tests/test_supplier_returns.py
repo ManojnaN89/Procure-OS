@@ -82,11 +82,11 @@ def test_given_blocked_stock_when_the_return_is_dispatched_then_it_leaves_and_th
     assert _on_hand(store) == D("8")
     hold_row = store.execute(text("select left_qty, closed_by_doc from stock_hold where id = :i"), {"i": hold}).one()
     assert (D(hold_row[0]), hold_row[1]) == (D("0"), no)
-    movement = store.execute(
-        text("select type, quality, qty from stock_movement where ref_doc = :n"), {"n": no}
-    ).one()
+    movement = store.execute(text("select type, quality, qty from stock_movement where ref_doc = :n"), {"n": no}).one()
     assert (movement[0], movement[1], D(movement[2])) == ("return", "blocked", D("2"))
-    line = store.execute(text("select counted, outcome from supplier_return_line where return_no = :n"), {"n": no}).one()
+    line = store.execute(
+        text("select counted, outcome from supplier_return_line where return_no = :n"), {"n": no}
+    ).one()
     assert (line[0], line[1]) == (False, None)
 
 
@@ -100,13 +100,18 @@ def test_given_a_dispatched_return_when_the_buyer_says_replace_then_the_replacem
     claims = returns.outcome(store, store.info["slug"], no, logins["procurement"], {1: "replace"}, as_of=TODAY)
 
     assert claims == []
-    assert store.execute(text("select outcome from supplier_return_line where return_no = :n"), {"n": no}).scalar_one() == "replace"
+    assert (
+        store.execute(text("select outcome from supplier_return_line where return_no = :n"), {"n": no}).scalar_one()
+        == "replace"
+    )
     replacement = _receive(store, po_no, "2")
     assert replacement.pending_inspection == [1]
     goods.inspect(store, replacement.no, [goods.Decision(1, D("2"), D("0"))], logins["cfo"], as_of=TODAY)
     assert goods.refresh_order(store, po_no) == "received"
     store.expire_all()
-    assert D(store.execute(text("select received_qty from po_line where po_no = :p"), {"p": po_no}).scalar_one()) == D("10")
+    assert D(store.execute(text("select received_qty from po_line where po_no = :p"), {"p": po_no}).scalar_one()) == D(
+        "10"
+    )
 
 
 def test_given_a_counted_return_with_no_replacement_and_an_invoice_beyond_the_goods_then_a_claim_is_raised(
@@ -117,11 +122,15 @@ def test_given_a_counted_return_with_no_replacement_and_an_invoice_beyond_the_go
     # the replacement arrives and is accepted, then two of the usable goods are held and sent back counted
     _receive(store, po_no, "2")
     replacement = store.execute(
-        text("select no from goods_receipt where po_no = :p and inspection_status = 'pending' order by no desc limit 1"),
+        text(
+            "select no from goods_receipt where po_no = :p and inspection_status = 'pending' order by no desc limit 1"
+        ),
         {"p": po_no},
     ).scalar_one()
     goods.inspect(store, str(replacement), [goods.Decision(1, D("2"), D("0"))], logins["cfo"], as_of=TODAY)
-    gr = store.execute(text("select gr_no from gr_line where po_no = :p order by gr_no limit 1"), {"p": po_no}).scalar_one()
+    gr = store.execute(
+        text("select gr_no from gr_line where po_no = :p order by gr_no limit 1"), {"p": po_no}
+    ).scalar_one()
     held = quality.hold(store, store.info["slug"], 1, "A", "WH-BLR", D("2"), "blocked", "Rusty")
     no = _return(store, held.hold_id, "2", gr_no=gr, line=1)
     returns.dispatch(store, store.info["slug"], no, 1, "RDC-12", "MH 14 XX 0000", as_of=TODAY)
@@ -135,10 +144,15 @@ def test_given_a_counted_return_with_no_replacement_and_an_invoice_beyond_the_go
     assert (D(claim["cgst"]), D(claim["sgst"]), D(claim["igst"])) == (D("0.00"), D("0.00"), D("36.00"))
     assert list(claim["invoices"]) == ["INV-T-1"] and claim["debit_note_no"] is None
     store.expire_all()
-    assert D(store.execute(text("select received_qty from po_line where po_no = :p"), {"p": po_no}).scalar_one()) == D("8")
-    assert store.execute(
-        text("select count(*) from supplier_return_line where return_no = :n and claim_no is not null"), {"n": no}
-    ).scalar_one() == 1
+    assert D(store.execute(text("select received_qty from po_line where po_no = :p"), {"p": po_no}).scalar_one()) == D(
+        "8"
+    )
+    assert (
+        store.execute(
+            text("select count(*) from supplier_return_line where return_no = :n and claim_no is not null"), {"n": no}
+        ).scalar_one()
+        == 1
+    )
 
 
 def test_a_counted_return_with_no_replacement_raises_nothing_when_the_invoice_is_not_beyond_the_goods(
@@ -146,7 +160,9 @@ def test_a_counted_return_with_no_replacement_raises_nothing_when_the_invoice_is
 ) -> None:  # noqa: F811
     po_no, logins, hold = _blocked(store)  # 8 received, the invoice is for 8 only
     _receive(store, po_no, "2")
-    gr = store.execute(text("select gr_no from gr_line where po_no = :p order by gr_no limit 1"), {"p": po_no}).scalar_one()
+    gr = store.execute(
+        text("select gr_no from gr_line where po_no = :p order by gr_no limit 1"), {"p": po_no}
+    ).scalar_one()
     held = quality.hold(store, store.info["slug"], 1, "A", "WH-BLR", D("2"), "blocked", "Rusty")
     no = _return(store, held.hold_id, "2", gr_no=gr, line=1)
     returns.dispatch(store, store.info["slug"], no, 1, "RDC-13", "MH 14 XX 0000", as_of=TODAY)
@@ -198,7 +214,9 @@ def test_a_dispatched_return_is_final_and_a_draft_can_be_cancelled(store: Sessio
     _, _, hold = _blocked(store)
     no = _return(store, hold, "1")
     returns.cancel(store, no, 1, "Wrong hold")
-    assert store.execute(text("select status from supplier_return where no = :n"), {"n": no}).scalar_one() == "cancelled"
+    assert (
+        store.execute(text("select status from supplier_return where no = :n"), {"n": no}).scalar_one() == "cancelled"
+    )
 
     no2 = _return(store, hold, "1")
     returns.dispatch(store, store.info["slug"], no2, 1, "RDC-14", "MH 14 XX 0000", as_of=TODAY)
@@ -218,10 +236,14 @@ def test_given_blocked_stock_when_it_is_scrapped_then_only_blocked_stock_leaves_
 
     assert left == D("0")
     assert _on_hand(store) == usable  # usable stock is untouched
-    row = store.execute(text("select quality, left_qty, closed_by_doc from stock_hold where id = :i"), {"i": hold}).one()
+    row = store.execute(
+        text("select quality, left_qty, closed_by_doc from stock_hold where id = :i"), {"i": hold}
+    ).one()
     assert (row[0], D(row[1]), row[2]) == ("blocked", D("0"), f"SCRAP-{hold}")
     assert store.execute(text("select type, quality, qty from stock_movement where type = 'scrap'")).one() == (
-        "scrap", "blocked", D("2")
+        "scrap",
+        "blocked",
+        D("2"),
     )
     assert store.execute(text("select count(*) from audit_event where action = 'stock.scrap'")).scalar_one() == 1
 

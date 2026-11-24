@@ -37,7 +37,9 @@ def test_a_company_sees_only_its_own_receipts_excess_returns_and_claims(store: S
     other = "q" + uuid.uuid4().hex[:8]
     assert tenants.create_tenant(other, load_reference=False).ok
     stranger = users.create_user(other, f"store{store.info['sfx']}@y.example", PASSWORD, "Elsewhere", "Store")
-    stranger_buyer = users.create_user(other, f"buyer{store.info['sfx']}@y.example", PASSWORD, "Elsewhere Buyer", "Buyer")
+    stranger_buyer = users.create_user(
+        other, f"buyer{store.info['sfx']}@y.example", PASSWORD, "Elsewhere Buyer", "Buyer"
+    )
     h = _headers(other, stranger, "Store")
     h_buyer = _headers(other, stranger_buyer, "Buyer")
 
@@ -48,8 +50,14 @@ def test_a_company_sees_only_its_own_receipts_excess_returns_and_claims(store: S
     assert client.get("/api/recovery-claims", headers=h).status_code in (403, 200)
     if client.get("/api/recovery-claims", headers=h).status_code == 200:
         assert client.get("/api/recovery-claims", headers=h).json() == []
-    assert client.post(f"/api/receipt-excess/{excess_id}/return", json={"reason": "not mine"}, headers=h_buyer).status_code == 404
+    assert (
+        client.post(f"/api/receipt-excess/{excess_id}/return", json={"reason": "not mine"}, headers=h_buyer).status_code
+        == 404
+    )
     assert client.get("/api/recovery-claims", headers=h_buyer).json() == []
-    assert client.post(
-        "/api/returns", json={"reason": "not mine", "lines": [{"hold_id": held.hold_id, "qty": "1"}]}, headers=h
-    ).status_code == 404
+    assert (
+        client.post(
+            "/api/returns", json={"reason": "not mine", "lines": [{"hold_id": held.hold_id, "qty": "1"}]}, headers=h
+        ).status_code
+        == 404
+    )

@@ -55,7 +55,9 @@ def test_given_goods_above_the_order_when_the_store_receives_them_then_they_wait
 
     row = _row(store, po_no)
     assert (row["status"], D(row["qty"]), row["uom"]) == ("waiting", D("1.5"), "NOS")
-    hold = store.execute(text("select quality, left_qty, source from stock_hold where id = :i"), {"i": row["hold_id"]}).one()
+    hold = store.execute(
+        text("select quality, left_qty, source from stock_hold where id = :i"), {"i": row["hold_id"]}
+    ).one()
     assert (hold[0], D(hold[1]), hold[2]) == ("quarantine", D("1.5"), "excess")
     assert _on_hand(store) == D("10.5") and _quarantine(store) == D("1.5")
     # held excess is never set aside, issued or invoiceable: it is not usable stock
@@ -155,9 +157,7 @@ def test_given_a_rejected_acceptance_when_it_ends_then_the_excess_waits_again_wi
     assert now["task_id"] is not None
 
 
-def test_given_an_excess_when_the_buyer_returns_it_then_a_draft_return_names_it(
-    store: Session, outbox: Outbox
-) -> None:  # noqa: F811
+def test_given_an_excess_when_the_buyer_returns_it_then_a_draft_return_names_it(store: Session, outbox: Outbox) -> None:  # noqa: F811
     po_no, _ = _over(store)
     row = _row(store, po_no)
 

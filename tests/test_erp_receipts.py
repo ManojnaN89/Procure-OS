@@ -45,7 +45,9 @@ def test_given_erp_rows_when_they_are_imported_then_order_and_budget_move_but_st
     assert store.execute(text("select received_qty from po_line where po_no = :p"), {"p": po_no}).scalar_one() == 100
     assert store.execute(text("select count(*) from stock_movement")).scalar_one() == 0
     assert _on_hand(store) == 0
-    budget = store.execute(text("select coalesce(sum(amount), 0) from budget_actual where po_no = :p"), {"p": po_no}).scalar_one()
+    budget = store.execute(
+        text("select coalesce(sum(amount), 0) from budget_actual where po_no = :p"), {"p": po_no}
+    ).scalar_one()
     assert budget == 10000.00
     assert store.execute(text("select source, external_ref from goods_receipt order by no")).all() == [
         ("erp", "ERP-GR-7001"),
@@ -66,9 +68,7 @@ def test_a_second_import_loads_nothing_and_a_changed_row_is_listed_not_applied(
     changed = _file(tmp_path, [f"ERP-GR-7001,1,{po_no},1,2026-11-06,55,,,,DC/1,,,"])
     report = erp_receipts.import_receipts(store, store.info["slug"], changed, user_id=1)
     assert report.loaded["goods_receipt"] == 0
-    assert report.changed_rows == [
-        "already loaded; changed: qty_received 40 -> 55 (ERP-GR-7001 line 1)"
-    ]
+    assert report.changed_rows == ["already loaded; changed: qty_received 40 -> 55 (ERP-GR-7001 line 1)"]
     assert store.execute(text("select received_qty from po_line where po_no = :p"), {"p": po_no}).scalar_one() == 40
 
 
@@ -87,25 +87,29 @@ def test_a_reverses_row_reverses_that_erp_receipt_and_the_app_refuses_its_own(
         store.info["slug"],
         _file(
             tmp_path,
-            [",".join(["ERP-GR-7005", "1", "", "", "", "", "", "", "", "", "", "ERP-GR-7004"])],
+            ["ERP-GR-7005,1,,,,,,,,,,ERP-GR-7004"],
         ),
         user_id=1,
     )
 
     assert report.reversed == 1
     assert store.execute(text("select received_qty from po_line where po_no = :p"), {"p": po_no}).scalar_one() == 0
-    assert store.execute(
-        text("select sum(amount) from budget_actual where po_no = :p and source = 'receipt_reversal'"), {"p": po_no}
-    ).scalar_one() == -6000.00
-    assert store.execute(text("select status from goods_receipt where external_ref = 'ERP-GR-7004'")).scalar_one() == "reversed"
+    assert (
+        store.execute(
+            text("select sum(amount) from budget_actual where po_no = :p and source = 'receipt_reversal'"), {"p": po_no}
+        ).scalar_one()
+        == -6000.00
+    )
+    assert (
+        store.execute(text("select status from goods_receipt where external_ref = 'ERP-GR-7004'")).scalar_one()
+        == "reversed"
+    )
 
 
-def test_a_reverses_row_for_a_receipt_never_loaded_is_left_out(
-    store: Session, outbox: Outbox, tmp_path: Path
-) -> None:  # noqa: F811
+def test_a_reverses_row_for_a_receipt_never_loaded_is_left_out(store: Session, outbox: Outbox, tmp_path: Path) -> None:  # noqa: F811
     _sent(store, qty="10")
     report = erp_receipts.import_receipts(
-        store, store.info["slug"], _file(tmp_path, [",".join(["ERP-GR-7006", "1", "", "", "", "", "", "", "", "", "", "ERP-GR-4999"])]), user_id=1
+        store, store.info["slug"], _file(tmp_path, ["ERP-GR-7006,1,,,,,,,,,,ERP-GR-4999"]), user_id=1
     )
     assert report.rejected[0].reason == "ERP-GR-4999 has not been loaded"
 

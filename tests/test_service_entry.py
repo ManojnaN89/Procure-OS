@@ -445,12 +445,17 @@ def test_given_a_confirmed_service_when_its_confirmer_reverses_it_then_the_line_
 
     from p2p.receiving import reversal
 
-    got = reversal.reverse_service_entry(svc, svc.info["slug"], done.no, logins["keeper"], "Done for another site", as_of=TODAY)
+    got = reversal.reverse_service_entry(
+        svc, svc.info["slug"], done.no, logins["keeper"], "Done for another site", as_of=TODAY
+    )
 
     assert got == {"status": "reversed"}
     assert _line(svc) == (D("0"), "open")
     assert svc.execute(text("select status from po where no = :p"), {"p": po_no}).scalar_one() == "sent"
-    assert svc.execute(text("select status, reversal_reason from service_entry")).one() == ("reversed", "Done for another site")
+    assert svc.execute(text("select status, reversal_reason from service_entry")).one() == (
+        "reversed",
+        "Done for another site",
+    )
     assert svc.execute(text("select count(*) from audit_event where action = 'service.reverse'")).scalar_one() == 1
     assert svc.execute(text("select count(*) from budget_actual")).scalar_one() == 0
 

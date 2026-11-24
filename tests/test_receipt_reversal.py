@@ -46,10 +46,7 @@ def test_given_a_receipt_on_the_posting_day_when_the_store_reverses_it_then_stoc
         TODAY,
         "Posted on the wrong order",
     )
-    budget = [
-        tuple(r)
-        for r in store.execute(text("select source, period, amount from budget_actual order by id"))
-    ]
+    budget = [tuple(r) for r in store.execute(text("select source, period, amount from budget_actual order by id"))]
     assert [row[0] for row in budget] == ["receipt", "receipt_reversal"]
     assert budget[0][1] == "2026-11" and D(budget[0][2]) == D("1000.00")
     assert D(budget[1][2]) == D("-1000.00")
@@ -60,7 +57,9 @@ def test_given_a_receipt_inside_the_window_when_the_order_acknowledged_its_versi
     store: Session, outbox: Outbox
 ) -> None:  # noqa: F811
     po_no, logins = _sent(store)
-    store.execute(text("update po set acknowledged_version = version, status = 'acknowledged' where no = :p"), {"p": po_no})
+    store.execute(
+        text("update po set acknowledged_version = version, status = 'acknowledged' where no = :p"), {"p": po_no}
+    )
     store.commit()
     gr = _receive(store, po_no, "4").no
 
@@ -95,13 +94,13 @@ def test_given_goods_already_issued_when_the_receipt_is_reversed_then_the_stock_
     )
     store.commit()
 
-    with pytest.raises(reversal.ReversalError, match="A: only 1 usable is at Bengaluru store, so 10 cannot be taken back"):
+    with pytest.raises(
+        reversal.ReversalError, match="A: only 1 usable is at Bengaluru store, so 10 cannot be taken back"
+    ):
         reversal.reverse_receipt(store, store.info["slug"], gr, 1, "Undo", as_of=TODAY)
 
 
-def test_given_an_erp_or_cutover_receipt_when_it_is_reversed_then_it_is_refused(
-    store: Session, outbox: Outbox
-) -> None:  # noqa: F811
+def test_given_an_erp_or_cutover_receipt_when_it_is_reversed_then_it_is_refused(store: Session, outbox: Outbox) -> None:  # noqa: F811
     po_no, gr, _ = _received(store)
     store.execute(text("update goods_receipt set source = 'erp' where no = :n"), {"n": gr})
     store.commit()
@@ -132,9 +131,7 @@ def test_given_a_receipt_past_the_window_when_the_store_asks_then_a_purchase_man
     assert store.execute(text("select status from goods_receipt where no = :n"), {"n": gr}).scalar_one() == "reversed"
 
 
-def test_two_reversals_of_one_receipt_at_the_same_moment_leave_one_winner(
-    store: Session, outbox: Outbox
-) -> None:  # noqa: F811
+def test_two_reversals_of_one_receipt_at_the_same_moment_leave_one_winner(store: Session, outbox: Outbox) -> None:  # noqa: F811
     po_no, gr, logins = _received(store)
     slug = store.info["slug"]
     barrier = threading.Barrier(2)

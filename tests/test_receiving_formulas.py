@@ -28,9 +28,7 @@ def test_an_item_or_its_category_asking_for_inspection_is_enough() -> None:
         ("7.5", "0", "0", "7.5"),  # a category with no tolerance (Brightwave)
     ],
 )
-def test_good_units_split_into_what_counts_and_what_waits(
-    good: str, room: str, counted: str, excess: str
-) -> None:
+def test_good_units_split_into_what_counts_and_what_waits(good: str, room: str, counted: str, excess: str) -> None:
     split = rules.split_excess(D(good), D(room))
     assert (split.counted, split.excess) == (D(counted), D(excess))
 

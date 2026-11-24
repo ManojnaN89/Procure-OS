@@ -591,7 +591,9 @@ def test_the_api_inspection_and_the_separation_of_duties_answer_with_the_right_c
         ).status_code
         == 409
     )
-    assert client.post(f"/api/receipts/{gr}/inspect", json={"lines": [{"line_no": 1}]}, headers=h_check).status_code == 422
+    assert (
+        client.post(f"/api/receipts/{gr}/inspect", json={"lines": [{"line_no": 1}]}, headers=h_check).status_code == 422
+    )
     assert client.post(f"/api/receipts/{gr}/inspect", json={"lines": []}, headers=h_check).status_code == 422
     ok = client.post(
         f"/api/receipts/{gr}/inspect",

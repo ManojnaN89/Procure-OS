@@ -6,8 +6,8 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import text
 from sqlalchemy.orm import Session
-from test_receiving import _receive, _sent, store  # noqa: F401 - fixtures
 from test_orders import shop  # noqa: F401 - the store fixture builds on it
+from test_receiving import _receive, _sent, store  # noqa: F401 - fixtures
 from test_sourcing import PASSWORD, Outbox, db, outbox  # noqa: F401 - fixtures
 
 from p2p.main import app
@@ -67,9 +67,10 @@ def test_given_a_receipt_when_another_store_person_inspects_it_then_it_is_accept
     done = goods.inspect(store, gr, [goods.Decision(1, D("10"), D("0"))], other, as_of=TODAY)
 
     assert done.accepted == {1: D("10")}
-    assert store.execute(
-        text("select inspected_by is not null from goods_receipt where no = :n"), {"n": gr}
-    ).scalar_one() is True
+    assert (
+        store.execute(text("select inspected_by is not null from goods_receipt where no = :n"), {"n": gr}).scalar_one()
+        is True
+    )
 
 
 def test_the_screen_offers_the_inspection_to_quality_and_not_to_the_receiver(store: Session, outbox: Outbox) -> None:  # noqa: F811
@@ -80,12 +81,18 @@ def test_the_screen_offers_the_inspection_to_quality_and_not_to_the_receiver(sto
     keeper = users.create_user(slug, f"store{sfx}@x.example", PASSWORD, "A Store", "Store")
     quality = users.create_user(slug, f"quality{sfx}@x.example", PASSWORD, "A Quality", "Quality")
     gr = _receive(store, po_no, "10", user=keeper).no
-    h_store = {"Authorization": "Bearer " + client.post(
-        "/api/auth/login", json={"email": f"store{sfx}@x.example", "password": PASSWORD}
-    ).json()["access_token"]}
-    h_quality = {"Authorization": "Bearer " + client.post(
-        "/api/auth/login", json={"email": f"quality{sfx}@x.example", "password": PASSWORD}
-    ).json()["access_token"]}
+    h_store = {
+        "Authorization": "Bearer "
+        + client.post("/api/auth/login", json={"email": f"store{sfx}@x.example", "password": PASSWORD}).json()[
+            "access_token"
+        ]
+    }
+    h_quality = {
+        "Authorization": "Bearer "
+        + client.post("/api/auth/login", json={"email": f"quality{sfx}@x.example", "password": PASSWORD}).json()[
+            "access_token"
+        ]
+    }
     assert quality
 
     assert client.get(f"/api/receipts/{gr}", headers=h_store).json()["can_inspect"] is False
