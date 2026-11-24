@@ -70,6 +70,7 @@ def list_excess(db: Db, ctx: Ctx, open: bool = False) -> list[dict[str, Any]]:
             "item_code": r["item_code"],
             "supplier": r["supplier"],
             "version_made": r["version_made"],
+            "version": r["version"],
             "return_no": r["return_no"],
             "proposal_id": r["proposal_id"],
         }
