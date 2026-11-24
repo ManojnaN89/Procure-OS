@@ -6,7 +6,6 @@ is theirs alone.
 import uuid
 from datetime import date
 from decimal import Decimal
-from typing import Any
 
 import pytest
 from fastapi.testclient import TestClient
@@ -55,9 +54,12 @@ def test_t1_another_company_has_no_apex_bill_and_no_apex_rule(bills: Session) ->
                 invoices.enter_invoice(
                     other,
                     invoices.InvoiceIn(
-                        supplier_code="SUP-010", supplier_invoice_no="SNL/2627/0458",
-                        invoice_date=date(2026, 11, 23), kind="non_po",
-                        category_code="UTL", cost_centre_code="CC-ADM",
+                        supplier_code="SUP-010",
+                        supplier_invoice_no="SNL/2627/0458",
+                        invoice_date=date(2026, 11, 23),
+                        kind="non_po",
+                        category_code="UTL",
+                        cost_centre_code="CC-ADM",
                         lines=[invoices.InvLine(None, None, Decimal("1"), Decimal("100"))],
                     ),
                     1,

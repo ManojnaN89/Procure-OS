@@ -20,7 +20,8 @@ from p2p.platform import routing
 
 ROOT = Path(__file__).resolve().parents[1]
 _spec = importlib.util.spec_from_file_location(
-    "migration_0170", ROOT / "backend" / "p2p" / "platform" / "migrations" / "tenant" / "versions" / "0170_invoices_without_order.py"
+    "migration_0170",
+    ROOT / "backend" / "p2p" / "platform" / "migrations" / "tenant" / "versions" / "0170_invoices_without_order.py",
 )
 assert _spec is not None and _spec.loader is not None
 migration = importlib.util.module_from_spec(_spec)
@@ -65,12 +66,17 @@ def test_d2_two_entries_at_once_leave_one_live_and_one_cancelled_copy(bills: Ses
                 done = invoices.enter_invoice(
                     s,
                     invoices.InvoiceIn(
-                        supplier_code="S1", supplier_invoice_no="RACE/2627/1", invoice_date=TODAY, kind="non_po",
-                        category_code="UTL", cost_centre_code="CC-ADM",
+                        supplier_code="S1",
+                        supplier_invoice_no="RACE/2627/1",
+                        invoice_date=TODAY,
+                        kind="non_po",
+                        category_code="UTL",
+                        cost_centre_code="CC-ADM",
                         documents=[{"id": int(document), "kind": "copy"}],
                         lines=[invoices.InvLine(None, None, D("1"), D("100"), gst_rate=D("18"), description="Line")],
                     ),
-                    user, as_of=TODAY,
+                    user,
+                    as_of=TODAY,
                 )
                 return done.status
             except invoices.InvoiceError:

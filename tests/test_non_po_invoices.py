@@ -2,10 +2,11 @@
 the possible duplicate and the refusals. Each test says what it is given, what it does and what it expects.
 """
 
+from collections.abc import Iterator
 from contextlib import contextmanager
 from datetime import date
 from decimal import Decimal
-from typing import Any, Iterator
+from typing import Any
 
 import pytest
 from sqlalchemy import text
@@ -138,7 +139,11 @@ def bills(shop: Session) -> Session:  # noqa: F811
             "('invoice_booking', 'PI', 'company', '{prefix}-{fy4}-{seq:06d}', 'fy')"
         )
     )
-    x(text("insert into tolerance (key, value, category_code) values ('price_pct', '2', 'ANY'), ('price_abs', '500', 'ANY'), ('qty_pct', '0', 'ANY')"))
+    x(
+        text(
+            "insert into tolerance (key, value, category_code) values ('price_pct', '2', 'ANY'), ('price_abs', '500', 'ANY'), ('qty_pct', '0', 'ANY')"
+        )
+    )
     x(text("update payment_terms set baseline = 'invoice_date'"))
     shop.commit()
     fm = users.create_user(slug, f"finmgr{sfx}@x.example", PASSWORD, "Fin Manager", "Approver")
@@ -223,9 +228,14 @@ def _row(shop: Session, no: str) -> dict[str, Any]:
     return dict(shop.execute(text("select * from invoice where no = :n"), {"n": no}).mappings().one())
 
 
-def _authorise(shop: Session, no: str, *, user: int | None = None, on: date | None = None, reason: str | None = None) -> dict[str, Any]:
+def _authorise(
+    shop: Session, no: str, *, user: int | None = None, on: date | None = None, reason: str | None = None
+) -> dict[str, Any]:
     return non_po.authorise(
-        shop, shop.info["slug"], no, user if user is not None else shop.info["bills"]["owner"],
+        shop,
+        shop.info["slug"],
+        no,
+        user if user is not None else shop.info["bills"]["owner"],
         over_budget_reason=reason,
     )
 
@@ -269,7 +279,9 @@ def test_n2_a_bill_in_the_finance_band_needs_the_finance_manager_and_uses_the_ms
     bills: Session, outbox: Outbox
 ) -> None:  # noqa: F811
     with _on(AUTH_ON):
-        done = _enter(bills, supplier="S2", number="MG/2627/112", on=N2_ON, category="PRF", taxable="75000.00", supporting=True)
+        done = _enter(
+            bills, supplier="S2", number="MG/2627/112", on=N2_ON, category="PRF", taxable="75000.00", supporting=True
+        )
         assert (done.status, done.authoriser) == ("awaiting_authorisation", "U4")
     with _on(AUTH2_ON):
         result = _authorise(bills, done.no)
@@ -314,7 +326,16 @@ def test_n4_the_enterer_cannot_authorise_and_a_deputy_may(bills: Session, outbox
     bills.commit()
     owner_login = bills.info["bills"]["ap"]
     with _on(AUTH_ON):
-        first = _enter(bills, supplier="S2", number="MG/2627/120", on=N2_ON, category="PRF", taxable="75000.00", supporting=True, user=owner_login)
+        first = _enter(
+            bills,
+            supplier="S2",
+            number="MG/2627/120",
+            on=N2_ON,
+            category="PRF",
+            taxable="75000.00",
+            supporting=True,
+            user=owner_login,
+        )
 
     assert _row(bills, first.no)["authoriser"] == "U1"
     with pytest.raises(invoices.InvoiceError, match="it is not your turn"):
@@ -337,7 +358,9 @@ def test_n4_the_enterer_cannot_authorise_and_a_deputy_may(bills: Session, outbox
 
 def test_n5_a_rejection_cancels_the_bill_tells_ap_and_frees_the_number(bills: Session, outbox: Outbox) -> None:  # noqa: F811
     with _on(AUTH_ON):
-        done = _enter(bills, supplier="S2", number="MG/2627/112", on=N2_ON, category="PRF", taxable="75000.00", supporting=True)
+        done = _enter(
+            bills, supplier="S2", number="MG/2627/112", on=N2_ON, category="PRF", taxable="75000.00", supporting=True
+        )
     with _on(AUTH2_ON):
         _authorise(bills, done.no)
 
@@ -347,26 +370,36 @@ def test_n5_a_rejection_cancels_the_bill_tells_ap_and_frees_the_number(bills: Se
     assert row["status"] == "cancelled" and row["cancel_reason"] == "Rejected by Fin Manager: fee not agreed"
     assert bills.execute(text("select count(*) from task where status = 'cancelled'")).scalar_one() == 1
     with _on(AUTH_ON):
-        again = _enter(bills, supplier="S2", number="MG/2627/112", on=N2_ON, category="PRF", taxable="75000.00", supporting=True)
+        again = _enter(
+            bills, supplier="S2", number="MG/2627/112", on=N2_ON, category="PRF", taxable="75000.00", supporting=True
+        )
     assert again.status == "awaiting_authorisation" and again.duplicate_of is None
 
 
-def test_n6_the_budget_holds_each_bill_and_the_last_decider_needs_a_reason_over_it(bills: Session, outbox: Outbox) -> None:  # noqa: F811
+def test_n6_the_budget_holds_each_bill_and_the_last_decider_needs_a_reason_over_it(
+    bills: Session, outbox: Outbox
+) -> None:  # noqa: F811
     with _on(AUTH_ON):
-        first = _enter(bills, supplier="S2", number="MG/2627/112", on=N2_ON, category="PRF", taxable="75000.00", supporting=True)
+        first = _enter(
+            bills, supplier="S2", number="MG/2627/112", on=N2_ON, category="PRF", taxable="75000.00", supporting=True
+        )
     with _on(AUTH2_ON):
         _authorise(bills, first.no)
     with _on(APPROVE_ON):
         _approve(bills, first.no)
     for number, taxable in (("MG/2627/115", "80000.00"), ("MG/2627/116", "85000.00")):
         with _on(AUTH_ON):
-            done = _enter(bills, supplier="S2", number=number, on=N2_ON, category="PRF", taxable=taxable, supporting=True)
+            done = _enter(
+                bills, supplier="S2", number=number, on=N2_ON, category="PRF", taxable=taxable, supporting=True
+            )
         with _on(AUTH2_ON):
             _authorise(bills, done.no)
         with _on(APPROVE_ON):
             _approve(bills, done.no)
     with _on(AUTH_ON):
-        last = _enter(bills, supplier="S2", number="MG/2627/117", on=N2_ON, category="PRF", taxable="90000.00", supporting=True)
+        last = _enter(
+            bills, supplier="S2", number="MG/2627/117", on=N2_ON, category="PRF", taxable="90000.00", supporting=True
+        )
     with _on(AUTH2_ON):
         _authorise(bills, last.no)
 
@@ -376,7 +409,12 @@ def test_n6_the_budget_holds_each_bill_and_the_last_decider_needs_a_reason_over_
         approved = _approve(bills, last.no, reason="the audit fee is contracted")
     assert approved["status"] == "approved"
     assert _row(bills, last.no)["over_budget_reason"] == "the audit fee is contracted"
-    assert bills.execute(text("select count(*) from audit_event where action = 'invoice.approve_over_budget'")).scalar_one() == 1
+    assert (
+        bills.execute(
+            text("select count(*) from audit_event where action = 'invoice.approve_over_budget'")
+        ).scalar_one()
+        == 1
+    )
 
 
 def test_b1_b2_the_limit_is_compared_on_the_recorded_total(bills: Session, outbox: Outbox) -> None:  # noqa: F811
@@ -394,10 +432,23 @@ def test_a_possible_duplicate_is_a_question_unless_a_reason_is_given(bills: Sess
     with _on(date(2026, 11, 30)):
         with pytest.raises(invoices.InvoiceError, match="this may be the same bill as"):
             _enter(bills, number="SNL/2627/0461", on=date(2026, 11, 30))
-        other = _enter(bills, supplier="S2", number="MG/2627/900", on=date(2026, 11, 30), category="PRF", taxable="15000.00", supporting=True)
+        other = _enter(
+            bills,
+            supplier="S2",
+            number="MG/2627/900",
+            on=date(2026, 11, 30),
+            category="PRF",
+            taxable="15000.00",
+            supporting=True,
+        )
     assert other.status == "awaiting_authorisation"
     with _on(AUTH2_ON):
-        seen = _enter(bills, number="SNL/2627/0463", on=date(2026, 11, 27), not_duplicate_reason="November's bill, paid by standing order")
+        seen = _enter(
+            bills,
+            number="SNL/2627/0463",
+            on=date(2026, 11, 27),
+            not_duplicate_reason="November's bill, paid by standing order",
+        )
     assert _row(bills, seen.no)["suspect_of"] == first.no
 
 
@@ -414,7 +465,9 @@ def test_n7_a_bill_in_another_company_band_is_authorised_by_its_own_cost_centre_
     bills: Session, outbox: Outbox
 ) -> None:  # noqa: F811
     with _on(N1_ON):
-        done = _enter(bills, supplier="S4", number="NFN/2627/1187", category="TEL", cost_centre="CC-ITO", taxable="25000.00")
+        done = _enter(
+            bills, supplier="S4", number="NFN/2627/1187", category="TEL", cost_centre="CC-ITO", taxable="25000.00"
+        )
     assert (done.status, done.authoriser) == ("awaiting_authorisation", "U2")
     with _on(AUTH_ON):
         approved = _authorise(bills, done.no, user=bills.info["bills"]["cfo"])

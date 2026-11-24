@@ -309,4 +309,6 @@ def test_n6_a_bill_without_an_order_is_held_from_authorisation_and_spent_when_pa
         ("payment", D("15000.00"), "CC-ADM", "5460", "2026-11", "2026-11")
     ]
     assert bills.execute(text("select count(*) from budget_use where cost_centre_code = 'CC-ADM'")).scalar_one() == 1
+
+
 from test_sourcing import db  # noqa: E402, F401 - fixtures

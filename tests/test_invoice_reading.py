@@ -564,9 +564,7 @@ def test_a_draft_with_problems_cannot_be_confirmed_unchanged(ledger: Session, ou
 # ---- the autonomy gate is locked (OP-13 interim, 10.10.2) ---------------------------------------
 
 
-def test_the_invoice_read_gate_is_locked_and_every_clean_draft_waits_for_ap(
-    ledger: Session, outbox: Outbox
-) -> None:  # noqa: F811
+def test_the_invoice_read_gate_is_locked_and_every_clean_draft_waits_for_ap(ledger: Session, outbox: Outbox) -> None:  # noqa: F811
     po_no, logins = _goods(ledger)
     first = _read(ledger, docs.make(_spec(po_no), qr=True), _gateway("{}")[0])
     assert _draft(ledger, first)["status"] == "pending"  # AP confirms every invoice
@@ -773,24 +771,41 @@ def test_m1_the_senders_verdict_decides_whether_a_mail_is_read_at_all(bills: Ses
     assert (proposal["kind"], proposal["category_code"], proposal["cost_centre_code"]) == ("non_po", "UTL", "CC-ADM")
     assert any("cost centre CC-ADM" in a for a in passing["assumptions"])
 
-    none = _draft(bills, ledger_draft(bills, docs.make(_bill_spec("SNL/2627/0462"), qr=True), gw, auth={"verdict": "none"}))
+    none = _draft(
+        bills, ledger_draft(bills, docs.make(_bill_spec("SNL/2627/0462"), qr=True), gw, auth={"verdict": "none"})
+    )
     assert "the sender could not be authenticated" in none["assumptions"]
     assert none["status"] == "pending"
 
     before = provider.calls
-    failed = _draft(bills, ledger_draft(bills, docs.make(_bill_spec("SNL/2627/0463"), qr=True), gw, auth={"verdict": "fail", "failed": "dmarc=fail"}))
+    failed = _draft(
+        bills,
+        ledger_draft(
+            bills, docs.make(_bill_spec("SNL/2627/0463"), qr=True), gw, auth={"verdict": "fail", "failed": "dmarc=fail"}
+        ),
+    )
     assert provider.calls == before and failed["path"] == "none" and failed["status"] == "needs_person"
     assert "failed its authentication" in failed["problems"][0]
     assert bills.execute(text("select count(*) from task where kind = 'invoice_sender_check'")).scalar_one() == 1
 
     stranger = _draft(
         bills,
-        ledger_draft(bills, docs.make(_bill_spec("SNL/2627/0464"), qr=True), gw, sender="Someone <billing@elsewhere.example>"),
+        ledger_draft(
+            bills, docs.make(_bill_spec("SNL/2627/0464"), qr=True), gw, sender="Someone <billing@elsewhere.example>"
+        ),
     )
     assert stranger["status"] == "pending" and any("not a registered contact" in a for a in stranger["assumptions"])
 
 
-def ledger_draft(db: Session, data: bytes, gw: Any, *, auth: dict[str, Any] | None = None, sender: str | None = "Alpha Traders <s1@supplier.example>", document_id: int | None = None) -> int:
+def ledger_draft(
+    db: Session,
+    data: bytes,
+    gw: Any,
+    *,
+    auth: dict[str, Any] | None = None,
+    sender: str | None = "Alpha Traders <s1@supplier.example>",
+    document_id: int | None = None,
+) -> int:
     return reading.read_document(
         db, db.info["slug"], data, "bill.pdf", source="email", gateway=gw, as_of=date(2026, 11, 30),
         sender=sender, received_on=date(2026, 11, 27), received_at=datetime(2026, 11, 27, 9, 0, tzinfo=UTC),
@@ -828,7 +843,9 @@ def test_a1_the_gate_is_locked_and_a_clean_bill_read_waits_for_ap(bills: Session
         autonomy.configure(bills, sod.user(bills.info["bills"]["ap"]), "invoice.read", level="auto")
     _enter(bills, number="SNL/2627/0458", on=date(2026, 11, 23))
     gw, _ = _gateway("{}")
-    draft = _draft(bills, ledger_draft(bills, docs.make(_bill_spec("SNL/2627/0471"), qr=True), gw, auth={"verdict": "pass"}))
+    draft = _draft(
+        bills, ledger_draft(bills, docs.make(_bill_spec("SNL/2627/0471"), qr=True), gw, auth={"verdict": "pass"})
+    )
     assert draft["status"] == "pending" and bills.execute(text("select count(*) from invoice")).scalar_one() == 1
 
 
@@ -837,19 +854,27 @@ def test_g3_a_debit_note_is_read_as_one_and_must_name_its_invoice(bills: Session
     spec = _bill_spec("SNL/DBN/0459", debit_note=True, ref_invoice=None)
     gw, provider = _gateway("{}")
 
-    draft_id = _read(bills, docs.make(spec, qr=True), gw, name="debit.pdf", sender="Alpha Traders <s1@supplier.example>")
+    draft_id = _read(
+        bills, docs.make(spec, qr=True), gw, name="debit.pdf", sender="Alpha Traders <s1@supplier.example>"
+    )
     draft = _draft(bills, draft_id)
 
     assert provider.calls == [] and draft["proposal"]["doc_type"] == "debit_note"
     assert any("must say which invoice" in p for p in draft["problems"])
-    done = reading.confirm_draft(bills, draft_id, bills.info["bills"]["ap"], as_of=date(2026, 11, 23), edits={"ref_invoice_no": original.no})
+    done = reading.confirm_draft(
+        bills, draft_id, bills.info["bills"]["ap"], as_of=date(2026, 11, 23), edits={"ref_invoice_no": original.no}
+    )
     assert done.status == "approved" and _row(bills, done.no)["type"] == "debit_note"
 
 
-def test_a_bill_with_no_order_is_read_by_code_and_by_the_model_into_a_bill_draft(bills: Session, outbox: Outbox) -> None:  # noqa: F811
+def test_a_bill_with_no_order_is_read_by_code_and_by_the_model_into_a_bill_draft(
+    bills: Session, outbox: Outbox
+) -> None:  # noqa: F811
     _enter(bills, number="SNL/2627/0458", on=date(2026, 11, 23))
     gw, provider = _gateway("{}")
-    by_code = _draft(bills, ledger_draft(bills, docs.make(_bill_spec("SNL/2627/0480"), qr=True), gw, auth={"verdict": "pass"}))
+    by_code = _draft(
+        bills, ledger_draft(bills, docs.make(_bill_spec("SNL/2627/0480"), qr=True), gw, auth={"verdict": "pass"})
+    )
     assert provider.calls == [] and (by_code["kind"], by_code["proposal"]["category_code"]) == ("non_po", "UTL")
 
     spec = _bill_spec("SNL/2627/0481")

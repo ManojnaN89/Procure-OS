@@ -59,10 +59,22 @@ def test_the_bill_copy_always_and_the_named_supporting_document_when_a_rule_name
 
 
 def test_a_category_without_a_rule_and_a_stocked_category_are_refused_in_words() -> None:
-    assert n.rule_problems(
-        rule=None, category_name="Raw materials", total=D("1"), supplier_name="S", supplier_status="active",
-        supplier_approved=True, cost_centre_ok=True, gl_code="1410", gl_ok=True, has_copy=True, has_supporting=True,
-    )[0].message == "Raw materials cannot be billed without a purchase order"
+    assert (
+        n.rule_problems(
+            rule=None,
+            category_name="Raw materials",
+            total=D("1"),
+            supplier_name="S",
+            supplier_status="active",
+            supplier_approved=True,
+            cost_centre_ok=True,
+            gl_code="1410",
+            gl_ok=True,
+            has_copy=True,
+            has_supporting=True,
+        )[0].message
+        == "Raw materials cannot be billed without a purchase order"
+    )
     stocked = n.Rule(3, "RAW", "Raw materials", 1, D("1000.00"), None, "1410", True)
     assert _problems(rule=stocked)[0].message == "Raw materials cannot be billed without a purchase order"
 
@@ -92,11 +104,20 @@ def test_the_fr33_key_drops_leading_zeros_in_each_run_but_a_run_of_zeros_keeps_o
 
 def _header(**kw: object) -> m.Header:
     base: dict[str, object] = {
-        "supplier_gst_type": "regular", "e_invoice_applicable": False, "invoice_type": "invoice", "irn": None,
-        "tax_charged": D("18"), "invoice_supplier_gstin": "27AAAAA0000A1Z2",
+        "supplier_gst_type": "regular",
+        "e_invoice_applicable": False,
+        "invoice_type": "invoice",
+        "irn": None,
+        "tax_charged": D("18"),
+        "invoice_supplier_gstin": "27AAAAA0000A1Z2",
         "valid_supplier_gstins": frozenset({"27AAAAA0000A1Z2"}),
-        "invoice_buyer_gstin": "27AAAAA0000A1Z2", "order_buyer_gstin": "27AAAAA0000A1Z2",
-        "supplier_state": "27", "place_of_supply": "27", "cgst": D("9"), "sgst": D("9"), "igst": D("0"),
+        "invoice_buyer_gstin": "27AAAAA0000A1Z2",
+        "order_buyer_gstin": "27AAAAA0000A1Z2",
+        "supplier_state": "27",
+        "place_of_supply": "27",
+        "cgst": D("9"),
+        "sgst": D("9"),
+        "igst": D("0"),
     }
     return m.Header(**{**base, **kw})  # type: ignore[arg-type]
 
@@ -108,8 +129,12 @@ def test_igst_within_a_state_and_cgst_sgst_across_states_are_refused_in_words() 
         "IGST was charged on a supply within Maharashtra (27): CGST and SGST are due"
     )
     across = _header(
-        invoice_buyer_gstin="29BBBBB0000B1ZP", order_buyer_gstin="29BBBBB0000B1ZP", place_of_supply="29",
-        igst=D("0"), cgst=D("9"), sgst=D("9"),
+        invoice_buyer_gstin="29BBBBB0000B1ZP",
+        order_buyer_gstin="29BBBBB0000B1ZP",
+        place_of_supply="29",
+        igst=D("0"),
+        cgst=D("9"),
+        sgst=D("9"),
     )
     assert m.header_problem(across) == m.TAX_HEAD
     assert m.header_words(across, {"27": "Maharashtra", "29": "Karnataka"}) == (
