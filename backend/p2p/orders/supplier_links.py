@@ -33,7 +33,7 @@ OPEN_FOR = {"respond": ("sent",), "dispatch": ("sent", "acknowledged", "part_rec
 SIGNER = Signer("supplier-link")
 CODES = otp.OneTimeCodes("po_answer")
 NO_CODE = "We cannot send a code for this link: please ask the buyer to send the order again"
-RESEND_GAP = 600.0  # seconds: the current version is emailed at most once per stale link in this time
+RESEND_GAP = 600  # seconds: the current version is emailed at most once per stale link in this time
 _CHECK = (
     "select l.id, l.po_no, l.supplier_code, l.purpose, l.po_version, l.used_at, l.sent_to, p.status, p.version, "
     "p.supplier_code as po_supplier from supplier_link l join po p on p.no = l.po_no where l.id = :i"

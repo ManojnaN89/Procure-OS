@@ -320,6 +320,9 @@ STOCK_TABLES = (
     "goods_receipt",
     "stock_movement",
     "quote_draft",
+    "po_commitment",  # block 8: an acknowledgement keeps a date per line; a version names the link that answered it
+    "supplier_chase",
+    "po_version",
     "po_approval_step",
     "supplier_link",
     "po_change",

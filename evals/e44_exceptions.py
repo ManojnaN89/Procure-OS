@@ -150,8 +150,10 @@ def oracle(db: Any, today: date) -> dict[tuple[str, str], dict[str, Any]]:
     for p in q("select no, sent_at from po where status = 'sent' and sent_at is not null"):
         if today > _add_working(_day(p["sent_at"]), ack_days, closed):
             want[("supplier", p["no"])] = {"owner": "Buyer", "act": SUPPLIER_ACT["ack"], "since": _day(p["sent_at"])}
+    # block 8 spec 8.6.2: a line is due on its promised date, else its need-by date; a line with only a need-by counts
     late = q(
-        "select l.po_no, min(l.promised_date) as oldest from po_line l join po on po.no = l.po_no where l.promised_date < :d "
+        "select l.po_no, min(coalesce(l.promised_date, l.need_by)) as oldest from po_line l join po on po.no = l.po_no "
+        "where coalesce(l.promised_date, l.need_by) < :d "
         "and l.status in ('open', 'part_received') and l.received_qty < l.qty and po.status in ('sent', 'acknowledged', 'part_received') "
         "group by l.po_no",
         d=today,
