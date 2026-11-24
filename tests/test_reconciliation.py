@@ -600,3 +600,82 @@ def test_the_reconciliation_routes_answer_by_role(ledger: Session, outbox: Outbo
         assert client.get(f"/api/trace/{po_no}", headers=theirs).status_code == 404
     finally:
         routing.clear_engine_cache()
+
+
+# ---- block 13: statement flags, explained differences, bank lines not ours and the MSME year end --------------
+
+
+def test_given_a_statement_line_outside_its_period_when_imported_then_it_is_matched_and_flagged(
+    ledger: Session, outbox: Outbox
+) -> None:  # noqa: F811
+    po_no, _ = _goods(ledger, qty="10", price="100")
+    inv = _invoice(ledger, po_no, number="JAN-1", on=date(2026, 1, 20))
+    data = (
+        "date,type,document_no,amount,reference\n"
+        f"2026-01-20,invoice,JAN-1,{ledger.execute(text('select total from invoice where no = :n'), {'n': inv.no}).scalar_one()},\n"
+    ).encode()
+
+    got = vendor_statement.import_statement(
+        ledger, "S1", data, "jan.csv", 1, period_from=date(2026, 2, 1), period_to=date(2026, 2, 28)
+    )
+
+    assert [(r["outcome"], bool(r["flag"])) for r in got["results"]] == [("matched", True)]
+    assert "dated outside the statement's period" in got["results"][0]["flag"]
+
+
+def test_given_a_difference_when_ap_explains_it_then_who_and_why_are_kept_and_a_matched_line_is_refused(
+    ledger: Session, outbox: Outbox
+) -> None:  # noqa: F811
+    po_no, _ = _goods(ledger, qty="10", price="100")
+    inv = _invoice(ledger, po_no, number="S1-99")
+    data = (
+        "date,type,document_no,amount,reference\n"
+        f"2026-11-06,invoice,S1-99,{ledger.execute(text('select total from invoice where no = :n'), {'n': inv.no}).scalar_one()},\n"
+        "2026-11-06,invoice,NOPE,100.00,\n"
+    ).encode()
+    got = vendor_statement.import_statement(ledger, "S1", data, "s.csv", 1,
+                                            period_from=date(2026, 11, 1), period_to=date(2026, 11, 30))  # fmt: skip
+    line = next(r for r in got["results"] if r["doc_no"] == "NOPE")
+
+    done = vendor_statement.resolve(ledger, got["id"], line["id"], "Supplier billed the wrong entity", 4)
+
+    assert done["resolved_by"] == "4" and done["note"] == "Supplier billed the wrong entity"
+    assert _audit(ledger, "vendor_statement.resolve") == 1
+    with pytest.raises(InvoiceError, match="already"):
+        vendor_statement.resolve(ledger, got["id"], line["id"], "again", 4)
+
+
+def test_given_a_bank_line_that_is_no_payment_of_ours_when_marked_then_it_leaves_the_open_list(
+    ledger: Session, outbox: Outbox
+) -> None:  # noqa: F811
+    bank_statement.import_statement(ledger, HEAD + "2026-11-05,CHG1,BANK CHARGES,17.70,\n", 1, today=TODAY)
+    (line,) = bank_statement.open_lines(ledger)
+
+    done = bank_statement.not_ours(ledger, line["id"], "bank charges", 4)
+
+    assert done["status"] == "not_ours" and bank_statement.open_lines(ledger) == []
+    assert ledger.execute(text("select status, why, confirmed_by from bank_statement_line")).one() == (
+        "not_ours", "bank charges", "4",
+    )  # fmt: skip
+    assert _audit(ledger, "bank_statement.not_ours") == 1
+
+
+def test_given_a_micro_supplier_past_its_deadline_when_the_year_ends_then_principal_and_interest_are_reported(
+    ledger: Session, outbox: Outbox
+) -> None:  # noqa: F811
+    _small(ledger)
+    po_no, _ = _goods(ledger, qty="10", price="1000")
+    inv = _invoice(ledger, po_no, qty="10", price="1000", number="MS-1")
+    ledger.execute(text("insert into ref_rbi_bank_rate (effective_from, rate_pct) values ('2020-01-01', 5.5) "
+                        "on conflict do nothing"))  # fmt: skip
+    ledger.commit()
+
+    from p2p.invoices import period_close
+
+    got = period_close.msme_year_end(ledger, "2026-27", as_of=date(2027, 3, 31))
+
+    total = D(ledger.execute(text("select total from invoice where no = :n"), {"n": inv.no}).scalar_one())
+
+    assert got["suppliers"] and D(got["total_principal"]) >= total
+    row = next(r for r in got["suppliers"] if r["supplier_code"] == "S1")
+    assert D(row["principal"]) == total

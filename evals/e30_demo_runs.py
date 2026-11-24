@@ -30,6 +30,7 @@ sys.path.insert(0, str(lib.ROOT / "tests"))
 import invoice_documents as docs  # noqa: E402
 
 ID = "E30"
+# Block 13 (spec 10.1): the order closes on settlement, with its closure date and its lines (D-12).
 TITLE = (
     "Demo runs through the real screens: a normal run, a part delivery and a price mismatch on the invoice, each typed in "
     "and with documents, and a held order"
@@ -912,6 +913,12 @@ def pay_many(
             "paid",
         )
     c.same("order status", one(db, "select status from po where no = :n", n=po), "closed")
+    c.true(
+        "the order closed on settlement, with its lines",
+        bool(one(db, "select closed_at is not null from po where no = :n", n=po))
+        and set(db.execute(text("select distinct status from po_line where po_no = :n"), {"n": po}).scalars())
+        == {"closed"},
+    )
     import budget_oracle
 
     for no, _, taxable, _ in invoices:

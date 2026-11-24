@@ -45,11 +45,14 @@ def line_status(ordered: Decimal, accepted_total: Decimal) -> str:
 
 
 def order_status(line_statuses: list[str]) -> str | None:
-    """The status the order should take from its lines, or None if no line has received anything yet."""
+    """The status the order should take from its lines, or None if no line has received anything yet.
+
+    A short-closed line counts like a received one: nothing more is coming for it.
+    """
     live = [s for s in line_statuses if s != "cancelled"]
-    if live and all(s in ("received", "closed") for s in live):
+    if live and all(s in ("received", "closed", "short_closed") for s in live):
         return "received"
-    if any(s in ("received", "part_received", "closed") for s in live):
+    if any(s in ("received", "part_received", "closed", "short_closed") for s in live):
         return "part_received"
     return None
 

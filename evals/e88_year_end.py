@@ -29,6 +29,7 @@ from block1 import D, Z, js
 from lib import Outcome
 
 ID = "E88"
+# Block 13 (spec 10.1): the year end closes each month through the snapshot and final export (R7.5).
 TITLE = "Year end locks the year, records the open commitments it carries, and the new year counts them"
 REQUIREMENT = (
     "D-09, OP-5 (block 3 spec 3.3 YE1, 4.3, 4.6, 4.7): close allowed from 1 April by budget.manage; locks every month "
@@ -90,6 +91,12 @@ def _run(ctx: Any) -> Outcome:  # one story, told in order
         check(sorted(str(p) for p in body.get("locked") or []) == to_lock,
               f"the close locked {body.get('locked')}, expected {to_lock}")  # fmt: skip
         _carried(check, body, carried, "the close")
+        # block 13 R7.5: every month the year end locks through the close keeps its snapshot and final export
+        closed_months = [r[0] for r in apex.q("select period from period_close order by period")]
+        check(closed_months == to_lock, f"period_close holds {closed_months}, expected {to_lock}")
+        check(not apex.q("select period from period_close where export_id is null and period = any(:p)",
+                         p=to_lock),
+              "a month closed by the year end has no final accounting export")
         check(apex.audit_count("budget.year_close") == audit0 + 1, "the close: not one budget.year_close audit row")
         r2 = apex.close_year(FY, fin)
         check(r2.status_code == 409, f"closing {FY} again answered {r2.status_code}, expected 409")

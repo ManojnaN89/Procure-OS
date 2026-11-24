@@ -190,10 +190,17 @@ const PurchaseOrdersView = {
         <div class="cell-muted">${this.esc(h.reason)} · total ${formatCurrency(h.total_before)} → ${formatCurrency(h.total_after)}${h.outcome ? ` · ${this.esc(h.outcome)}` : ""}</div>
         ${h.acknowledged ? `<div class="cell-muted">${this.esc(h.acknowledged)}</div>` : ""}
       </div>`).join("");
+    const closure = po.closure || { supply_done: false, blockers: [], short_closes: [] };
+    const blocked = (closure.blockers || []).map((b) => this.esc(b.words)).join("; ");
+    const waiting = (closure.short_closes || []).find((s) => s.status === "waiting");
+    const shorten = (closure.short_closes || []).map((s) => `
+      <div class="cell-muted" style="font-size:11.5px;">Short-close ${this.esc(s.id)}: ${this.esc(s.risk)} risk, ${formatCurrency(s.value)} — ${this.esc(s.status)}${s.approver ? ` (${this.esc(s.approver)})` : ""}</div>`).join("");
     box.innerHTML = `
       <div class="panel" style="margin-bottom:12px;">
         <div class="panel-title">Order document and changes</div>
-        <p style="margin:0 0 10px;font-size:12.5px;color:var(--text-secondary);">Version ${this.esc(c.version)}.
+        <p style="margin:0 0 8px;font-size:12.5px;color:var(--text-secondary);">Supply: ${closure.supply_done ? `complete${closure.supply_done_on ? ` (${formatDate(closure.supply_done_on)})` : ""}` : "not complete"} | Money: ${blocked || (closure.supply_done ? "settled" : "not settled")}</p>
+        ${shorten}${waiting ? `<div class="btn btn-sm" id="poShortWithdraw" style="margin:6px 0;">Withdraw the short-close</div>` : ""}
+        <p style="margin:8px 0 10px;font-size:12.5px;color:var(--text-secondary);">Version ${this.esc(c.version)}.
           <a href="#" id="poPdf" style="color:var(--accent-tint);">Open the order document (PDF)</a></p>
         <div style="display:flex;gap:8px;flex-wrap:wrap;">
           ${c.can_revise ? `<div class="btn btn-sm" id="poReviseOpen"><i class="ti ti-edit"></i>Change the order</div>` : ""}
@@ -268,10 +275,26 @@ const PurchaseOrdersView = {
         <div class="btn btn-primary btn-sm" id="poCancelGo" style="margin-top:8px;display:inline-block;">Cancel the order</div>`);
       on("poCancelGo", () => send("cancel", { reorder: document.getElementById("poCancelAgain").checked }));
     });
-    on("poCloseOpen", () => {
-      show(`<p style="margin:0;font-size:12.5px;color:var(--text-secondary);">The part the supplier has not delivered is closed. It no longer counts as stock on the way, and the supplier is told.</p>${reason}
-        <div class="btn btn-primary btn-sm" id="poCloseGo" style="margin-top:8px;display:inline-block;">Close what is still to come</div>`);
-      on("poCloseGo", () => send("close-balance", {}));
+    on("poCloseOpen", async () => {
+      const got = await API.getJSON(`/api/purchase-orders/${encodeURIComponent(po.id)}/close-balance/preview`);
+      if (!got) { document.getElementById("poChangeNote").textContent = "The preview could not be read."; return; }
+      const rows = (got.lines || []).map((l) => `<tr><td><input type="checkbox" class="close-line" value="${this.esc(l.line)}" checked aria-label="Close line ${this.esc(l.line)}"></td>
+        <td>${this.esc(l.line)}. ${this.esc(l.item)}</td><td>${this.esc(l.balance)} ${this.esc(l.uom || "")}</td><td>${formatCurrency(l.value)}</td></tr>`).join("");
+      const why = (got.flags || []).map((f) => this.esc(f.words)).join("; ") || `value within ${formatCurrency(got.value)}`;
+      const how = got.risk === "low" ? "Closes now" : `Goes to ${this.esc(got.approver)} because ${why}`;
+      show(`<div class="table-wrap"><table class="data-table"><thead><tr><th></th><th>LINE</th><th>BALANCE</th><th>VALUE</th></tr></thead><tbody>${rows}</tbody></table></div>
+        <p style="margin:8px 0 0;font-size:12.5px;"><b>${formatCurrency(got.value)}</b> · ${this.esc(how)}</p>${reason}
+        <div class="btn btn-primary btn-sm" id="poCloseGo" style="margin-top:8px;display:inline-block;">${got.risk === "low" ? "Close" : "Send for approval"}</div>`);
+      on("poCloseGo", () => {
+        const lines = Array.from(document.querySelectorAll(".close-line:checked")).map((x) => Number(x.value));
+        send("close-balance", { lines });
+      });
+    });
+    on("poShortWithdraw", async () => {
+      if (!waiting) return;
+      const r = await API.postJSON(`/api/purchase-orders/${encodeURIComponent(po.id)}/short-closes/${encodeURIComponent(waiting.id)}/withdraw`, {});
+      if (r.ok) return reload();
+      document.getElementById("poChangeNote").textContent = r.data.detail || "That did not work.";
     });
   },
 

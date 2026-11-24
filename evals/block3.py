@@ -1309,8 +1309,11 @@ def bg1(co: Co3, check: b.Checker, st: s2.Stock) -> dict[str, dict[str, Any]]:
 
 
 def open_value(line: dict[str, Any], actual: Decimal = Z) -> Decimal:
-    """Spec 4.1 held by orders for one line: max(0, round((qty - short closed) x price, 2) - actual on the line)."""
-    return max(Z, r2((D(line["qty"]) - D(line.get("short_closed"))) * D(line["price"])) - actual)
+    """Budget_use for one order line (block 13 R2.7): while the order (or line) is not closed, the whole quantity
+    stays committed less the actual on the line; a short-closed balance stays committed until the order closes."""
+    if line.get("po_status") == "closed" or line.get("line_status") == "closed":
+        return Z
+    return max(Z, r2(D(line["qty"]) * D(line["price"])) - actual)
 
 
 def gl_of_items(dataset: Path) -> dict[str, str]:

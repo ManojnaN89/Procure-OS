@@ -1582,6 +1582,8 @@ def get_purchase_order(no: str, db: Db, ctx: Ctx) -> dict[str, Any]:
     promised = [line["promised_date"] for line in lines if line["promised_date"]]
     can_dispatch = can_anywhere(db, ctx.user_id, "po.send")
     can_act = po_workflow.can_act(db, no, ctx.user_id)
+    from p2p.orders import closure as order_closure  # noqa: PLC0415 - the closure check is block 13's
+
     step_version = db.execute(
         text("select max(version) from po_approval_step where po_no = :n and round = :r"),
         {"n": no, "r": r["approval_round"]},
@@ -1623,6 +1625,7 @@ def get_purchase_order(no: str, db: Db, ctx: Ctx) -> dict[str, Any]:
             )
         ],
         "waiting_for": r["waiting_for"],
+        "closure": order_closure.state(db, no),
         "buyer_gstin": r["buyer_gstin"],
         "supplier_gstin": r["supplier_gstin"],
         "touchless_checks": r["touchless_checks"] or [],

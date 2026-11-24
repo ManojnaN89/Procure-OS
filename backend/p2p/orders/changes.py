@@ -265,61 +265,13 @@ def _code(db: Session, user_id: int) -> str | None:
 # ---- close the balance -------------------------------------------------------------------------
 
 
-def close_balance(db: Session, tenant: str | None, po_no: str, user_id: int, reason: str | None) -> dict[str, Any]:
-    """The supplier will not deliver the rest: close what is still to come. Something must already have been received."""
-    why = _reason(reason)
-    po = _locked(db, po_no)
-    if po["status"] not in CLOSABLE:
-        db.rollback()
-        raise ChangeError(
-            f"{po_no} is {po['status']}; only an order that is with the supplier can have its balance closed"
-        )
-    open_lines = [
-        dict(r)
-        for r in db.execute(
-            text("select * from po_line where po_no = :n and status in ('open', 'part_received') order by line_no"),
-            {"n": po_no},
-        ).mappings()
-    ]
-    if (
-        db.execute(
-            text("select coalesce(sum(received_qty), 0) from po_line where po_no = :n"), {"n": po_no}
-        ).scalar_one()
-        <= 0
-    ):
-        db.rollback()
-        raise ChangeError(f"nothing has been received against {po_no}: cancel it instead")
-    closed: list[str] = []
-    for ln in open_lines:
-        balance = Decimal(ln["qty"]) - Decimal(ln["received_qty"])
-        if balance <= 0:
-            continue
-        db.execute(
-            text("update po_line set status = 'closed', short_closed_qty = :b where po_no = :n and line_no = :l"),
-            {"b": balance, "n": po_no, "l": ln["line_no"]},
-        )
-        closed.append(f"{ln['description']}: {format_qty(balance)} {ln['uom'] or ''}".strip())
-    if not closed:
-        db.rollback()
-        raise ChangeError(f"nothing is still to come on {po_no}")
-    still_open = db.execute(
-        text("select count(*) from po_line where po_no = :n and status in ('open', 'part_received')"), {"n": po_no}
-    ).scalar_one()
-    db.execute(text("update po set closed_reason = :r, closed_at = now() where no = :n"), {"r": why, "n": po_no})
-    if not still_open:
-        db.execute(text("update po set status = 'closed' where no = :n"), {"n": po_no})
-    audit.record(
-        db, user(user_id), "po.close_balance", "po", po_no,
-        before={"status": po["status"]}, after={"closed": closed}, reason=why,
-    )  # fmt: skip
-    db.commit()
-    told = tell_supplier(
-        db, po, f"Purchase order {po_no}: balance closed",
-        f"We are closing the balance of order {po_no}; no further supply is expected on:\n" + "\n".join(closed) + f"\nReason: {why}",
-    )  # fmt: skip
-    tell_people(db, tenant, po_no, f"The balance of order {po_no} was closed", why, buyer=po["buyer"])
-    _check_again(db, tenant, po_no, f"the balance of {po_no} was closed")
-    return {"status": "closed" if not still_open else po["status"], "closed": closed, "supplier_told": told}
+def close_balance(
+    db: Session, tenant: str | None, po_no: str, user_id: int, reason: str | None, lines: list[int] | None = None
+) -> dict[str, Any]:
+    """The supplier will not deliver the rest: close what is still to come, by risk (block 13, orders/short_close)."""
+    from p2p.orders import short_close  # noqa: PLC0415 - short-close is built on this module
+
+    return short_close.ask(db, tenant, po_no, user_id, reason, lines)
 
 
 def _check_again(db: Session, tenant: str | None, po_no: str, why: str) -> None:

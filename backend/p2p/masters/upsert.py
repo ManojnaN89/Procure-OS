@@ -116,12 +116,14 @@ class _Comparison:
         report: ImportReport,
         actor: Actor,
         lock: str | None = None,
+        live: bool = False,
     ) -> None:
         self.spec, self.company, self.absent, self.report, self.actor = spec, company, absent, report, actor
         self.policy = rules.policy(spec.name)
         self.out = _Table(spec)
         self._warned: set[str] = set()  # suppliers already warned about (bank details, status history)
         self.lock = lock  # live: the table takes no new row, and says why (0c already keeps the existing ones)
+        self.live = live
 
     def run(self, rows: Lines) -> _Table:
         index = self.company.index.get(self.spec.name, {})
@@ -204,6 +206,9 @@ class _Comparison:
         protected = set(self.policy.protected)
         if self.spec.name == "supplier" and old["status"] != "draft":
             protected |= set(rules.SUPPLIER_FROZEN)
+        if self.live and self.spec.name == "item" and "standard_price" in diff:
+            self._warn(line, key, "standard_price stays: change it on Standard prices")
+            diff = [c for c in diff if c != "standard_price"]
         for column in (c for c in diff if c in protected):
             reason = rules.protected_reason(self.spec.name, column, old[column], old.get("status"))
             self._warn(line, key, reason)
@@ -240,7 +245,7 @@ def apply(
         if spec.name not in company.rows:
             continue  # a file the dataset may leave out: the table keeps its rows
         lock = (locked or {}).get(spec.name)
-        compared = _Comparison(spec, company, absent.get(spec.name, set()), report, actor, lock).run(
+        compared = _Comparison(spec, company, absent.get(spec.name, set()), report, actor, lock, live=bool(locked)).run(
             accepted[spec.name]
         )
         report.not_in_file[spec.name] = len(company.outside(spec, parsed[spec.name]))

@@ -304,7 +304,8 @@ class OrderLine:
     def held(self) -> Decimal:
         if not self.open:
             return ZERO
-        return max(ZERO, _m2((self.qty - self.short) * self.price) - self.actual)
+        # block 13 (R2.7): a short-closed balance stays committed until the order closes
+        return max(ZERO, _m2(self.qty * self.price) - self.actual)
 
 
 class Budgets:

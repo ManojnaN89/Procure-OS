@@ -96,7 +96,7 @@ const ControlTowerView = {
       ${p ? `<div style="margin-top:12px;font-size:12px;"><strong>Periods, FY ${this.esc(p.fy)}${p.year_closed ? " (closed)" : ""}:</strong>
         ${p.periods.map((m) => `<span class="badge ${m.status === "locked" ? "badge-closed" : m.status === "open" ? "badge-open" : "badge-draft"}" title="${this.esc(m.status === "locked" ? `Locked by ${m.locked_by}: ${m.reason}` : m.status === "open" ? "Open" : "Not ended")}" style="margin:2px;">${m.status === "locked" ? '<i class="ti ti-lock"></i> ' : ""}${this.esc(m.label)}</span>`).join("")}</div>` : ""}
       ${manage && p ? `<div style="margin-top:10px;display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
-        ${p.can_lock ? `<input id="ctLockReason" placeholder="Why lock it (e.g. Month-end close)" style="${f}width:240px;"><button type="button" class="btn btn-sm" id="ctLock"><i class="ti ti-lock"></i>Lock ${this.esc(lockLabel)}</button>` : ""}
+        ${p.can_lock ? `<input id="ctLockReason" placeholder="Why lock it (e.g. Month-end close)" style="${f}width:240px;"><button type="button" class="btn btn-sm" id="ctLock"><i class="ti ti-lock"></i>Close the month ${this.esc(lockLabel)}</button>` : ""}
         ${p.can_close ? `<button type="button" class="btn btn-sm" id="ctClose">Close FY ${this.esc(p.fy)}</button>` : ""}
         <button type="button" class="btn btn-sm" id="ctAdjustOpen">Adjust a budget</button></div>
         <div id="ctAdjust" style="display:none;margin-top:8px;" class="panel">
@@ -126,7 +126,7 @@ const ControlTowerView = {
       if (!reason) { UI.toast("Say why the month is locked.", "warning"); return; }
       const res = await API.postJSON(`/api/budgets/periods/${p.can_lock}/lock`, { reason });
       if (!res.ok) { fail(res, "Couldn't lock the month."); return; }
-      UI.toast(`${res.data.period} is locked.`, "success");
+      UI.toast(`${res.data.period} is closed.`, "success");
       this.loadBudgets();
     });
     document.getElementById("ctClose")?.addEventListener("click", async () => {
@@ -162,7 +162,7 @@ const ControlTowerView = {
       box.innerHTML = `
         <div class="stat-grid" style="grid-template-columns:repeat(3,1fr);margin-bottom:14px;">
           ${cards.map(([key, value, sub]) => `<div class="stat-card"><div class="stat-label">${this.esc(this.KPI_LABELS[key]).toUpperCase()}</div><div class="stat-value" style="font-size:22px;">${value}</div><div class="cell-muted" style="font-size:11.5px;">${sub}</div></div>`).join("")}
-          <div class="stat-card"><div class="stat-label">SAVING PER AWARDED RFQ</div><div class="stat-value" style="font-size:22px;">${k.savings.per_rfq === null ? "—" : formatCurrency(k.savings.per_rfq)}</div><div class="cell-muted" style="font-size:11.5px;">first offer less awarded price · ${this.esc(k.savings.rfqs)} RFQs</div></div>
+          <div class="stat-card"><div class="stat-label">SAVING, POTENTIAL</div><div class="stat-value" style="font-size:22px;">${formatCurrency(k.savings.potential)}</div><div class="cell-muted" style="font-size:11.5px;">realised ${formatCurrency(k.savings.realised)} · ${this.esc(k.savings.awards)} awards</div></div>
         </div>
         <div class="panel"><div class="panel-title">Cycle time, request to paid (working days, paid cases only)</div>
           <table class="data-table"><thead><tr><th>STAGE</th><th>CASES</th><th>MEDIAN</th><th>90TH PERCENTILE</th></tr></thead><tbody>

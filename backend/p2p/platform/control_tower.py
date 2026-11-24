@@ -11,7 +11,6 @@ from sqlalchemy.orm import Session
 
 from p2p.formulas import kpis as rules
 from p2p.formulas.calendar import IST, BusinessCalendar
-from p2p.formulas.orders import net_unit_price
 from p2p.platform.rows import rows as _rows
 
 D = Decimal
@@ -308,26 +307,10 @@ def kpis(db: Session, calendar: BusinessCalendar) -> dict[str, Any]:
         "contract_pct": _s(rules.share(D(contract), D(total))),
         "total": str(D(total)),
     }
-    # savings: first offer less the awarded price, per awarded RFQ
-    per_rfq: dict[str, Decimal] = defaultdict(Decimal)
-    for a in _rows(db, "select rfq_no, rfq_line_no, qty, price from award where status in ('final', 'approved')"):
-        first = _rows(
-            db,
-            "select l.unit_price, l.discount_pct from quote q join quote_line l on l.quote_no = q.no where q.rfq_no = :r and l.rfq_line_no = :n "
-            "order by q.received_at, q.no limit 1",
-            r=a["rfq_no"], n=a["rfq_line_no"],
-        )  # fmt: skip
-        if first:
-            per_rfq[a["rfq_no"]] += rules.saving(
-                net_unit_price(D(first[0]["unit_price"]), D(first[0]["discount_pct"])), D(a["price"]), D(a["qty"])
-            )
-    savings = list(per_rfq.values())
-    out["savings"] = {
-        "rfqs": len(savings),
-        "total": str(sum(savings, D(0))),
-        "per_rfq": _s((sum(savings, D(0)) / len(savings)).quantize(D("0.01"))) if savings else None,
-        "rfqs_with_saving": sum(1 for s in savings if s > 0),
-    }
+    # savings: potential and realised from the price measures (DF-29, R6.2); never the first quote again
+    from p2p.invoices import price_measures  # noqa: PLC0415 - price measures are block 13's
+
+    out["savings"] = price_measures.kpis(db)
     # touchless: reached an order and no person touched the request, its RFQs or its orders
     touched = db.execute(
         text(

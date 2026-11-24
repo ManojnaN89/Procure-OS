@@ -714,6 +714,36 @@ TABLES: tuple[Table, ...] = (
             ("location_code", "location", "code"),
         ),
     ),
+    Table(
+        "item_standard_price",
+        "item_standard_price",
+        (
+            ("item_code", "text"),
+            ("price", "numeric(18,4)"),
+            ("version", "integer"),
+            ("effective_from", "date"),
+            ("effective_to", "date"),
+            ("status", "text"),
+            ("reason", "text"),
+            ("created_by", "text"),
+        ),
+        ("item_code", "version"),
+        (("item_code", "item", "code"),),
+    ),
+    Table(
+        "ledger_map",
+        "ledger_map",
+        (
+            ("purpose", "text"),
+            ("gl_code", "text"),
+            ("ledger_name", "text"),
+            ("version", "integer"),
+            ("effective_from", "date"),
+            ("effective_to", "date"),
+        ),
+        ("purpose", "version"),
+        (("gl_code", "gl_account", "code"),),
+    ),
 )
 
 BY_NAME = {t.name: t for t in TABLES}

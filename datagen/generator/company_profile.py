@@ -27,6 +27,7 @@ import yaml
 
 sys.path.insert(0, str(Path(__file__).parent))
 from common import Calendar, stable_hash  # noqa: E402
+import close_data  # noqa: E402
 from history import simulate  # noqa: E402
 from history_check import history_problems  # noqa: E402
 from history_close import Closing  # noqa: E402
@@ -154,9 +155,72 @@ class MasterWriter:
         self.contracts()
         self.benchmarks()
         self.put("forward_buy_rule", forward_rule_rows(self.p))
+        self.price_versions()
+        self.ledger_map()
         for name in EMPTY_TABLES:
             self.put(name, [])
         return self.counts
+
+    def price_versions(self) -> None:
+        """Version 1 of every item from the item master; the profile's later versions (13.2, block 0b OP-19)."""
+        rows = [
+            {
+                "item_code": it["code"],
+                "price": it["price"],
+                "version": "1",
+                "effective_from": "2000-01-01",
+                "effective_to": "",
+                "status": "active",
+                "reason": "from the item master at setup",
+                "created_by": "system:setup",
+            }
+            for it in self.p["items"]
+        ]
+        for item, price, version, start, why in self.p.data.get("standard_price_versions") or []:
+            rows.append(
+                {
+                    "item_code": item,
+                    "price": price,
+                    "version": str(version),
+                    "effective_from": start,
+                    "effective_to": "",
+                    "status": "active",
+                    "reason": why,
+                    "created_by": "system:setup",
+                }
+            )
+            for row in rows:
+                if row["item_code"] == item and row["effective_to"] == "" and row["effective_from"] < start:
+                    row["effective_to"] = (
+                        date.fromisoformat(start) - timedelta(days=1)
+                    ).isoformat()
+        self.put("item_standard_price", rows)
+
+    def ledger_map(self) -> None:
+        """The purpose-to-ledger map the accounting export reads (2.6, R8)."""
+        ledgers = {
+            "payable_msme": ("2110", "Sundry creditors: micro and small suppliers"),
+            "payable_other": ("2120", "Sundry creditors: others"),
+            "gst_input_cgst": ("1510", "GST input: CGST"),
+            "gst_input_sgst": ("1520", "GST input: SGST"),
+            "gst_input_igst": ("1530", "GST input: IGST"),
+            "rcm_payable": ("2220", "Reverse charge GST payable"),
+            "tds_payable": ("2210", "Tax deducted at source payable"),
+            "advance": ("1610", "Advances to suppliers"),
+            "grni": ("2310", "Goods received not invoiced"),
+            "freight_inward": ("5220", "Freight inward"),
+            "round_off": (None, "Round Off"),
+            "msme_interest": (None, "Interest on delayed payment to MSME"),
+            "bank:CBA-01": (None, "HDFC Current A/c 0201"),
+        }
+        self.put(
+            "ledger_map",
+            [
+                {"purpose": purpose, "gl_code": gl or "", "ledger_name": name, "version": "1",
+                 "effective_from": "2000-01-01", "effective_to": ""}
+                for purpose, (gl, name) in ledgers.items()
+            ],
+        )  # fmt: skip
 
     def organisation(self) -> None:
         co, loc = self.p["company"], self.p["location"]
@@ -632,6 +696,9 @@ def build(profile: CompanyProfile, out: Path) -> dict[str, dict[str, int]]:
     if history:
         write_stock(profile.data, out)  # held stock and the stock check scenarios, after the demand truth
         write_block3(profile, out)  # budget and forward-buy scenarios, after the stock truth they start from
+        close_data.gstr2b(profile, out)  # block 13: the GSTR-2B files and their answer key
+        close_data.price_measures(profile, out)  # PPV, contract variance, saving and the accounting export truth
+        close_data.vendor_statement_period(profile, out)
     opening = cutover.write(out, profile) if history and "cutover" in profile.data else {}
     write_approval(profile.data, out)  # the approval scenarios of block 4: every order version worked out
     write_period(profile.data, out)  # the period RFQ scenarios of block 5: suggested quantities, awards, contracts
@@ -798,7 +865,7 @@ def check(out: Path, profile: CompanyProfile | None = None) -> list[str]:
         edges = [Decimal(0)] + [hi + Decimal("0.01") for _, hi in spans[:-1]]
         if [lo for lo, _ in spans] != edges or spans[-1][1] != Decimal(TOP):
             problems.append(f"approval bands for {'/'.join(key)} leave a gap or overlap")
-    for document in ("request", "po", "price_variance", "payment_run", "supplier_activation"):
+    for document in ("request", "po", "price_variance", "payment_run", "supplier_activation", "short_close"):
         if not any(k[0] == document for k in bands):
             problems.append(f"no approval rule for {document}")
 
@@ -876,6 +943,8 @@ def check(out: Path, profile: CompanyProfile | None = None) -> list[str]:
 
     problems += _scope_problems(t)
     problems += _version_problems(t)
+    problems += _close_problems(t)
+    problems += _gstr2b_problems(out)
     problems += _benchmark_problems(t)
     problems += _input_problems(out, t)
     problems += block3_problems(out, profile)
@@ -940,6 +1009,46 @@ def _scope_problems(t: dict[str, list[dict[str, str]]]) -> list[str]:
                     problems.append(
                         f"two prices of {a['item_code']} from {a['supplier_code']} overlap in dates and scope"
                     )
+    return problems
+
+
+def _close_problems(t: dict[str, list[dict[str, str]]]) -> list[str]:
+    """Standard price versions do not overlap; every ledger purpose is mapped once; the short_close bands are above."""
+    problems: list[str] = []
+    by_item: dict[str, list[tuple[str, str]]] = defaultdict(list)
+    for r in t["item_standard_price"]:
+        by_item[r["item_code"]].append((r["effective_from"], r["effective_to"] or "9999-12-31"))
+    for item, spans in by_item.items():
+        spans.sort()
+        for (start, end), (next_start, _) in zip(spans, spans[1:], strict=False):
+            if next_start <= end:
+                problems.append(f"standard price versions of {item} overlap on {next_start}")
+        if spans[0][0] > "2000-01-01":
+            problems.append(f"standard prices of {item} do not start at version 1")
+    purposes = [r["purpose"] for r in t["ledger_map"]]
+    for purpose in ("payable_msme", "payable_other", "gst_input_cgst", "gst_input_sgst", "gst_input_igst",
+                    "rcm_payable", "tds_payable", "advance", "grni", "freight_inward", "round_off",
+                    "msme_interest", "bank:CBA-01"):
+        if purpose not in purposes:
+            problems.append(f"ledger_map has no row for {purpose}")
+    return problems
+
+
+def _gstr2b_problems(out: Path) -> list[str]:
+    """Every GSTR-2B document traces to a history invoice, except the one planted only in 2B (G5)."""
+    truth = out / "truth" / "truth_gstr2b.csv"
+    files = sorted((out / "gst").glob("gstr2b_*.json")) if (out / "gst").is_dir() else []
+    if not truth.exists() or not files:
+        return ["the GSTR-2B files or their truth file are missing"]
+    known = {
+        "".join(c for c in r["supplier_invoice_no"].upper() if c.isalnum())
+        for r in read(out / "history" / "invoice.csv")
+    }
+    problems = []
+    for r in read(truth):
+        doc = "".join(c for c in r["doc"].upper() if c.isalnum())
+        if r["outcome"] != "only_2b" and doc not in known and not doc.startswith("2BONLY"):
+            problems.append(f"GSTR-2B truth doc {r['doc']} traces to no history invoice")
     return problems
 
 

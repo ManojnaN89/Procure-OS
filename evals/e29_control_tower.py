@@ -21,6 +21,7 @@ from replay import insert, replay
 from sqlalchemy import text
 
 ID = "E29"
+# Block 13 (spec 10.1): savings are potential and realised from the price measures, never the first quote.
 TITLE = "The control tower, the key figures and the alerts agree with an independent recount"
 REQUIREMENT = (
     "Plan P1-21/P1-23: every role sees what needs it and nothing else; the control tower shows every case by stage, location "
@@ -347,30 +348,16 @@ def kpi_oracle(db: Any, world_info: dict[str, Any], holidays: set[date]) -> dict
             managed += l["taxable"] if l["source"] in ("contract", "award") else 0
             contract += l["taxable"] if l["source"] == "contract" else 0
     out["spend"] = (pct1(int(managed * 100), int(total * 100)), pct1(int(contract * 100), int(total * 100)), str(total))
-    # savings, from the dataset files
-    quote_at = {r["no"]: (datetime.fromisoformat(r["received_at"]), r["no"]) for r in rows("history", "quote")}
-    quotes_of: dict[str, list[str]] = defaultdict(list)
-    for r in rows("history", "quote"):
-        quotes_of[r["rfq_no"]].append(r["no"])
-    qlines: dict[tuple[str, str], dict[str, str]] = {
-        (l["quote_no"], l["rfq_line_no"]): l for l in rows("history", "quote_line")
-    }
-    per_rfq: dict[str, Decimal] = defaultdict(Decimal)
-    for a in rows("history", "award"):
-        offers = sorted((quote_at[n], n) for n in quotes_of[a["rfq_no"]] if (n, a["rfq_line_no"]) in qlines)
-        if not offers:
-            continue
-        ln = qlines[(offers[0][1], a["rfq_line_no"])]
-        net = (D(ln["unit_price"]) * (100 - D(ln["discount_pct"] or "0")) / 100).quantize(
-            Decimal("0.0001"), ROUND_HALF_UP
-        )
-        per_rfq[a["rfq_no"]] += ((net - D(a["price"])) * D(a["qty"])).quantize(CENT, ROUND_HALF_UP)
-    out["savings"] = {
-        "rfqs": len(per_rfq),
-        "total": str(sum(per_rfq.values(), D(0))),
-        "per_rfq": str((sum(per_rfq.values(), D(0)) / len(per_rfq)).quantize(CENT, ROUND_HALF_UP)) if per_rfq else None,
-        "rfqs_with_saving": sum(1 for v in per_rfq.values() if v > 0),
-    }
+    # savings, from the price measures' truth (block 13, DF-29): potential and realised are never one sum
+    measures = rows("truth", "truth_price_measures")
+    potential = sum(
+        (D(r["amount"]) for r in measures if r["measure"] == "saving_potential"), D(0)
+    ).quantize(CENT)
+    realised = sum(
+        (D(r["amount"]) for r in measures if r["measure"] == "saving_realised"), D(0)
+    ).quantize(CENT)
+    awards = len({r["source_ref"] for r in measures if r["measure"] == "saving_potential"})
+    out["savings"] = {"potential": str(potential), "realised": str(realised), "awards": awards}
     # on-time delivery, from the dataset files
     po_status = {p["no"]: p["status"] for p in rows("history", "po")}
     gate = {g["no"]: ist_date(datetime.fromisoformat(g["gate_entry_at"])) for g in rows("history", "goods_receipt")}
@@ -736,7 +723,7 @@ def check_homes(world: Any, tower_counts: dict[str, int], wrong: list[str]) -> d
         k = client.get("/api/kpis", headers=world.headers("Finance")).json()
         seen["kpi_keys"] = sorted(k)
     finally:
-        pin_today(None)
+        pin_today(TODAY)
     return seen
 
 

@@ -30,6 +30,7 @@ sys.path.insert(0, str(lib.ROOT / "tests"))
 import invoice_documents as docs  # noqa: E402
 
 ID = "E34"
+# Block 13 (spec 10.1): orders wait for the bank and close on settlement, with closed_at and closed lines (D-12).
 TITLE = (
     "The whole application for a real user: the demo script from low stock to a paid invoice in a browser, every role "
     "guide followed as a new user, and every screen swept for errors, overflow and raw codes"
@@ -1235,6 +1236,13 @@ def _run(ctx: Any) -> Outcome:
                 expect(page.locator("#fileText")).to_contain_text("payment_no")
             d.mark(12)
             d.sync()
+            c.true(
+                "orders wait for the bank before closing (block 13 R2)",
+                all(
+                    r[0] == "received" and r[1] is None
+                    for r in q("select status, closed_at from po where status <> 'cancelled'")
+                ),
+            )
             lines = one("select file_text from payment_run where no = :n", n=run_no).strip().splitlines()
             c.same("the bank file has a header and one line per supplier", len(lines), 1 + len(by_supplier))
             statement = folder / "statement.csv"
@@ -1256,6 +1264,11 @@ def _run(ctx: Any) -> Outcome:
             d.sync()
             c.same("every invoice is paid", sorted({r[0] for r in q("select status from invoice")}), ["paid"])
             c.same("every order is closed", sorted({r[0] for r in q("select status from po")}), ["closed"])
+            c.true(
+                "every order carries its closure date and its lines closed (block 13 R2.4)",
+                all(r[0] is not None for r in q("select closed_at from po"))
+                and sorted({r[0] for r in q("select status from po_line where status <> 'cancelled'")}) == ["closed"],
+            )
             c.true("every payment carries the bank's reference", all(r[0] for r in q("select utr from payment")))
             advice = [m for m in supplier_mails() if "Bank reference" in m["body"]]
             c.same(

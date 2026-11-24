@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 
 from p2p.formulas.estimate import Estimate, estimated_price
 from p2p.formulas.sourcing import pick_contract_price
+from p2p.masters import standard_prices
 from p2p.orders.quotes import last_paid
 from p2p.sourcing.service import contract_options
 
@@ -25,8 +26,10 @@ def for_item(
     """The estimate of `qty` of an item bought in `unit` on a date for a delivery location (a regional contract price
     only inside its scope). None when the item has no price at all. A market benchmark is never an estimate."""
     contract = pick_contract_price(contract_options(db, item_code, unit, as_of, location), qty)
+    # block 13: the standard step reads the version in force on the estimate date (R5.3)
+    versioned = standard_prices.in_force(db, item_code, as_of)
     return estimated_price(
         (contract.price, contract.contract_code) if contract else None,
         last_paid(db, [item_code]).get(item_code),
-        standard,
+        versioned if versioned is not None else standard,
     )

@@ -4,7 +4,7 @@ Part A replays the dataset's goods orders from the suppliers who are paid 30% in
 dataset paid them, and compares advance payments, tax at source, what each invoice takes off, and what is paid for it with
 the dataset's own answers (skipped when the dataset has no advances; the demo companies have none yet). Part B gives every supplier discount terms and checks the discount with a calculation written
 here in exact fractions, on and around the edge of every window, and checks a payment run built around the discount.
-Part C checks who is told when a run closes an order."""
+Part C checks who is told when a run closes an order, and that an order closes only once its supply is complete and the money is settled (block 13 D-12)."""
 
 from collections import defaultdict
 from datetime import date, timedelta
@@ -17,6 +17,7 @@ from replay import replay
 from sqlalchemy import text
 
 ID = "E26"
+# Block 13 (spec 10.1): an order closes on settlement only when supply is complete (D-12).
 TITLE = "Advances, early-payment discounts and the closing notice are right"
 REQUIREMENT = (
     "Plan P1-19/20: 30% advance on an order and its adjustment against invoices (tax at source on the advance), "
@@ -526,6 +527,20 @@ def _discounts(out: Outcome, *, quick: bool) -> None:
     payment.generate_file(db, run_no, finance)
     closed = payment.mark_paid(db, run_no, finance, paid_on=run_date, tenant=world.slug)
     db.commit()
+    # D-12: an order closes only when supply is complete and the money is settled
+    supply_open = {
+        r[0]
+        for r in db.execute(
+            text(
+                "select p.no from po p where p.no = any(:c) and exists "
+                "(select 1 from po_line l where l.po_no = p.no and l.status not in "
+                "('received', 'short_closed', 'closed', 'cancelled'))"
+            ),
+            {"c": list(closed)},
+        )
+    } if closed else set()
+    if supply_open:
+        out.find("high", f"{len(supply_open)} order(s) closed with supply still to come: {sorted(supply_open)}")
 
     taken = {
         no: D(d)

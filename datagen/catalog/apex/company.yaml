@@ -104,6 +104,9 @@ approval_rules: |
   POA-02,po_amendment,100000.01,500000.00,ANY,ANY,ANY,ANY,purchase_manager,1,2025-04-01,
   POA-03,po_amendment,500000.01,999999999.00,ANY,ANY,ANY,ANY,director,1,2025-04-01,
   VAR-01,price_variance,0.00,999999999.00,ANY,ANY,ANY,ANY,purchase_manager,1,2025-04-01,
+  SC-01,short_close,0.00,25000.00,ANY,ANY,ANY,ANY,auto,1,2025-04-01,
+  SC-02,short_close,25000.01,500000.00,ANY,ANY,ANY,ANY,purchase_manager,1,2025-04-01,
+  SC-03,short_close,500000.01,999999999.00,ANY,ANY,ANY,ANY,director,1,2025-04-01,
   PAY-01,payment_run,0.00,999999999.00,ANY,ANY,ANY,ANY,director,1,2025-04-01,
   SUP-01,supplier_activation,0.00,999999999.00,ANY,ANY,ANY,ANY,director,1,2025-04-01,
   FWD-01,forward_buy,0.00,999999999.00,ANY,ANY,ANY,ANY,purchase_manager,1,2025-04-01,
@@ -147,6 +150,8 @@ settings:
   - [msme_max_days, "45", Most days a micro or small supplier may be paid in when agreed in writing (MSMED Act section 15)]
   - [msme_no_agreement_days, "15", Days a micro or small supplier must be paid in without a written agreement (MSMED Act section 15)]
   - [msme_warn_days, "7", Invoices of small suppliers reaching their deadline within this many days are listed]
+  - [ppv_recognition, invoice, "When accounting PPV is recognised: invoice (default), receipt or both"]
+  - [accounts_export_format, generic_csv, The accounting export file format]
 
 # Versioned as a set (task 3.2): version 1 is the full set; a later version copies the one before it with its
 # changes [key, category, value]. A match keeps the version in force on the day the invoice was received.
@@ -163,6 +168,7 @@ tolerances:
       - [supplier_change_pct, "5.00", Supplier quantity change noted by the agent up to this percent]
       - [supplier_price_pct, "2.00", Supplier price rise a buyer may accept up to this percent; above it the purchase manager decides]
       - [supplier_date_days, "3", Supplier delivery date slip accepted by the agent up to this many days]
+      - [gstr2b_diff_abs, "1.00", GSTR-2B and our books agree when each tax head and the taxable value differ by at most this]
   - version: 2
     effective_from: "2026-07-01"
     note: Quantity tolerance removed and rupee tolerance cut after the internal audit (D-17)
@@ -778,3 +784,8 @@ quote_scenarios:
   - {name: A1, title: Path A/B case, kind: path, as_of: "2026-11-23", item: RM-01, location: PLT-CKN, qty: "600", contract: "650.00", market: "600.00"}
   - {name: A2, title: Path A order on CNT-0001, kind: order, as_of: "2026-11-23", item: RM-01, location: PLT-CKN, qty: "600", price: "650.00", gst: "18"}
   - {name: V1, title: Reselected after the expired award, kind: order, as_of: "2026-11-26", item: RM-08, location: PLT-CKN, qty: "500", price: "975.00", gst: "18"}
+
+# Standard price versions (13.2, block 0b OP-19): version 1 is every item's price at setup; a later version starts on
+# its date and the version before ends the day before it.
+standard_price_versions:
+  - [RM-08, "950.00", 2, "2026-12-01", "Supplier price list rise for copper wire"]

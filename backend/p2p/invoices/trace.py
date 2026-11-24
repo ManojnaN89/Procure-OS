@@ -235,7 +235,9 @@ def _rfqs(db: Session, requests: set[str], pos: set[str], who: People) -> list[d
 
 
 def _orders(db: Session, pos: set[str], who: People) -> list[dict[str, Any]]:
-    """Each order with what is still open on it: quantity still to receive, and received but not yet invoiced."""
+    """Each order with what is still open on it, its closure state and its short-closes (R3.5, R2.7)."""
+    from p2p.orders import closure  # noqa: PLC0415 - the closure check builds on the order tables
+
     approved = _approvals(db, "po_approval_step", "po_no", pos, who)
     out = []
     for r in _rows(
@@ -252,10 +254,15 @@ def _orders(db: Session, pos: set[str], who: People) -> list[dict[str, Any]]:
         parts.append("issued without a buyer (touchless)" if r["touchless"] else "")
         parts.append(f"{r['to_receive']:f} still to receive" if r["to_receive"] else "")
         parts.append(f"{r['to_invoice']:f} received, not invoiced" if r["to_invoice"] else "")
+        state = closure.state(db, str(r["no"]))
+        parts.append(
+            f"Supply: complete ({state['supply_done_on'] or '-'}) | Money: "
+            + ("settled" if not state["blockers"] else "; ".join(b["words"] for b in state["blockers"]))
+        )
         out.append(
             {**_item(r["no"], r["approved_at"] or r["created_at"], r["status"], qty=r["qty"], amount=r["total"],
                      who=who(r["buyer"]), detail="; ".join(x for x in parts if x)),
-             "to_receive": r["to_receive"], "to_invoice": r["to_invoice"]}
+             "to_receive": r["to_receive"], "to_invoice": r["to_invoice"], "closure": state}
         )  # fmt: skip
     return out
 
@@ -296,8 +303,10 @@ def _invoices(db: Session, invoices: set[str], who: People) -> list[dict[str, An
     for r in _rows(
         db,
         "select i.no, i.type, i.supplier_invoice_no, i.invoice_date, i.status, i.total, i.entered_by, i.due_date, "
-        "i.block_reason, (select sum(qty) from invoice_line where invoice_no = i.no) as qty from invoice i "
-        "where i.no = any(:i) order by i.invoice_date, i.no",
+        "i.block_reason, (select sum(qty) from invoice_line where invoice_no = i.no) as qty, "
+        "(select l.outcome from gstr2b_line l join gstr2b_import x on x.id = l.import_id "
+        " where l.our_invoice_no = i.no and x.current order by l.id desc limit 1) as gstr2b "
+        "from invoice i where i.no = any(:i) order by i.invoice_date, i.no",
         i=list(invoices),
     ):
         parts = [f"{r['type'].replace('_', ' ')} {r['supplier_invoice_no']}"]
@@ -305,6 +314,8 @@ def _invoices(db: Session, invoices: set[str], who: People) -> list[dict[str, An
             parts.append(f"due {r['due_date']:%d %b %Y}")
         if r["block_reason"]:
             parts.append(str(r["block_reason"]))
+        if r["gstr2b"]:
+            parts.append(f"GSTR-2B: {str(r['gstr2b']).replace('_', ' ')}")
         out.append(
             _item(r["no"], r["invoice_date"], r["status"], qty=r["qty"], amount=r["total"], who=who(r["entered_by"]),
                   detail="; ".join(parts))

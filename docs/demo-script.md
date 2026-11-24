@@ -54,7 +54,14 @@ After step 16, everything is paid. **Reconciliation** is in the menu of finance@
 | 2 | finance@ | **Order trace** → the impeller order's number → **Trace** | Every step of the case: the request, the order, both receipts (120, then 80), the invoice and the payment, with dates, amounts and who acted |
 | 3 | ap@ | **Received not invoiced** → as of the payment day → **Show** | Nothing received and not invoiced; one line invoiced and not received: the seals, invoiced ₹1,353.60 above the order price (the block that was released) |
 | 4 | finance@ | **Bank lines** (if the bank statement had a line no payment fits, such as the bank's charge) | The line, why it is open, and the payments of the same amount it could be |
-| 5 | ap@ | **Supplier statements** → Deccan Castings → a statement (template: **Download the template**) with its invoice DC/2611/0207 at ₹1,180 more than ours and our payment → **Import and match** | The payment **Matched**; the invoice **Amount differs** by ₹1,180, with ours and theirs side by side |
+| 5 | ap@ | **Supplier statements** → Deccan Castings → a statement (template: **Download the template**) with its invoice DC/2611/0207 at ₹1,180 more than ours and our payment → **Import and match** | The payment **Matched**; the invoice **Amount differs** by ₹1,180, with ours and theirs side by side; **Mark explained** keeps the note |
+| 6 | finance@ | **Bank lines** → **Not ours** on a bank charge line, with a reason | The line leaves the open list, the task completes, and the audit shows who said so |
+| 7 | buyer@ | Open a part-delivered order → **Close what is still to come** | The preview: the lines and balances, the value including GST, "Closes now" below Rs 25,000 with no flag, or the person it goes to. Above the limit it waits, the supplier hears only after approval, and goods arriving meanwhile make it stale |
+| 8 | finance@ | **Close** → **GSTR-2B check** → upload the dataset's `gst/gstr2b_27APXCA0000P1ZL_202610.json` | Each document's outcome against our books, ours and theirs side by side; nothing is held or changed; one task for AP |
+| 9 | finance@ | **Close** → **Month-end close** → **Preview** November → a reason → **Close the month** | The warnings, the received-not-invoiced frozen, the final export with its accrual, and the budget month locked; the file downloads the same bytes again |
+| 10 | finance@ | **Close** → **Price variance and savings** | PPV, contract variance, market gap and potential and realised saving in their own lists, never one sum; the standard price versions |
+
+After the month close a document dated in it lands in the next open month and keeps its event month; that month's export does not change. **Small suppliers** has the year-end view at 31 March.
 
 Every step of the plan's 13 has a picture in `evals/results/journeys/steps/` (Apex and Brightwave), and `journey.md` says which step of the journey shows it; the reconciliation screens have one each too (`journey-13-1-…` onwards).
 

@@ -19,6 +19,7 @@ from sqlalchemy.orm import Session
 
 from p2p.formulas import reconciliation as rules
 from p2p.formulas.matching import normalize_invoice_no
+from p2p.formulas.money import format_inr
 from p2p.invoices.bank_statement import read_amount, read_date
 from p2p.invoices.service import InvoiceError
 from p2p.platform import audit, parsing
@@ -39,6 +40,7 @@ TYPES = {
     "credit note": "credit_note", "credit_note": "credit_note", "credit": "credit_note", "cn": "credit_note",
     "debit note": "debit_note", "debit_note": "debit_note", "dn": "debit_note",
     "payment": "payment", "receipt": "payment", "payment received": "payment",
+    "opening": "opening", "opening balance": "opening", "closing": "closing", "closing balance": "closing",
 }  # fmt: skip
 OUTCOMES = ("matched", "amount_differs", "only_theirs", "only_ours")
 WINDOW_DAYS = 3  # a payment without a reference is matched on its amount within this many days of ours
@@ -77,7 +79,8 @@ def parse(data: bytes, filename: str) -> tuple[list[rules.Theirs], list[dict[str
         why = (
             "the date cannot be read" if on is None
             else "the amount cannot be read" if amount is None or amount == 0
-            else f"the type '{cell(r, 'type')}' is not invoice, credit note, debit note or payment" if kind is None
+            else f"the type '{cell(r, 'type')}' is not invoice, credit note, debit note, payment, opening or closing"
+            if kind is None
             else "the document number is missing" if not number
             else None
         )  # fmt: skip
@@ -113,13 +116,31 @@ def _ours(db: Session, supplier: str, start: date, end: date, theirs: list[rules
         rules.Ours(r[0], "payment", r[0], r[1], D(r[2]), r[3])
         for r in db.execute(
             text(
-                "select no, paid_on, amount, utr from payment where supplier_code = :s and paid_on between :a and :b "
+                "select no, paid_on, amount, utr from payment where supplier_code = :s and paid_on is not null "
                 "and amount > 0 order by no"
             ),
-            {"s": supplier, "a": start, "b": end},
+            {"s": supplier},
         )
     ]
     return out
+
+
+def _live_on(db: Session) -> date | None:
+    """The day the company went live; nothing before it is on our books (R3.1)."""
+    try:
+        from p2p.platform import tenants  # noqa: PLC0415 - the control database holds the state changes
+
+        slug = db.info.get("slug") or tenants.slug_of(str(db.get_bind().engine.url.database or ""))
+        with tenants.control_engine().connect() as c:
+            return c.execute(
+                text(
+                    "select at::date from tenant_state_change s join tenant t on t.id = s.tenant_id "
+                    "where t.slug = :s and s.to_state = 'live' order by s.at limit 1"
+                ),
+                {"s": slug},
+            ).scalar()
+    except Exception:  # noqa: BLE001 - the statement still imports without the go-live date
+        return None
 
 
 def _summary(db: Session, statement_id: int) -> dict[str, Any]:
@@ -128,13 +149,22 @@ def _summary(db: Session, statement_id: int) -> dict[str, Any]:
         dict(r)
         for r in db.execute(
             text(
-                "select row_no, doc_date, doc_type, doc_no, their_amount, our_ref, our_amount, difference, outcome, reason "
-                "from vendor_statement_line where statement_id = :i order by row_no nulls last, id"
+                "select id, row_no, doc_date, doc_type, doc_no, their_amount, our_ref, our_amount, difference, outcome, "
+                "reason, flag, note, resolved_by, resolved_at from vendor_statement_line where statement_id = :i "
+                "order by row_no nulls last, id"
             ),
             {"i": statement_id},
         ).mappings()
     ]
-    return {**head, "results": lines}
+    differences = [ln for ln in lines if ln["outcome"] not in ("matched", "balance") and ln["row_no"] is not None]
+    explained = [ln for ln in differences if ln["resolved_by"] is not None]
+    return {
+        **head,
+        "results": lines,
+        "differences": len(differences),
+        "explained": len(explained),
+        "explained_words": f"{len(explained)} of {len(differences)} differences explained",
+    }
 
 
 def import_statement(
@@ -164,8 +194,37 @@ def import_statement(
     end = period_to or max(t.on for t in theirs if t.on)
     if end < start:
         raise InvoiceError("the period ends before it starts")
-    results = rules.match_statement(theirs, _ours(db, supplier, start, end, theirs), window_days=WINDOW_DAYS)
-    counts = {o: sum(r.outcome == o for r in results) for o in OUTCOMES}
+    balances = [
+        rules.Result(
+            t.row,
+            t.on,
+            t.doc_type,
+            t.doc_no,
+            t.amount,
+            None,
+            None,
+            "balance",
+            f"{t.doc_type} balance of {format_inr(t.amount)}, shown not compared",
+        )
+        for t in theirs
+        if t.doc_type in ("opening", "closing")
+    ]
+    results = rules.match_statement([t for t in theirs if t.doc_type not in ("opening", "closing")],
+                                    _ours(db, supplier, start, end, theirs), window_days=WINDOW_DAYS) + balances  # fmt: skip
+    live = _live_on(db)
+    flagged: list[tuple[rules.Result, str | None]] = []
+    for r in results:
+        found = r
+        if live is not None and r.on is not None and r.on < live:
+            found = rules.Result(
+                r.row, r.on, r.doc_type, r.doc_no, r.their_amount, None, None, "only_theirs",
+                f"before our records start ({live:%d %b %Y})",
+            )  # fmt: skip
+        flag = None
+        if found.on is not None and not (start <= found.on <= end):
+            flag = f"dated outside the statement's period ({start:%d %b %Y} to {end:%d %b %Y})"
+        flagged.append((found, flag))
+    counts = {o: sum(r.outcome == o for r, _ in flagged) for o in OUTCOMES}
     statement_id = db.execute(
         text(
             "insert into vendor_statement (supplier_code, period_from, period_to, file_name, file_hash, lines, matched, "
@@ -178,15 +237,15 @@ def import_statement(
             "u": str(user_id),
         },
     ).scalar_one()  # fmt: skip
-    for r in results:
+    for r, flag in flagged:
         db.execute(
             text(
                 "insert into vendor_statement_line (statement_id, row_no, doc_date, doc_type, doc_no, their_amount, our_ref, "
-                "our_amount, difference, outcome, reason) values (:i, :r, :d, :t, :n, :ta, :o, :oa, :x, :c, :w)"
+                "our_amount, difference, outcome, reason, flag) values (:i, :r, :d, :t, :n, :ta, :o, :oa, :x, :c, :w, :f)"
             ),
             {
                 "i": statement_id, "r": r.row, "d": r.on, "t": r.doc_type, "n": r.doc_no, "ta": r.their_amount,
-                "o": r.our_ref, "oa": r.our_amount, "x": r.difference, "c": r.outcome, "w": r.reason,
+                "o": r.our_ref, "oa": r.our_amount, "x": r.difference, "c": r.outcome, "w": r.reason, "f": flag,
             },
         )  # fmt: skip
     audit.record(
@@ -214,3 +273,45 @@ def statements(db: Session, supplier: str | None = None) -> list[dict[str, Any]]
 def statement(db: Session, statement_id: int) -> dict[str, Any] | None:
     found = db.execute(text("select 1 from vendor_statement where id = :i"), {"i": statement_id}).first()
     return _summary(db, statement_id) if found else None
+
+
+def resolve(db: Session, statement_id: int, line_id: int, note: str | None, user_id: int) -> dict[str, Any]:
+    """AP marks a difference explained with a note; a matched line or one already explained is refused (R3.2)."""
+    why = (note or "").strip()
+    if not why:
+        raise InvoiceError("a note is needed to explain a difference")
+    line = (
+        db.execute(
+            text(
+                "select id, outcome, resolved_by from vendor_statement_line where id = :i and statement_id = :s for update"
+            ),
+            {"i": line_id, "s": statement_id},
+        )
+        .mappings()
+        .first()
+    )
+    if line is None:
+        raise InvoiceError(f"line {line_id} is not on statement {statement_id}")
+    if line["outcome"] == "matched":
+        raise InvoiceError("a matched line needs no explanation")
+    if line["resolved_by"] is not None:
+        raise InvoiceError("this line is already explained")
+    db.execute(
+        text("update vendor_statement_line set note = :n, resolved_by = :u, resolved_at = now() where id = :i"),
+        {"n": why, "u": str(user_id), "i": line_id},
+    )
+    audit.record(
+        db, user(user_id), "vendor_statement.resolve", "vendor_statement_line", str(line_id),
+        before={"outcome": line["outcome"]}, after={"note": why}, reason=why,
+    )  # fmt: skip
+    db.commit()
+    row = dict(
+        db.execute(
+            text("select id, outcome, note, resolved_by, resolved_at from vendor_statement_line where id = :i"),
+            {"i": line_id},
+        )
+        .mappings()
+        .one()
+    )
+    return {"line": row["id"], "outcome": row["outcome"], "note": row["note"],
+            "resolved_by": row["resolved_by"], "resolved_at": row["resolved_at"]}  # fmt: skip

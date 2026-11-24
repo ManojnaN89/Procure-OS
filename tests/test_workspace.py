@@ -585,7 +585,7 @@ def test_the_key_figures_are_worked_out_from_the_cases(ledger: Session, outbox: 
     assert body["spend_under_management"] == {"pct": "100.0", "contract_pct": "100.0", "total": "10000.00"}
     assert body["first_pass_match"] == {"invoices": 2, "pct": "50.0"}  # one blocked, one clean
     assert body["on_time_delivery"] == {"lines": 1, "pct": "0.0"}
-    assert body["savings"] == {"rfqs": 0, "total": "0", "per_rfq": None, "rfqs_with_saving": 0}
+    assert body["savings"] == {"potential": "0.00", "realised": "0.00", "awards": 0}
     assert body["msme_on_time_payment"] == {"invoices": 0, "pct": None}
     assert set(body["cycle_time"]) == {
         "approval",

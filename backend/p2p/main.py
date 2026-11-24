@@ -15,6 +15,7 @@ from p2p.platform.approval_link_api import router as approval_link_router
 from p2p.platform.auth import router as auth_router
 from p2p.platform.budget_api import router as budget_router
 from p2p.platform.buying_rules_api import router as buying_rules_router
+from p2p.platform.close_api import router as close_router
 from p2p.platform.company_api import router as company_router
 from p2p.platform.company_state import StateError
 from p2p.platform.contract_link_api import router as contract_link_router
@@ -68,6 +69,7 @@ app.include_router(setup_router)
 app.include_router(buying_rules_router)
 app.include_router(budget_router)
 app.include_router(forward_buy_router)
+app.include_router(close_router)
 app.include_router(ui_router)
 app.include_router(workspace_router)
 app.include_router(guides_router)

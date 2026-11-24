@@ -43,6 +43,7 @@ APPROVE = {
     "payment_run": "payment.approve",
     "supplier_activation": "supplier.activate",
     "forward_buy": "sourcing.route_approve",  # block 3: requests/forward_buy.py checks this permission
+    "short_close": "po.approve",  # block 13: orders/short_close.py checks this permission
 }
 ADMIN = ("admin.users", "admin.rules", "admin.settings")
 # the five duties of one case, each by a different person (FR32, sod.DUTIES)
@@ -458,6 +459,20 @@ def _stock_position(db: Session) -> list[str]:
     return [] if opening or imported else ["no opening stock and no stock history loaded"]
 
 
+def _close_ready(db: Session) -> list[str]:
+    """The rows month-end close and the export need (block 13, 3.2): the risk bands, 2B tolerance and ledger map."""
+    problems = []
+    if not db.execute(text("select 1 from approval_rule where document = 'short_close' limit 1")).first():
+        problems.append("no short_close approval bands: every short close will need a person")
+    if not db.execute(text("select 1 from tolerance where key = 'gstr2b_diff_abs' limit 1")).first():
+        problems.append("no gstr2b_diff_abs tolerance: the comparison uses 1.00")
+    if not db.execute(text("select 1 from ledger_map limit 1")).first():
+        problems.append("no ledger map: the accounting export cannot be made")
+    if not db.execute(text("select 1 from item_standard_price limit 1")).first():
+        problems.append("no standard price versions: PPV cannot be measured")
+    return problems
+
+
 def check(db: Session, slug: str, *, group: str = "all", on: date | None = None) -> Readiness:
     """Every check of the groups asked (all, setup or cutover)."""
     if group not in GROUPS:
@@ -482,6 +497,8 @@ def check(db: Session, slug: str, *, group: str = "all", on: date | None = None)
         ("company_bank", "setup", "The company's bank account", "blocker", lambda: _company_bank(db), "/admin/setup"),
         ("supplier_bank", "setup", "Suppliers can be paid", "warning", lambda: _supplier_bank(db), ""),
         ("holidays", "setup", "Holidays of this financial year", "warning", lambda: _holidays(db, on), ""),
+        ("close_ready", "setup", "Month-end close and the export have their rows", "warning",
+         lambda: _close_ready(db), "/close"),
         ("cutover_import", "cutover", "Open documents loaded and matching the control totals", "blocker",
          lambda: _cutover_import(db), "/admin/setup?tab=golive"),
         ("stock_position", "cutover", "Stock position loaded", "warning", lambda: _stock_position(db), ""),
