@@ -405,7 +405,7 @@ def run(ctx) -> Outcome:  # noqa: C901 - one story, told in order
         serials = {
             s
             for (s,) in db.execute(
-                text("select serial from serial_number where item_code = :i"),
+                text("select serial from serial_number where item_code = :i and status = 'received'"),
                 {"i": laptop},
             )
         }
@@ -432,10 +432,29 @@ def run(ctx) -> Outcome:  # noqa: C901 - one story, told in order
     returned = client.post(
         f"/api/unordered-receipts/{rejected}/returned",
         headers=store,
-        json={"ref": "RTN/43"},
+        json={"challan": "RTN/43", "vehicle": "KA 01 XX 0000"},
     )
     if returned.status_code != 200 or on_hand() - before != D("2"):
         out.find("high", "rejected goods were not simply returned (or they touched stock)")
+    # block 9 (spec 9.9 and 10.1): the return is a return document (RTN), dispatched, one mail, no stock
+    rtn = returned.json().get("return_no") if returned.status_code == 200 else None
+    if not rtn:
+        out.find("high", "the rejected receipt without an order made no return document")
+    else:
+        doc = db.execute(
+            text("select source, status, reason from supplier_return where no = :n"), {"n": rtn}
+        ).mappings().first()
+        if doc is None or (doc["source"], doc["status"]) != ("unordered", "dispatched"):
+            out.find("high", f"the return document is {dict(doc) if doc else None}")
+        mine = db.execute(
+            text("select return_no from unordered_receipt where no = :n"), {"n": rejected}
+        ).scalar()
+        if mine != rtn:
+            out.find("high", f"the receipt without an order names {mine}, the return is {rtn}")
+        if not db.execute(
+            text("select 1 from audit_event where action = 'return.dispatch' and entity_id = :n"), {"n": rtn}
+        ).first():
+            out.find("high", f"no return.dispatch audit row for {rtn}")
     listed = {r["id"]: r["status"] for r in client.get("/api/unordered-receipts", headers=store).json()}
     if listed.get(first_no) != "received" or listed.get(rejected) != "returned":
         out.find("high", f"the list says {listed}")

@@ -90,7 +90,7 @@ def _run(ctx: Any) -> Outcome:
         found = re.match(r"^(\S+@\S+)\s+(\S+)\s+#\s*(.+) \((\w+)\)$", line)
         if found:
             people[found.group(3)] = (found.group(1), found.group(2))
-    check(len(people) == 10, f"expected 10 logins (nine roles and a second administrator), found {len(people)}")
+    check(len(people) == 11, f"expected 11 logins (nine roles, quality and a second administrator), found {len(people)}")
     tokens: dict[str, dict[str, str]] = {}
 
     def who(designation: str) -> dict[str, str]:
@@ -101,13 +101,14 @@ def _run(ctx: Any) -> Outcome:
             tokens[designation] = {"Authorization": "Bearer " + r.json()["access_token"]}
         return tokens[designation]
 
-    REQUESTER, STORE, BUYER, AP, FINANCE, ADMIN = (
+    REQUESTER, STORE, BUYER, AP, FINANCE, ADMIN, QUALITY = (
         "Production Manager",
         "Storekeeper",
         "Buyer",
         "AP Executive",
         "Finance Manager",
         "System Administrator",
+        "Quality Inspector",
     )
     PLANT_HEAD, PURCHASE_MANAGER, DIRECTOR = "Plant Head", "Purchase Manager", "Director"
 
@@ -413,7 +414,8 @@ def _run(ctx: Any) -> Outcome:
         lines = q("select line_no, qty from po_line where po_no = :n order by line_no", n=po_no)
         decisions = [{"line_no": ln[0], "qty_accepted": str(ln[1]), "qty_rejected": "0"} for ln in lines]
         refused(AP, "POST", f"/api/receipts/{gr}/inspect", {"lines": decisions})
-        call(STORE, "POST", f"/api/receipts/{gr}/inspect", {"lines": decisions})
+        refused(STORE, "POST", f"/api/receipts/{gr}/inspect", {"lines": decisions})  # the receiver cannot inspect
+        call(QUALITY, "POST", f"/api/receipts/{gr}/inspect", {"lines": decisions})  # block 9 (spec 9.1, 10.1)
     check(q("select count(*) from goods_receipt")[0][0] == 4, "four goods receipts expected")
     check(
         all(r[0] == "received" for r in q("select status from po")),

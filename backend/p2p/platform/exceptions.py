@@ -392,7 +392,9 @@ def _ai_handover(db: Session) -> Iterator[Stuck]:
         )  # fmt: skip
 
 
-def _sourcing_cases(db: Session, nexts: dict[str, tuple[str, str]] = SOURCING_NEXT) -> Iterator[Stuck]:
+def _sourcing_cases(
+    db: Session, nexts: dict[str, tuple[str, str]] = SOURCING_NEXT, *, owner_prefix: str = ""
+) -> Iterator[Stuck]:
     """The sourcing cases of block 6 (an RFQ closed short, a reply not read, a quote expired before its order, a
     contract line held for path A or B) and the order cases of block 8 (an order not acknowledged after the reminders,
     an acknowledgement by email to record, an order email not read). Each is an open task of its buyer."""
@@ -410,9 +412,10 @@ def _sourcing_cases(db: Session, nexts: dict[str, tuple[str, str]] = SOURCING_NE
             or p.get("po_no")
             or (f"{p.get('request_no')}/{p.get('line_no')}" if p.get("request_no") else r["id"])
         )
+        owner = name_of(db, code) if code else "Not assigned"
         yield Stuck(
             str(r["kind"]), ref, str(p.get("link") or "#/exceptions"), str(r["title"]),
-            name_of(db, code) if code else "Not assigned", step, _day(r["created_at"]), act=act,
+            f"{owner_prefix}: {owner}" if owner_prefix else owner, step, _day(r["created_at"]), act=act,
             people=frozenset({code}) if code else frozenset(), see=(act,),
         )  # fmt: skip
 
@@ -433,7 +436,7 @@ def collect(db: Session, today: date, calendar: BusinessCalendar) -> list[Stuck]
         *_ai_handover(db),
         *_sourcing_cases(db),
         *_sourcing_cases(db, ORDER_NEXT),
-        *_sourcing_cases(db, RECEIPT_NEXT),
+        *_sourcing_cases(db, RECEIPT_NEXT, owner_prefix="Buyer"),
     ]
 
 

@@ -10,6 +10,7 @@ table). The administrator, who sees everything, must get exactly that set and no
 only the kinds its permissions allow, and "mine" only what that role must act on.
 """
 
+import json
 from collections import Counter, defaultdict
 from datetime import date, datetime, timedelta
 from typing import Any
@@ -36,6 +37,10 @@ SEE = {  # the kind: permissions that let a role see it (the screen's specificat
     "unordered": {"grn.create", "grn.unordered_approve", "po.create"},
     "service": {"po.create"},
     "approval": {"request.approve"},
+    "inspection": {"grn.create", "grn.inspect"},  # block 9 (spec 9.1, 10.1)
+    "return_draft": {"grn.create", "po.create"},
+    "receipt_excess": {"po.create"},
+    "return_outcome": {"po.create"},
 }
 SUPPLIER_ACT = {"rfq": "rfq.create", "ack": "po.send", "late": "po.create"}
 
@@ -129,6 +134,29 @@ def oracle(db: Any, today: date) -> dict[tuple[str, str], dict[str, Any]]:
         who = s["delegate"] or s["approver"]
         want[("approval", s["request_no"])] = {
             "owner": f"Approver: {name.get(who, who)}", "act": None, "since": _day(s["opened_at"]),
+        }  # fmt: skip
+
+    for g in q(
+        "select g.no, g.received_by, g.gate_entry_at from goods_receipt g "
+        "where g.inspection_status = 'pending' and g.status = 'posted'"
+    ):
+        want[("inspection", g["no"])] = {
+            "owner": "Quality", "act": "grn.inspect", "since": _day(g["gate_entry_at"]),
+        }  # fmt: skip
+
+    for r in q("select no, created_at from supplier_return where status = 'draft'"):
+        want[("return_draft", r["no"])] = {
+            "owner": "Store", "act": "grn.create", "since": _day(r["created_at"]),
+        }  # fmt: skip
+
+    for t in q(
+        "select id, kind, title, assignee, payload, created_at from task "
+        "where kind in ('receipt_excess', 'return_outcome') and status in ('open', 'overdue')"
+    ):
+        payload = t["payload"] or {}
+        ref = str(payload.get("po_no") or payload.get("return_no") or t["id"])
+        want[(t["kind"], ref)] = {
+            "owner": "Buyer", "act": "po.create", "since": _day(t["created_at"]),
         }  # fmt: skip
 
     for p in q(
@@ -245,6 +273,47 @@ def _plant(world: Any, client: TestClient, out: Outcome) -> dict[str, str]:
         {"a": pm, "o": datetime.combine(lib.TODAY - timedelta(days=3), datetime.min.time(), IST)},
     )
     planted["approval"] = "E44-WAIT"
+
+    # block 9 (spec 9.1, 9.5, 9.7 and 10.1): a receipt waiting for inspection, an excess and a return outcome for the
+    # buyer, and a draft return for the store
+    place = template_po["ship_to_location"]
+    db.execute(
+        text(
+            "insert into goods_receipt (no, po_no, location_code, received_by, inspection_status, posted_by) "
+            "values ('E44-GR', :p, :l, 'U02', 'pending', '1')"
+        ),
+        {"p": template_po["no"], "l": place},
+    )
+    db.execute(
+        text(
+            "insert into receipt_excess (gr_no, po_no, po_line_no, qty, uom) values ('E44-GR', :p, :l, 1, 'NOS')"
+        ),
+        {"p": template_po["no"], "l": template_line["line_no"]},
+    )
+    supplier = db.execute(text("select code from supplier where status = 'active' order by code limit 1")).scalar_one()
+    db.execute(
+        text(
+            "insert into supplier_return (no, supplier_code, location_code, status, source, reason, created_by) "
+            "values ('E44-RTN', :s, :l, 'draft', 'store', 'E44: cracked on arrival', 'U02')"
+        ),
+        {"s": supplier, "l": place},
+    )
+    buyer = world.logins["Buyer"]
+    for kind, title, ref in (
+        ("receipt_excess", "1 NOS above E44-PO on E44-GR", template_po["no"]),
+        ("return_outcome", "Agree the replacement on E44-RTN", template_po["no"]),
+    ):
+        db.execute(
+            text(
+                "insert into task (kind, title, assignee, sla_hours, due_at, payload) values "
+                "(:k, :t, :a, 18, now(), cast(:p as jsonb))"
+            ),
+            {"k": kind, "t": title, "a": buyer, "p": json.dumps({"po_no": ref, "link": "#/returns"})},
+        )
+    planted["inspection"] = "E44-GR"
+    planted["return_draft"] = "E44-RTN"
+    planted["receipt_excess"] = template_po["no"]
+    planted["return_outcome"] = template_po["no"]
     db.commit()
 
     # a decision waiting, and a release asked for on one blocked invoice
@@ -296,9 +365,11 @@ def run(ctx: lib.Ctx) -> Outcome:
 
     # 1. every planted case is there, with the owner the oracle names
     for label, ref in planted.items():
-        kind = {"release": "invoice", "service": "service", "approval": "approval", "proposal": "proposal"}.get(
-            label, "unordered"
-        )
+        kind = {
+            "release": "invoice", "service": "service", "approval": "approval", "proposal": "proposal",
+            "inspection": "inspection", "return_draft": "return_draft", "receipt_excess": "receipt_excess",
+            "return_outcome": "return_outcome",
+        }.get(label, "unordered")  # block 9 (spec 10.1)
         if (kind, ref) not in got:
             out.find("high", f"the planted {label} ({ref}) is not on the screen")
     # 2. exactly the oracle's set, nothing extra, nothing missing (a late order may also be one not acknowledged)

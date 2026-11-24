@@ -265,7 +265,7 @@ def _inspection(check: b.Checker, co: s2.Co, st: s2.Stock) -> None:
           f"inspection: RM-01 holds {hold}, expected one receipt hold of 50 in quarantine for {gr}")  # fmt: skip
     s2.agree2(check, "inspection receipt", st, co, only=[("MO-1", "RM-01")])
     s2.check_ledger(check, "inspection receipt", co)
-    r = co.call(co.role("store"), "POST", f"/api/receipts/{gr}/inspect",
+    r = co.call(co.role("quality"), "POST", f"/api/receipts/{gr}/inspect",
                 {"lines": [{"line_no": line, "qty_accepted": "44", "qty_rejected": "6", "reason": "Blow holes"}]})  # fmt: skip
     check(r.status_code == 200, f"inspection: inspect answered {r.status_code}: {r.text[:200]}")
     st.held[("RM-01", CKN, "quarantine")] -= Decimal(50)
@@ -282,6 +282,31 @@ def _inspection(check: b.Checker, co: s2.Co, st: s2.Stock) -> None:
     after = co.q("select after::text from audit_event where action = 'grn.post' order by id desc limit 1")
     check(bool(after) and "quarantine" in str(after[0][0]), "inspection: the grn.post audit row does not record the "
           "quarantine", "medium")  # fmt: skip
+    # block 9 (spec 9.5 and 10.1): the blocked six go back with a return document, and the line and budget stay as they are
+    store = co.role("store")
+    blocked_id = co.one(
+        "select id from stock_hold where item_code = 'RM-01' and quality = 'blocked' and closed_at is null"
+    )
+    r = co.call(store, "POST", "/api/returns", {
+        "reason": "eval: the six with blow holes go back",
+        "lines": [{"hold_id": int(blocked_id), "qty": "6"}]})  # fmt: skip
+    check(r.status_code == 201, f"inspection: the return answered {r.status_code}: {r.text[:200]}")
+    rtn = b.js(r).get("return_no") if r.status_code == 201 else None
+    if rtn:
+        r = co.call(store, "POST", f"/api/returns/{rtn}/dispatch",
+                    {"challan": "RDC-E68", "vehicle": "MH 12 XX 0000"})  # fmt: skip
+        check(r.status_code == 200, f"inspection: dispatching {rtn} answered {r.status_code}: {r.text[:200]}")
+        st.held[("RM-01", CKN, "blocked")] -= Decimal(6)
+        open_blocked = co.one("select coalesce(sum(left_qty), 0) from stock_hold where item_code = 'RM-01' "
+                              "and quality = 'blocked' and closed_at is null")  # fmt: skip
+        check(b.D(open_blocked) == 0, f"inspection: blocked RM-01 left {open_blocked} after the return, expected 0")
+        closed = co.one("select closed_by_doc from stock_hold where id = :i", i=int(blocked_id))
+        check(closed == rtn, f"inspection: the returned hold was closed by {closed}, expected {rtn}")
+        s2.check_positions(check, "after the return", co, st, [("RM-01", CKN)])
+        check(co.one("select received_qty from po_line where po_no = :p and line_no = :l", p=po, l=line)
+              == received0 + 44, "inspection: the return changed what was received")  # fmt: skip
+        check(co.one("select count(*) from recovery_claim") == 0,
+              "inspection: the return raised a claim although nothing was invoiced beyond the goods")  # fmt: skip
     s2.check_ledger(check, "after inspection", co)
     supplier, price = co.q("select p.supplier_code, pl.unit_price from po p join po_line pl on pl.po_no = p.no where "
                            "p.no = :p and pl.line_no = :l", p=po, l=line)[0]  # fmt: skip

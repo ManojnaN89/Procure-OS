@@ -123,7 +123,7 @@ def _run(ctx: Any) -> Outcome:  # one story, told in order
     rejected = Decimal(2)
     accepted = D(bearings["qty"]) - rejected
     with b3.day(b3.RECEIPT_DAY):
-        r = apex.call(apex.store(), "POST", f"/api/receipts/{gr}/inspect", {"lines": [{
+        r = apex.call(apex.role("quality"), "POST", f"/api/receipts/{gr}/inspect", {"lines": [{  # block 9: quality@
             "line_no": int(bearings["line_no"]), "qty_accepted": str(accepted), "qty_rejected": str(rejected),
             "reason": "eval: cracked cage"}]})  # fmt: skip
     check(r.status_code == 200, f"inspecting {gr} answered {r.status_code} {r.text[:200]}")
@@ -190,6 +190,34 @@ def _run(ctx: Any) -> Outcome:  # one story, told in order
     check(b3.r2(D(bearings["qty"]) * D(bearings["price"])) != actual["RM-06"], "the inspection case cannot tell an "
           "actual at gate entry from one at acceptance (mutation check)", "medium")  # fmt: skip
 
+    # block 9 (spec 9.6 and 10.1): a counted return takes the accepted goods and their budget back, source return
+    store = apex.store()
+    received_before = D(apex.one("select received_qty from po_line where po_no = :p and line_no = :l",
+                                 p=bearings["po_no"], l=int(bearings["line_no"])))  # fmt: skip
+    r = apex.call(store, "POST", "/api/inventory/holds", {
+        "item_code": "RM-06", "location": b3.CKN, "qty": "1", "quality": "blocked",
+        "reason": "eval: one bearing cracked after fitting"})  # fmt: skip
+    check(r.status_code == 201, f"return: the hold answered {r.status_code}: {r.text[:200]}")
+    hold_id = js(r).get("hold_id")
+    r = apex.call(store, "POST", "/api/returns", {
+        "reason": "eval: cracked after fitting", "lines": [{
+            "hold_id": hold_id, "qty": "1", "gr_no": gr, "po_line_no": int(bearings["line_no"])}]})  # fmt: skip
+    check(r.status_code == 201, f"return: the draft answered {r.status_code}: {r.text[:200]}")
+    rtn = js(r).get("return_no") if r.status_code == 201 else None
+    if rtn:
+        r = apex.call(store, "POST", f"/api/returns/{rtn}/dispatch",
+                      {"challan": "RDC-E86", "vehicle": "MH 12 XX 0000"})  # fmt: skip
+        check(r.status_code == 200, f"return: dispatch answered {r.status_code}: {r.text[:200]}")
+        rows = [x for x in apex.actuals() if x.get("source") == "return"
+                and str(x.get("po_no")) == str(bearings["po_no"])]  # fmt: skip
+        check(len(rows) == 1 and D(rows[0].get("amount")) == -D(bearings["price"]),
+              f"return: the budget took back {rows}, expected one row of -{bearings['price']}")  # fmt: skip
+        received_after = D(apex.one("select received_qty from po_line where po_no = :p and line_no = :l",
+                                    p=bearings["po_no"], l=int(bearings["line_no"])))  # fmt: skip
+        check(received_after == received_before - 1,
+              f"return: received_qty {received_after}, expected {received_before - 1}")  # fmt: skip
+        check(apex.one("select count(*) from recovery_claim") == 0,
+              "return: a claim was raised although no invoice was booked for the returned unit")  # fmt: skip
     b3.tenant_check3(check, apex, bw)
     out.metrics.update({"checks": check.done, "failed": len(check.failed), "actual rows": len(apex.actuals())})
     out.notes.append(

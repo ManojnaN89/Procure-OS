@@ -126,7 +126,7 @@ def capture_mail() -> Outbox:
 
 # ---- a company built from the dataset ---------------------------------------------------------
 
-ROLES = ("Admin", "Requester", "Buyer", "Approver", "Store", "AP", "Finance")
+ROLES = ("Admin", "Requester", "Buyer", "Approver", "Store", "Quality", "AP", "Finance")
 
 
 @dataclass
