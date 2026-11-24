@@ -23,9 +23,7 @@ TODAY = date(2026, 11, 6)
 BUYER_MH = "27BBBBB0000B1Z5"
 
 
-def test_judge_gst_compares_the_rate_and_each_head_with_the_tolerance_inclusive() -> (
-    None
-):
+def test_judge_gst_compares_the_rate_and_each_head_with_the_tolerance_inclusive() -> None:
     expected = m.TaxParts(D("675.00"), D("675.00"), D("0.00"))
 
     assert (
@@ -47,9 +45,9 @@ def test_judge_gst_compares_the_rate_and_each_head_with_the_tolerance_inclusive(
     ) == [
         "CGST 676.01 against 675.00 expected (1.01 apart, more than 1.00)"
     ]  # B12: exactly one rupee is within, a paisa more is not
-    assert m.judge_gst(
-        D("5"), D("12"), expected, m.TaxParts(D("3"), D("0"), D("0")), D("1.00")
-    )[0].startswith("GST 12% on the invoice, 5% on the order")
+    assert m.judge_gst(D("5"), D("12"), expected, m.TaxParts(D("3"), D("0"), D("0")), D("1.00"))[0].startswith(
+        "GST 12% on the invoice, 5% on the order"
+    )
 
 
 def test_a_reverse_charge_line_compares_the_rate_only() -> None:
@@ -122,18 +120,14 @@ def test_a_wrong_rate_blocks_even_when_its_amounts_add_up(ledger: Session) -> No
     po_no, _ = _goods(ledger, qty="100", price="270")
     _intra(ledger, po_no)
 
-    wrong = _enter(
-        ledger, po_no, "100", "270", number="D1", rate="12", cgst="1620", sgst="1620"
-    )
+    wrong = _enter(ledger, po_no, "100", "270", number="D1", rate="12", cgst="1620", sgst="1620")
 
     assert (wrong.status, wrong.reasons) == ("blocked", ["gst_mismatch"])
     row = ledger.execute(
         text("select payment_block, block_reason from invoice where no = :n"),
         {"n": wrong.no},
     ).one()
-    assert (
-        row[0] == "tax" and "line 1: GST 12% on the invoice, 5% on the order" in row[1]
-    )
+    assert row[0] == "tax" and "line 1: GST 12% on the invoice, 5% on the order" in row[1]
     assert ledger.execute(
         text("select reasons, rules from match_result where invoice_no = :n"),
         {"n": wrong.no},
@@ -151,9 +145,7 @@ def test_each_tax_head_within_one_rupee_passes_and_a_paisa_more_does_not(
     po_two, _ = _goods(ledger, qty="101", price="270", logins=logins)
     _intra(ledger, po_two)
 
-    exact = _enter(
-        ledger, po_no, "100", "270", number="D3", rate="5", cgst="676.00", sgst="676.00"
-    )
+    exact = _enter(ledger, po_no, "100", "270", number="D3", rate="5", cgst="676.00", sgst="676.00")
     over = _enter(
         ledger,
         po_two,
@@ -169,9 +161,7 @@ def test_each_tax_head_within_one_rupee_passes_and_a_paisa_more_does_not(
     assert (over.status, over.reasons) == ("blocked", ["gst_mismatch"])
     assert (
         "CGST 676.01 against 675.00 expected (1.01 apart, more than 1.00)"
-        in ledger.execute(
-            text("select block_reason from invoice where no = :n"), {"n": over.no}
-        ).scalar_one()
+        in ledger.execute(text("select block_reason from invoice where no = :n"), {"n": over.no}).scalar_one()
     )
 
 
@@ -214,14 +204,10 @@ def test_a_composition_supplier_stays_the_header_tax_rule_without_a_line_reason(
     ledger: Session,
 ) -> None:  # noqa: F811
     po_no, _ = _goods(ledger, qty="10", price="100")
-    ledger.execute(
-        text("update supplier set gst_reg_type = 'composition' where code = 'S1'")
-    )
+    ledger.execute(text("update supplier set gst_reg_type = 'composition' where code = 'S1'"))
     ledger.commit()
 
-    done = _enter(
-        ledger, po_no, "10", "100", number="C-1", rate="5", cgst="25", sgst="25"
-    )
+    done = _enter(ledger, po_no, "10", "100", number="C-1", rate="5", cgst="25", sgst="25")
 
     assert done.reasons == ["tax_not_allowed"] and done.status == "blocked"
 
@@ -248,12 +234,7 @@ def test_igst_on_an_intra_state_supply_is_the_headers_tax_head_and_not_a_line_am
     )
 
     assert done.reasons == [m.TAX_HEAD] and done.status == "blocked"
-    assert (
-        ledger.execute(
-            text("select payment_block from invoice where no = :n"), {"n": done.no}
-        ).scalar_one()
-        == "tax"
-    )
+    assert ledger.execute(text("select payment_block from invoice where no = :n"), {"n": done.no}).scalar_one() == "tax"
 
 
 from test_sourcing import Outbox, db, outbox  # noqa: F401, E402 - fixtures

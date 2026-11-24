@@ -17,7 +17,6 @@ from test_service_entry import svc  # noqa: F401 - fixtures
 from test_sourcing import Outbox  # noqa: F401 - fixtures
 
 from p2p.formulas import matching as m
-from p2p.invoices import service as invoices
 from p2p.receiving import goods
 
 D = Decimal
@@ -26,11 +25,7 @@ TODAY = date(2026, 11, 6)
 
 def _row(world: Session, no: str) -> dict:
     world.expire_all()
-    return dict(
-        world.execute(text("select * from invoice where no = :n"), {"n": no})
-        .mappings()
-        .one()
-    )
+    return dict(world.execute(text("select * from invoice where no = :n"), {"n": no}).mappings().one())
 
 
 def test_given_an_invoice_held_for_quantity_when_the_rest_is_received_then_it_is_matched_again(
@@ -38,9 +33,7 @@ def test_given_an_invoice_held_for_quantity_when_the_rest_is_received_then_it_is
 ) -> None:  # noqa: F811
     po_no, _ = _goods(ledger, qty="200", price="100", received="120")
     taken = _invoice(ledger, po_no, "10", "100", number="B")
-    held = _invoice(
-        ledger, po_no, "190", "100", number="E"
-    )  # available 120 - 10 = 110, so 80 over
+    held = _invoice(ledger, po_no, "190", "100", number="E")  # available 120 - 10 = 110, so 80 over
 
     assert taken.status == "approved"
     assert (held.status, held.reasons) == ("blocked", ["qty_over_received"])
@@ -60,9 +53,7 @@ def test_given_an_invoice_held_for_quantity_when_the_rest_is_received_then_it_is
     )
 
 
-def test_a_second_receipt_approves_an_invoice_only_up_to_what_is_accepted(
-    ledger: Session, outbox: Outbox
-) -> None:  # noqa: F811
+def test_a_second_receipt_approves_an_invoice_only_up_to_what_is_accepted(ledger: Session, outbox: Outbox) -> None:  # noqa: F811
     po_no, _ = _goods(ledger, qty="1000", price="100", received="400")
     big = _invoice(ledger, po_no, "1000", "100", number="I1")  # 600 over
     small = _invoice(ledger, po_no, "400", "100", number="I2")
@@ -86,9 +77,7 @@ def test_goods_waiting_for_inspection_are_matched_again_when_the_inspection_acce
     ledger.execute(text("update item set inspection_required = true where code = 'A'"))
     ledger.commit()
     po_no, _ = _sent(ledger, qty="10", price="100")
-    _receive(
-        ledger, po_no, "10"
-    )  # the receipt waits for inspection: nothing is accepted yet
+    _receive(ledger, po_no, "10")  # the receipt waits for inspection: nothing is accepted yet
     held = _invoice(ledger, po_no, "10", "100", number="INSP")
 
     assert held.reasons == ["qty_over_received"]
@@ -102,9 +91,7 @@ def test_goods_waiting_for_inspection_are_matched_again_when_the_inspection_acce
     assert _row(ledger, held.no)["status"] == "approved"
 
 
-def test_the_oldest_invoice_waiting_is_matched_first(
-    ledger: Session, outbox: Outbox
-) -> None:  # noqa: F811
+def test_the_oldest_invoice_waiting_is_matched_first(ledger: Session, outbox: Outbox) -> None:  # noqa: F811
     po_no, _ = _goods(ledger, qty="10", price="100", received="5")
     old = _invoice(ledger, po_no, "8", "100", number="OLD")
     new = _invoice(ledger, po_no, "8", "100", number="NEW")
@@ -116,13 +103,9 @@ def test_the_oldest_invoice_waiting_is_matched_first(
     assert _row(ledger, new.no)["status"] == "blocked"
 
 
-def test_a_price_block_is_not_cleared_by_goods_arriving(
-    ledger: Session, outbox: Outbox
-) -> None:  # noqa: F811
+def test_a_price_block_is_not_cleared_by_goods_arriving(ledger: Session, outbox: Outbox) -> None:  # noqa: F811
     po_no, _ = _goods(ledger, qty="10", price="1000", received="5")
-    held = _invoice(
-        ledger, po_no, "10", "1060", number="P1"
-    )  # price and quantity both out
+    held = _invoice(ledger, po_no, "10", "1060", number="P1")  # price and quantity both out
 
     posted = _receive(ledger, po_no, "5")
 
@@ -135,9 +118,7 @@ def test_a_price_block_is_not_cleared_by_goods_arriving(
     assert reasons == [m.PRICE]
 
 
-def test_a_service_hold_is_matched_again_by_the_requesters_confirmation(
-    svc: Session, outbox: Outbox
-) -> None:  # noqa: F811
+def test_a_service_hold_is_matched_again_by_the_requesters_confirmation(svc: Session, outbox: Outbox) -> None:  # noqa: F811
     from test_service_entry import _confirm, _service_po
 
     po_no, logins = _service_po(svc)

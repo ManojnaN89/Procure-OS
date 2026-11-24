@@ -50,26 +50,14 @@ def test_the_guard_refuses_every_person_who_may_not_accept_a_price_and_leaves_th
         with pytest.raises(permissions.PermissionDenied):
             proposals.approve(ledger, pid, login)
         assert (
-            ledger.execute(
-                text("select status from invoice where no = :n"), {"n": held.no}
-            ).scalar_one()
-            == "blocked"
+            ledger.execute(text("select status from invoice where no = :n"), {"n": held.no}).scalar_one() == "blocked"
         )
-        assert (
-            ledger.execute(
-                text("select status from proposal where id = :i"), {"i": pid}
-            ).scalar_one()
-            == "pending"
-        )
+        assert ledger.execute(text("select status from proposal where id = :i"), {"i": pid}).scalar_one() == "pending"
 
 
-def test_an_order_maker_cannot_accept_the_price_of_their_own_order(
-    ledger: Session, outbox: Outbox
-) -> None:  # noqa: F811
+def test_an_order_maker_cannot_accept_the_price_of_their_own_order(ledger: Session, outbox: Outbox) -> None:  # noqa: F811
     po_no, logins = _goods(ledger, qty="10", price="1000")
-    ledger.execute(
-        text("update po set buyer = 'U2' where no = :p"), {"p": po_no}
-    )  # the CFO made it
+    ledger.execute(text("update po set buyer = 'U2' where no = :p"), {"p": po_no})  # the CFO made it
     ap = _ap(ledger)
     held = _invoice(ledger, po_no, "10", "1060", number="P-2", user=ap)
     pid = invoices.request_release(ledger, held.no, "agreed", ap)
@@ -94,12 +82,7 @@ def test_the_named_approvers_deputy_may_decide(ledger: Session, outbox: Outbox) 
 
     proposals.approve(ledger, pid, logins["cfo"])
 
-    assert (
-        ledger.execute(
-            text("select status from invoice where no = :n"), {"n": held.no}
-        ).scalar_one()
-        == "approved"
-    )
+    assert ledger.execute(text("select status from invoice where no = :n"), {"n": held.no}).scalar_one() == "approved"
 
 
 def test_a_release_whose_goods_were_taken_meanwhile_fails_and_the_invoice_stays_blocked(
@@ -116,19 +99,11 @@ def test_a_release_whose_goods_were_taken_meanwhile_fails_and_the_invoice_stays_
     proposals.approve(ledger, two, logins["procurement"])
 
     ledger.expire_all()
-    assert (
-        ledger.execute(
-            text("select status from invoice where no = :n"), {"n": second.no}
-        ).scalar_one()
-        == "blocked"
-    )
-    row = ledger.execute(
-        text("select execution, result from proposal where id = :i"), {"i": two}
-    ).one()
+    assert ledger.execute(text("select status from invoice where no = :n"), {"n": second.no}).scalar_one() == "blocked"
+    row = ledger.execute(text("select execution, result from proposal where id = :i"), {"i": two}).one()
     assert row[0] == "failed"
     assert (
-        f"{second.no} can no longer be released: line 1 (order line 1): 10 more than can be invoiced"
-        in row[1]["error"]
+        f"{second.no} can no longer be released: line 1 (order line 1): 10 more than can be invoiced" in row[1]["error"]
     )
     assert "match it again" in row[1]["error"]
 
@@ -141,17 +116,13 @@ def test_the_asker_is_told_the_outcome(ledger: Session, outbox: Outbox) -> None:
     proposals.approve(ledger, pid, logins["procurement"])
 
     told = ledger.execute(
-        text(
-            "select title from notification where user_id = :u and kind = 'invoice_release' order by id desc limit 1"
-        ),
+        text("select title from notification where user_id = :u and kind = 'invoice_release' order by id desc limit 1"),
         {"u": ap},
     ).scalar_one()
     assert told == f"{held.no} was released by Procure Vikram"
 
 
-def test_a_second_release_for_one_invoice_is_refused(
-    ledger: Session, outbox: Outbox
-) -> None:  # noqa: F811
+def test_a_second_release_for_one_invoice_is_refused(ledger: Session, outbox: Outbox) -> None:  # noqa: F811
     po_no, _ = _goods(ledger, qty="10", price="1000")
     ap = _ap(ledger)
     held = _invoice(ledger, po_no, "10", "1060", number="P-7", user=ap)
@@ -161,9 +132,7 @@ def test_a_second_release_for_one_invoice_is_refused(
         invoices.request_release(ledger, held.no, "again", ap)
 
 
-def test_the_api_reports_the_variance_and_the_named_approver(
-    ledger: Session, outbox: Outbox
-) -> None:  # noqa: F811
+def test_the_api_reports_the_variance_and_the_named_approver(ledger: Session, outbox: Outbox) -> None:  # noqa: F811
     from fastapi.testclient import TestClient
 
     from p2p.main import app
@@ -182,13 +151,8 @@ def test_the_api_reports_the_variance_and_the_named_approver(
         "600.00",
     )
     assert detail["release"]["approver_name"] == "Procure Vikram"
-    assert (
-        detail["match"][0]["variance_value"] == "600.00"
-        and detail["match"][0]["rules"] == 2
-    )
-    asked = client.post(
-        f"/api/invoices/{held.no}/release", json={"reason": "agreed"}, headers=h_ap
-    ).json()
+    assert detail["match"][0]["variance_value"] == "600.00" and detail["match"][0]["rules"] == 2
+    asked = client.post(f"/api/invoices/{held.no}/release", json={"reason": "agreed"}, headers=h_ap).json()
     assert (asked["kind"], asked["variance"], asked["approver"]) == (
         "price",
         "600.00",

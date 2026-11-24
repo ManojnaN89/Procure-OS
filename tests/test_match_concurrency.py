@@ -54,9 +54,7 @@ def _entered_in_another_session(
 ) -> str:
     with Session(routing.engine_for(slug)) as db:
         gate.wait(timeout=30)
-        return invoices.enter_invoice(
-            db, _invoice_data(po_no, number, qty, price), ap, as_of=TODAY
-        ).status
+        return invoices.enter_invoice(db, _invoice_data(po_no, number, qty, price), ap, as_of=TODAY).status
 
 
 def _thread_entry(
@@ -67,9 +65,7 @@ def _thread_entry(
     ap: int,
     gate: threading.Barrier,
 ) -> None:
-    results.append(
-        _entered_in_another_session(slug, po_no, number, "6", "100", ap, gate)
-    )
+    results.append(_entered_in_another_session(slug, po_no, number, "6", "100", ap, gate))
 
 
 def test_two_invoices_for_the_last_goods_at_once_approve_exactly_one_and_never_exceed_what_was_accepted(
@@ -106,16 +102,12 @@ def test_two_invoices_for_the_last_goods_at_once_approve_exactly_one_and_never_e
         # give the next attempt room again
         if attempt < 2:
             ledger.execute(
-                text(
-                    "update invoice set status = 'cancelled' where status in ('approved', 'part_paid', 'paid')"
-                )
+                text("update invoice set status = 'cancelled' where status in ('approved', 'part_paid', 'paid')")
             )
             ledger.commit()
 
 
-def test_two_price_blocked_invoices_for_the_same_goods_cannot_both_be_released(
-    ledger: Session, outbox: Outbox
-) -> None:  # noqa: F811
+def test_two_price_blocked_invoices_for_the_same_goods_cannot_both_be_released(ledger: Session, outbox: Outbox) -> None:  # noqa: F811
     po_no, logins = _goods(ledger, qty="10", price="1000")
     ap = _ap(ledger)
     first = _invoice(ledger, po_no, "10", "1060", number="A", user=ap)
@@ -127,29 +119,13 @@ def test_two_price_blocked_invoices_for_the_same_goods_cannot_both_be_released(
     proposals.approve(ledger, one, logins["procurement"])
 
     ledger.expire_all()
-    assert (
-        ledger.execute(
-            text("select status from invoice where no = :n"), {"n": first.no}
-        ).scalar_one()
-        == "approved"
-    )
-    proposals.approve(
-        ledger, two, logins["procurement"]
-    )  # the re-check fails and is recorded on the proposal
+    assert ledger.execute(text("select status from invoice where no = :n"), {"n": first.no}).scalar_one() == "approved"
+    proposals.approve(ledger, two, logins["procurement"])  # the re-check fails and is recorded on the proposal
     ledger.expire_all()
-    assert (
-        ledger.execute(
-            text("select status from invoice where no = :n"), {"n": second.no}
-        ).scalar_one()
-        == "blocked"
-    )
-    row = ledger.execute(
-        text("select execution, result from proposal where id = :i"), {"i": two}
-    ).one()
+    assert ledger.execute(text("select status from invoice where no = :n"), {"n": second.no}).scalar_one() == "blocked"
+    row = ledger.execute(text("select execution, result from proposal where id = :i"), {"i": two}).one()
     assert row[0] == "failed" and "more than can be invoiced" in row[1]["error"]
-    assert ledger.execute(text("select invoiced_qty from po_line")).scalar_one() == D(
-        "10"
-    )
+    assert ledger.execute(text("select invoiced_qty from po_line")).scalar_one() == D("10")
 
 
 def test_the_invoiced_quantity_never_exceeds_accepted_after_each_step_of_a_partial_flow(
@@ -173,10 +149,7 @@ def test_the_invoiced_quantity_never_exceeds_accepted_after_each_step_of_a_parti
     assert posted.rematched == [blocked.no]
     invariant()
     assert (
-        ledger.execute(
-            text("select status from invoice where no = :n"), {"n": blocked.no}
-        ).scalar_one()
-        == "approved"
+        ledger.execute(text("select status from invoice where no = :n"), {"n": blocked.no}).scalar_one() == "approved"
     )
 
 
@@ -189,9 +162,7 @@ def test_a_match_and_a_receipt_reversal_on_one_line_run_one_after_the_other() ->
     pytest.xfail("NEEDS block 9: receipt reversal")
 
 
-def test_two_companies_never_see_each_others_invoices(
-    ledger: Session, outbox: Outbox
-) -> None:  # noqa: F811
+def test_two_companies_never_see_each_others_invoices(ledger: Session, outbox: Outbox) -> None:  # noqa: F811
     other = "c" + uuid.uuid4().hex[:8]
     assert tenants.create_tenant(other, load_reference=False).ok
     try:

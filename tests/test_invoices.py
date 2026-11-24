@@ -60,7 +60,6 @@ def test_a_line_keeps_every_reason_it_has() -> None:
     assert verdict.variance_value == D("400.00")
 
 
-
 def test_the_quantity_may_not_exceed_what_was_accepted_plus_the_quantity_tolerance() -> None:
     assert m.judge_line(D("10"), D("10"), D("5"), D("5"), TOL).result == m.MATCHED
     assert m.judge_line(D("10"), D("10"), D("5.0001"), D("5"), TOL).reason == m.QTY
@@ -255,7 +254,6 @@ def test_a_price_a_little_over_is_within_tolerance_and_paid(ledger: Session, out
 
     assert (within.status, within.result) == ("approved", "within_tolerance")
     assert (over.status, over.result, over.reasons) == ("blocked", "blocked", ["price_variance"])
-
 
 
 def test_a_price_over_both_limits_blocks_with_the_reason_and_the_kind_of_block(ledger: Session, outbox: Outbox) -> None:  # noqa: F811
@@ -493,9 +491,10 @@ def test_a_block_is_released_only_by_the_price_rule_person_through_a_proposal(le
     assert ledger.execute(
         text("select resolved_by, resolution from match_result where resolved_at is not null")
     ).one() == (str(logins["procurement"]), "The supplier agreed the new price in writing")
-    assert ledger.execute(
-        text("select resolution_kind from match_result where resolved_at is not null")
-    ).scalar_one() == "price_accepted"
+    assert (
+        ledger.execute(text("select resolution_kind from match_result where resolved_at is not null")).scalar_one()
+        == "price_accepted"
+    )
     assert ledger.execute(text("select invoiced_qty from po_line")).scalar_one() == D(
         "10"
     )  # now it counts against the receipt
@@ -509,7 +508,9 @@ def test_a_block_is_released_only_by_the_price_rule_person_through_a_proposal(le
     )
 
 
-def test_an_invoice_entered_by_the_rule_person_has_nobody_who_may_accept_its_price(ledger: Session, outbox: Outbox) -> None:  # noqa: F811
+def test_an_invoice_entered_by_the_rule_person_has_nobody_who_may_accept_its_price(
+    ledger: Session, outbox: Outbox
+) -> None:  # noqa: F811
     po_no, logins = _goods(ledger, qty="10", price="1000")
     slug, sfx = ledger.info["slug"], ledger.info["sfx"]
     other = users.create_user(slug, f"ap{sfx}@x.example", PASSWORD, "An AP", "AP")
