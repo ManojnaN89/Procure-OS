@@ -33,6 +33,9 @@ IST = ZoneInfo("Asia/Kolkata")
 RECEIVABLE = ("sent", "acknowledged", "part_received")
 SEE = {  # the kind: permissions that let a role see it (the screen's specification, not the code's)
     "invoice": {"invoice.view", "invoice.match", "invoice.approve"},
+    "invoice_authorise": {"invoice.view", "invoice.match", "invoice.approve"},
+    "invoice_approve": {"invoice.view", "invoice.match", "invoice.approve"},
+    "invoice_sender_check": {"invoice.view", "invoice.book", "invoice.match"},
     "unordered": {"grn.create", "grn.unordered_approve", "po.create"},
     "service": {"po.create"},
     "approval": {"request.approve"},
@@ -91,6 +94,33 @@ def oracle(db: Any, today: date) -> dict[tuple[str, str], dict[str, Any]]:
             "act": act,
             "since": i["received_on"],
             "reason": i["block_reason"],
+        }
+
+    # block 10 (spec 10.1): the bills without an order waiting past their 18 working hours, and an invoice mail whose
+    # sender failed authentication (that one at once)
+    profile = {r["user_id"]: r["display_name"] for r in q("select user_id, display_name from user_profile")}
+    now = datetime.now(IST)
+    for t in q(
+        "select id, kind, assignee, payload, due_at, created_at from task "
+        "where kind in ('invoice_authorise', 'invoice_approve', 'invoice_sender_check') "
+        "and status in ('open', 'overdue')"
+    ):
+        p = t["payload"] or {}
+        if t["kind"] == "invoice_sender_check":
+            ref = str(p.get("email_id") or t["id"])
+            want[("invoice_sender_check", ref)] = {
+                "owner": f"AP: {profile.get(int(t['assignee']), 'a person')}",
+                "act": None,
+                "since": _day(t["created_at"]),
+            }
+            continue
+        if t["due_at"] > now:
+            continue
+        person = p.get("person")
+        want[(t["kind"], str(p.get("invoice_no")))] = {
+            "owner": f"Named person: {name.get(str(person), person) if person else 'not assigned'}",
+            "act": None,
+            "since": _day(t["due_at"]),
         }
 
     for u in q(
@@ -263,6 +293,52 @@ def _plant(world: Any, client: TestClient, out: Outcome) -> dict[str, str]:
         invoices.request_release(db, blocked, "E44: agreed with the supplier", world.logins["AP"])
         db.commit()
         planted["release"] = blocked
+    # block 10 (spec 10.1): a bill without an order with each of its two decisions overdue, and an invoice mail whose
+    # sender failed authentication
+    db.execute(
+        text(
+            "insert into invoice (no, type, kind, supplier_code, supplier_invoice_no, dedupe_key, invoice_date, fy, "
+            "received_on, taxable, cgst, sgst, total, status, payment_block, category_code, cost_centre_code, "
+            "authoriser, entered_by) values ('E44-BILL', 'invoice', 'non_po', 'SUP-010', 'E44/BILL', 'E44BILL', :d, "
+            "'2026-27', :d, 1000, 90, 90, 1180, 'awaiting_approval', 'none', 'UTL', 'CC-ADM', 'U07', 'U04')"
+        ),
+        {"d": lib.TODAY},
+    )  # fmt: skip
+    for kind, title in (
+        ("invoice_authorise", "Authorise Sahyadri Netlink Pvt Ltd's bill E44/BILL for Rs 1,180.00"),
+        ("invoice_approve", "Approve Sahyadri Netlink Pvt Ltd's bill E44/BILL for Rs 1,180.00"),
+    ):
+        db.execute(
+            text(
+                "insert into task (kind, title, assignee, sla_hours, due_at, payload, created_at) values "
+                "(:k, :t, :a, 18, :due, cast(:p as jsonb), :created)"
+            ),
+            {
+                "k": kind,
+                "t": title,
+                "a": world.org_logins["U07"],
+                "due": datetime.now(IST) - timedelta(days=2),
+                "p": f'{{"invoice_no": "E44-BILL", "person": "U07", "calendar_location": "PLT-CKN"}}',
+                "created": datetime.now(IST) - timedelta(days=3),
+            },
+        )
+    db.execute(
+        text(
+            "insert into task (kind, title, assignee, sla_hours, due_at, payload, created_at) values "
+            "('invoice_sender_check', 'Invoice mail from billing@sahyadrinetlink.example not read', :a, 18, :due, "
+            "cast(:p as jsonb), :created)"
+        ),
+        {
+            "a": world.logins["AP"],
+            "due": datetime.now(IST) + timedelta(days=1),
+            "p": '{"email_id": 999999, "from": "billing@sahyadrinetlink.example"}',
+            "created": datetime.now(IST),
+        },
+    )  # fmt: skip
+    db.commit()
+    planted["bill_authorise"] = "E44-BILL"
+    planted["bill_approve"] = "E44-BILL"
+    planted["sender_check"] = "999999"
     return planted
 
 
@@ -296,9 +372,15 @@ def run(ctx: lib.Ctx) -> Outcome:
 
     # 1. every planted case is there, with the owner the oracle names
     for label, ref in planted.items():
-        kind = {"release": "invoice", "service": "service", "approval": "approval", "proposal": "proposal"}.get(
-            label, "unordered"
-        )
+        kind = {
+            "release": "invoice",
+            "service": "service",
+            "approval": "approval",
+            "proposal": "proposal",
+            "bill_authorise": "invoice_authorise",
+            "bill_approve": "invoice_approve",
+            "sender_check": "invoice_sender_check",
+        }.get(label, "unordered")
         if (kind, ref) not in got:
             out.find("high", f"the planted {label} ({ref}) is not on the screen")
     # 2. exactly the oracle's set, nothing extra, nothing missing (a late order may also be one not acknowledged)

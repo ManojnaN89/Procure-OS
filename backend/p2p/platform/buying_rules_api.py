@@ -8,7 +8,7 @@ approval chains; every change needs a reason, and it applies only when a second 
 `setting_changes`): the endpoint checks it and answers 202 with the proposal.
 """
 
-from datetime import date
+from datetime import date, timedelta
 from decimal import Decimal
 from typing import Annotated, Any
 
@@ -21,7 +21,7 @@ from p2p.formulas import selection as sel
 from p2p.formulas.calendar import business_today
 from p2p.formulas.money import round_money
 from p2p.orders import selection_rule, touchless
-from p2p.platform import routing, setting_changes
+from p2p.platform import audit, routing, setting_changes
 from p2p.platform.permissions import require
 from p2p.platform.rows import rows as _rows
 from p2p.platform.setting_changes import Change
@@ -34,6 +34,7 @@ router = APIRouter(prefix="/api/setup", tags=["setup"])
 Db = Annotated[Session, Depends(routing.tenant_session)]
 RulesAdmin = Annotated[routing.TenantContext, Depends(require("admin.rules"))]
 D = Decimal
+_ONE_DAY = timedelta(days=1)
 
 # The thresholds of the buying route in the order the screen shows them: label and kind (rupees, percent or days).
 ROUTE_FIELDS: dict[str, tuple[str, str]] = {
@@ -450,7 +451,107 @@ def _price_threshold(db: Session, actor: Actor, args: dict[str, Any], reason: st
     return Change("price_threshold_rule", key, before, after, {"version": version})
 
 
-# ---- items bought from one supplier only ---------------------------------------------------------
+# ---- bills without an order (block 10): the non_po_rule versions ---------------------------------
+
+
+@router.get("/non-po-rules")
+def get_non_po_rules(db: Db, ctx: RulesAdmin) -> dict[str, Any]:
+    today, names = business_today(), _names(db)
+    versions = []
+    for r in _rows(db, "select * from non_po_rule order by category_code, version desc"):
+        v = _version(r, today, names)
+        v |= {
+            "category": r["category_code"],
+            "enabled": r["enabled"],
+            "max_value": str(D(r["max_value"]).quantize(D("0.01"))),
+            "supporting_doc": r["supporting_doc"],
+        }
+        versions.append(v)
+    return {
+        "versions": versions,
+        "categories": _rows(
+            db,
+            "select code, name, default_gl, stocked from item_category where coalesce(stocked, false) = false "
+            "order by code",
+        ),
+    }
+
+
+class NonPoVersion(BaseModel):
+    category_code: str
+    effective_from: date
+    enabled: bool = True
+    max_value: Decimal
+    supporting_doc: str | None = None
+    reason: str | None = None
+
+
+@router.post("/non-po-rules", status_code=202)
+def new_non_po_rule(body: NonPoVersion, db: Db, ctx: RulesAdmin) -> dict[str, Any]:
+    reason = need_reason(body.reason)
+    return _submit(db, ctx, "non_po_rule", body.model_dump(mode="json", exclude={"reason"}), reason)
+
+
+@setting_changes.handler("non_po_rule", "admin.rules")
+def _non_po_rule(db: Session, actor: Actor, args: dict[str, Any], reason: str, apply: bool) -> Change:
+    body = NonPoVersion.model_validate(args)
+    category = db.execute(
+        text("select name, stocked from item_category where code = :c"), {"c": body.category_code}
+    ).first()
+    if category is None:
+        raise _422(f"there is no item category {body.category_code}")
+    if category[1]:
+        raise _422(f"{category[0]} is kept in stock: a stocked category is never billed without an order")
+    if body.max_value <= 0:
+        raise _422("the highest bill must be above zero")
+    _check_start(db, "non_po_rule", body.effective_from, "category_code = :c", c=body.category_code)
+    same_day = db.execute(
+        text("select version from non_po_rule where category_code = :c and effective_from = :d"),
+        {"c": body.category_code, "d": body.effective_from},
+    ).scalar()
+    if same_day is not None:
+        raise _422(f"version {same_day} starts on {body.effective_from:%d %b %Y}: a new one starts another day")
+    before = db.execute(
+        text(
+            "select version, enabled, max_value, supporting_doc from non_po_rule where category_code = :c "
+            "and effective_from < :d and (effective_to is null or effective_to >= :d) order by version desc limit 1"
+        ),
+        {"c": body.category_code, "d": body.effective_from},
+    ).first()
+    after = {"enabled": body.enabled, "max_value": str(body.max_value), "supporting_doc": body.supporting_doc}
+    change = Change("non_po_rule", body.category_code, dict(before._mapping) if before else None, after)
+    if not apply:
+        return change
+    if before is not None:
+        db.execute(
+            text("update non_po_rule set effective_to = :e where category_code = :c and version = :v"),
+            {"e": body.effective_from - _ONE_DAY, "c": body.category_code, "v": before[0]},
+        )
+    version = int(
+        db.execute(
+            text(
+                "insert into non_po_rule (category_code, version, effective_from, enabled, max_value, supporting_doc, "
+                "note, created_by) values (:c, (select coalesce(max(version), 0) + 1 from non_po_rule "
+                "where category_code = :c), :f, :e, :m, :s, :n, :by) returning version"
+            ),
+            {
+                "c": body.category_code,
+                "f": body.effective_from,
+                "e": body.enabled,
+                "m": body.max_value,
+                "s": body.supporting_doc,
+                "n": reason,
+                "by": actor.id,
+            },
+        ).scalar_one()
+    )
+    record_history(db, actor, change.area, body.category_code, change.old, change.new, reason)
+    audit.record(
+        db, actor, "non_po_rule.version", "non_po_rule", body.category_code,
+        before=change.old, after={**change.new, "version": version, "effective_from": str(body.effective_from)},
+        reason=reason,
+    )  # fmt: skip
+    return Change(change.area, change.key, change.old, change.new, {"version": version})
 
 
 @router.get("/single-source")

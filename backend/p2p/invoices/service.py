@@ -6,17 +6,21 @@ cancelled record that points at the original. A blocked invoice is released only
 entered it, through a proposal (rule 5); nothing here releases a block by itself.
 """
 
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import UTC, date, datetime
 from decimal import Decimal
 from typing import Any
 
 from sqlalchemy import text
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from p2p.formulas import matching as rules
+from p2p.formulas import non_po as non_po_rules
 from p2p.formulas.fy import financial_year
 from p2p.formulas.gst import Registration
+from p2p.formulas.gstin import is_valid_gstin
 from p2p.formulas.money import format_inr
 from p2p.formulas.orders import line_amounts
 from p2p.formulas.words import count
@@ -33,10 +37,14 @@ class InvoiceError(Exception):
     pass
 
 
+class InvoiceInputError(InvoiceError):
+    """What was typed cannot be an invoice: refused 422, where a state or rule refuses 409."""
+
+
 @dataclass
 class InvLine:
-    po_no: str
-    po_line_no: int
+    po_no: str | None
+    po_line_no: int | None
     qty: Decimal
     unit_price: Decimal
     discount: Decimal = D(0)
@@ -85,6 +93,12 @@ class InvoiceIn:
     total: Decimal | None = None
     ref_invoice_no: str | None = None
     document_ref: str | None = None
+    kind: str = "po"  # po or non_po (a bill without a purchase order)
+    category_code: str | None = None
+    cost_centre_code: str | None = None
+    gl_code: str | None = None
+    documents: list[dict[str, Any]] = field(default_factory=list)  # {"id": int, "kind": "copy"|"supporting"}
+    not_duplicate_reason: str | None = None
     no: str | None = (
         None  # an invoice of the old system loaded at cutover keeps its number; else the platform numbers it
     )
@@ -93,10 +107,12 @@ class InvoiceIn:
 @dataclass
 class Entered:
     no: str
-    status: str  # approved, blocked or cancelled (a duplicate)
+    status: str  # approved, blocked, cancelled (a duplicate), awaiting_authorisation
     result: str | None  # matched, within_tolerance, blocked
     reasons: list[str] = field(default_factory=list)
     duplicate_of: str | None = None
+    kind: str = "po"
+    authoriser: str | None = None
 
 
 def _tolerances(db: Session, inv: Any) -> tolerances.ToleranceSet:
@@ -129,8 +145,116 @@ def _po_line(db: Session, supplier: str, po_no: str, line_no: int) -> dict[str, 
     return dict(row)
 
 
-def _supplier_state(sup: dict[str, Any]) -> str | None:
+def _supplier_state(sup: Mapping[str, Any]) -> str | None:
     return sup["state_code"] or (str(sup["gstin"])[:2] if sup["gstin"] else None)
+
+
+def _state_names(db: Session) -> dict[str, str]:
+    return {str(r[0]): str(r[1]) for r in db.execute(text("select code, name from ref_gst_state"))}
+
+
+def _bill(db: Session, data: InvoiceIn, sup: dict[str, Any], received_on: date) -> dict[str, Any]:
+    """Check a bill without an order against its rule (10.1) and say where it is charged. Raises before anything is
+    written; the total is checked again after the amounts are worked out."""
+    category = data.category_code
+    if not category:
+        raise InvoiceInputError("a bill without an order needs the category it is for")
+    from p2p.invoices import non_po as bill_service  # noqa: PLC0415 - the bill's service builds on this module
+
+    rule = bill_service.rule_in_force(db, category, received_on)
+    cc = (
+        db.execute(
+            text(
+                "select c.*, l.gstin as location_gstin, d.head_user from cost_centre c "
+                "left join location l on l.code = c.location_code left join department d on d.code = c.department_code "
+                "where c.code = :c"
+            ),
+            {"c": data.cost_centre_code},
+        )
+        .mappings()
+        .first()
+    )
+    gl_code = data.gl_code or (rule.gl_code if rule else None)
+    gl = (
+        db.execute(
+            text("select code, type, is_capex, is_tax_account from gl_account where code::text = cast(:c as text)"),
+            {"c": gl_code},
+        ).first()
+        if gl_code and str(gl_code).isdigit()
+        else None
+    )
+    approved = bool(
+        db.execute(
+            text("select 1 from supplier_category where supplier_code = :s and category_code = :c"),
+            {"s": data.supplier_code, "c": category},
+        ).first()
+    )
+    gl_ok = gl is not None and str(gl[1]) == "expense" and not gl[2] and not gl[3]
+    problems = non_po_rules.rule_problems(
+        rule=rule,
+        category_name=(str(rule.category_name) if rule else None),
+        total=D("0"),
+        supplier_name=str(sup["legal_name"]),
+        supplier_status=str(sup["status"]),
+        supplier_approved=approved,
+        cost_centre_ok=cc is not None and cc["active"] in (True, "true"),
+        gl_code=gl_code,
+        gl_ok=gl_ok,
+        has_copy=any(d.get("kind") == "copy" for d in data.documents),
+        has_supporting=any(d.get("kind") == "supporting" for d in data.documents),
+    )
+    if problems:
+        first = problems[0]
+        raise (InvoiceInputError(first.message) if first.status == 422 else InvoiceError(first.message))
+    # every document must be on file, of a kind this knows
+    ids = [int(d["id"]) for d in data.documents if d.get("id") is not None]
+    found = (
+        {int(r[0]) for r in db.execute(text("select id from document where id = any(:i)"), {"i": ids})}
+        if ids
+        else set()
+    )
+    if len(found) != len(set(ids)) or len(ids) != len(data.documents):
+        raise InvoiceInputError("one of the documents attached to the bill is not on file")
+    for d in data.documents:
+        if d.get("kind") not in ("copy", "supporting"):
+            raise InvoiceInputError("a document is attached as the copy or as a supporting document")
+    if cc is None:
+        raise InvoiceError("a bill without an order needs an active cost centre")
+    return {
+        "rule": rule,
+        "cc": dict(cc),
+        "gl_code": gl_code,
+        "problems": problems,
+        "location_gstin": cc["location_gstin"],
+    }
+
+
+def _check_bill_line_rate(ln: InvLine, rate: Decimal) -> None:
+    if rate not in non_po_rules.GST_SLABS:
+        raise InvoiceInputError(f"{rate}% is not a GST rate: use one of 0, 0.25, 3, 5, 12, 18 or 28")
+
+
+def _live(db: Session, supplier: str, fy: str, type_: str, key: str) -> str | None:
+    return db.execute(
+        text(
+            "select no from invoice where supplier_code = :s and fy = :f and dedupe_key = :k and type = :t "
+            "and status <> 'cancelled' order by created_at, no limit 1"
+        ),
+        {"s": supplier, "f": fy, "k": key, "t": type_},
+    ).scalar()
+
+
+def _twin_irn(db: Session, irn: str | None, excluding: str) -> tuple[str, str, date, Decimal] | None:
+    if not irn:
+        return None
+    row = db.execute(
+        text(
+            "select no, supplier_invoice_no, invoice_date, total from invoice where upper(irn) = upper(:i) "
+            "and status <> 'cancelled' and no <> :x order by created_at limit 1"
+        ),
+        {"i": irn, "x": excluding},
+    ).first()
+    return (str(row[0]), str(row[1]), row[2], D(row[3])) if row else None
 
 
 def enter_invoice(
@@ -144,40 +268,66 @@ def enter_invoice(
     sup = dict(found)
     if data.type not in ("invoice", "credit_note", "debit_note"):
         raise InvoiceError("the type must be invoice, credit_note or debit_note")
+    if data.kind not in ("po", "non_po"):
+        raise InvoiceInputError("the kind must be po or non_po")
     if not data.supplier_invoice_no.strip():
         raise InvoiceError("the supplier's invoice number is needed")
     if data.type == "invoice" and not data.lines:
         raise InvoiceError("an invoice needs at least one line")
+    if data.type == "debit_note" and not data.ref_invoice_no:
+        raise InvoiceInputError("a debit note must say which invoice it is for")
+    bill = data.kind == "non_po"
+    if bill and data.type != "invoice":
+        raise InvoiceInputError("a note cannot be a bill without an order")
     for ln in data.lines:
         if ln.qty <= 0 or ln.unit_price < 0 or ln.discount < 0:
-            raise InvoiceError(
-                f"{ln.po_no} line {ln.po_line_no}: the quantity must be more than zero and the price not negative"
-            )
-    po_lines = [_po_line(db, data.supplier_code, ln.po_no, ln.po_line_no) for ln in data.lines]
+            where = f"{ln.po_no} line {ln.po_line_no}" if ln.po_no else "a bill line"
+            raise InvoiceError(f"{where}: the quantity must be more than zero and the price not negative")
+        if bill and (ln.po_no or ln.po_line_no):
+            raise InvoiceInputError("a line of a bill cannot name an order line: a bill is all one kind")
+        if not bill and (not ln.po_no or ln.po_line_no is None):
+            raise InvoiceInputError("an invoice line needs its order number and line number")
+    received_at = data.received_at or datetime.now(UTC)
+    received_on = as_of or received_at.date()
+    context = _bill(db, data, sup, received_on) if bill else None
+    po_lines = (
+        []
+        if bill
+        else [_po_line(db, data.supplier_code, str(ln.po_no or ""), int(ln.po_line_no or 0)) for ln in data.lines]
+    )
     if data.type != "invoice" and data.ref_invoice_no:
         ref = db.execute(text("select supplier_code from invoice where no = :n"), {"n": data.ref_invoice_no}).first()
         if ref is None or ref[0] != data.supplier_code:
             raise InvoiceError(f"{data.ref_invoice_no} is not an invoice of {data.supplier_code}")
+    if data.supplier_gstin and not is_valid_gstin(data.supplier_gstin):
+        raise InvoiceInputError(f"{data.supplier_gstin} is not a valid GSTIN")
+    supplier_gstin = (data.supplier_gstin or sup["gstin"]) if (bill or data.type != "invoice") else data.supplier_gstin
+    if supplier_gstin and not is_valid_gstin(str(supplier_gstin)):
+        raise InvoiceInputError(f"{supplier_gstin} is not a valid GSTIN")
+    if data.buyer_gstin and not is_valid_gstin(data.buyer_gstin):
+        raise InvoiceInputError(f"{data.buyer_gstin} is not a valid GSTIN")
 
-    received_at = data.received_at or datetime.now(UTC)
-    received_on = as_of or received_at.date()
     fy = financial_year(data.invoice_date)
     key = rules.normalize_invoice_no(data.supplier_invoice_no)
-    twin = db.execute(
-        text(
-            "select no from invoice where supplier_code = :s and fy = :f and dedupe_key = :k and type = :t "
-            "and status <> 'cancelled' order by created_at, no limit 1"
-        ),
-        {"s": data.supplier_code, "f": fy, "k": key, "t": data.type},
-    ).scalar()
+    db.execute(
+        text("select pg_advisory_xact_lock(hashtext(:k))"),
+        {"k": f"invoice|{data.supplier_code}|{fy}|{data.type}|{key}"},
+    )
+    twin = _live(db, data.supplier_code, fy, data.type, key)
+    irn_twin = _twin_irn(db, data.irn, "") if not twin else None
 
-    buyer = data.buyer_gstin or (po_lines[0]["buyer_gstin"] if po_lines else None)
+    buyer = data.buyer_gstin or (
+        context["location_gstin"] if context else (po_lines[0]["buyer_gstin"] if po_lines else None)
+    )
     place = data.place_of_supply or (str(buyer)[:2] if buyer else None)
     registration = Registration(sup["gst_reg_type"] or "regular")
     state = _supplier_state(sup)
     amounts = []
-    for ln, pl in zip(data.lines, po_lines, strict=True):
-        rate = ln.gst_rate if ln.gst_rate is not None else D(pl["gst_rate"])
+    for n, ln in enumerate(data.lines):
+        pl = po_lines[n] if po_lines else None
+        rate = ln.gst_rate if ln.gst_rate is not None else (D(pl["gst_rate"]) if pl else D(0))
+        if bill:
+            _check_bill_line_rate(ln, rate)
         taxable = ln.taxable if ln.taxable is not None else (ln.qty * (ln.unit_price - ln.discount)).quantize(D("0.01"))
         if None in (ln.cgst, ln.sgst, ln.igst):
             if state and place:
@@ -217,32 +367,98 @@ def enter_invoice(
     # rounding to the rupee is all the rounding there is: a total that is further off than that is a problem to find
     round_off = data.round_off if data.round_off is not None else raw_total.quantize(D("1")) - raw_total
 
-    no = data.no or numbering.next_number(db, "invoice_booking", received_on)
-    db.execute(
-        text(
-            "insert into invoice (no, type, supplier_code, supplier_gstin, buyer_gstin, place_of_supply, supplier_invoice_no, "
-            "dedupe_key, invoice_date, fy, irn, ack_no, ack_date, eway_bill_no, reverse_charge, received_at, received_on, channel, "
-            "taxable, cgst, sgst, igst, cess, round_off, total, ref_invoice_no, document_ref, entered_by, status) values "
-            "(:no, :t, :s, :sg, :bg, :pos, :sin, :k, :d, :fy, :irn, :ack, :ackd, :ew, :rc, :ra, :ro, :ch, :tx, :cg, :sgs, :ig, :ce, :rnd, :tot, :ref, :doc, :by, 'received')"
-        ),
-        {
-            "no": no, "t": data.type, "s": data.supplier_code, "sg": data.supplier_gstin, "bg": buyer, "pos": place,
-            "sin": data.supplier_invoice_no.strip(), "k": key, "d": data.invoice_date, "fy": fy, "irn": data.irn or None,
-            "ack": data.ack_no, "ackd": data.ack_date, "ew": data.eway_bill_no, "rc": data.reverse_charge, "ra": received_at,
-            "ro": received_on, "ch": data.channel, "tx": header_taxable, "cg": cgst, "sgs": sgst, "ig": igst, "ce": data.cess,
-            "rnd": round_off, "tot": total, "ref": data.ref_invoice_no, "doc": data.document_ref, "by": str(user_id),
-        },
-    )  # fmt: skip
-    for n, (ln, pl, am) in enumerate(zip(data.lines, po_lines, amounts, strict=True), start=1):
-        db.execute(
+    if bill and context is not None:
+        rule = context["rule"]
+        if rule is not None and total > rule.max_value:
+            raise InvoiceError(
+                f"a {rule.category_name.lower()} bill without an order may be at most "
+                f"{non_po_rules.money(rule.max_value)}; this one is {non_po_rules.money(total)}: raise a purchase order"
+            )
+        earlier = db.execute(
             text(
-                "insert into invoice_line (invoice_no, line_no, po_no, po_line_no, description, hsn_sac, qty, uom, unit_price, discount, "
-                "taxable, gst_rate, cgst, sgst, igst) values (:i, :n, :p, :l, :d, :h, :q, :u, :pr, :di, :tx, :r, :c, :s, :g)"
+                "select no, supplier_invoice_no, invoice_date, total from invoice where supplier_code = :s "
+                "and category_code = :c and kind = 'non_po' and status <> 'cancelled' and total = :t "
+                "and dedupe_key <> :k and abs(invoice_date - :d) <= :w order by invoice_date desc, no limit 1"
             ),
             {
-                "i": no, "n": n, "p": ln.po_no, "l": ln.po_line_no, "d": ln.description or pl["description"], "h": ln.hsn_sac,
-                "q": ln.qty, "u": ln.uom or pl["uom"], "pr": ln.unit_price, "di": ln.discount, "tx": am[1], "r": am[0],
-                "c": am[2], "s": am[3], "g": am[4],
+                "s": data.supplier_code,
+                "c": data.category_code,
+                "t": total,
+                "k": key,
+                "d": data.invoice_date,
+                "w": int(
+                    db.execute(
+                        text("select value from org_setting where key = 'non_po_duplicate_window_days'")
+                    ).scalar()
+                    or 7
+                ),
+            },
+        ).first()
+        if earlier is not None and not twin and not irn_twin and not (data.not_duplicate_reason or "").strip():
+            raise InvoiceError(
+                f"this may be the same bill as {earlier[0]} ({earlier[1]}, {earlier[2]:%d %b %Y}, "
+                f"{non_po_rules.money(D(earlier[3]))}): enter it with a reason if it is not"
+            )
+
+    no = data.no or numbering.next_number(db, "invoice_booking", received_on)
+    copy_of, reason = (twin, "number") if twin else ((irn_twin[0], "irn") if irn_twin else (None, None))
+    params = {
+        "no": no, "t": data.type, "s": data.supplier_code, "sg": supplier_gstin, "bg": buyer, "pos": place,
+        "sin": data.supplier_invoice_no.strip(), "k": key, "d": data.invoice_date, "fy": fy, "irn": data.irn or None,
+        "ack": data.ack_no, "ackd": data.ack_date, "ew": data.eway_bill_no, "rc": data.reverse_charge, "ra": received_at,
+        "ro": received_on, "ch": data.channel, "tx": header_taxable, "cg": cgst, "sgs": sgst, "ig": igst, "ce": data.cess,
+        "rnd": round_off, "tot": total, "ref": data.ref_invoice_no, "doc": data.document_ref, "by": str(user_id),
+        "kind": data.kind, "cat": data.category_code if bill else None,
+        "cc": data.cost_centre_code if bill else None, "rule": context["rule"].id if bill and context else None,
+        "status": "cancelled" if copy_of else "received",
+        "block": "duplicate" if copy_of else "none",
+        "dupo": copy_of,
+        "why": (
+            f"The same invoice number is already on file as {copy_of}"
+            if reason == "number"
+            else f"The same IRN is already on file as {copy_of}"
+            if reason == "irn"
+            else None
+        ),
+        "suspect": earlier[0] if bill and not copy_of and earlier is not None else None,
+        "ndr": data.not_duplicate_reason if bill and earlier is not None and not copy_of else None,
+    }  # fmt: skip
+    try:
+        with db.begin_nested():
+            db.execute(
+                text(
+                    "insert into invoice (no, type, kind, supplier_code, supplier_gstin, buyer_gstin, place_of_supply, "
+                    "supplier_invoice_no, dedupe_key, invoice_date, fy, irn, ack_no, ack_date, eway_bill_no, reverse_charge, "
+                    "received_at, received_on, channel, taxable, cgst, sgst, igst, cess, round_off, total, ref_invoice_no, "
+                    "document_ref, entered_by, status, payment_block, duplicate_of, block_reason, category_code, "
+                    "cost_centre_code, non_po_rule_id, suspect_of, not_duplicate_reason) values "
+                    "(:no, :t, :kind, :s, :sg, :bg, :pos, :sin, :k, :d, :fy, :irn, :ack, :ackd, :ew, :rc, :ra, :ro, :ch, "
+                    ":tx, :cg, :sgs, :ig, :ce, :rnd, :tot, :ref, :doc, :by, :status, :block, :dupo, :why, :cat, :cc, :rule, "
+                    ":suspect, :ndr)"
+                ),
+                params,
+            )
+    except IntegrityError:
+        live = _live(db, data.supplier_code, fy, data.type, key) or (_twin_irn(db, data.irn, "") or ("another",))[0]
+        raise InvoiceError(
+            f"{data.supplier_invoice_no} was entered at the same moment as {live}: look at it before entering again"
+        ) from None
+    for n, (ln, am) in enumerate(zip(data.lines, amounts, strict=True), start=1):
+        pl = po_lines[n - 1] if po_lines else None
+        db.execute(
+            text(
+                "insert into invoice_line (invoice_no, line_no, po_no, po_line_no, description, hsn_sac, qty, uom, unit_price, "
+                "discount, taxable, gst_rate, cgst, sgst, igst, category_code, cost_centre_code, gl_code, location_code) "
+                "values (:i, :n, :p, :l, :d, :h, :q, :u, :pr, :di, :tx, :r, :c, :s, :g, :cat, :cc, :gl, :loc)"
+            ),
+            {
+                "i": no, "n": n, "p": ln.po_no, "l": ln.po_line_no,
+                "d": ln.description or (pl["description"] if pl else None), "h": ln.hsn_sac,
+                "q": ln.qty, "u": ln.uom or (pl["uom"] if pl else None), "pr": ln.unit_price, "di": ln.discount,
+                "tx": am[1], "r": am[0], "c": am[2], "s": am[3], "g": am[4],
+                "cat": data.category_code if bill else None, "cc": data.cost_centre_code if bill else None,
+                "gl": context["gl_code"] if bill and context else None,
+                "loc": context["cc"]["location_code"] if bill and context else None,
             },
         )  # fmt: skip
     for ch in data.charges:
@@ -253,27 +469,179 @@ def enter_invoice(
     actor = user(user_id)
     audit.record(
         db, actor, "invoice.enter", "invoice", no,
-        after={"supplier": data.supplier_code, "number": data.supplier_invoice_no, "total": total, "type": data.type, "channel": data.channel},
+        after={
+            "supplier": data.supplier_code, "number": data.supplier_invoice_no, "total": total, "type": data.type,
+            "channel": data.channel, "kind": data.kind, "category": data.category_code,
+            "cost_centre": data.cost_centre_code,
+        },
     )  # fmt: skip
+    if bill and data.documents:
+        for d in data.documents:
+            db.execute(
+                text(
+                    "insert into invoice_document_link (invoice_no, document_id, kind, added_by) "
+                    "values (:i, :d, :k, :b) on conflict do nothing"
+                ),
+                {"i": no, "d": int(d["id"]), "k": str(d["kind"]), "b": str(user_id)},
+            )
+        audit.record(
+            db, actor, "invoice.evidence", "invoice", no,
+            after={"documents": [{"id": int(d["id"]), "kind": d["kind"]} for d in data.documents]},
+        )  # fmt: skip
 
-    if twin:
-        db.execute(
-            text(
-                "update invoice set status = 'cancelled', payment_block = 'duplicate', duplicate_of = :o, "
-                "block_reason = :why where no = :n"
-            ),
-            {"o": twin, "why": f"The same invoice number is already on file as {twin}", "n": no},
-        )
-        audit.record(db, actor, "invoice.duplicate", "invoice", no, after={"duplicate_of": twin})
+    if copy_of:
+        audit.record(
+            db, actor, "invoice.duplicate", "invoice", no,
+            after={"duplicate_of": copy_of, "by": reason},
+        )  # fmt: skip
         if commit:
             db.commit()
-        return Entered(no, "cancelled", None, ["duplicate"], twin)
+        return Entered(no, "cancelled", None, ["duplicate"], copy_of, data.kind)
+    if bill and earlier is not None and params["suspect"]:
+        audit.record(
+            db, actor, "invoice.not_duplicate", "invoice", no,
+            after={"suspect_of": params["suspect"], "reason": data.not_duplicate_reason},
+        )  # fmt: skip
     if data.type != "invoice":
-        db.execute(text("update invoice set status = 'approved' where no = :n"), {"n": no})
+        problem, words = _note_header(
+            db, data, sup, buyer, place, cgst, sgst, igst,
+            po_lines[0]["buyer_gstin"] if po_lines else None, supplier_gstin,
+        )  # fmt: skip
+        if problem:
+            db.execute(
+                text("update invoice set status = 'blocked', payment_block = 'tax', block_reason = :w where no = :n"),
+                {"w": words, "n": no},
+            )
+            audit.record(
+                db, actor, "invoice.match", "invoice", no,
+                after={"result": "blocked", "reason": problem, "status": "blocked"},
+            )  # fmt: skip
+            if commit:
+                db.commit()
+            return Entered(no, "blocked", "blocked", [problem], kind=data.kind)
+        db.execute(
+            text("update invoice set status = 'approved', approved_by = :b where no = :n"), {"b": str(user_id), "n": no}
+        )
         if commit:
             db.commit()
-        return Entered(no, "approved", None)
+        return Entered(no, "approved", None, kind=data.kind)
+    if bill:
+        return _match_bill(db, no, actor, commit=commit)
     return match_invoice(db, no, actor, commit=commit)
+
+
+def _note_words(problem: str | None) -> str | None:
+    return {
+        rules.TAX: "A supplier under the composition scheme or without GST registration cannot charge GST",
+        rules.IRN: "The supplier must issue an e-invoice and this one carries no IRN",
+        rules.GSTIN: "The GSTIN on the note does not match the supplier master or our registration",
+    }.get(problem or "", problem)
+
+
+def _note_header(
+    db: Session,
+    data: InvoiceIn,
+    sup: dict[str, Any],
+    buyer: str | None,
+    place: str | None,
+    cgst: Decimal,
+    sgst: Decimal,
+    igst: Decimal,
+    order_buyer: str | None = None,
+    supplier_gstin: str | None = None,
+) -> tuple[str | None, str | None]:
+    """The header checks of a credit or debit note (10.7.5): composition, GSTINs and the tax head."""
+    valid = {
+        g
+        for (g,) in db.execute(
+            text("select gstin from supplier_address where supplier_code = :c and gstin is not null"),
+            {"c": data.supplier_code},
+        )
+    } | {g for g in (sup["gstin"],) if g}
+    header = rules.Header(
+        sup["gst_reg_type"], sup["e_invoice_applicable"] in (True, "true"), data.type, data.irn,
+        cgst + sgst + igst, supplier_gstin, frozenset(valid), buyer, order_buyer,
+        _supplier_state(sup), place, cgst, sgst, igst,
+    )  # fmt: skip
+    problem = rules.header_problem(header)
+    if problem == rules.TAX_HEAD:
+        return problem, rules.header_words(header, _state_names(db))
+    return problem, _note_words(problem)
+
+
+def _match_bill(db: Session, no: str, actor: Actor, *, commit: bool = True) -> Entered:
+    """The header and arithmetic checks of a bill without an order; a clean one goes to its authoriser."""
+    inv = db.execute(text("select * from invoice where no = :n for update"), {"n": no}).mappings().one()
+    sup = db.execute(text("select * from supplier where code = :c"), {"c": inv["supplier_code"]}).mappings().one()
+    lines = [
+        dict(r)
+        for r in db.execute(
+            text("select * from invoice_line where invoice_no = :n order by line_no"), {"n": no}
+        ).mappings()
+    ]
+    valid = {
+        g
+        for (g,) in db.execute(
+            text("select gstin from supplier_address where supplier_code = :c and gstin is not null"),
+            {"c": inv["supplier_code"]},
+        )
+    } | {g for g in (sup["gstin"],) if g}
+    cc_gstin = db.execute(
+        text("select l.gstin from cost_centre c join location l on l.code = c.location_code where c.code = :c"),
+        {"c": inv["cost_centre_code"]},
+    ).scalar()
+    tax = D(inv["cgst"]) + D(inv["sgst"]) + D(inv["igst"])
+    header = rules.Header(
+        sup["gst_reg_type"], sup["e_invoice_applicable"] in (True, "true"), inv["type"], inv["irn"], tax,
+        inv["supplier_gstin"], frozenset(valid), inv["buyer_gstin"], cc_gstin,
+        _supplier_state(dict(sup)), inv["place_of_supply"], D(inv["cgst"]), D(inv["sgst"]), D(inv["igst"]),
+    )  # fmt: skip
+    problem = rules.header_problem(header)
+    arithmetic = rules.check_arithmetic(
+        [rules.LineSums(D(x["qty"]), D(x["unit_price"]), D(x["discount"]), D(x["taxable"])) for x in lines],
+        [D(r[0]) for r in db.execute(text("select amount from invoice_charge where invoice_no = :n"), {"n": no})],
+        D(inv["taxable"]), tax, D(inv["round_off"]), D(inv["total"]),
+    )  # fmt: skip
+    reason = problem or (rules.ARITH if arithmetic.problems else None)
+    if reason:
+        words = (
+            rules.header_words(header, _state_names(db))
+            if reason == rules.TAX_HEAD
+            else _explain(reason, lines, [], arithmetic.problems)
+        )
+        db.execute(
+            text("update invoice set status = 'blocked', payment_block = :k, block_reason = :w where no = :n"),
+            {"k": rules.BLOCK_KIND.get(reason, "tax"), "w": words, "n": no},
+        )
+        audit.record(
+            db, actor, "invoice.match", "invoice", no,
+            after={"result": "blocked", "reason": reason, "status": "blocked", "detail": words},
+        )  # fmt: skip
+        if commit:
+            db.commit()
+        return Entered(no, "blocked", "blocked", [reason], kind="non_po")
+    db.execute(
+        text(
+            "update invoice set status = 'awaiting_authorisation', payment_block = 'none', block_reason = null where no = :n"
+        ),
+        {"n": no},
+    )
+    audit.record(
+        db, actor, "invoice.match", "invoice", no,
+        after={"result": "matched", "reason": None, "status": "awaiting_authorisation"},
+    )  # fmt: skip
+    from p2p.invoices import non_po  # noqa: PLC0415 - the bill's own service builds on this module
+
+    db.commit()
+    authoriser = non_po.to_authorise(db, _tenant_of(db), no)
+    return Entered(no, "awaiting_authorisation", "matched", kind="non_po", authoriser=authoriser)
+
+
+def _tenant_of(db: Session) -> str:
+    from p2p.platform import tenants  # noqa: PLC0415 - only the bill's emails need the tenant
+
+    slug = db.info.get("slug")
+    return str(slug) if slug else (tenants.slug_of(str(db.get_bind().engine.url.database or "")) or "")
 
 
 def _available(db: Session, po_no: str, line_no: int, received: Decimal, excluding: str) -> Decimal:
@@ -320,6 +688,8 @@ def match_invoice(db: Session, no: str, actor: Actor, *, commit: bool = True) ->
     header = rules.Header(
         sup["gst_reg_type"], sup["e_invoice_applicable"] in (True, "true"), inv["type"], inv["irn"], tax,
         inv["supplier_gstin"], frozenset(valid_gstins), inv["buyer_gstin"], buyer_on_order,
+        _supplier_state(dict(sup)), (str(inv["buyer_gstin"])[:2] if inv["buyer_gstin"] else None),
+        Decimal(inv["cgst"]), Decimal(inv["sgst"]), Decimal(inv["igst"]),
     )  # fmt: skip
     tol_set = _tolerances(db, inv)
     tol_rows = tol_set.rows
@@ -383,7 +753,11 @@ def match_invoice(db: Session, no: str, actor: Actor, *, commit: bool = True) ->
         )
     if result == rules.BLOCKED:
         kind = rules.BLOCK_KIND[reason or rules.PRICE]
-        why = _explain(reason, lines, verdicts, arithmetic.problems)
+        why = (
+            rules.header_words(header, _state_names(db))
+            if reason == rules.TAX_HEAD
+            else _explain(reason, lines, verdicts, arithmetic.problems)
+        )
         db.execute(
             text("update invoice set status = 'blocked', payment_block = :k, block_reason = :w where no = :n"),
             {"k": kind, "w": why, "n": no},
@@ -391,7 +765,10 @@ def match_invoice(db: Session, no: str, actor: Actor, *, commit: bool = True) ->
         status = "blocked"
     else:
         db.execute(
-            text("update invoice set status = 'approved', payment_block = 'none', block_reason = null where no = :n"),
+            text(
+                "update invoice set status = 'approved', payment_block = 'none', block_reason = null, "
+                "approved_by = coalesce(entered_by, approved_by) where no = :n"
+            ),
             {"n": no},
         )
         from p2p.invoices import payment  # noqa: PLC0415 - payment builds on this module
@@ -462,15 +839,33 @@ def cancel_invoice(db: Session, no: str, reason: str, user_id: int) -> None:
     """An invoice that will not be paid (the supplier is sending a corrected one, or it was wrong)."""
     if not reason.strip():
         raise InvoiceError("a reason is needed")
-    inv = db.execute(text("select status, type from invoice where no = :n for update"), {"n": no}).first()
+    inv = db.execute(text("select status, type, kind from invoice where no = :n for update"), {"n": no}).first()
     if inv is None:
         raise InvoiceError(f"{no} does not exist")
-    if inv[0] not in ("blocked", "received"):
-        raise InvoiceError(f"{no} is {inv[0]}; only a blocked invoice can be cancelled")
+    if inv[0] not in ("blocked", "received", "awaiting_authorisation", "awaiting_approval"):
+        raise InvoiceError(f"{no} is {inv[0]}; only an invoice still being worked can be cancelled")
     db.execute(
         text("update invoice set status = 'cancelled', cancel_reason = :r where no = :n"),
         {"r": reason.strip(), "n": no},
     )
+    if inv[2] == "non_po":
+        from p2p.platform import tasks  # noqa: PLC0415 - only a bill has these tasks
+
+        db.execute(
+            text(
+                "update invoice_approval_step set status = 'cancelled' where invoice_no = :n "
+                "and status in ('waiting', 'pending')"
+            ),
+            {"n": no},
+        )
+        for task_id in db.execute(
+            text(
+                "select id from task where payload->>'invoice_no' = :n "
+                "and kind in ('invoice_authorise', 'invoice_approve') and status in ('open', 'overdue')"
+            ),
+            {"n": no},
+        ).scalars():
+            tasks.cancel_task(db, int(task_id), user_id, reason="the bill was cancelled")
     audit.record(
         db,
         user(user_id),
@@ -489,10 +884,15 @@ def request_release(db: Session, no: str, reason: str, user_id: int) -> int:
     if not reason.strip():
         raise InvoiceError("a reason is needed")
     inv = db.execute(
-        text("select status, total, payment_block, block_reason, supplier_code from invoice where no = :n"), {"n": no}
+        text("select status, total, payment_block, block_reason, supplier_code, kind from invoice where no = :n"),
+        {"n": no},
     ).first()
     if inv is None:
         raise InvoiceError(f"{no} does not exist")
+    if inv[5] == "non_po":
+        raise InvoiceError(
+            "a bill without an order is never released by a proposal: correct it and match it again, or cancel it"
+        )
     if inv[0] != "blocked":
         raise InvoiceError(f"{no} is {inv[0]}, not blocked")
     if inv[2] == "duplicate":
@@ -548,7 +948,10 @@ def _release(db: Session, payload: dict[str, Any], actor: Actor) -> dict[str, An
         raise InvoiceError(
             "segregation of duties: the person who asked for or confirmed what is invoiced cannot also approve the invoice"
         )
-    db.execute(text("update invoice set status = 'approved', payment_block = 'none' where no = :n"), {"n": no})
+    db.execute(
+        text("update invoice set status = 'approved', payment_block = 'none', approved_by = :b where no = :n"),
+        {"b": str(actor.id) if actor.kind == "user" else actor.identity, "n": no},
+    )
     from p2p.invoices import payment  # noqa: PLC0415 - payment builds on this module
 
     payment.book_invoice(db, no)
@@ -583,9 +986,13 @@ def rematch_invoice(db: Session, no: str, user_id: int) -> Entered:
 
     It applies the same rules; it does not override them. Only a release by another person pays a blocked invoice.
     """
-    inv = db.execute(text("select status, type from invoice where no = :n"), {"n": no}).first()
+    inv = db.execute(text("select status, type, kind from invoice where no = :n"), {"n": no}).first()
     if inv is None:
         raise InvoiceError(f"{no} does not exist")
-    if inv[0] != "blocked" or inv[1] != "invoice":
+    if inv[1] != "invoice":
+        raise InvoiceError(f"{no} is a {str(inv[1]).replace('_', ' ')}; only an invoice is matched")
+    if inv[0] != "blocked":
         raise InvoiceError(f"{no} is {inv[0]}; only a blocked invoice is matched again")
+    if inv[2] == "non_po":
+        return _match_bill(db, no, user(user_id))
     return match_invoice(db, no, user(user_id))

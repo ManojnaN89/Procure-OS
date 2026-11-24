@@ -40,6 +40,8 @@ from quote_scenarios import check as check_quotes  # noqa: E402
 from quote_scenarios import write_quotes  # noqa: E402
 from confirmation_scenarios import check as check_confirmation  # noqa: E402
 from confirmation_scenarios import write_confirmation  # noqa: E402
+from invoice_scenarios import check as check_invoice  # noqa: E402
+from invoice_scenarios import write_invoice  # noqa: E402
 from version_scenarios import check as check_versions  # noqa: E402
 from version_scenarios import write_versions  # noqa: E402
 from demand_scenarios import write_scenarios  # noqa: E402
@@ -251,6 +253,21 @@ class MasterWriter:
             "approval_rule", [{**r, "location_code": r.get("location_code") or "ANY"} for r in csv.DictReader(lines)]
         )
         self.put("setting", [{"key": k, "value": v, "description": d} for k, v, d in self.p["settings"]])
+        self.put(
+            "non_po_rule",
+            [
+                {
+                    "category_code": r["category"],
+                    "version": r["version"],
+                    "effective_from": r["effective_from"],
+                    "enabled": str(r["enabled"]).lower(),
+                    "max_value": r["max_value"],
+                    "supporting_doc": r.get("supporting_doc", ""),
+                    "note": r.get("note", ""),
+                }
+                for r in self.p.data.get("non_po_rules", [])
+            ],
+        )
         rows, versions, current = [], [], {}
         for v in self.p["tolerances"]:  # each version copies the one before it with its changes
             if "values" in v:
@@ -431,6 +448,7 @@ class MasterWriter:
                 blocked_by=s.get("blocked_by", ""),
                 address=s.get("address", ""),
                 phone=s.get("phone", ""),
+                contact_email=s.get("contact_email", ""),
             )
             for s in self.p["suppliers"]
         ]
@@ -638,6 +656,7 @@ def build(profile: CompanyProfile, out: Path) -> dict[str, dict[str, int]]:
     write_quotes(profile.data, out)  # block 6: last prices paid, negotiation briefs, the A/B case, order totals
     write_versions(profile.data, out)  # block 7: every version of each order, its tax, approver and materiality
     write_confirmation(profile.data, out)  # block 8: the supplier confirmation figures and dates
+    write_invoice(profile, out)  # block 10: bills without an order, their tax and due dates
     manifest = {
         "dataset": profile.dataset,
         "profile": profile.name,
@@ -710,6 +729,7 @@ REFERENCES = [
     ("market_benchmark", "region_code", "region", "code"),
     ("market_benchmark", "entered_by", "user", "code"),
     ("market_benchmark", "verified_by", "user", "code"),
+    ("non_po_rule", "category_code", "category", "code"),
 ]
 # an input column of this name must name a row of that table
 INPUT_REFERENCES = {
@@ -730,7 +750,7 @@ def _column(path: Path, column: str) -> set[str]:
 def check(out: Path, profile: CompanyProfile | None = None) -> list[str]:
     """What is wrong with the dataset, in plain words. Empty when it is as designed."""
     problems = common_problems(out) + check_approval(out) + check_period(out) + check_quotes(out) + check_versions(out)
-    problems += check_confirmation(out)
+    problems += check_confirmation(out) + check_invoice(out)
     if problems:
         return problems
     m = out / "master"
@@ -1056,6 +1076,15 @@ def _profile_problems(
         if source == "location_head" and any(not loc["head_user"] for loc in t["location"]):
             problems.append(f"role {role}: a location has no head")
     plans = {**profile["budgets"]["per_month"], **profile["budgets"]["per_location"]}
+    cats = {c["code"]: c for c in t["category"]}
+    for r in t["non_po_rule"]:
+        what = f"non_po_rule {r['category_code']} v{r['version']}"
+        if r["category_code"] not in cats:
+            problems.append(f"{what}: the category does not exist")
+        elif cats[r["category_code"]]["stocked"] == "true":
+            problems.append(f"{what}: a stocked category is never billed without an order")
+        if Decimal(r["max_value"]) <= 0:
+            problems.append(f"{what}: max_value must be above zero")
     for holder, plan in plans.items():
         if sum((Decimal(v) for v in plan["gl"].values()), Decimal(0)) != Decimal(plan["total"]):
             problems.append(f"budget of {holder}: the GL split does not add up to {plan['total']}")

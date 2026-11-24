@@ -25,7 +25,11 @@ GSTIN = "gstin_mismatch"
 TAX = "tax_not_allowed"
 ARITH = "arithmetic_mismatch"
 SERVICE = "service_not_confirmed"
-BLOCK_KIND = {PRICE: "match", QTY: "match", SERVICE: "match", ARITH: "match", IRN: "tax", GSTIN: "tax", TAX: "tax"}
+TAX_HEAD = "tax_head"  # IGST where CGST and SGST are due, or the other way round (block 10)
+BLOCK_KIND = {
+    PRICE: "match", QTY: "match", SERVICE: "match", ARITH: "match", IRN: "tax", GSTIN: "tax", TAX: "tax",
+    TAX_HEAD: "tax",
+}  # fmt: skip
 
 TWO_PLACES = Decimal("0.01")
 
@@ -56,8 +60,11 @@ def tolerance_for(rows: Sequence[Mapping[str, str]], category: str | None) -> To
 
 
 def normalize_invoice_no(number: str) -> str:
-    """The supplier's invoice number without case, spaces or punctuation, so 'PIS/2425/0036' and 'pis 2425 0036' are one."""
-    return re.sub(r"[^A-Z0-9]", "", number.upper())
+    """The supplier's invoice number with no leading zeros in a run of digits and then without case, spaces or
+    punctuation, so 'PIS/2425/0036' and 'pis 2425 36' are one, and so are 'INV-001' and 'inv 1' (FR33). A run of
+    zeros keeps one 0."""
+    trimmed = re.sub(r"\d+", lambda m: m.group().lstrip("0") or "0", number.upper())
+    return re.sub(r"[^A-Z0-9]", "", trimmed)
 
 
 @dataclass(frozen=True)
@@ -119,6 +126,11 @@ class Header:
     ]  # the registrations the supplier has on file, and the one the order was placed with
     invoice_buyer_gstin: str | None
     order_buyer_gstin: str | None
+    supplier_state: str | None = None  # the state code of the supplier's GSTIN
+    place_of_supply: str | None = None  # the state code of the buyer GSTIN
+    cgst: Decimal = Decimal(0)
+    sgst: Decimal = Decimal(0)
+    igst: Decimal = Decimal(0)
 
 
 def header_problem(h: Header) -> str | None:
@@ -136,7 +148,27 @@ def header_problem(h: Header) -> str | None:
         return GSTIN
     if h.valid_supplier_gstins and h.invoice_supplier_gstin not in h.valid_supplier_gstins:
         return GSTIN
+    if h.tax_charged > 0 and h.supplier_state and h.place_of_supply:
+        if h.supplier_state == h.place_of_supply and h.igst > 0:
+            return TAX_HEAD  # a supply within one state is taxed CGST and SGST, never IGST
+        if h.supplier_state != h.place_of_supply and (h.cgst > 0 or h.sgst > 0):
+            return TAX_HEAD  # a supply across states is taxed IGST, never CGST and SGST
     return None
+
+
+def header_words(h: Header, states: Mapping[str, str] | None = None) -> str | None:
+    """The tax-head problem in the words a person reads (block 10 owns the check; block 11 quotes it)."""
+    if header_problem(h) != TAX_HEAD or not (h.supplier_state and h.place_of_supply):
+        return None
+    names = states or {}
+    ss, pp = h.supplier_state, h.place_of_supply
+
+    def at(code: str) -> str:
+        return f"{names[code]} ({code})" if code in names else code
+
+    if ss == pp:
+        return f"IGST was charged on a supply within {at(ss)}: CGST and SGST are due"
+    return f"CGST and SGST were charged on a supply from {at(ss)} to {at(pp)}: IGST is due"
 
 
 @dataclass

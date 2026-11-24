@@ -72,7 +72,13 @@ def test_the_demo_payment_tool_is_not_loaded_by_default_and_no_product_code_uses
 
 
 def test_the_decisions_a_person_always_makes_stay_with_a_person_whatever_the_settings_say(shop: Session) -> None:  # noqa: F811
-    assert autonomy.LOCKED == {"payment_run.approve", "supplier.set_status", "invoice.release_block", "rfq.send"}
+    assert autonomy.LOCKED == {
+        "payment_run.approve",
+        "supplier.set_status",
+        "invoice.release_block",
+        "rfq.send",
+        "invoice.read",
+    }
     for decision_type in autonomy.LOCKED:
         with pytest.raises(ValueError, match="always decided by a person"):
             autonomy.configure(shop, Actor("user", "1"), decision_type, level="auto")
@@ -239,10 +245,11 @@ def test_an_explanation_that_says_something_was_released_or_paid_is_not_used_but
 def test_a_clean_document_from_someone_who_is_not_a_known_contact_is_never_entered_by_itself(
     ledger: Session,  # noqa: F811
 ) -> None:
-    autonomy.configure(ledger, sod.user(1), "invoice.read", level="auto")
+    with pytest.raises(ValueError, match="always decided by a person"):
+        autonomy.configure(ledger, sod.user(1), "invoice.read", level="auto")  # D54: AP confirms every invoice
     po_no, logins = _goods(ledger)
     mine = _read(ledger, docs.make(_spec(po_no), qr=True), _gateway("{}")[0])  # from the supplier's own address
-    assert _draft(ledger, mine)["status"] == "applied"
+    assert _draft(ledger, mine)["status"] == "pending"
     po2, _ = _goods(ledger, qty="5", price="40", logins=logins)
     page = docs.make(_spec(po2, number="AT/2627/0202", rows=[Row("Bearing", D(5), D(40))]), qr=True)
 
@@ -251,13 +258,12 @@ def test_a_clean_document_from_someone_who_is_not_a_known_contact_is_never_enter
     )  # same document, someone else's mail
 
     assert _draft(ledger, stranger)["status"] == "pending"  # a person sees it first
-    assert ledger.execute(text("select count(*) from invoice")).scalar_one() == 1
+    assert ledger.execute(text("select count(*) from invoice")).scalar_one() == 0
 
 
 def test_a_printed_total_that_cannot_be_checked_against_the_lines_is_not_a_clean_draft(
     ledger: Session,  # noqa: F811
 ) -> None:
-    autonomy.configure(ledger, sod.user(1), "invoice.read", level="auto")
     po_no, _ = _goods(ledger)
     spec = _spec(po_no)
     gw, _ = _gateway(_says(spec, buyer_gstin=None))  # the model did not read who it is addressed to

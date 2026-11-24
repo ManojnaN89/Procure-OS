@@ -45,3 +45,6 @@ Open **Control tower**. Under **Budgets, this financial year so far** each cost 
 ## Budgets: months, year end and adjustments
 
 The budgets panel on the control tower shows each budget with what requests hold, what orders hold and what was spent (stock when it is accepted, the rest when it is paid). Lock a month once it has ended (the earlier months first) with a reason; nothing is booked in a locked month after that, a late posting goes to the next open month. From 1 April close the year: open requests and orders carry into the new year, unspent budget lapses. To add to, take from or move a budget, use **Adjust a budget**: another finance person approves it.
+
+## Bills without an order
+Bills for utilities and professional fees arrive without an order: AP enters them for a configured category, the cost centre's owner authorises, and the `non_po_invoice` rule decides who approves by amount. The budget shows them held from authorisation and spent when paid. Change a category's limit or supporting document on the company setup's **Bills without an order** tab (a second administrator approves).

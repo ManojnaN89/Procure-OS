@@ -19,7 +19,7 @@ from p2p.platform import permissions, proposals, users
 D = Decimal
 client = TestClient(app)
 TODAY = date(2026, 11, 6)
-S1_GSTIN, BUYER_GSTIN = "27AAAAA0000A1Z5", "29BBBBB0000B1Z5"
+S1_GSTIN, BUYER_GSTIN = "27AAAAA0000A1Z2", "29BBBBB0000B1ZP"
 
 
 # ---- the rules --------------------------------------------------------------------------------
@@ -69,8 +69,12 @@ def test_a_category_tolerance_overrides_the_general_one_key_by_key() -> None:
     assert m.tolerance_for(rows, None) == m.Tolerance(D("2"), D("500"), D("0"))
 
 
-def test_an_invoice_number_is_compared_without_case_spaces_or_punctuation() -> None:
-    assert m.normalize_invoice_no("PIS/2425/0036") == m.normalize_invoice_no(" pis 2425 0036 ") == "PIS24250036"
+def test_an_invoice_number_is_compared_without_case_spaces_or_punctuation_and_without_leading_zeros() -> None:
+    assert m.normalize_invoice_no("PIS/2425/0036") == m.normalize_invoice_no(" pis 2425 36 ") == "PIS242536"
+    assert m.normalize_invoice_no("INV-001") == m.normalize_invoice_no("inv 1") == "INV1"
+    assert m.normalize_invoice_no("INV-000") == "INV0"
+    assert m.normalize_invoice_no("0") == "0"
+    assert m.normalize_invoice_no("A-0B-007") == "A0B7"
     assert m.normalize_invoice_no("A-1") != m.normalize_invoice_no("A-2")
 
 
@@ -368,8 +372,8 @@ def test_each_problem_with_the_invoice_itself_blocks_it_as_a_tax_block(ledger: S
     wrong = invoices.enter_invoice(
         ledger,
         invoices.InvoiceIn(
-            supplier_code="S1", supplier_invoice_no="C-4", invoice_date=TODAY, lines=[_line(po_no, "1", "100")], irn="A" * 64,
-            supplier_gstin=S1_GSTIN, buyer_gstin="24ZZZZZ0000Z1Z5",
+            supplier_code="S1", supplier_invoice_no="C-4", invoice_date=TODAY, lines=[_line(po_no, "1", "100")], irn="B" * 64,
+            supplier_gstin=S1_GSTIN, buyer_gstin="24ZZZZZ0000Z1ZW",
         ),
         1, as_of=TODAY,
     )  # fmt: skip
@@ -528,7 +532,7 @@ def test_a_blocked_invoice_can_be_cancelled_for_a_reason_and_an_approved_one_can
     invoices.cancel_invoice(ledger, blocked.no, "A corrected invoice is coming", 1)
 
     assert _row(ledger, blocked.no)["status"] == "cancelled"
-    with pytest.raises(invoices.InvoiceError, match="only a blocked invoice"):
+    with pytest.raises(invoices.InvoiceError, match="only an invoice still being worked"):
         invoices.cancel_invoice(ledger, good.no, "oops", 1)
     assert ledger.execute(text("select count(*) from audit_event where action = 'invoice.cancel'")).scalar_one() == 1
 

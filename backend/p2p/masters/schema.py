@@ -714,6 +714,21 @@ TABLES: tuple[Table, ...] = (
             ("location_code", "location", "code"),
         ),
     ),
+    Table(
+        "non_po_rule",
+        "non_po_rule",
+        (
+            ("category_code", "text"),
+            ("version", "integer"),
+            ("effective_from", "date"),
+            ("enabled", "boolean"),
+            ("max_value", "numeric(14,2)"),
+            ("supporting_doc", "text"),
+            ("note", "text"),
+        ),
+        ("category_code", "version"),
+        (("category_code", "item_category", "code"),),
+    ),
 )
 
 BY_NAME = {t.name: t for t in TABLES}

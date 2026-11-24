@@ -71,6 +71,7 @@ LATER = (
     "period RFQ: award waiting for the director",
     "quotation request with a negotiation brief",
     "quotation request closed short, a case for the buyer",
+    "bill without an order, waiting for authorisation",
 )
 STAGES = EARLY + LATER
 
@@ -307,6 +308,38 @@ class _Run:
             body["irn"] = hashlib.sha256(f"{head[0]}|{number}".encode()).hexdigest().upper()
         return dict(self.call(AP, "POST", "/api/invoices", body))
 
+    def bill(self) -> dict[str, Any]:
+        """A bill without an order: Sahyadri's internet bill, with its copy uploaded first, waiting for the plant head."""
+        self._invoice_seq += 1
+        number = f"SNL/{self.today:%y%m}/{self._invoice_seq:04d}"
+        self.db.rollback()
+        uploaded = self.client.post(
+            "/api/files?doc_type=invoice_evidence",
+            files={"file": ("bill.pdf", b"%PDF-1.4\n% synthetic bill copy\n", "application/pdf")},
+            headers=self.who(AP),
+        )
+        if uploaded.status_code != 201:
+            raise demo.DemoError(f"{AP}: the bill copy could not be uploaded: {uploaded.status_code}")
+        body: dict[str, Any] = {
+            "supplier_code": "SUP-010",
+            "kind": "non_po",
+            "category_code": "UTL",
+            "cost_centre_code": "CC-ADM",
+            "number": number,
+            "date": self.today.isoformat(),
+            "documents": [{"id": uploaded.json()["id"], "kind": "copy"}],
+            "lines": [
+                {"description": "Internet lease line, 100 Mbps", "qty": "1", "unit_price": "15000.00", "gst_rate": "18"}
+            ],
+        }
+        gstin, e_invoice = self.q("select gstin, e_invoice_applicable from supplier where code = 'SUP-010'")[0]
+        if e_invoice:
+            from p2p.invoices import einvoice  # noqa: PLC0415 - only the demo bill's IRN needs it
+
+            body["irn"] = einvoice.irn_of(str(gstin), self.today, "INV", number)
+        self.db.rollback()
+        return dict(self.call(AP, "POST", "/api/invoices", body))
+
     def payment_run(self) -> str:
         """Finance plans a run of what is due, in the window that takes the one invoice waiting."""
         made = self.call(FINANCE, "POST", "/api/payment-runs", {"run_date": self.day(), "window_days": 120})
@@ -465,6 +498,10 @@ def _later(run: _Run) -> None:
     reason = "The supplier's price rose and the stock is needed"
     run.call(AP, "POST", f"/api/invoices/{blocked['invoice']}/release", {"reason": reason})
     _stage(run, LATER[6], blocked["invoice"])
+    bill = run.bill()
+    if bill.get("status") != "awaiting_authorisation":
+        raise demo.DemoError(f"the bill without an order should wait for its authoriser, is {bill.get('status')}")
+    _stage(run, LATER[13], bill["invoice"])
     _period(run)
     _quotes(run)
 

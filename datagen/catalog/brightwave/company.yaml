@@ -80,6 +80,7 @@ approver_roles:
   - [dept_head, department_head, null]
   - [it_head, designation, IT Head]
   - [cfo, designation, Chief Financial Officer]
+  - [finance_manager, designation, Finance Manager]
 
 # code, name, department, owner
 cost_centres:
@@ -110,6 +111,9 @@ approval_rules: |
   PAY-01,payment_run,0.00,999999999.00,ANY,ANY,ANY,ANY,cfo,1,2025-04-01,
   SUP-01,supplier_activation,0.00,999999999.00,ANY,ANY,ANY,ANY,cfo,1,2025-04-01,
   FWD-01,forward_buy,0.00,999999999.00,ANY,ANY,ANY,ANY,cfo,1,2025-04-01,
+  NPO-01,non_po_invoice,0.00,50000.00,ANY,ANY,ANY,ANY,auto,1,2025-04-01,
+  NPO-02,non_po_invoice,50000.01,500000.00,ANY,ANY,ANY,ANY,finance_manager,1,2025-04-01,
+  NPO-03,non_po_invoice,500000.01,999999999.00,ANY,ANY,ANY,ANY,cfo,1,2025-04-01,
 
 # the autonomy gate (set by `demo reset`): no touchless orders here, a buyer issues every order
 autonomy:
@@ -150,6 +154,7 @@ settings:
   - [msme_max_days, "45", Most days a micro or small supplier may be paid in when agreed in writing (MSMED Act section 15)]
   - [msme_no_agreement_days, "15", Days a micro or small supplier must be paid in without a written agreement (MSMED Act section 15)]
   - [msme_warn_days, "7", Invoices of small suppliers reaching their deadline within this many days are listed]
+  - [non_po_duplicate_window_days, "7", "A bill without an order with the same supplier, category and total within this many days of another is asked about"]
 
 # Versioned as a set (task 3.2): version 1 is the full set; a later version copies the one before it with its
 # changes [key, category, value]. A match keeps the version in force on the day the invoice was received.
@@ -192,7 +197,7 @@ budgets:
   locks: {through: "2026-10", by: U05, reason: Month-end close, day: 10, time: "18:00"}
   per_month:  # cost centre: total, then the total split by GL account (budgets are kept per GL)
     CC-ENG: {total: "600000.00", gl: {"1230": "400000.00", "5320": "50000.00", "5440": "150000.00"}}
-    CC-ITO: {total: "900000.00", gl: {"1230": "250000.00", "5320": "50000.00", "5440": "600000.00"}}
+    CC-ITO: {total: "930000.00", gl: {"1230": "250000.00", "5320": "50000.00", "5440": "600000.00", "5460": "30000.00"}}
     CC-ADM: {total: "450000.00", gl: {"1230": "100000.00", "5320": "100000.00", "5340": "100000.00", "5350": "120000.00", "5260": "30000.00"}}
   per_location:  # the office's own budget across its departments, checked as well as the cost centre's
     OFF-BLR: {total: "1950000.00", gl: {"1230": "750000.00", "5320": "200000.00", "5440": "750000.00", "5340": "100000.00", "5350": "120000.00", "5260": "30000.00"}}
@@ -202,6 +207,11 @@ categories:
   - {code: SWS, name: Software and cloud, kind: service, gl: 5440, stocked: false, approval_category: software, tds: 194J(a)}
   - {code: OFS, name: Office supplies, kind: goods, gl: 5320, stocked: true, approval_category: office, tds: 194Q}
   - {code: FAC, name: Facility services, kind: service, gl: 5340, stocked: false, approval_category: services, tds: 194C}
+  - {code: TEL, name: Internet and telephone, kind: service, gl: 5460, stocked: false, approval_category: services, tds: 194J(a)}
+
+# Bills without a purchase order (D-14)
+non_po_rules:
+  - {category: TEL, version: 1, effective_from: "2025-04-01", enabled: true, max_value: "100000.00", supporting_doc: "", note: Office internet}
 
 # gst: [rate before 22 Sep 2025, rate from then]; on_hand: opening stock at the office (a stocked item);
 # reorder: [reorder point, order up to, safety stock] (min-max planning; safety stock 0 when not given); gl overrides the category's account.
@@ -232,6 +242,8 @@ suppliers:
   - {code: SUP-005, name: Clean and Secure Facility Services Pvt Ltd, form: pvt_ltd, pan: CLECC0000F, state: "29", city: Bengaluru, pincode: "560100", e_invoice: false, hsn_digits: "6", msme: none, terms: NET30, turnover: 5-20cr, bank: AXIS, domain: cleansecure, categories: [FAC], tds: 194C, scopes: {FAC: [KA]}}  # local crews
   # a prospect registered by the buyer to quote for the Hyderabad office (D-03): identity not yet checked, no bank account
   - {code: SUP-006, name: Deccan Facility Management Services Pvt Ltd, form: pvt_ltd, pan: DEFCD0000M, state: "36", city: Hyderabad, pincode: "500081", e_invoice: false, hsn_digits: "6", msme: none, terms: NET30, turnover: 5-20cr, bank: HDFC, domain: deccanfacility, categories: [FAC], tds: 194C, status: prospect, registered_by: U03, registered_on: "2026-11-05"}
+  # a bill without an order (block 10): the office's internet provider
+  - {code: SUP-007, name: Nandi Fibernet Pvt Ltd, form: pvt_ltd, pan: NANCN0000F, state: "29", city: Bengaluru, pincode: "560001", e_invoice: false, hsn_digits: "6", msme: none, terms: NET30, turnover: 1.5-5cr, bank: SBI, domain: nandifibernet, categories: [TEL], contact_email: billing@nandifibernet.example, phone: "+91 00000 90017"}
 
 contracts:
   - code: CNT-0001

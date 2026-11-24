@@ -110,7 +110,7 @@ def test_six_suppliers_can_all_be_used_one_is_a_micro_enterprise_and_one_has_the
     db = apex.db
 
     codes = [r[0] for r in db.execute(text("select code from supplier where status = 'active' order by code"))]
-    assert codes == [f"SUP-00{n}" for n in range(1, 7)]
+    assert codes == [*(f"SUP-00{n}" for n in range(1, 7)), "SUP-010", "SUP-011"]
     others = db.execute(text("select code, status from supplier where status <> 'active' order by code")).all()
     assert [tuple(r) for r in others] == [("SUP-007", "blocked"), ("SUP-008", "prospect"), ("SUP-009", "prospect")]
     for code in codes:
@@ -143,6 +143,7 @@ def test_nothing_is_open_yet_and_the_settings_are_in_place(apex: Apex) -> None:
         "plant_head",
         "purchase_manager",
         "director",
+        "finance_manager",
     }
     # only touchless orders act alone (the profile's `autonomy`); everything else waits for a person
     auto = db.execute(text("select decision_type from autonomy_setting where level = 'auto'")).scalars().all()

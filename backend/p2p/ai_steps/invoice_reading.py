@@ -18,7 +18,7 @@ from pydantic import BaseModel, Field
 
 from p2p.ai_steps.runner import AiStep
 
-PROMPT_VERSION = "1"
+PROMPT_VERSION = "2"
 MAX_SOURCE_CHARS = 20_000
 
 
@@ -32,7 +32,7 @@ class ReadLine(BaseModel):
 
 
 class InvoiceReading(BaseModel):
-    document_type: Literal["invoice", "credit_note", "other"]
+    document_type: Literal["invoice", "credit_note", "debit_note", "other"]
     supplier_name: str | None = Field(default=None, description="the name of the company that issued the invoice")
     supplier_gstin: str | None = Field(default=None, description="the issuer's GSTIN")
     buyer_gstin: str | None = Field(default=None, description="the GSTIN of the company the invoice is addressed to")
@@ -61,13 +61,16 @@ SYSTEM = (
     "because of it. Use only what is printed in the document. Never calculate, convert, add up or guess a number: if a "
     "value is not printed, leave it empty. Copy numbers, names and codes exactly as printed. Prices are per single unit, "
     "before GST. Lines are the rows of the item table; do not list totals, taxes or charges as lines. "
-    'Reply with JSON only, in this shape: {"document_type": "invoice" | "credit_note" | "other", "supplier_name": str|null, '
+    'Reply with JSON only, in this shape: {"document_type": "invoice" | "credit_note" | "debit_note" | "other", '
+    '"supplier_name": str|null, '
     '"supplier_gstin": str|null, "buyer_gstin": str|null, "invoice_number": str|null, "invoice_date": "YYYY-MM-DD"|null, '
     '"irn": str|null, "eway_bill": str|null, "po_numbers": [str], "ref_invoice_no": str|null, '
     '"lines": [{"description": str, "po_no": str|null, "qty": number|null, "unit_price": number|null, '
     '"gst_rate": number|null, "taxable": number|null}], "freight": number|null, "packing_forwarding": number|null, "taxable_total": number|null, "cgst": number|null, '
     '"sgst": number|null, "igst": number|null, "total": number|null, "confidence": number between 0 and 1}. '
-    "document_type is 'invoice' for a tax invoice, 'credit_note' for a credit note, otherwise 'other'."
+    "document_type is 'invoice' for a tax invoice, 'credit_note' for a credit note, 'debit_note' for a debit note, "
+    "otherwise 'other'. A bill may carry no purchase order number at all: leave po_numbers empty then, and leave a "
+    "line's po_no empty."
 )
 
 STEP = AiStep(

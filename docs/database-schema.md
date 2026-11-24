@@ -31,7 +31,7 @@ Reading a line: `name*` is part of the primary key, `name?` may be empty, then t
 
 ## Tenant database (one per company)
 
-162 tables.
+165 tables.
 
 **advance** · payment_no* text, po_no text, gross num, taxable num, used_gross num, used_taxable num, paid_on? date
 
@@ -143,15 +143,19 @@ Reading a line: `name*` is part of the primary key, `name?` may be empty, then t
 
 **intake_pending** · id* bigint, user_id int, channel text, source_text text, question text, asked text, attempts int, status text, created_at timestamptz, updated_at timestamptz
 
-**invoice** · no* text, type text, supplier_code text, supplier_gstin? text, buyer_gstin? text, place_of_supply? text, supplier_invoice_no text, dedupe_key text, invoice_date date, fy text, irn? text, ack_no? text, ack_date? date, eway_bill_no? text, reverse_charge bool, received_at timestamptz, received_on date, channel text, taxable num, cgst num, sgst num, igst num, cess num, round_off num, total num, ref_invoice_no? text, due_date? date, payment_block text, status text, duplicate_of? text, block_reason? text, cancel_reason? text, document_ref? text, entered_by? text, created_at timestamptz, tds_amount num, paid_on? date, booked_at? timestamptz, advance_used num, advance_taxable_used num, discount_taken num, tolerance_version? int
+**invoice** · no* text, type text, supplier_code text, supplier_gstin? text, buyer_gstin? text, place_of_supply? text, supplier_invoice_no text, dedupe_key text, invoice_date date, fy text, irn? text, ack_no? text, ack_date? date, eway_bill_no? text, reverse_charge bool, received_at timestamptz, received_on date, channel text, taxable num, cgst num, sgst num, igst num, cess num, round_off num, total num, ref_invoice_no? text, due_date? date, payment_block text, status text, duplicate_of? text, block_reason? text, cancel_reason? text, document_ref? text, entered_by? text, created_at timestamptz, tds_amount num, paid_on? date, booked_at? timestamptz, advance_used num, advance_taxable_used num, discount_taken num, tolerance_version? int, kind text, category_code? text, cost_centre_code? text, non_po_rule_id? bigint, authoriser? text, authorised_by? text, authorised_at? timestamptz, authorised_on? date, approval_rule_code? text, approval_rule_version? int, suspect_of? text, not_duplicate_reason? text, over_budget_reason? text, approved_by? text
+
+**invoice_approval_step** · id* bigint, invoice_no text, step int, role text, approver text, delegate? text, status text, acted_by? text, acted_at? timestamptz, comment? text, task_id? bigint, rule_id? bigint, rule_code? text, rule_version? int
 
 **invoice_charge** · id* bigint, invoice_no text, type text, amount num, gst_rate num, sac? text
 
 **invoice_diagnosis** · id* bigint, invoice_no text, cause text, fix text, explanation text, vendor_subject? text, vendor_body? text, source text, run_id? bigint, created_by? int, created_at timestamptz
 
-**invoice_draft** · id* bigint, source text, email_id? bigint, document_id? bigint, filename? text, document_hash? text, supplier_code? text, status text, path? text, reading? jsonb, qr? jsonb, proposal? jsonb, problems jsonb, assumptions jsonb, confidence? num, model? text, prompt_version? text, invoice_no? text, decided_by? text, decided_at? timestamptz, decision_note? text, created_by? text, created_at timestamptz
+**invoice_document_link** · invoice_no* text, document_id* int, kind text, added_by? text
 
-**invoice_line** · invoice_no* text, line_no* int, po_no text, po_line_no int, description? text, hsn_sac? text, qty num, uom? text, unit_price num, discount num, taxable num, gst_rate num, cgst num, sgst num, igst num
+**invoice_draft** · id* bigint, source text, email_id? bigint, document_id? bigint, filename? text, document_hash? text, supplier_code? text, status text, path? text, reading? jsonb, qr? jsonb, proposal? jsonb, problems jsonb, assumptions jsonb, confidence? num, model? text, prompt_version? text, invoice_no? text, decided_by? text, decided_at? timestamptz, decision_note? text, created_by? text, created_at timestamptz, received_on? date, received_at? timestamptz, sender_verdict? text, kind? text
+
+**invoice_line** · invoice_no* text, line_no* int, po_no? text, po_line_no? int, description? text, hsn_sac? text, qty num, uom? text, unit_price num, discount num, taxable num, gst_rate num, cgst num, sgst num, igst num, category_code? text, cost_centre_code? text, gl_code? text, location_code? text
 
 **item** · code* text, name? text, description? text, category_code? text, kind? text, default_gl? int, brand? text, base_uom? text, purchase_uom? text, pack_size? int, moq? int, hsn_sac? text, gst_rate_before? int, gst_rate_after? int, gst_rate_alt_before? int, gst_rate_alt_after? int, gst_rate_change_date? date, gst_rate_confidence? text, gst_reverse_charge? text, gst_note? text, standard_price? num, abc_class? text, stocked? bool, capex? bool, inspection_required? bool, hazardous? bool, default_lead_days? int, attributes? text, active? bool, serialised? bool
 
@@ -182,6 +186,8 @@ Reading a line: `name*` is part of the primary key, `name?` may be empty, then t
 **model_cache** · request_hash* text, response jsonb, created_at timestamptz
 
 **model_call** · id* bigint, at timestamptz, step text, provider? text, model? text, prompt_version? text, tokens_in int, tokens_out int, cost_usd num, ms int, attempts int, outcome text, error? text, request_hash? text, masked? jsonb, run_id? int, capability? text, user_id? int, workflow_id? int, entity? text, entity_id? text
+
+**non_po_rule** · id* bigint, category_code text, version int, effective_from date, effective_to? date, enabled bool, max_value num, supporting_doc? text, note? text, created_by? text, created_at timestamptz
 
 **notification** · id* bigint, user_id? int, kind text, title text, body? text, link? text, created_at timestamptz, read_at? timestamptz, severity text, related_type? text, related_id? text, resolved bool, resolved_at? timestamptz
 

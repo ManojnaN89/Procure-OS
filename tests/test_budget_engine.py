@@ -284,3 +284,29 @@ def test_the_year_end_carries_open_commitments_and_lets_unspent_budget_lapse(a0:
     # the open requests count against the new year's budget, which alone is read
     _same_as_truth(r, r.request_of("MRP-2027-01/PLT-CKN"), "YE1", "new_year")
     assert budget_periods.is_locked(r.s, "2027-03")
+
+
+# ---- block 10: a bill without an order, held from authorisation and spent at payment ---------------
+
+from test_non_po_invoices import _authorise, _enter, bills  # noqa: E402, F401 - fixtures
+from test_orders import shop  # noqa: E402, F401 - fixtures
+
+
+def test_n6_a_bill_without_an_order_is_held_from_authorisation_and_spent_when_paid(bills: Any) -> None:  # noqa: F811
+    done = _enter(bills, number="SNL/2627/0458", on=date(2026, 11, 23))
+    _authorise(bills, done.no)
+
+    held = bills.execute(text("select part, amount from budget_use where cost_centre_code = 'CC-ADM'")).all()
+    assert held == [("order", D("15000.00"))]
+    bills.execute(text("update invoice set status = 'paid' where no = :n"), {"n": done.no})
+    budget_ledger.post_payment(bills, done.no, user(bills.info["bills"]["owner"]), date(2026, 11, 30))
+    bills.commit()
+
+    actual = bills.execute(
+        text("select source, amount, cost_centre_code, gl_code, period, event_period from budget_actual")
+    ).all()
+    assert [(s, a, c, g, p, e) for s, a, c, g, p, e in actual] == [
+        ("payment", D("15000.00"), "CC-ADM", "5460", "2026-11", "2026-11")
+    ]
+    assert bills.execute(text("select count(*) from budget_use where cost_centre_code = 'CC-ADM'")).scalar_one() == 1
+from test_sourcing import db  # noqa: E402, F401 - fixtures

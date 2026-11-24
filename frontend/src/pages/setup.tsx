@@ -11,6 +11,7 @@ import { ApprovalChains, Approvers } from "./setup-approvals";
 import {
 	BuyingRoute,
 	ForwardBuying,
+	NonPoRules,
 	PriceThresholds,
 	SingleSource,
 	SupplierSelection,
@@ -56,6 +57,7 @@ const TABS = [
 	{ id: "touchless", label: "Touchless orders", need: ["admin.rules"] },
 	{ id: "forward-buy", label: "Forward buying", need: ["admin.rules"] },
 	{ id: "thresholds", label: "Price thresholds", need: ["admin.rules"] },
+	{ id: "non-po", label: "Bills without an order", need: ["admin.rules"] },
 	{ id: "single", label: "Single-source items", need: ["admin.rules"] },
 	{ id: "policies", label: "Policies", need: ["admin.settings"] },
 	{ id: "history", label: "History", need: ["audit.view", "admin.settings"] },
@@ -130,6 +132,7 @@ export function SetupPage() {
 			{active === "touchless" ? <Touchless {...shared} /> : null}
 			{active === "forward-buy" ? <ForwardBuying {...shared} /> : null}
 			{active === "thresholds" ? <PriceThresholds {...shared} /> : null}
+			{active === "non-po" ? <NonPoRules {...shared} /> : null}
 			{active === "single" ? <SingleSource {...shared} /> : null}
 			{active === "policies" ? <Policies {...shared} /> : null}
 			{active === "history" ? <History /> : null}

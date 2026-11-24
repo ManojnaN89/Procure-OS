@@ -11,7 +11,7 @@ from p2p.formulas.calendar import business_today
 from p2p.invoices import reading
 from p2p.invoices import service as invoices
 from p2p.platform import files, ratelimit, routing
-from p2p.platform.permissions import require
+from p2p.platform.permissions import need_any, require
 
 router = APIRouter(prefix="/api", tags=["invoice-intake"])
 Db = Annotated[Session, Depends(routing.tenant_session)]
@@ -33,6 +33,9 @@ def _row(d: dict[str, Any], detail: bool = False) -> dict[str, Any]:
         "supplier": d.get("supplier"),
         "status": d["status"],
         "path": d["path"],
+        "kind": d.get("kind"),
+        "received_on": _iso(d.get("received_on")),
+        "sender_verdict": d.get("sender_verdict"),
         "number": proposal.get("invoice_number"),
         "date": proposal.get("invoice_date"),
         "type": proposal.get("doc_type"),
@@ -66,6 +69,7 @@ _SELECT = (
 
 @router.get("/invoice-drafts")
 def list_drafts(db: Db, ctx: Ctx, status: str | None = None) -> list[dict[str, Any]]:
+    need_any(db, ctx.user_id, "invoice.view", "invoice.book")
     rows = db.execute(
         text(
             f"{_SELECT} where (cast(:s as text) is null and d.status in ('pending', 'needs_person') or d.status = :s) "
@@ -78,6 +82,7 @@ def list_drafts(db: Db, ctx: Ctx, status: str | None = None) -> list[dict[str, A
 
 @router.get("/invoice-drafts/{draft_id}")
 def get_draft(draft_id: int, db: Db, ctx: Ctx) -> dict[str, Any]:
+    need_any(db, ctx.user_id, "invoice.view", "invoice.book")
     row = db.execute(text(f"{_SELECT} where d.id = :i"), {"i": draft_id}).mappings().first()
     if row is None:
         raise HTTPException(404, "draft not found")
@@ -126,9 +131,16 @@ def confirm_draft(draft_id: int, payload: dict[str, Any], db: Db, ctx: Book) -> 
         raise HTTPException(422, f"the correction could not be read: {exc}") from None
     except invoices.InvoiceError as exc:
         message = str(exc)
-        raise HTTPException(
-            404 if "does not exist" in message else 403 if message.startswith("segregation") else 409, message
-        ) from None
+        code = (
+            422
+            if isinstance(exc, invoices.InvoiceInputError)
+            else 404
+            if "does not exist" in message
+            else 403
+            if message.startswith("segregation")
+            else 409
+        )
+        raise HTTPException(code, message) from None
     return {"invoice": done.no, "status": done.status, "result": done.result, "reasons": done.reasons}
 
 
