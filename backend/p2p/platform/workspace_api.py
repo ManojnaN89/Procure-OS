@@ -449,6 +449,38 @@ def _admin(db: Session, today: date) -> list[dict[str, Any]]:
     return out
 
 
+def _bill_tasks(db: Session, user_id: int) -> list[dict[str, Any]]:
+    """The bills of block 10 whose authorisation or approval is this login's to give (their own tasks)."""
+    out = []
+    for kind, key, title in (
+        ("invoice_authorise", "bills_to_authorise", "Bills to authorise"),
+        ("invoice_approve", "bills_to_approve", "Bills to approve"),
+    ):
+        rows = _rows(
+            db,
+            "select id, title, payload from task where kind = :k and assignee = :u and status in ('open', 'overdue') "
+            "order by due_at",
+            k=kind,
+            u=user_id,
+        )
+        out.append(
+            _section(
+                key,
+                title,
+                "#/invoices",
+                [
+                    _row(
+                        str(r["id"]),
+                        r["title"][:90],
+                        f"#/invoices/{(r['payload'] or {}).get('invoice_no', '')}",
+                    )
+                    for r in rows
+                ],
+            )
+        )
+    return out
+
+
 def _flow(db: Session, today: date, restock_count: int) -> list[dict[str, Any]]:
     """The steps of the purchase flow in order with how many cases sit in each, for the administrator's strip."""
     stages = control_tower.tower(db, today, reference.calendar_for(db))["stages"]
@@ -484,6 +516,7 @@ def workspace(db: Db, ctx: Ctx) -> dict[str, Any]:
     org = org_code_of(db, ctx.user_id)
     today = business_today()
     sections: list[dict[str, Any]] = []
+    sections += _bill_tasks(db, ctx.user_id)
     if "Requester" in roles:
         sections += _requester(db, org)
     if "Approver" in roles:

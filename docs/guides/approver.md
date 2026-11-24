@@ -41,3 +41,6 @@ If you will be away, open **Settings** (the gear at the top) → **Away? Name a 
 
 ## Approving a forward buy
 A forward buy the buyer accepted comes to the person the forward-buy rule names (the purchase manager). Open the request from your task: **Approve the extra quantity** makes a new request for it, which goes through its own approval and budget check; **Decline** needs a reason. The figures are worked out again first; if anything changed you see the new recommendation instead.
+
+## Bills without an order
+**My work** has **Bills to authorise** for the cost centre you own, and **Bills to approve** once the amount reaches your band. Open the bill to see its lines, evidence and budget, then **Authorise** (the supply was received and belongs to your cost centre) or **Reject** with a reason. You never authorise one you entered. When a budget's policy blocks, the last decider gives the reason to approve it.

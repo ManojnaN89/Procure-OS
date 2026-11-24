@@ -81,11 +81,13 @@ approver_roles:
   - [plant_head, location_head, null]
   - [purchase_manager, designation, Purchase Manager]
   - [director, designation, Director]
+  - [finance_manager, designation, Finance Manager]
 
 # code, name, department, owner
 cost_centres:
   - [CC-PRD, Production (materials), PRD, U01]
   - [CC-MNT, Maintenance (spares and services), PRD, U01]
+  - [CC-ADM, Plant administration, MGT, U07]
 
 # decision D36: up to Rs 10,000 approves itself, up to Rs 1 lakh the head of the plant the goods go to, above that the
 # director. Capital purchases above Rs 1 lakh are also seen by the purchase manager ('+' adds to the chain chosen by value).
@@ -107,6 +109,9 @@ approval_rules: |
   PAY-01,payment_run,0.00,999999999.00,ANY,ANY,ANY,ANY,director,1,2025-04-01,
   SUP-01,supplier_activation,0.00,999999999.00,ANY,ANY,ANY,ANY,director,1,2025-04-01,
   FWD-01,forward_buy,0.00,999999999.00,ANY,ANY,ANY,ANY,purchase_manager,1,2025-04-01,
+  NPO-01,non_po_invoice,0.00,50000.00,ANY,ANY,ANY,ANY,auto,1,2025-04-01,
+  NPO-02,non_po_invoice,50000.01,500000.00,ANY,ANY,ANY,ANY,finance_manager,1,2025-04-01,
+  NPO-03,non_po_invoice,500000.01,999999999.00,ANY,ANY,ANY,ANY,director,1,2025-04-01,
 
 # the autonomy gate (not master data; set by `demo reset`). po.issue: touchless orders (D35), issued and sent with no
 # buyer for contract and safe-reorder lines within the buyer's tier; the tests and limits are rows of touchless_rule
@@ -147,6 +152,7 @@ settings:
   - [msme_max_days, "45", Most days a micro or small supplier may be paid in when agreed in writing (MSMED Act section 15)]
   - [msme_no_agreement_days, "15", Days a micro or small supplier must be paid in without a written agreement (MSMED Act section 15)]
   - [msme_warn_days, "7", Invoices of small suppliers reaching their deadline within this many days are listed]
+  - [non_po_duplicate_window_days, "7", "A bill without an order with the same supplier, category and total within this many days of another is asked about"]
 
 # Versioned as a set (task 3.2): version 1 is the full set; a later version copies the one before it with its
 # changes [key, category, value]. A match keeps the version in force on the day the invoice was received.
@@ -191,6 +197,7 @@ budgets:
   per_month:  # cost centre: total, then the total split by GL account (budgets are kept per GL)
     CC-PRD: {total: "1500000.00", gl: {"1410": "1450000.00", "1420": "50000.00"}}
     CC-MNT: {total: "150000.00", gl: {"1430": "100000.00", "5240": "50000.00"}}
+    CC-ADM: {total: "60000.00", gl: {"5460": "20000.00", "5410": "40000.00"}}
   per_location:  # the plant's own budget across its departments, checked as well as the cost centre's
     PLT-CKN: {total: "1650000.00", gl: {"1410": "1450000.00", "1420": "50000.00", "1430": "100000.00", "5240": "50000.00"}}
     PLT-SND: {total: "300000.00", gl: {"1410": "250000.00", "1420": "50000.00"}}  # trial production: materials and cartons
@@ -200,6 +207,13 @@ categories:
   - {code: PKG, name: Packaging, kind: goods, gl: 1420, stocked: true, approval_category: materials, tds: 194Q}
   - {code: MRO, name: Maintenance spares, kind: goods, gl: 1430, stocked: true, approval_category: mro, tds: 194Q}
   - {code: SRV, name: Services, kind: service, gl: 5240, stocked: false, approval_category: services, tds: 194J(a)}
+  - {code: UTL, name: Utilities and telecom, kind: service, gl: 5460, stocked: false, approval_category: services, tds: 194J(a)}
+  - {code: PRF, name: Professional fees, kind: service, gl: 5410, stocked: false, approval_category: services, tds: 194J(b)}
+
+# Bills without a purchase order (D-14): the category, the highest total, and the one supporting document it needs.
+non_po_rules:
+  - {category: UTL, version: 1, effective_from: "2025-04-01", enabled: true, max_value: "50000.00", supporting_doc: "", note: Telephone and internet bills}
+  - {category: PRF, version: 1, effective_from: "2025-04-01", enabled: true, max_value: "200000.00", supporting_doc: Engagement letter, note: Audit and tax fees}
 
 # gst: [rate before 22 Sep 2025, rate from then]; on_hand: opening stock at the plant (a stocked item);
 # reorder: [reorder point, order up to, safety stock] (min-max planning; safety stock 0 when not given). Services use the unit OTH.
@@ -234,6 +248,9 @@ suppliers:
   # prospects registered by the buyer to quote (D-03): identity not yet checked, papers uploaded, no bank account
   - {code: SUP-008, name: Sabarmati Corrugators Pvt Ltd, form: pvt_ltd, pan: SABCS0000K, state: "24", city: Ahmedabad, pincode: "380009", e_invoice: false, hsn_digits: "4", msme: none, terms: NET30, turnover: 1.5-5cr, bank: SBI, domain: sabarmaticorrugators, categories: [PKG], status: prospect, registered_by: U03, registered_on: "2026-11-02"}  # cartons for Sanand
   - {code: SUP-009, name: Chakan Enamel Wires, form: partnership, pan: CHAFC0000E, state: "27", city: Pune, pincode: "411034", e_invoice: false, hsn_digits: "4", msme: none, terms: NET30, turnover: 1.5-5cr, bank: BOM, domain: chakanenamelwires, phone: "+91 00000 90005", address: "15, Industrial Area", categories: [RAW], status: prospect, registered_by: U03, registered_on: "2026-11-09"}  # same phone and address as SUP-005 Pune Copper: flagged for review
+  # bills without an order (block 10): the internet provider and the chartered accountant
+  - {code: SUP-010, name: Sahyadri Netlink Pvt Ltd, form: pvt_ltd, pan: SAHCS0000N, state: "27", city: Pune, pincode: "411001", e_invoice: true, hsn_digits: "6", msme: none, terms: NET30, turnover: 1.5-5cr, bank: HDFC, domain: sahyadrinetlink, categories: [UTL], contact_email: billing@sahyadrinetlink.example, phone: "+91 00000 90010"}
+  - {code: SUP-011, name: Mehendale and Gokhale, Chartered Accountants, form: partnership, pan: MEHFM0000G, state: "27", city: Pune, pincode: "411004", e_invoice: false, hsn_digits: "6", msme: micro, udyam: UDYAM-MH-00-1000011, agreed_days: 30, terms: NET45, turnover: 1.5-5cr, bank: ICICI, domain: mehendalegokhale, categories: [PRF], contact_email: accounts@mehendalegokhale.example, phone: "+91 00000 90011"}
 
 contracts:
   - code: CNT-0001

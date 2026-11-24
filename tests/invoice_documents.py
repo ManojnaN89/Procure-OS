@@ -32,14 +32,15 @@ class Row:
 @dataclass
 class Spec:
     supplier_name: str = "Alpha Traders"
-    gstin: str = "27AAAAA0000A1Z5"
-    buyer_gstin: str = "29BBBBB0000B1Z5"
+    gstin: str = "27AAAAA0000A1Z2"
+    buyer_gstin: str = "29BBBBB0000B1ZP"
     number: str = "AT/2627/0101"
     on: date = date(2026, 11, 6)
     po_no: str | None = None
     rows: list[Row] = field(default_factory=lambda: [Row("Bearing", D(10), D(100))])
     freight: Decimal = D(0)
     credit_note: bool = False
+    debit_note: bool = False
     ref_invoice: str | None = None
     irn: bool = False  # print the IRN (and put the QR code on it when drawn)
     wrong_total: Decimal | None = None  # print a total that is not the sum
@@ -73,7 +74,7 @@ class Spec:
 
     @property
     def doc_type(self) -> str:
-        return "CRN" if self.credit_note else "INV"
+        return "CRN" if self.credit_note else "DBN" if self.debit_note else "INV"
 
     @property
     def irn_value(self) -> str:
@@ -83,10 +84,10 @@ class Spec:
 def text_lines(spec: Spec, *, irn: str | None = None) -> list[str]:
     taxable, cgst, sgst, igst = spec.amounts()
     out = [
-        "CREDIT NOTE" if spec.credit_note else "TAX INVOICE",
+        "CREDIT NOTE" if spec.credit_note else "DEBIT NOTE" if spec.debit_note else "TAX INVOICE",
         spec.supplier_name,
         f"GSTIN: {spec.gstin}",
-        f"{'Credit note' if spec.credit_note else 'Invoice'} No: {spec.number}",
+        f"{'Credit note' if spec.credit_note else 'Debit note' if spec.debit_note else 'Invoice'} No: {spec.number}",
         f"Date: {spec.on:%d/%m/%Y}",
         f"Bill to GSTIN: {spec.buyer_gstin}",
     ]

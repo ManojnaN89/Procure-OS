@@ -44,6 +44,16 @@ Apex Pumps is the main demo company: one pump plant at Chakan, nine people, sixt
 | 20 | store@ | **Run store check**, then **Issue for production** on MO-1 → **Issue what is set aside** | Stock is set aside earliest need-by first; what is short goes for approval, priced at the contract price, else the last price paid (the wire and seals the journey bought), else the standard price |
 | 21 | planthead@, then buyer@ | Open MO-1's request (lines "Short for MO-1", the budget) and approve it by the emailed link; buyer@ opens it | Each line shows its buying route and why; the castings go straight to an order on the contract |
 
+## A bill without an order
+
+Sahyadri Netlink and Mehendale and Gokhale bill without a purchase order: an internet line and the auditor's fee.
+
+1. ap@: **Invoices -> Enter an invoice -> Is there a purchase order? No.** Choose Sahyadri, the category **Utilities and telecom** (its limit, Rs 50,000, is shown), the cost centre **CC-ADM**, the bill number and date, the line (1 at 15,000 at 18%), and attach the bill copy. **Enter the bill.** It waits for the plant head, who owns CC-ADM.
+2. planthead@: **My work -> Bills to authorise -> Authorise.** The amount is in the automatic band: the bill is approved, due 30 days from its date, and its Rs 15,000 is held on CC-ADM 5460.
+3. ap@: the auditor's bill, **Professional fees**, Rs 75,000, with the **Engagement letter** attached (the category names it). planthead@ authorises it; it then waits for finance@, because the amount is in the finance manager's band.
+4. finance@: **My work -> Bills to approve -> Approve.** The due date is the MSME deadline (30 days from the acceptance) where that is earlier than the terms.
+5. Try a bill with no supporting document, a blocked supplier, a stocked category or a total over the limit: each is refused with the reason. A header or arithmetic fault blocks the bill and is corrected and matched again; it is never released by proposal.
+
 ## Reconciliation (step 13)
 
 After step 16, everything is paid. **Reconciliation** is in the menu of finance@ and ap@:

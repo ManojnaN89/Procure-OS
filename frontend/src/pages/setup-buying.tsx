@@ -1102,3 +1102,151 @@ export function PriceThresholds(shared: Shared) {
 		</>
 	);
 }
+
+// ---- bills without an order (block 10): one rule version per category ---------------------------------
+
+type NonPoVersion = Version & {
+	category: string;
+	enabled: boolean;
+	max_value: string;
+	supporting_doc: string | null;
+};
+type NonPoData = {
+	versions: NonPoVersion[];
+	categories: {
+		code: string;
+		name: string | null;
+		default_gl: string | null;
+		stocked: boolean;
+	}[];
+};
+
+export function NonPoRules(shared: Shared) {
+	const data = useQuery({
+		queryKey: ["setup-non-po-rules"],
+		queryFn: () => api<NonPoData>("/api/setup/non-po-rules"),
+	});
+	const categories = data.data?.categories ?? [];
+	const [category, setCategory] = useState("");
+	const [from, setFrom] = useState(today());
+	const [enabled, setEnabled] = useState(true);
+	const [maxValue, setMaxValue] = useState("");
+	const [doc, setDoc] = useState("");
+	const inForce = (code: string) =>
+		(data.data?.versions ?? []).find((v) => v.category === code && v.in_force);
+	const save = useChange(
+		shared,
+		"setup-non-po-rules",
+		(reason) => {
+			if (!category) throw new Error("Choose the category.");
+			if (!isNumber(maxValue) || Number(maxValue) <= 0)
+				throw new Error("The highest bill needs an amount above zero.");
+			return api("/api/setup/non-po-rules", {
+				method: "POST",
+				json: {
+					category_code: category,
+					effective_from: from,
+					enabled,
+					max_value: maxValue,
+					supporting_doc: doc.trim() || null,
+					reason,
+				},
+			});
+		},
+		() => {
+			setMaxValue("");
+			setDoc("");
+		},
+	);
+	if (!data.data) return null;
+	return (
+		<>
+			<Card className="mb-4">
+				<CardHeader>Bills without an order: the rule in force</CardHeader>
+				<CardBody>
+					<Table>
+						<thead>
+							<tr>
+								<Th>Category</Th>
+								<Th>Version</Th>
+								<Th>Highest bill</Th>
+								<Th>Supporting document</Th>
+								<Th>In force</Th>
+							</tr>
+						</thead>
+						<tbody>
+							{categories.map((c) => {
+								const v = inForce(c.code);
+								return (
+									<tr key={c.code}>
+										<Td>{c.name ?? c.code}</Td>
+										<Td>{v ? `Version ${v.version}` : "no rule"}</Td>
+										<Td>{v ? shown("inr", v.max_value) : "-"}</Td>
+										<Td>{v?.supporting_doc ?? "-"}</Td>
+										<Td>
+											{v ? (
+												v.enabled ? (
+													<Badge tone="success">Bills allowed</Badge>
+												) : (
+													<Badge>Not allowed</Badge>
+												)
+											) : (
+												<Badge>Not allowed</Badge>
+											)}
+										</Td>
+									</tr>
+								);
+							})}
+						</tbody>
+					</Table>
+					<p className="mt-3 text-sm text-muted-foreground">
+						A stocked category is never billed without an order. The rule decides the
+						highest total and the one supporting document the bill needs.
+					</p>
+				</CardBody>
+			</Card>
+			<Card>
+				<CardHeader>
+					New version. It starts on the date you choose (today or later); bills already
+					entered keep the version they used.
+				</CardHeader>
+				<CardBody className="space-y-3">
+					<Field label="Category">
+						<select
+							className={select}
+							value={category}
+							onChange={(e) => setCategory(e.target.value)}
+						>
+							<option value="">Choose a category</option>
+							{categories.map((c) => (
+								<option key={c.code} value={c.code}>
+									{c.name ?? c.code}
+								</option>
+							))}
+						</select>
+					</Field>
+					<Field label="Bills allowed for this category">
+						<select
+							className={select}
+							value={enabled ? "yes" : "no"}
+							onChange={(e) => setEnabled(e.target.value === "yes")}
+						>
+							<option value="yes">Yes</option>
+							<option value="no">No</option>
+						</select>
+					</Field>
+					<Field label="Highest bill total (?)">
+						<Input value={maxValue} onChange={(e) => setMaxValue(e.target.value)} />
+					</Field>
+					<Field label="Supporting document the bill needs (empty when none)">
+						<Input value={doc} onChange={(e) => setDoc(e.target.value)} />
+					</Field>
+					<StartsOn value={from} onChange={setFrom} />
+					<Button disabled={save.isPending} onClick={() => save.mutate()}>
+						Save for approval
+					</Button>
+				</CardBody>
+			</Card>
+		</>
+	);
+}

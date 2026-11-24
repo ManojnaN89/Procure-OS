@@ -596,7 +596,7 @@ def test_the_command_line_says_what_an_update_did(db: Session, dataset: Path, tm
     assert dry.stdout.startswith("update by key (dry run, nothing written): would add 0, would change 1, unchanged ")
     lines = real.stdout.splitlines()
     assert lines[0].startswith("update by key: added 0, changed 1, unchanged ")
-    assert "  supplier: 0 added, 1 changed, 8 unchanged, 0 not in the file" in lines
+    assert "  supplier: 0 added, 1 changed, 10 unchanged, 0 not in the file" in lines
     assert "  changed   supplier SUP-003: trade_name 'Shree Wires and Electricals Pvt Ltd' -> 'Shree Wires'" in lines
     spoiled = _cli(db.info["slug"], _variant(dataset, tmp_path, supplier=_set("SUP-003", pan="BAD")))
     assert spoiled.returncode == 1 and "  left out  supplier line 4: pan 'BAD' is not a valid PAN" in spoiled.stdout

@@ -94,6 +94,7 @@ CARRIED: dict[str, str | None] = {
             "budget_period_lock",  # block 3: locks of the loaded history months
             "forward_buy_rule",  # block 3
             "ai_capability",  # AI foundation: the capability switches
+            "non_po_rule",  # block 10: which categories may be billed without an order, and their limits
         )
     },  # fmt: skip
     "stock_movement": "source = 'import'",  # the loaded history; what the platform posted in setup is test data
@@ -110,7 +111,7 @@ NOT_CARRIED = (
     "checkpoint_migrations", "checkpoint_writes", "checkpoints", "cutover_import", "cutover_supplier_ytd",
     "delivery_reminder", "demand_change", "demand_change_case", "dispatch_note", "dispatch_note_line", "email_message",
     "goods_receipt", "gr_line", "intake_pending", "invoice", "invoice_charge", "invoice_diagnosis", "invoice_draft",
-    "invoice_line", "match_result", "material_request", "material_request_buy", "material_request_line",
+    "invoice_line", "invoice_approval_step", "invoice_document_link", "match_result", "material_request", "material_request_buy", "material_request_line",
     "material_requirement", "model_cache", "model_call", "notification", "number_counter", "one_time_code", "payment",
     "payment_allocation", "payment_run", "planning_note", "po", "po_approval_step", "po_change", "po_charge",
     "po_commitment", "po_line", "po_revision", "product_demand", "production_order", "proposal", "purchase_case", "quote",

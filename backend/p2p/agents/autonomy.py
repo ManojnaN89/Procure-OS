@@ -21,7 +21,7 @@ WINDOW = timedelta(days=30)
 
 # Decisions that a person always makes (rule 5). No setting, by anyone, lets them happen without one. Sending an RFQ is
 # one (D42): a buyer confirms every new RFQ before it goes to suppliers; the reminders on a confirmed one run by themselves.
-LOCKED = frozenset({"payment_run.approve", "supplier.set_status", "invoice.release_block", "rfq.send"})
+LOCKED = frozenset({"payment_run.approve", "supplier.set_status", "invoice.release_block", "rfq.send", "invoice.read"})
 
 # What each decision is called on the Automation screen, so a reason names it the way a person sees it.
 LABELS = {

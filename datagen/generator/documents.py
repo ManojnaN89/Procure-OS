@@ -17,6 +17,7 @@ phones are +91 00000 ..., emails end in .example (`unsafe_text` checks every doc
 
 import argparse
 import csv
+import hashlib
 import json
 import re
 import shutil
@@ -156,9 +157,10 @@ def qr_payload(inv: dict[str, str], lines: list[dict[str, str]]) -> str:
     import base64
 
     on = date.fromisoformat(inv["invoice_date"])
+    doc_type = "CRN" if inv["type"] == "credit_note" else "DBN" if inv["type"] == "debit_note" else "INV"
     claims = {
         "SellerGstin": inv["supplier_gstin"], "BuyerGstin": inv["buyer_gstin"], "DocNo": inv["supplier_invoice_no"],
-        "DocTyp": "CRN" if inv["type"] == "credit_note" else "INV", "DocDt": on.strftime("%d/%m/%Y"),
+        "DocTyp": doc_type, "DocDt": on.strftime("%d/%m/%Y"),
         "TotInvVal": float(D(inv["total"])), "ItemCnt": len(lines), "MainHsnCode": lines[0]["hsn_sac"] if lines else "",
         "Irn": inv["irn"], "IrnDt": f"{inv['ack_date'] or inv['invoice_date']} 10:00:00",
     }  # fmt: skip
@@ -271,7 +273,9 @@ def invoice_pages(
     bank = ctx.bank.get(inv["supplier_code"])
     reg = ctx.registration.get(inv["buyer_gstin"], {})
     credit = inv["type"] == "credit_note"
-    pos = list(dict.fromkeys(ln["po_no"] for ln in lines))
+    debit = inv["type"] == "debit_note"
+    note = credit or debit
+    pos = list(dict.fromkeys(ln["po_no"] for ln in lines if ln.get("po_no")))
     chunks = (
         [lines] if not rows_per_page else [lines[i : i + rows_per_page] for i in range(0, len(lines), rows_per_page)]
     )
@@ -293,11 +297,11 @@ def invoice_pages(
             ]
             p += [Text(LM, 88, f"GSTIN: {inv['supplier_gstin']}    PAN: {sup['pan']}", 8.5)]
             p += [
-                Text(RM, 50, "CREDIT NOTE" if credit else "TAX INVOICE", 15, True, "r"),
+                Text(RM, 50, "CREDIT NOTE" if credit else "DEBIT NOTE" if debit else "TAX INVOICE", 15, True, "r"),
                 Text(RM, 62, "Original for recipient", 7.5, False, "r", 0.4),
             ]
             p.append(Rule(LM, 100, RM, 100, 1.0))
-            label = "Credit note No" if credit else "Invoice No"
+            label = "Credit note No" if credit else "Debit note No" if debit else "Invoice No"
             y = 118.0
             p += [Text(LM, y, f"{label}: {inv['supplier_invoice_no']}", 9.5, True)]
             p += [Text(LM, y + 13, f"Date: {date.fromisoformat(inv['invoice_date']):%d/%m/%Y}", 9)]
@@ -342,7 +346,7 @@ def invoice_pages(
                 Text(
                     LM,
                     64,
-                    f"{'Credit note' if credit else 'Invoice'} No: {inv['supplier_invoice_no']}    Date: {date.fromisoformat(inv['invoice_date']):%d/%m/%Y}",
+                    f"{'Credit note' if credit else 'Debit note' if debit else 'Invoice'} No: {inv['supplier_invoice_no']}    Date: {date.fromisoformat(inv['invoice_date']):%d/%m/%Y}",
                     9,
                 )
             ]
@@ -354,9 +358,9 @@ def invoice_pages(
             idx = lines.index(ln) + 1
             desc, sub = ln["description"], ""
             ref = f"{ln['po_no']}/{ln['po_line_no']}"
-            if po_style == "inline" and pk.text_width(f"{ref} {desc}", 8) <= DESC_WIDTH:
+            if ln.get("po_no") and po_style == "inline" and pk.text_width(f"{ref} {desc}", 8) <= DESC_WIDTH:
                 desc = f"{ref} {desc}"
-            elif po_style == "sub":
+            elif ln.get("po_no") and po_style == "sub":
                 sub = f"PO {ln['po_no']} line {ln['po_line_no']}"
             ops, y = _row(
                 y,
@@ -454,12 +458,14 @@ def invoice_expected(ctx: Ctx, inv: dict[str, str]) -> dict[str, Any]:
     return {
         "supplier_code": inv["supplier_code"], "supplier_name": ctx.supplier[inv["supplier_code"]]["legal_name"],
         "supplier_gstin": inv["supplier_gstin"], "buyer_gstin": inv["buyer_gstin"],
-        "document_type": "credit_note" if credit else "invoice", "invoice_number": inv["supplier_invoice_no"],
+        "document_type": "credit_note" if credit else "debit_note" if inv["type"] == "debit_note" else "invoice",
+        "invoice_number": inv["supplier_invoice_no"],
         "invoice_date": inv["invoice_date"], "irn": inv["irn"] or None,
-        "po_numbers": list(dict.fromkeys(ln["po_no"] for ln in lines)),
+        "po_numbers": list(dict.fromkeys(ln["po_no"] for ln in lines if ln.get("po_no"))),
         "ref_invoice_number": ctx.supplier_no.get(inv["ref_invoice_no"]) if inv["ref_invoice_no"] else None,
         "lines": [
-            {"line_no": int(ln["line_no"]), "po_no": ln["po_no"], "po_line_no": int(ln["po_line_no"]), "description": ln["description"],
+            {"line_no": int(ln["line_no"]), "po_no": ln["po_no"] or None,
+             "po_line_no": int(ln["po_line_no"]) if ln["po_line_no"] else None, "description": ln["description"],
              "hsn": ln["hsn_sac"], "qty": ln["qty"], "uom": ln["uom"], "unit_price": ln["unit_price"], "taxable": ln["taxable"],
              "gst_rate": ln["gst_rate"]}
             for ln in lines
@@ -475,7 +481,7 @@ def make_invoice(ctx: Ctx, inv: dict[str, str], look: str, seed: int) -> tuple[b
     no = inv["no"]
     rng = Random(f"{seed}|invoice|{no}")
     lines = ctx.lines[no]
-    has_qr = bool(inv["irn"]) and inv["type"] == "invoice"
+    has_qr = bool(inv["irn"]) and inv["type"] in ("invoice", "credit_note", "debit_note")
     qr = pk.qr_pixels(qr_payload(inv, lines)) if has_qr else None
     po_style = rng.choice(["inline", "sub", "header"])
     multi = look == "multipage_pdf"
@@ -508,9 +514,89 @@ def make_invoice(ctx: Ctx, inv: dict[str, str], look: str, seed: int) -> tuple[b
         "dataset_invoice": no, "channel": inv["channel"], "dataset_status": inv["status"], "planted_cases": ctx.planted.get(no, []),
         "expected": invoice_expected(ctx, inv),
         "qr": {"irn": inv["irn"], "seller_gstin": inv["supplier_gstin"], "buyer_gstin": inv["buyer_gstin"], "doc_no": inv["supplier_invoice_no"],
-               "doc_type": "INV", "doc_date": inv["invoice_date"], "total": inv["total"], "item_count": len(lines)} if has_qr else None,
+               "doc_type": "CRN" if inv["type"] == "credit_note" else "DBN" if inv["type"] == "debit_note" else "INV",
+               "doc_date": inv["invoice_date"], "total": inv["total"], "item_count": len(lines)} if has_qr else None,
     }  # fmt: skip
     return data, ext, entry, printed
+
+
+# ---- bills without an order and debit notes (block 10) ------------------------------------------
+
+
+def _fy4(on: date) -> str:
+    start = on.year if on.month >= 4 else on.year - 1
+    return f"{start}-{(start + 1) % 100:02d}"
+
+
+def _irn(gstin: str, on: date, doc_type: str, doc_no: str) -> str:
+    return hashlib.sha256(f"{gstin}{_fy4(on)}{doc_type}{doc_no}".encode()).hexdigest().upper()
+
+
+def extra_invoices(ctx: Ctx) -> list[dict[str, str]]:
+    """A bill without an order (with and without a QR code) and a debit note, against a bill or an invoice of the history."""
+    made: list[dict[str, str]] = []
+    if "SUP-010" in ctx.supplier:  # Apex: the internet provider bills without an order
+        sup = ctx.supplier["SUP-010"]
+        buyer = next((r["gstin"] for r in ctx.registration.values() if r["is_default"] == "true"), "")
+        for number, with_qr in (("SNL/2627/0458", True), ("SNL/2627/0459", False)):
+            on = date(2026, 11, 23)
+            no = f"BILL-{number.replace('/', '-')}"
+            doc_date = on
+            ctx.lines[no] = [
+                {
+                    "invoice_no": no, "line_no": "1", "po_no": "", "po_line_no": "",
+                    "description": "Internet lease line, 100 Mbps, November 2026", "hsn_sac": "998422",
+                    "qty": "1", "uom": "OTH", "unit_price": "15000.00", "discount": "0.00", "taxable": "15000.00",
+                    "gst_rate": "18", "cgst": "1350.00", "sgst": "1350.00", "igst": "0.00",
+                }
+            ]  # fmt: skip
+            made.append(
+                {
+                    "no": no, "type": "invoice", "supplier_code": "SUP-010", "supplier_gstin": sup["gstin"],
+                    "buyer_gstin": buyer, "place_of_supply": buyer[:2], "supplier_invoice_no": number,
+                    "invoice_date": doc_date.isoformat(), "fy": _fy4(doc_date), "irn": _irn(sup["gstin"], doc_date, "INV", number) if with_qr else "",
+                    "ack_no": "ACK-0000" if with_qr else "", "ack_date": doc_date.isoformat() if with_qr else "",
+                    "eway_bill_no": "", "reverse_charge": "false", "received_at": f"{doc_date.isoformat()}T10:00:00+05:30",
+                    "received_on": doc_date.isoformat(), "channel": "email", "taxable": "15000.00", "cgst": "1350.00",
+                    "sgst": "1350.00", "igst": "0.00", "cess": "0.00", "round_off": "0.00", "total": "17700.00",
+                    "ref_invoice_no": "", "due_date": "", "payment_block": "none", "status": "approved",
+                    "duplicate_of": "", "block_reason": "", "cancel_reason": "", "document_ref": "",
+                    "entered_by": "U04", "created_at": f"{doc_date.isoformat()}T10:00:00+05:30",
+                    "payment_terms_code": "NET30", "_qr": "true" if with_qr else "false",
+                }
+            )  # fmt: skip
+    refs = [r for r in ctx.invoices if r["supplier_code"] == "SUP-003" and r["type"] == "invoice"]
+    if refs:  # a debit note of Shree Wires against its latest invoice on file
+        ref = sorted(refs, key=lambda r: r["no"])[-1]
+        sup = ctx.supplier["SUP-003"]
+        on = date(2026, 11, 20)
+        for number, with_qr in (("SW/DBN/2627/014", True), ("SW/DBN/2627/015", False)):
+            no = f"DBN-{number.replace('/', '-')}"
+            ctx.lines[no] = [
+                {
+                    "invoice_no": no, "line_no": "1", "po_no": "", "po_line_no": "",
+                    "description": "Short supply of enamelled copper wire, debit raised", "hsn_sac": "854411",
+                    "qty": "1", "uom": "KGS", "unit_price": "2500.00", "discount": "0.00", "taxable": "2500.00",
+                    "gst_rate": "18", "cgst": "225.00", "sgst": "225.00", "igst": "0.00",
+                }
+            ]  # fmt: skip
+            made.append(
+                {
+                    "no": no, "type": "debit_note", "supplier_code": "SUP-003", "supplier_gstin": sup["gstin"],
+                    "buyer_gstin": ref["buyer_gstin"], "place_of_supply": ref["place_of_supply"],
+                    "supplier_invoice_no": number, "invoice_date": on.isoformat(), "fy": _fy4(on),
+                    "irn": _irn(sup["gstin"], on, "DBN", number) if with_qr else "",
+                    "ack_no": "ACK-0000" if with_qr else "", "ack_date": on.isoformat() if with_qr else "",
+                    "eway_bill_no": "", "reverse_charge": "false", "received_at": f"{on.isoformat()}T10:00:00+05:30",
+                    "received_on": on.isoformat(), "channel": "email", "taxable": "2500.00", "cgst": "225.00",
+                    "sgst": "225.00", "igst": "0.00", "cess": "0.00", "round_off": "0.00", "total": "2950.00",
+                    "ref_invoice_no": ref["no"], "due_date": "", "payment_block": "none", "status": "approved",
+                    "duplicate_of": "", "block_reason": "", "cancel_reason": "", "document_ref": "",
+                    "entered_by": "U04", "created_at": f"{on.isoformat()}T10:00:00+05:30",
+                    "payment_terms_code": sup["payment_terms_code"], "_qr": "true" if with_qr else "false",
+                }
+            )  # fmt: skip
+    return made
 
 
 # ---- quotation replies --------------------------------------------------------------------------
@@ -819,6 +905,13 @@ def generate(dataset: Path, seed: int = 42, limit: int | None = None, out: Path 
     unsafe: list[str] = []
     for i, inv in enumerate(invoices):
         data, _, entry, printed = make_invoice(ctx, inv, INVOICE_LOOKS[i % len(INVOICE_LOOKS)], seed)
+        entry["split"] = split_of(entry, ctx.hold_out_suppliers)
+        (out / entry["file"]).write_bytes(data)
+        unsafe += [f"{entry['file']}: {b}" for b in unsafe_text("\n".join(printed))]
+        documents.append(entry)
+    for i, inv in enumerate(extra_invoices(ctx) if limit is None else []):
+        inv.pop("_qr", None)
+        data, _, entry, printed = make_invoice(ctx, inv, "text_pdf", seed)
         entry["split"] = split_of(entry, ctx.hold_out_suppliers)
         (out / entry["file"]).write_bytes(data)
         unsafe += [f"{entry['file']}: {b}" for b in unsafe_text("\n".join(printed))]

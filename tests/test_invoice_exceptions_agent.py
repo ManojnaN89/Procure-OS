@@ -25,7 +25,7 @@ from p2p.platform import ui_api, users
 D = Decimal
 client = TestClient(app)
 TODAY = date(2026, 11, 6)
-SUPPLIER_GSTIN, OUR_GSTIN = "27AAAAA0000A1Z5", "29BBBBB0000B1Z5"
+SUPPLIER_GSTIN, OUR_GSTIN = "27AAAAA0000A1Z2", "29BBBBB0000B1ZP"
 
 
 def decision(**kw: Any) -> str:
@@ -97,7 +97,7 @@ def _blocked(world: Session, kind: str) -> str:
         return _invoice(world, po_no, "10")
     if kind == "gstin":
         _receive(world, po_no, "10")
-        return _invoice(world, po_no, "10", buyer="29ZZZZZ9999Z1Z9")
+        return _invoice(world, po_no, "10", buyer="29ZZZZZ9999Z1Z4")
     if kind == "composition":
         world.execute(text("update supplier set gst_reg_type = 'composition' where code = 'S1'"))
         world.commit()
@@ -123,7 +123,7 @@ CASES = [
     ("qty", "qty_mismatch", "wait_for_receipt", ["10", "6"]),
     ("rejected", "rejected_qty_invoiced", "credit_note", ["10", "4", "6"]),
     ("notreceived", "goods_not_received", "wait_for_receipt", ["10"]),
-    ("gstin", "wrong_gstin", "corrected_invoice", ["29ZZZZZ9999Z1Z9", OUR_GSTIN]),
+    ("gstin", "wrong_gstin", "corrected_invoice", ["29ZZZZZ9999Z1Z4", OUR_GSTIN]),
     ("composition", "composition_tax", "corrected_invoice", []),
     ("einvoice", "e_invoice_missing", "corrected_invoice", ["IRN"]),
 ]

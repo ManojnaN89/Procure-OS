@@ -605,19 +605,20 @@ def test_a_tolerance_is_set_for_a_category_and_the_goods_receipt_uses_it(s: Setu
 # ---- automation --------------------------------------------------------------------------------
 
 
-def test_the_automation_table_lists_every_decision_and_locks_the_four_that_stay_with_a_person(s: Setup) -> None:
+def test_the_automation_table_lists_every_decision_and_locks_the_five_that_stay_with_a_person(s: Setup) -> None:
     got = client.get("/api/setup/automation", headers=s.a).json()
     rows = {r["decision_type"]: r for r in got["decisions"]}
 
     assert got["kill_switch"] is False
     assert {"rfq.send", "rfq.award", "quote.read", "po.send"} <= set(rows)
-    for locked in ("payment_run.approve", "supplier.set_status", "invoice.release_block", "rfq.send"):
+    for locked in ("payment_run.approve", "supplier.set_status", "invoice.release_block", "rfq.send", "invoice.read"):
         assert (
             rows[locked]["locked"] is True
             and rows[locked]["levels"] == ["propose"]
             and rows[locked]["level"] == "propose"
         )
     assert rows["rfq.send"]["note"].startswith("D42: a buyer confirms every new RFQ")  # D42: never automatic
+    assert rows["invoice.read"]["note"].startswith("D54: AP confirms every invoice")  # D54, OP-13 interim
     assert rows["rfq.award"]["locked"] is False and rows["rfq.award"]["levels"] == ["off", "propose", "auto"]
     assert rows["po.send"]["level"] == "propose"  # a buyer sends orders until the company says otherwise
 

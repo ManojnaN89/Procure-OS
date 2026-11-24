@@ -600,10 +600,11 @@ _HELP = {
 DECISIONS: dict[str, tuple[str, str]] = {dt: (autonomy.LABELS[dt], help_) for dt, help_ in _HELP.items()}
 LOCKED_LABELS = {
     dt: autonomy.LABELS[dt]
-    for dt in ("rfq.send", "payment_run.approve", "supplier.set_status", "invoice.release_block")
+    for dt in ("rfq.send", "payment_run.approve", "supplier.set_status", "invoice.release_block", "invoice.read")
 }
 LOCKED_NOTES = {
     "rfq.send": "D42: a buyer confirms every new RFQ before it goes out. Reminders on a confirmed RFQ run by themselves.",
+    "invoice.read": "D54: AP confirms every invoice read from a document",
 }
 LOCKED_NOTE = "Always decided by a person. It can never be set to act alone."
 LEVELS = ("off", "propose", "auto")

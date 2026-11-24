@@ -234,6 +234,93 @@ def check_order(db: Session, po_no: str, today: date) -> list[GroupCheck]:
     return check_request(db, str(request_no), today, final_prices=True) if request_no else []
 
 
+BILL_HELD = ("awaiting_approval", "approved", "part_paid")  # a bill counts in budget_use in these states
+
+
+def check_invoice(db: Session, invoice_no: str, today: date) -> list[GroupCheck]:
+    """The budget check for a bill without an order (block 10, 10.4): one result per GL and cost centre on it, and one
+    per GL and location that has a budget of its own, at the line's taxable value.
+
+    The bill checked counts in none of the parts: while it is still waiting for authorisation it is not in `budget_use`,
+    and once it is, its own value is taken out of what the other documents use. A bill is never refused for budget alone
+    by this function; the caller asks the last decider for a reason when the policy blocks."""
+    inv = db.execute(text("select kind, status from invoice where no = :n"), {"n": invoice_no}).first()
+    if inv is None or inv[0] != "non_po":
+        return []
+    in_view = inv[1] in BILL_HELD
+    start, _ = fy_bounds(today)
+    months = {"a": start.strftime("%Y-%m"), "b": today.strftime("%Y-%m")}
+    warn_pct = settings.number(db, "budget_warn_pct", str(WARN_PCT))
+    block_pct = settings.number(db, "budget_block_pct", str(BLOCK_PCT))
+    period = period_words(today)
+    setting_blocks = _policy_setting(db) == "block"
+    own = {
+        (r[0], r[1]): (Decimal(r[2]), r[3])
+        for r in db.execute(
+            text(
+                "select gl_code, cost_centre_code, sum(taxable), min(location_code) from invoice_line "
+                "where invoice_no = :n and gl_code is not null group by 1, 2"
+            ),
+            {"n": invoice_no},
+        )
+    }
+    out: list[GroupCheck] = []
+    for (gl, cc), (amount, location) in sorted(own.items()):
+        held_rows = (
+            db.execute(
+                text(
+                    "select sum(amount) as total, bool_or(policy = 'block') as blocks, count(*) as n from budget "
+                    "where gl_code = :g and cost_centre_code = :cc and period between :a and :b"
+                ),
+                {"g": gl, "cc": cc, **months},
+            )
+            .mappings()
+            .one()
+        )
+        parts = _used(db, _USE_CHARGED, {"n": invoice_no, "g": gl, "cc": [cc], **months})
+        if in_view:
+            parts = (parts[0], max(parts[1] - amount, Decimal(0)), parts[2])
+        check = check_budget(
+            Decimal(held_rows["total"]) if held_rows["n"] else None,
+            sum(parts, Decimal(0)),
+            amount,
+            warn_pct=warn_pct,
+            block_pct=block_pct,
+        )
+        policy = "block" if held_rows["blocks"] or setting_blocks else "warn"
+        out.append(GroupCheck(gl, (cc,), check, policy, "cost_centre", location, None, period, warn_pct, parts))
+    for (gl, _cc), (amount, location) in sorted(own.items()):
+        if not location:
+            continue
+        held_loc = (
+            db.execute(
+                text(
+                    "select sum(amount) as total, bool_or(policy = 'block') as blocks, count(*) as n from budget "
+                    "where gl_code = :g and location_code = :l and cost_centre_code is null "
+                    "and period between :a and :b"
+                ),
+                {"g": gl, "l": location, **months},
+            )
+            .mappings()
+            .one()
+        )
+        if not held_loc["n"]:
+            continue
+        parts = _used(db, "u.location_code = :l", {"n": invoice_no, "g": gl, "l": location, **months})
+        if in_view:
+            parts = (parts[0], max(parts[1] - amount, Decimal(0)), parts[2])
+        check = check_budget(
+            Decimal(held_loc["total"]),
+            sum(parts, Decimal(0)),
+            amount,
+            warn_pct=warn_pct,
+            block_pct=block_pct,
+        )
+        policy = "block" if held_loc["blocks"] or setting_blocks else "warn"
+        out.append(GroupCheck(gl, (), check, policy, "location", location, None, period, warn_pct, parts))
+    return out
+
+
 def blocked(checks: list[GroupCheck]) -> bool:
     """Over a budget whose policy blocks."""
     return any(c.check.status == "over" and c.policy == "block" for c in checks)

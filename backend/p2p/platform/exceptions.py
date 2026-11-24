@@ -10,7 +10,7 @@ read only.
 
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass
-from datetime import date, datetime
+from datetime import UTC, date, datetime
 from decimal import Decimal
 from functools import partial
 from typing import Any
@@ -22,6 +22,7 @@ from p2p.approvals.workflow import name_of, org_code_of
 from p2p.formulas import matching
 from p2p.formulas.calendar import IST, BusinessCalendar
 from p2p.formulas.kpis import working_days_between
+from p2p.formulas.money import format_inr
 from p2p.invoices.service import asked_or_confirmed
 from p2p.orders.workflow import NO_APPROVER
 from p2p.platform import alerts, permissions
@@ -31,6 +32,9 @@ from p2p.requests import demand_cases, supply_cases
 
 KINDS: dict[str, str] = {
     "invoice": "Invoices blocked",
+    "invoice_authorise": "Bills without an order waiting",
+    "invoice_approve": "Bills without an order waiting",
+    "invoice_sender_check": "Invoice mail not read",
     "unordered": "Goods received without an order",
     "service": "Services not confirmed",
     "approval": "Approvals past their reminder",
@@ -380,10 +384,76 @@ def _sourcing_cases(db: Session, nexts: dict[str, tuple[str, str]] = SOURCING_NE
         )  # fmt: skip
 
 
+def _invoice_tasks(db: Session, now: datetime) -> Iterator[Stuck]:
+    """The bills of block 10 waiting for a person: an authorisation or an approval past its 18 working hours, and an
+    invoice mail whose sender failed authentication (that one at once)."""
+    rows = _rows(
+        db,
+        "select id, kind, title, assignee, payload, due_at, created_at from task "
+        "where kind = any(:k) and status in ('open', 'overdue') order by id",
+        k=["invoice_authorise", "invoice_approve", "invoice_sender_check"],
+    )
+    for r in rows:
+        kind = str(r["kind"])
+        if kind in ("invoice_authorise", "invoice_approve") and r["due_at"] > now:
+            continue
+        p = r["payload"] or {}
+        code = org_code_of(db, int(r["assignee"]))
+        person = (
+            name_of(db, code)
+            if code
+            else db.execute(
+                text("select display_name from user_profile where user_id = :u"), {"u": int(r["assignee"])}
+            ).scalar()
+            or "a person"
+        )
+        no = str(p.get("invoice_no") or "")
+        if kind == "invoice_sender_check":
+            yield Stuck(
+                kind,
+                str(p.get("email_id") or r["id"]),
+                "#/invoices",
+                f"Invoice mail from {p.get('from') or 'an unknown address'} was not read: {r['title']}",
+                f"AP: {person}",
+                "Read the email and enter the bill by hand, or ask the supplier to send from its registered address",
+                _day(r["created_at"]),
+                see=("invoice.view", "invoice.book", "invoice.match"),
+                people=frozenset({code}) if code else frozenset(),
+            )
+            continue
+        inv = db.execute(
+            text(
+                "select i.supplier_invoice_no, coalesce(s.trade_name, s.legal_name), i.total, i.authoriser "
+                "from invoice i join supplier s on s.code = i.supplier_code where i.no = :n"
+            ),
+            {"n": no},
+        ).first()
+        if inv is None:
+            continue
+        people = {code} if code else set()
+        deputy = p.get("deputy")
+        if deputy:
+            people.add(str(deputy))
+        next_step = "Authorise or reject the bill" if kind == "invoice_authorise" else "Approve or reject the bill"
+        yield Stuck(
+            kind,
+            no,
+            f"#/invoices/{no}",
+            f"Bill {inv[0]} from {inv[1]} for {format_inr(inv[2])} waits for you",
+            f"Named person: {name_of(db, code) if code else 'not assigned'}",
+            next_step,
+            _day(r["due_at"]),
+            amount=Decimal(inv[2]),
+            people=frozenset(people),
+            see=("invoice.view", "invoice.match", "invoice.approve"),
+        )
+
+
 def collect(db: Session, today: date, calendar: BusinessCalendar) -> list[Stuck]:
     """Every stuck case in the company, whoever must act."""
     return [
         *_invoices(db),
+        *_invoice_tasks(db, datetime.now(UTC)),
         *_unordered(db),
         *_services(db, today),
         *_approvals(db),

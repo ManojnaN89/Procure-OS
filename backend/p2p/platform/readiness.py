@@ -43,6 +43,7 @@ APPROVE = {
     "payment_run": "payment.approve",
     "supplier_activation": "supplier.activate",
     "forward_buy": "sourcing.route_approve",  # block 3: requests/forward_buy.py checks this permission
+    "non_po_invoice": "invoice.approve",  # block 10: a bill without an order
 }
 ADMIN = ("admin.users", "admin.rules", "admin.settings")
 # the five duties of one case, each by a different person (FR32, sod.DUTIES)
@@ -79,7 +80,7 @@ SEPARATION = (
     Separation("SEP-10", "a market benchmark verified", "benchmark.enter", "benchmark.verify", ("sourcing/benchmarks.py",)),
     Separation("SEP-11", "a direct buy or a looser buying route agreed", "rfq.create", "sourcing.route_approve", ("sourcing/service.py",)),
     Separation("SEP-12", "goods received without an order approved", "grn.create", "grn.unordered_approve", ("receiving/unordered.py",)),
-    Separation("SEP-13", "an invoice block released", "invoice.book", "invoice.approve", ("invoices/service.py",)),
+    Separation("SEP-13", "an invoice block released", "invoice.book", "invoice.approve", ("invoices/service.py", "invoices/non_po.py")),
     Separation("SEP-14", "a payment run approved", "payment.propose", "chain:payment_run", ("invoices/payment.py",)),
     Separation("SEP-15", "a bank match confirmed", "chain:payment_run", "payment.propose", ("invoices/bank_statement.py",)),
 )  # fmt: skip
@@ -340,6 +341,30 @@ def _requesters(db: Session, people: People, on: date) -> list[str]:
     return list(dict.fromkeys(problems))
 
 
+def _non_po_rules(db: Session, on: date) -> list[str]:
+    """A category that may be billed without an order needs a `non_po_invoice` approval row: otherwise its bills wait
+    for a rule that does not exist (block 10, 10.3.2)."""
+    enabled = db.execute(
+        text(
+            "select count(*) from non_po_rule where enabled and effective_from <= :d "
+            "and (effective_to is null or effective_to >= :d)"
+        ),
+        {"d": on},
+    ).scalar_one()
+    if not int(enabled):
+        return []
+    rows = db.execute(
+        text(
+            "select count(*) from approval_rule where document = 'non_po_invoice' and effective_from <= :d "
+            "and (effective_to is null or effective_to >= :d)"
+        ),
+        {"d": on},
+    ).scalar_one()
+    if int(rows):
+        return []
+    return ["a category may be billed without an order but no non_po_invoice approval rule is in force"]
+
+
 def _separation(db: Session, people: People, on: date) -> list[str]:
     problems: list[str] = []
     for rule in SEPARATION:
@@ -474,6 +499,8 @@ def check(db: Session, slug: str, *, group: str = "all", on: date | None = None)
          lambda: _approvers(db, people, on), "/admin/setup?tab=approvals"),
         ("approvers", "setup", "Every requester has someone else to approve their requests", "warning",
          lambda: _requesters(db, people, on), "/admin/setup?tab=approvals"),
+        ("non_po_rules", "setup", "Bills without an order have an approval rule", "warning",
+         lambda: _non_po_rules(db, on), "/admin/buying?tab=non-po"),
         ("separation", "setup", "Every two-person control has a second person", "blocker",
          lambda: _separation(db, people, on), "/admin/setup?tab=roles"),
         ("duties", "setup", "Five different people for the five duties of a case", "blocker", lambda: _duties(people),

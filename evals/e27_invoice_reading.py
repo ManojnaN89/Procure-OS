@@ -385,32 +385,28 @@ def run(ctx) -> Outcome:
     if a != b:
         out.find("high", "the same document made two drafts")
 
-    # 6. the gate: switched on, only clean e-invoices enter by themselves, and what enters equals the key
-    autonomy.configure(db, sod.user(world.logins["Admin"]), "invoice.read", level="auto")
-    auto_ok = auto_bad = 0
-    for no in clean[n_qr + n_plain + n_sloppy :][: (3 if ctx.quick else 6)]:
-        draft = draft_of(db, read(docs.pdf(printed(key, no), qr_for(key, no)), f"{no}-auto.pdf", sender_of(no)))
-        if draft["status"] == "applied":
-            row = db.execute(
-                text("select supplier_invoice_no, total, status from invoice where no = :n"), {"n": draft["invoice_no"]}
-            ).one()
-            if row[0] == key.invoices[no]["supplier_invoice_no"] and row[1] == D(key.invoices[no]["total"]):
-                auto_ok += 1
-            else:
-                auto_bad += 1
-    doubt_entered = 0
-    # a total that is printed on the page (so the evidence check passes) but is not the invoice's: only the sum check sees it
-    taxable = key.invoices[sloppy_ids[0]]["taxable"]
-    reader.answer = json.dumps(reading_of(key, sloppy_ids[0], total=taxable, confidence=1.0), default=str)
+    # 6. the gate is locked (D54, OP-13 interim): a clean e-invoice still waits for AP
+    try:
+        autonomy.configure(db, sod.user(world.logins["Admin"]), "invoice.read", level="auto")
+        locked = False
+    except ValueError:
+        locked = True
+    out.metrics["the invoice read gate is locked"] = locked
+    if not locked:
+        out.find("high", "the invoice read gate could be set to act without a person")
     before = db.execute(text("select count(*) from invoice")).scalar_one()
-    read(docs.pdf([*printed(key, sloppy_ids[0]), "Customer copy"]), "doubt.pdf", sender_of(sloppy_ids[0]))
-    doubt_entered = db.execute(text("select count(*) from invoice")).scalar_one() - before
-    out.metrics["gate on: e-invoices entered by themselves / entered wrongly"] = f"{auto_ok} / {auto_bad}"
-    out.metrics["gate on: invoices entered from a doubtful reading"] = doubt_entered
-    if auto_bad or doubt_entered:
-        out.find("high", f"the gate entered {auto_bad} wrong invoice(s) and {doubt_entered} from a doubtful reading")
-    if auto_ok == 0:
-        out.find("medium", "with the gate on, no clean e-invoice was entered by itself")
+    waiting = 0
+    for no in clean[n_qr + n_plain + n_sloppy :][: (2 if ctx.quick else 4)]:
+        draft = draft_of(db, read(docs.pdf(printed(key, no), qr_for(key, no)), f"{no}-gate.pdf", sender_of(no)))
+        if draft["status"] in ("pending", "needs_person"):
+            waiting += 1
+    entered = db.execute(text("select count(*) from invoice")).scalar_one() - before
+    out.metrics["gate locked: clean e-invoices waiting for AP"] = waiting
+    out.metrics["gate locked: invoices entered without AP"] = entered
+    if entered:
+        out.find("high", f"the gate entered {entered} invoice(s) without AP")
+    if waiting == 0:
+        out.find("medium", "no clean e-invoice was read into a draft waiting for AP")
     out.metrics["audit rows for drafts"] = db.execute(
         text("select count(*) from audit_event where action like 'invoice_draft.%'")
     ).scalar_one()

@@ -41,6 +41,7 @@ HEADERS = {
     "gst_registration": "gstin,state_code,legal_address,pincode,is_default",
     "budget": "cost_centre_code,gl_code,project_code,period,amount,version,policy,location_code",
     "budget_period_lock": "period,locked_by,locked_at,reason",
+    "non_po_rule": "category_code,version,effective_from,enabled,max_value,supporting_doc,note",
     "forward_buy_rule": "category_code,item_code,location_code,version,effective_from,effective_to,enabled,min_gap_pct,min_trend_months,max_cover_months,holding_cost_pct_month,min_net_saving_inr,shelf_life_months,storage_max_qty,note",
     "category": "code,name,parent_code,kind,default_gl,stocked,capex,min_quotes,buyer_user,approval_category,required_attributes,required_supplier_docs,inspection_required,default_tds_section,reverse_charge_default",
     "item": "code,name,description,category_code,kind,default_gl,brand,base_uom,purchase_uom,pack_size,moq,hsn_sac,gst_rate_before,gst_rate_after,gst_rate_alt_before,gst_rate_alt_after,gst_rate_change_date,gst_rate_confidence,gst_reverse_charge,gst_note,standard_price,abc_class,stocked,capex,inspection_required,serialised,hazardous,default_lead_days,attributes,active",
@@ -159,6 +160,7 @@ class Supplier:
     blocked_by: str = ""
     address: str = ""  # the registered address line, when not the made-up one
     phone: str = ""  # the contact's phone, when not the made-up one
+    contact_email: str = ""  # the billing contact's address, when not sales@<domain>.example
 
     @property
     def prospect(self) -> bool:
@@ -240,7 +242,7 @@ def supplier_tables(suppliers: list[Supplier]) -> dict[str, list[dict[str, objec
                 "supplier_code": s.code,
                 "name": s.contact,
                 "role": "sales",
-                "email": f"sales@{s.domain}.example",
+                "email": s.contact_email or f"sales@{s.domain}.example",
                 "phone": s.phone or f"+91 00000 9{i:04d}",
                 "is_primary": "true",
             }

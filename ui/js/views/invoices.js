@@ -3,8 +3,8 @@ const InvoicesView = {
     return String(value ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
   },
 
-  STATUS: { received: "Received", matched: "Matched", blocked: "Blocked", approved: "Approved for payment", part_paid: "Part paid", paid: "Paid", cancelled: "Cancelled" },
-  BADGE: { blocked: "badge-held", approved: "badge-approved", paid: "badge-paid", cancelled: "badge-draft", received: "badge-waiting", part_paid: "badge-waiting", matched: "badge-approved" },
+  STATUS: { received: "Received", matched: "Matched", blocked: "Blocked", awaiting_authorisation: "Waiting for authorisation", awaiting_approval: "Waiting for approval", approved: "Approved for payment", part_paid: "Part paid", paid: "Paid", cancelled: "Cancelled" },
+  BADGE: { blocked: "badge-held", approved: "badge-approved", paid: "badge-paid", cancelled: "badge-draft", received: "badge-waiting", part_paid: "badge-waiting", matched: "badge-approved", awaiting_authorisation: "badge-waiting", awaiting_approval: "badge-waiting" },
   REASON: {
     price_variance: "Price above the order price",
     qty_over_received: "Quantity more than was received",
@@ -34,33 +34,35 @@ const InvoicesView = {
       <div class="tabs" id="invFilter">
         <button class="tab active" data-s="">All</button>
         <button class="tab" data-s="blocked">Blocked</button>
+        <button class="tab" data-act="kind" data-k="non_po">Without an order</button>
         <button class="tab" data-s="approved">Approved for payment</button>
         <button class="tab" data-s="paid">Paid</button>
       </div>
       <div class="table-wrap" id="tableWrap"><div class="empty-state">Loading…</div></div>`;
     document.getElementById("newInvoice").addEventListener("click", () => { window.location.hash = "#/invoices/new"; });
     this.wireDrafts(container);
-    const load = async (status) => {
+    const load = async (status, kind) => {
       const wrap = document.getElementById("tableWrap");
       try {
-        const rows = await API.getJSON(`/api/invoices${status ? `?status=${encodeURIComponent(status)}` : ""}`);
+        const q = [status ? `status=${encodeURIComponent(status)}` : "", kind ? `kind=${encodeURIComponent(kind)}` : ""].filter(Boolean).join("&");
+        const rows = await API.getJSON(`/api/invoices${q ? `?${q}` : ""}`);
         if (!wrap) return;
         wrap.innerHTML = rows.length
           ? `<table class="data-table"><thead><tr><th>INVOICE</th><th>SUPPLIER</th><th>SUPPLIER'S NUMBER</th><th>DATE</th><th>AMOUNT</th><th>STATUS</th></tr></thead><tbody>
               ${rows.map((r) => `<tr data-id="${this.esc(r.id)}">
-                <td class="cell-muted">${this.esc(r.id)}${r.type !== "invoice" ? ` <span class="badge badge-draft">${this.esc(r.type.replace("_", " "))}</span>` : ""}</td>
-                <td>${this.esc(r.supplier)}</td><td>${this.esc(r.number)}</td><td class="cell-muted">${formatDate(r.date)}</td><td>${formatCurrency(r.total)}</td>
+                <td class="cell-muted">${this.esc(r.id)}${r.type !== "invoice" ? ` <span class="badge badge-draft">${this.esc(r.type.replace("_", " "))}</span>` : ""}${r.kind === "non_po" ? ` <span class="badge badge-waiting">without an order</span>` : ""}</td>
+                <td>${this.esc(r.supplier)}${r.category ? `<div class="cell-muted" style="font-size:11px;">${this.esc(r.category)}</div>` : ""}</td><td>${this.esc(r.number)}</td><td class="cell-muted">${formatDate(r.date)}</td><td>${formatCurrency(r.total)}</td>
                 <td><span class="badge ${this.BADGE[r.status] || ""}">${this.esc(this.STATUS[r.status] || r.status)}</span>${r.reason ? `<div class="cell-muted" style="font-size:11px;margin-top:3px;max-width:340px;">${this.esc(r.reason)}</div>` : ""}${r.next_action ? `<div class="next-action" style="font-size:11.5px;margin-top:3px;max-width:340px;"><strong>Next:</strong> ${this.esc(r.next_action)}</div>` : ""}</td></tr>`).join("")}
             </tbody></table>`
-          : `<div class="empty-next"><strong>No invoices${status ? " in this state" : " yet"}.</strong>${status ? "" : "<br>Next: enter the supplier's invoice for goods that have arrived, or upload the document."}</div>`;
+          : `<div class="empty-next"><strong>No invoices${status || kind ? " here" : " yet"}.</strong>${status || kind ? "" : "<br>Next: enter the supplier's invoice for goods that have arrived, or upload the document."}</div>`;
         wrap.querySelectorAll("tr[data-id]").forEach((tr) => tr.addEventListener("click", () => { window.location.hash = `#/invoices/${tr.dataset.id}`; }));
       } catch {
         if (wrap) wrap.innerHTML = `<div class="empty-state">Couldn't load invoices.</div>`;
       }
     };
-    document.querySelectorAll("#invFilter [data-s]").forEach((b) => b.addEventListener("click", () => {
+    document.querySelectorAll("#invFilter [data-s], #invFilter [data-k]").forEach((b) => b.addEventListener("click", () => {
       document.querySelectorAll("#invFilter .tab").forEach((x) => x.classList.toggle("active", x === b));
-      load(b.dataset.s);
+      load(b.dataset.s || "", b.dataset.k || "");
     }));
     load("");
   },
@@ -96,7 +98,7 @@ const InvoicesView = {
     box.innerHTML = `<div class="panel" style="margin-bottom:14px;"><div class="panel-title">Invoices read from documents (${drafts.length})</div>
       ${drafts.map((d) => `<div class="draft-row" data-id="${this.esc(d.id)}" style="border-top:1px solid var(--border);padding:8px 0;font-size:12.5px;">
         <div><strong>${this.esc(d.supplier || "Unknown sender")}</strong> · ${this.esc(d.number || d.filename || "")} ${d.date ? "· " + formatDate(d.date) : ""} ${d.total ? "· " + formatCurrency(d.total) : ""}
-          <span class="cell-muted"> · ${this.esc(WAY[d.path] || "")} · ${this.esc(d.source)}</span></div>
+          <span class="cell-muted"> · ${this.esc(WAY[d.path] || "")} · ${this.esc(d.source)}${d.kind === "non_po" ? " · without an order" : ""}${d.received_on ? ` · received ${formatDate(d.received_on)}` : ""}${d.sender_verdict ? ` · sender ${this.esc(d.sender_verdict)}` : ""}</span></div>
         ${d.problems.map((p) => `<div style="color:var(--warning-text);">${this.esc(p)}</div>`).join("")}
         ${d.assumptions.map((p) => `<div class="cell-muted">Assumed: ${this.esc(p)}</div>`).join("")}
         <div style="margin-top:6px;display:flex;gap:8px;">
@@ -118,11 +120,21 @@ const InvoicesView = {
     container.innerHTML = `
       <div class="page-header"><a href="#/invoices" style="color:var(--text-muted);font-size:12px;text-decoration:none;">← Invoices</a><h1 style="margin-top:6px;">Enter an invoice</h1>
       <p>Choose the supplier, then type what the supplier's invoice says. The platform matches it straight away.</p></div>
+      <div class="panel" style="margin-bottom:12px;"><label>Is there a purchase order? <select id="invKind" style="padding:5px;margin-left:6px;"><option value="po">Yes</option><option value="non_po">No, a bill without an order</option></select></label></div>
       <div class="panel" id="entryBox">Loading…</div>`;
-    let ready = [];
-    try { ready = await API.getJSON("/api/invoicing/ready"); } catch { document.getElementById("entryBox").textContent = "Couldn't load the goods that can be invoiced."; return; }
-    const suppliers = [...new Map(ready.map((r) => [r.supplier_code, r.supplier])).entries()];
+    document.getElementById("invKind").addEventListener("change", (e) => {
+      if (e.target.value === "non_po") return this.renderBillEntry(container);
+      return this.renderOrderEntry(container);
+    });
+    return this.renderOrderEntry(container);
+  },
+
+  async renderOrderEntry(container) {
     const box = document.getElementById("entryBox");
+    if (!box) return;
+    let ready = [];
+    try { ready = await API.getJSON("/api/invoicing/ready"); } catch { box.textContent = "Couldn't load the goods that can be invoiced."; return; }
+    const suppliers = [...new Map(ready.map((r) => [r.supplier_code, r.supplier])).entries()];
     box.innerHTML = suppliers.length ? `
       <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:10px;">
         <select id="invSupplier" style="padding:6px;">${suppliers.map(([c, n]) => `<option value="${this.esc(c)}">${this.esc(n)}</option>`).join("")}</select>
@@ -170,6 +182,92 @@ const InvoicesView = {
     });
   },
 
+  async uploadEvidence(file) {
+    const form = new FormData();
+    form.append("file", file);
+    const res = await Auth.fetch("/api/files?doc_type=invoice_evidence", { method: "POST", body: form });
+    if (!res.ok) throw new Error("The document could not be uploaded.");
+    return (await res.json()).id;
+  },
+
+  // A bill without a purchase order: the category with its limit, the cost centre and GL, the lines, and the evidence.
+  async renderBillEntry(container) {
+    const box = document.getElementById("entryBox");
+    if (!box) return;
+    let vendors = [];
+    try { vendors = (await API.getJSON("/api/vendors?status=active")).map((v) => [v.code || v.id, v.name]); } catch { box.textContent = "Couldn't load the suppliers."; return; }
+    box.innerHTML = `
+      <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:10px;">
+        <select id="blSupplier" style="padding:6px;">${vendors.map(([c, n]) => `<option value="${this.esc(c)}">${this.esc(n)}</option>`).join("")}</select>
+        <input id="blNo" placeholder="Supplier's bill number" style="padding:6px;">
+        <input id="blDate" type="date" style="padding:6px;">
+        <select id="blCategory" style="padding:6px;"></select>
+      </div>
+      <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:10px;">
+        <input id="blCC" placeholder="Cost centre (e.g. CC-ADM)" style="padding:6px;">
+        <input id="blGL" placeholder="GL account" style="padding:6px;">
+        <span id="blLimit" class="cell-muted" style="font-size:12px;align-self:center;"></span>
+      </div>
+      <div id="blLines"></div>
+      <div class="btn btn-sm" id="blAdd" style="margin-top:8px;display:inline-block;">Add a line</div>
+      <div style="display:flex;gap:12px;flex-wrap:wrap;margin-top:10px;">
+        <label style="font-size:12.5px;">Bill copy (needed) <input id="blCopy" type="file" accept=".pdf,.png,.jpg,.jpeg,.tif,.tiff,.bmp"></label>
+        <label style="font-size:12.5px;">Supporting document (when the rule names one) <input id="blSupport" type="file"></label>
+      </div>
+      <div class="btn btn-primary btn-sm" id="blSave" style="margin-top:10px;display:inline-block;">Enter the bill</div>
+      <div id="blNote" style="font-size:12.5px;margin-top:8px;color:var(--warning-text);"></div>`;
+    const line = () => `<tr><td><input class="bl-desc" placeholder="What was supplied" style="width:260px;padding:5px;"></td><td><input class="bl-qty" type="number" min="0" step="any" value="1" style="width:80px;padding:5px;"></td><td><input class="bl-price" type="number" min="0" step="any" style="width:110px;padding:5px;"></td><td><input class="bl-rate" type="number" min="0" step="any" value="18" style="width:70px;padding:5px;"></td></tr>`;
+    document.getElementById("blLines").innerHTML = `<table class="data-table"><thead><tr><th>DESCRIPTION</th><th>QTY</th><th>UNIT PRICE</th><th>GST %</th></tr></thead><tbody>${line()}</tbody></table>`;
+    document.getElementById("blAdd").addEventListener("click", () => document.querySelector("#blLines tbody").insertAdjacentHTML("beforeend", line()));
+    const paintOptions = async () => {
+      const supplier = document.getElementById("blSupplier").value;
+      let options = [];
+      try { options = await API.getJSON(`/api/invoices/non-po/options?supplier=${encodeURIComponent(supplier)}`); } catch { options = []; }
+      const cat = document.getElementById("blCategory");
+      cat.innerHTML = options.length ? options.map((o) => `<option value="${this.esc(o.category)}" data-max="${this.esc(o.max_value)}" data-gl="${this.esc(o.gl_code || "")}" data-cc="${this.esc(o.cost_centre_code || "")}" data-doc="${this.esc(o.supporting_doc || "")}">${this.esc(o.name)}</option>`).join("") : `<option value="">No category may be billed without an order</option>`;
+      const paint = () => {
+        const sel = cat.options[cat.selectedIndex];
+        document.getElementById("blGL").value = sel ? sel.dataset.gl || "" : "";
+        if (sel && sel.dataset.cc && !document.getElementById("blCC").value) document.getElementById("blCC").value = sel.dataset.cc;
+        document.getElementById("blLimit").textContent = sel && sel.dataset.max ? `Up to ${formatCurrency(sel.dataset.max)}` : "";
+      };
+      cat.onchange = paint;
+      paint();
+    };
+    document.getElementById("blSupplier").addEventListener("change", paintOptions);
+    await paintOptions();
+    const save = async (reason) => {
+      const note = document.getElementById("blNote");
+      note.textContent = "";
+      const copy = document.getElementById("blCopy").files[0];
+      const support = document.getElementById("blSupport").files[0];
+      if (!copy) { note.textContent = "Attach the bill copy."; return; }
+      let documents = [];
+      try {
+        documents.push({ id: await this.uploadEvidence(copy), kind: "copy" });
+        if (support) documents.push({ id: await this.uploadEvidence(support), kind: "supporting" });
+      } catch (e) { note.textContent = e.message; return; }
+      const lines = [...document.querySelectorAll("#blLines tbody tr")].map((tr) => ({
+        description: tr.querySelector(".bl-desc").value, qty: tr.querySelector(".bl-qty").value,
+        unit_price: tr.querySelector(".bl-price").value, gst_rate: tr.querySelector(".bl-rate").value,
+      })).filter((l) => l.description && Number(l.qty) > 0 && l.unit_price !== "");
+      if (!lines.length) { note.textContent = "Enter at least one line."; return; }
+      const res = await API.postJSON("/api/invoices", {
+        supplier_code: document.getElementById("blSupplier").value, kind: "non_po",
+        category_code: document.getElementById("blCategory").value, cost_centre_code: document.getElementById("blCC").value,
+        gl_code: document.getElementById("blGL").value || null, number: document.getElementById("blNo").value,
+        date: document.getElementById("blDate").value, documents, not_duplicate_reason: reason || null, lines,
+      });
+      if (res.ok) { window.location.hash = `#/invoices/${res.data.invoice}`; return; }
+      note.innerHTML = `${this.esc(res.data.detail || "The bill was not entered.")}`;
+      if ((res.data.detail || "").includes("may be the same bill")) {
+        note.insertAdjacentHTML("beforeend", `<div style="margin-top:6px;display:flex;gap:6px;"><input id="blDupReason" placeholder="Why is it not a duplicate?" style="padding:5px;width:280px;"><div class="btn btn-sm" id="blDupOk">Enter with this reason</div></div>`);
+        document.getElementById("blDupOk").addEventListener("click", () => save(document.getElementById("blDupReason").value));
+      }
+    };
+    document.getElementById("blSave").addEventListener("click", () => save(null));
+  },
+
   async renderDetail(container, id) {
     container.innerHTML = `<div class="page-header"><h1>${this.esc(id)}</h1></div><div class="panel">Loading…</div>`;
     try {
@@ -178,12 +276,22 @@ const InvoicesView = {
       container.innerHTML = `
         <div class="page-header">${UI.backLink("#/invoices", "Invoices")}
           <h1>${this.esc(i.id)} · ${this.esc(i.supplier)}</h1>
-          <p><span class="badge ${this.BADGE[i.status] || ""}">${this.esc(this.STATUS[i.status] || i.status)}</span> · ${formatCurrency(i.total)} · supplier's number ${this.esc(i.number)} · ${formatDate(i.date)}${i.type !== "invoice" ? ` · ${this.esc(i.type.replace("_", " "))}${i.ref_invoice_no ? ` for ${this.esc(i.ref_invoice_no)}` : ""}` : ""}</p></div>
+          <p><span class="badge ${this.BADGE[i.status] || ""}">${this.esc(this.STATUS[i.status] || i.status)}</span> · ${formatCurrency(i.total)} · supplier's number ${this.esc(i.number)} · ${formatDate(i.date)}${i.type !== "invoice" ? ` · ${this.esc(i.type.replace("_", " "))}${i.ref_invoice_no ? ` for ${this.esc(i.ref_invoice_no)}` : ""}` : ""}${i.kind === "non_po" ? ` · without an order${i.category_name ? ` (${this.esc(i.category_name)} on ${this.esc(i.cost_centre || "")})` : ""}` : ""}</p></div>
         ${FlowStrip.forInvoice(i)}
         <div class="doc-layout">
         <div class="doc-main">
         ${i.reason ? UI.callout(i.status === "blocked" ? "warning" : "info", i.status === "cancelled" && i.duplicate_of ? `Copy of ${i.duplicate_of}` : "Why it is blocked", `<p>${this.esc(i.reason)}</p>${i.status === "blocked" && i.can_act ? "<p>Fix it with the supplier (a credit note or a corrected invoice), match it again, or ask another person to release it. The buttons below do each of these.</p>" : ""}`) : ""}
         ${i.pending_release ? UI.callout("info", "Waiting for approval", `<p>${this.esc(i.pending_release.summary)}. An approver decides it under Admin → Approvals.</p>`) : ""}
+        ${i.status === "awaiting_authorisation" ? UI.callout("info", "Waiting for the cost centre's authoriser", `<p>${this.esc(i.authoriser_name || i.authoriser || "The authoriser")} confirms the supply was received and belongs to ${this.esc(i.cost_centre_name || i.cost_centre)}.</p>`) : ""}
+        ${i.status === "awaiting_approval" ? UI.callout("info", "Waiting for approval", `<p>${i.steps.length ? `Step ${i.steps.filter((s) => s.status === "approved").length + 1} of ${i.steps.length}: ${this.esc((i.steps.find((s) => s.status === "pending") || {}).name || "an approver")}` : "An approver"}</p>`) : ""}
+        ${i.can_authorise || i.can_approve ? `<div class="panel"><div class="panel-title">Your decision</div>
+          <div class="btn-row">
+            ${i.can_authorise ? `<div class="btn btn-primary" id="invAuthorise"><i class="ti ti-check"></i>Authorise</div>` : ""}
+            ${i.can_approve ? `<div class="btn btn-primary" id="invApprove"><i class="ti ti-check"></i>Approve</div>` : ""}
+            <div class="btn btn-danger" id="invReject"><i class="ti ti-x"></i>Reject</div></div>
+          <div style="margin-top:10px;display:flex;gap:8px;flex-wrap:wrap;"><input id="invDecisionNote" placeholder="Note" style="padding:6px;width:220px;">
+            <input id="invBudgetReason" placeholder="Over-budget reason, when asked" style="padding:6px;width:280px;"></div>
+          <div id="invDecisionNoteText" style="font-size:12.5px;color:var(--warning-text);margin-top:6px;"></div></div>` : ""}
         <div class="table-wrap" style="margin-bottom:12px;"><table class="data-table"><thead><tr><th>ORDER LINE</th><th>ITEM</th><th>QTY</th><th>PRICE</th><th>TAXABLE</th><th>MATCH</th></tr></thead><tbody>
           ${i.lines.map((l) => { const m = i.match.find((x) => x.line_no === l.line_no) || {};
             return `<tr><td>${this.esc(l.po_no)} / ${this.esc(l.po_line_no)}</td><td>${this.esc(l.name)}</td><td>${this.esc(l.qty)} <span class="cell-muted">${this.esc(l.uom)}</span></td><td>${formatCurrency(l.unit_price)}</td><td>${formatCurrency(l.taxable)}</td>
@@ -211,8 +319,15 @@ const InvoicesView = {
             ["Supplier GSTIN", this.esc(i.supplier_gstin || "none")],
             ["Our GSTIN", this.esc(i.buyer_gstin || "none")],
             ["IRN", i.irn ? `<span class="mono" title="${this.esc(i.irn)}">${this.esc(i.irn.slice(0, 16))}…</span>` : ""],
+            ...(i.kind === "non_po" ? [["Category", this.esc(i.category_name || i.category || "")], ["Cost centre", this.esc(i.cost_centre_name || i.cost_centre || "")], ["GL account", this.esc(i.gl_code || "")], ["Authoriser", this.esc(i.authoriser_name || i.authoriser || "")], ["Approved by", this.esc(i.approved_by || "")]] : []),
           ])}
         </div>
+        ${i.steps && i.steps.length ? `<div class="panel" style="margin-top:10px;"><div class="panel-title">Approval steps</div>
+          ${i.steps.map((s) => `<div style="font-size:12.5px;padding:4px 0;border-top:1px solid var(--border);"><strong>${this.esc(s.name)}</strong> <span class="cell-muted">${this.esc(s.role)}</span> · ${this.esc(s.status)}${s.comment ? ` · ${this.esc(s.comment)}` : ""}</div>`).join("")}</div>` : ""}
+        ${i.budget && i.budget.length ? `<div class="panel" style="margin-top:10px;"><div class="panel-title">Budget</div>
+          ${i.budget.map((b) => `<div style="font-size:12px;padding:3px 0;">${this.esc(b.gl_code)} · ${this.esc(b.holder)}: ${this.esc(b.status)}${b.used_pct ? ` (${this.esc(b.used_pct)}% used)` : ""}${b.over_by && b.over_by !== "0.00" ? `, over by ${formatCurrency(b.over_by)}` : ""}</div>`).join("")}</div>` : ""}
+        ${i.documents && i.documents.length ? `<div class="panel" style="margin-top:10px;"><div class="panel-title">Evidence</div>
+          ${i.documents.map((d) => `<div style="font-size:12px;padding:3px 0;"><a href="/api/files/${d.document_id}" target="_blank">${this.esc(d.filename)}</a> <span class="cell-muted">${this.esc(d.kind)}</span></div>`).join("")}</div>` : ""}
         </div>
         </div>`;
       const note = document.getElementById("invNote");
@@ -245,6 +360,18 @@ const InvoicesView = {
       on("invRelease", () => ask("release"));
       on("invCancel", () => ask("cancel"));
       on("invWhyOk", () => post(verb, { reason: document.getElementById("invReason").value }));
+      const decision = (verbName) => {
+        const note = document.getElementById("invDecisionNote").value;
+        const reason = document.getElementById("invBudgetReason").value;
+        return post(verbName, { note, over_budget_reason: reason });
+      };
+      on("invAuthorise", () => decision("authorise"));
+      on("invApprove", () => decision("approve"));
+      on("invReject", () => {
+        const reason = document.getElementById("invDecisionNote").value;
+        if (!reason) { document.getElementById("invDecisionNoteText").textContent = "A reason is needed to reject the bill."; return; }
+        return post("reject", { reason });
+      });
     } catch {
       container.innerHTML = `<div class="empty-state">Couldn't load this invoice.</div>`;
     }

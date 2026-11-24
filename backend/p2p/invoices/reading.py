@@ -15,7 +15,7 @@ import hashlib
 import json
 import re
 from dataclasses import asdict, dataclass, field
-from datetime import date, datetime
+from datetime import UTC, date, datetime
 from decimal import Decimal
 from email.utils import parseaddr
 from pathlib import Path
@@ -24,7 +24,6 @@ from typing import Any
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
-from p2p.agents import autonomy
 from p2p.ai_steps import invoice_reading as step
 from p2p.ai_steps.gateway import Gateway
 from p2p.ai_steps.invoice_reading import InvoiceReading
@@ -37,11 +36,10 @@ from p2p.formulas.money import format_inr
 from p2p.formulas.orders import charge_rate, line_amounts
 from p2p.invoices import einvoice
 from p2p.invoices import service as invoices
-from p2p.platform import audit, worker
+from p2p.platform import audit, tasks, worker
 from p2p.platform.sod import Actor
 
 SERVICE = Actor("service", "invoice_reading")
-DECISION_TYPE = "invoice.read"
 SUPPORTED = (".pdf", ".png", ".jpg", ".jpeg", ".tif", ".tiff", ".bmp")
 MIN_TEXT = 40  # a PDF with less text than this is a scan: it goes to the OCR parser
 RATES = {Decimal(x) for x in ("0", "0.25", "3", "5", "12", "18", "28")}
@@ -170,8 +168,8 @@ def parse_rows(source: str, po_numbers: list[str]) -> tuple[list[TextLine], dict
 
 @dataclass
 class DraftLine:
-    po_no: str
-    po_line_no: int
+    po_no: str | None
+    po_line_no: int | None
     description: str
     qty: str
     unit_price: str
@@ -185,6 +183,11 @@ class Draft:
     invoice_number: str | None = None
     invoice_date: str | None = None
     doc_type: str = "invoice"
+    kind: str = "po"
+    category_code: str | None = None
+    cost_centre_code: str | None = None
+    gl_code: str | None = None
+    supporting_document_id: int | None = None
     supplier_gstin: str | None = None
     buyer_gstin: str | None = None
     irn: str | None = None
@@ -213,14 +216,15 @@ def _norm(value: str) -> str:
 
 
 def supplier_by_sender(db: Session, from_addr: str) -> str | None:
+    """The supplier whose registered contact sent the mail (D53): an address on file, never the header's claim."""
+    from p2p.masters import suppliers  # noqa: PLC0415 - the supplier master builds the registered senders
+
     address = parseaddr(from_addr)[1].strip().lower()
     if not address:
         return None
-    row = db.execute(
-        text("select supplier_code from supplier_contact where lower(email) = :a order by is_primary desc limit 1"),
-        {"a": address},
-    ).first()
-    return str(row[0]) if row else None
+    codes = [str(r[0]) for r in db.execute(text("select code from supplier order by code"))]
+    found = suppliers.registered_sender(db, address, codes)
+    return found[0][0] if found else None
 
 
 def supplier_by_gstin(db: Session, gstin: str | None) -> str | None:
@@ -357,6 +361,8 @@ def _finish(db: Session, d: Draft, pool: list[Candidate], printed_total: Decimal
         d.problems.append("no line of the invoice could be matched to an order line")
     if d.doc_type == "credit_note" and not d.ref_invoice_no:
         d.problems.append("a credit note must say which invoice it is for")
+    if d.doc_type == "debit_note" and not d.ref_invoice_no:
+        d.problems.append("a debit note must say which invoice it is for")
     if d.supplier_code and d.supplier_gstin:
         own = _own_gstins(db, d.supplier_code)
         if own and d.supplier_gstin.upper() not in own:
@@ -390,6 +396,8 @@ def _build_lines(
     rows: list[dict[str, Any]],
     pool: list[Candidate],
     doc_pos: list[str],
+    *,
+    bill_possible: bool = False,
 ) -> None:
     """Map each read row to an order line. `rows` have description, qty, unit_price, taxable, gst_rate, po_no, po_line_no."""
     seen: dict[tuple[str, int], str] = {}
@@ -397,7 +405,12 @@ def _build_lines(
         po_hints = [r["po_no"]] if r.get("po_no") else doc_pos
         hit, problem, assumed = map_line(r["description"], po_hints, r.get("po_line_no"), pool)
         if hit is None:
-            d.problems.append(problem or f"could not map '{r['description']}'")
+            if bill_possible and problem and problem.startswith(("could not tell", "could not map")):
+                d.problems.append(
+                    f"{r['description']} matches no order line; if this is a bill without an order, choose the category"
+                )
+            else:
+                d.problems.append(problem or f"could not map '{r['description']}'")
             continue
         key = (hit.po_no, hit.po_line_no)
         if key in seen:
@@ -434,6 +447,64 @@ def _build_lines(
         )
 
 
+def _build_bill_lines(d: Draft, rows: list[dict[str, Any]]) -> None:
+    """A bill's lines are what the page says: no order line to map them to, but every line needs its quantity, price and
+    a GST rate on one of the slabs."""
+    from p2p.formulas import non_po  # noqa: PLC0415 - the formula module owns the slabs
+
+    for r in rows:
+        qty, price, taxable, rate = r.get("qty"), r.get("unit_price"), r.get("taxable"), r.get("gst_rate")
+        if qty is None or price is None:
+            d.problems.append(f"the quantity or price of '{r['description']}' is not on the invoice")
+            continue
+        if taxable is not None and abs(D(qty) * D(price) - D(taxable)) > D("0.02"):
+            d.problems.append(f"'{r['description']}': {qty} x {price} is not the amount {taxable} printed")
+            continue
+        if rate is None:
+            d.problems.append(f"the GST rate of '{r['description']}' is not on the bill")
+            continue
+        if D(rate) not in non_po.GST_SLABS:
+            d.problems.append(f"'{r['description']}': {rate}% is not a GST rate")
+            continue
+        d.lines.append(
+            DraftLine(None, None, r["description"], str(qty), str(price), str(rate), str(taxable) if taxable is not None else None)
+        )  # fmt: skip
+
+
+def _bill_setup(
+    db: Session, supplier: str, on: date, pool: list[Candidate]
+) -> tuple[object | None, str | None, str | None, list[str], list[str]] | None:
+    """(rule, category, cost centre, assumptions, problems) when the reading is a bill without an order, else None."""
+    from p2p.invoices import non_po  # noqa: PLC0415 - the bill's service owns the rule
+
+    rules = non_po.approved_categories(db, supplier, on)
+    if pool or not rules:
+        return None
+    if len(rules) != 1:
+        return (None, None, None, [], ["choose the category"])
+    rule = rules[0]
+    cc = non_po.last_cost_centre(db, supplier, rule.category_code)
+    assumptions = [f"no order line is open for {supplier}: this is a bill without an order for {rule.category_name}"]
+    problems: list[str] = []
+    if cc:
+        assumptions.append(f"the cost centre {cc} was taken from {supplier}'s last bill for {rule.category_name}")
+    else:
+        problems.append("choose the cost centre")
+    return (rule, rule.category_code, cc, assumptions, problems)
+
+
+def _apply_bill(
+    d: Draft, setup: tuple[object | None, str | None, str | None, list[str], list[str]], rows: list[dict[str, Any]]
+) -> None:
+    rule, category, cc, assumptions, problems = setup
+    d.kind = "non_po"
+    d.category_code, d.cost_centre_code = category, cc
+    d.gl_code = getattr(rule, "gl_code", None) if rule is not None else None
+    d.assumptions += assumptions
+    d.problems += problems
+    _build_bill_lines(d, rows)
+
+
 def _ref_invoice(db: Session, supplier: str, written: str | None) -> str | None:
     if not written:
         return None
@@ -450,7 +521,11 @@ def draft_from_qr(
     db: Session, supplier: str, qr: einvoice.EInvoice, source: str, pool: list[Candidate]
 ) -> Draft | None:
     """The whole invoice by code: header from the QR code, lines from rows that add up. None if that is not enough."""
-    if not qr.irn_ok or qr.doc_type not in ("INV", "CRN") or not (qr.doc_no and qr.doc_date and qr.total is not None):
+    if (
+        not qr.irn_ok
+        or qr.doc_type not in ("INV", "CRN", "DBN")
+        or not (qr.doc_no and qr.doc_date and qr.total is not None)
+    ):
         return None
     doc_pos = _po_numbers_in(source, pool)
     rows, charges = parse_rows(source, doc_pos)
@@ -460,7 +535,7 @@ def draft_from_qr(
         supplier_code=supplier,
         invoice_number=qr.doc_no,
         invoice_date=qr.doc_date.isoformat(),
-        doc_type="credit_note" if qr.doc_type == "CRN" else "invoice",
+        doc_type={"CRN": "credit_note", "DBN": "debit_note"}.get(str(qr.doc_type), "invoice"),
         supplier_gstin=qr.seller_gstin,
         buyer_gstin=qr.buyer_gstin,
         irn=qr.irn,
@@ -469,8 +544,17 @@ def draft_from_qr(
     d.charges = [
         {"type": k, "amount": str(v[0]), "rate": str(v[1]) if v[1] is not None else None} for k, v in charges.items()
     ]
-    _build_lines(db, d, [asdict(r) for r in rows], pool, doc_pos)
-    if d.doc_type == "credit_note":
+    setup = _bill_setup(db, supplier, qr.doc_date, pool) if d.doc_type == "invoice" else None
+    if setup is not None:
+        _apply_bill(d, setup, [asdict(r) for r in rows])
+    else:
+        from p2p.invoices import non_po  # noqa: PLC0415 - only a supplier with a rule can switch a draft to a bill
+
+        _build_lines(
+            db, d, [asdict(r) for r in rows], pool, doc_pos,
+            bill_possible=bool(non_po.approved_categories(db, supplier, qr.doc_date)),
+        )  # fmt: skip
+    if d.doc_type in ("credit_note", "debit_note"):
         d.ref_invoice_no = None  # the QR code does not say which invoice; a person (or the printed text) must
     return _finish(db, d, pool, qr.total)
 
@@ -487,7 +571,13 @@ def draft_from_reading(
         supplier_code=supplier,
         invoice_number=reading.invoice_number,
         invoice_date=reading.invoice_date.isoformat() if reading.invoice_date else None,
-        doc_type="credit_note" if reading.document_type == "credit_note" else "invoice",
+        doc_type=(
+            "credit_note"
+            if reading.document_type == "credit_note"
+            else "debit_note"
+            if reading.document_type == "debit_note"
+            else "invoice"
+        ),
         supplier_gstin=(reading.supplier_gstin or "").upper() or None,
         buyer_gstin=(reading.buyer_gstin or "").upper() or None,
         irn=reading.irn,
@@ -527,11 +617,26 @@ def draft_from_reading(
         }
         for ln in reading.lines
     ]  # fmt: skip
-    _build_lines(db, d, rows, pool, doc_pos)
-    if reading.ref_invoice_no and d.doc_type == "credit_note":
+    setup = (
+        _bill_setup(db, supplier, reading.invoice_date, pool)
+        if d.doc_type == "invoice" and reading.invoice_date is not None
+        else None
+    )
+    if setup is not None:
+        _apply_bill(d, setup, rows)
+    else:
+        from p2p.invoices import non_po  # noqa: PLC0415 - only a supplier with a rule can switch a draft to a bill
+
+        _build_lines(
+            db, d, rows, pool, doc_pos,
+            bill_possible=bool(reading.invoice_date and non_po.approved_categories(db, supplier, reading.invoice_date)),
+        )  # fmt: skip
+    if reading.ref_invoice_no and d.doc_type in ("credit_note", "debit_note"):
         d.ref_invoice_no = _ref_invoice(db, supplier, reading.ref_invoice_no)
         if d.ref_invoice_no is None:
-            d.problems.append(f"the invoice {reading.ref_invoice_no} that the credit note refers to is not on file")
+            d.problems.append(
+                f"the invoice {reading.ref_invoice_no} that the {d.doc_type.replace('_', ' ')} refers to is not on file"
+            )
     return _finish(db, d, pool, reading.total)
 
 
@@ -556,22 +661,28 @@ def _store(
     confidence: float | None = None,
     model: str | None = None,
     created_by: str | None = None,
+    received_on: date | None = None,
+    received_at: datetime | None = None,
+    sender_verdict: str | None = None,
+    kind: str | None = None,
 ) -> int:
     all_problems = [*(problems or []), *(draft.problems if draft else [])]
     return int(
         db.execute(
             text(
                 "insert into invoice_draft (source, email_id, document_id, filename, document_hash, supplier_code, status, path, "
-                "reading, qr, proposal, problems, assumptions, confidence, model, prompt_version, created_by) values "
+                "reading, qr, proposal, problems, assumptions, confidence, model, prompt_version, created_by, received_on, "
+                "received_at, sender_verdict, kind) values "
                 "(:s, :e, :d, :f, :h, :sup, :st, :p, cast(:rd as jsonb), cast(:q as jsonb), cast(:pr as jsonb), cast(:pb as jsonb), "
-                "cast(:a as jsonb), :c, :m, :pv, :by) returning id"
+                "cast(:a as jsonb), :c, :m, :pv, :by, :ron, :rat, :sv, :k) returning id"
             ),
             {
                 "s": source, "e": email_id, "d": document_id, "f": filename, "h": document_hash, "sup": supplier, "st": status,
                 "p": path, "rd": _json(reading.model_dump(mode="json")) if reading else None,
                 "q": _json(qr.as_json()) if qr else None, "pr": _json(asdict(draft)) if draft else None,
                 "pb": _json(all_problems), "a": _json(draft.assumptions if draft else []), "c": confidence, "m": model,
-                "pv": step.PROMPT_VERSION if reading else None, "by": created_by,
+                "pv": step.PROMPT_VERSION if reading else None, "by": created_by, "ron": received_on, "rat": received_at,
+                "sv": sender_verdict, "k": kind,
             },
         ).scalar_one()
     )  # fmt: skip
@@ -592,8 +703,13 @@ def read_document(
     supplier_code: str | None = None,
     user_id: int = 0,
     received_at: datetime | None = None,
+    received_on: date | None = None,
+    auth: dict[str, Any] | None = None,
 ) -> int:
-    """Read one document into a draft. Returns the draft's id (the earlier one if this file was read before)."""
+    """Read one document into a draft. Returns the draft's id (the earlier one if this file was read before).
+
+    A mailed document keeps the day and time we stored the mail; a failed sender authentication is never read by a
+    model (D53, 10.8). Every draft, however clean, waits for AP (10.10)."""
     digest = hashlib.sha256(data).hexdigest()
     earlier = db.execute(
         text(
@@ -603,16 +719,22 @@ def read_document(
     ).scalar()
     if earlier:
         return int(earlier)
+    verdict = str((auth or {}).get("verdict") or "none")
     common: dict[str, Any] = {
         "source": source, "email_id": email_id, "document_id": document_id, "filename": filename, "document_hash": digest,
-        "created_by": str(user_id) if user_id else None,
+        "created_by": str(user_id) if user_id else None, "received_on": received_on or as_of,
+        "received_at": received_at or datetime.now(UTC), "sender_verdict": verdict if sender else None,
     }  # fmt: skip
+    address = parseaddr(sender or "")[1].strip().lower()
 
     def finish(**kw: Any) -> int:
         draft_id = _store(db, **common, **kw)
         audit.record(
             db, SERVICE, "invoice_draft.create", "invoice_draft", draft_id,
-            after={"status": kw["status"], "path": kw["path"], "supplier": kw.get("supplier"), "file": filename},
+            after={
+                "status": kw["status"], "path": kw["path"], "supplier": kw.get("supplier"), "file": filename,
+                "auth_verdict": common["sender_verdict"], "received_on": common["received_on"],
+            },
             model=kw.get("model"), prompt_version=step.PROMPT_VERSION if kw.get("reading") else None,
         )  # fmt: skip
         db.commit()
@@ -636,6 +758,23 @@ def read_document(
             (s for g in _gstins_in(source_text) if (s := supplier_by_gstin(db, g))), None
         )
         supplier, via = found, "GSTIN"
+    failed = (auth or {}).get("failed") or "no detail"
+    if verdict == "fail" and not supplier_code:
+        draft_id = finish(
+            supplier=supplier, status="needs_person", path="none", qr=qr,
+            problems=[f"the sender's mail server failed its authentication ({failed}): the mail was not read"],
+        )  # fmt: skip
+        tasks.create_task(
+            db,
+            tenant,
+            kind="invoice_sender_check",
+            title=f"Invoice mail from {address or 'an unknown address'} not read: check it with the supplier",
+            assignee=_ap_user(db),
+            sla_hours=18,
+            payload={"invoice_draft": draft_id, "email_id": email_id, "from": address},
+            email=True,
+        )
+        return draft_id
     if supplier is None:
         return finish(
             supplier=None, status="needs_person", path="none", qr=qr,
@@ -658,7 +797,7 @@ def read_document(
     model: str | None = None
     confidence: float | None = None
     path = "qr"
-    if draft is None or draft.problems:
+    if draft is None or (draft.problems and draft.doc_type == "invoice" and draft.kind == "po"):
         outcome = run_step(
             db, tenant, step.STEP, source_text[: step.MAX_SOURCE_CHARS], gateway=gateway, review_assignee=_ap_user(db),
             entity="invoice_document", entity_id=digest[:12],
@@ -674,8 +813,12 @@ def read_document(
         draft = draft_from_reading(db, supplier, reading, qr, source_text, pool)
     else:
         confidence = 1.0
+    if sender and source == "email" and verdict == "none":
+        draft.assumptions.append("the sender could not be authenticated")
+    if sender and source == "email" and via == "GSTIN":
+        draft.assumptions.append(f"sent from {address}, not a registered contact of {supplier}")
     status = "pending" if not draft.problems else "needs_person"
-    draft_id = finish(
+    return finish(
         supplier=supplier,
         status=status,
         path=path,
@@ -684,10 +827,8 @@ def read_document(
         qr=qr,
         confidence=confidence,
         model=model,
+        kind=draft.kind,
     )
-    if via != "GSTIN":  # a document from someone who is not a known contact of the supplier is always seen by a person
-        _maybe_apply(db, tenant, draft_id, draft, confidence, as_of, received_at)
-    return draft_id
 
 
 def _ap_user(db: Session) -> int:
@@ -698,15 +839,24 @@ def _ap_user(db: Session) -> int:
     return int(found or 0)
 
 
-def to_invoice_in(d: dict[str, Any], channel: str, received_at: datetime | None) -> invoices.InvoiceIn:
+def to_invoice_in(
+    d: dict[str, Any], channel: str, received_at: datetime | None, documents: list[dict[str, Any]] | None = None
+) -> invoices.InvoiceIn:
     def dec(v: Any) -> Decimal | None:
         return D(str(v)) if v not in (None, "") else None
 
+    kind = d.get("kind") or "po"
     return invoices.InvoiceIn(
         supplier_code=d["supplier_code"],
         supplier_invoice_no=d["invoice_number"],
         invoice_date=date.fromisoformat(d["invoice_date"]),
         type=d.get("doc_type") or "invoice",
+        kind=kind,
+        category_code=d.get("category_code") if kind == "non_po" else None,
+        cost_centre_code=d.get("cost_centre_code") if kind == "non_po" else None,
+        gl_code=d.get("gl_code") if kind == "non_po" else None,
+        documents=documents or [],
+        not_duplicate_reason=d.get("not_duplicate_reason"),
         supplier_gstin=d.get("supplier_gstin"),
         buyer_gstin=d.get("buyer_gstin"),
         irn=d.get("irn"),
@@ -721,32 +871,15 @@ def to_invoice_in(d: dict[str, Any], channel: str, received_at: datetime | None)
         total=dec(d.get("total")),
         lines=[
             invoices.InvLine(
-                po_no=ln["po_no"], po_line_no=int(ln["po_line_no"]), qty=D(str(ln["qty"])), unit_price=D(str(ln["unit_price"])),
+                po_no=ln.get("po_no") if kind == "po" else None,
+                po_line_no=int(ln["po_line_no"]) if kind == "po" and ln.get("po_line_no") else None,
+                qty=D(str(ln["qty"])), unit_price=D(str(ln["unit_price"])),
                 gst_rate=dec(ln.get("gst_rate")), taxable=dec(ln.get("taxable")), description=ln.get("description"),
             )
             for ln in d.get("lines", [])
         ],
         charges=[invoices.InvCharge(c["type"], D(str(c["amount"])), D(str(c.get("rate") or 0))) for c in d.get("charges", [])],
     )  # fmt: skip
-
-
-def _maybe_apply(
-    db: Session,
-    tenant: str,
-    draft_id: int,
-    draft: Draft,
-    confidence: float | None,
-    as_of: date,
-    received_at: datetime | None,
-) -> None:
-    """A clean draft is entered without a person only when the autonomy gate allows it. Anything in doubt waits for AP."""
-    if draft.problems or draft.assumptions or not draft.lines:
-        return
-    total = D(draft.total) if draft.total else sum((D(ln.qty) * D(ln.unit_price) for ln in draft.lines), D(0))
-    if not autonomy.gate(db, DECISION_TYPE, value=total, confidence=confidence).allowed:
-        return
-    confirm_draft(db, draft_id, 0, as_of=as_of, automatic=True, received_at=received_at)
-    autonomy.record_outcome(db, DECISION_TYPE, auto=True, ref=str(draft_id))
 
 
 # ---- the person's decision --------------------------------------------------------------------
@@ -766,51 +899,66 @@ def confirm_draft(
     *,
     as_of: date,
     edits: dict[str, Any] | None = None,
-    automatic: bool = False,
     received_at: datetime | None = None,
 ) -> invoices.Entered:
     """Enter the invoice of a draft. `edits` lets AP correct what was read: header fields (supplier_code, invoice_number,
-    invoice_date, ref_invoice_no) and lines by position (qty, unit_price, po_no, po_line_no). The three-way match does the rest."""
+    invoice_date, ref_invoice_no, doc_type, kind, category_code, cost_centre_code, gl_code, supporting_document_id,
+    not_duplicate_reason) and lines by position (qty, unit_price, po_no, po_line_no, description, gst_rate). A bill is
+    entered on the day the document was received, whatever day AP confirms. All of `enter_invoice`'s checks apply."""
     row = _locked(db, draft_id)
     if row["status"] not in ("pending", "needs_person"):
         raise ReadingError(f"draft {draft_id} is {row['status']}; only an open draft can be confirmed")
     proposal = dict(row["proposal"] or {})
     if not proposal:
         raise ReadingError("nothing was read from this document: enter the invoice by hand")
-    for key in ("supplier_code", "invoice_number", "invoice_date", "ref_invoice_no", "doc_type"):
+    header = (
+        "supplier_code", "invoice_number", "invoice_date", "ref_invoice_no", "doc_type", "kind",
+        "category_code", "cost_centre_code", "gl_code", "supporting_document_id", "not_duplicate_reason",
+    )  # fmt: skip
+    for key in header:
         if edits and edits.get(key) not in (None, ""):
             proposal[key] = edits[key]
     lines = proposal.get("lines", [])
     for pos, change in ((edits or {}).get("lines") or {}).items():
         ln = lines[int(pos)]
-        for key in ("qty", "unit_price", "po_no", "po_line_no"):
+        for key in ("qty", "unit_price", "po_no", "po_line_no", "description", "gst_rate"):
             if change.get(key) not in (None, ""):
                 ln[key] = change[key]
         ln["taxable"] = None  # the amount printed no longer describes the corrected line
     if edits and edits.get("lines"):
         proposal["total"] = None
-    if row["status"] == "needs_person" and not edits and not automatic and proposal.get("problems"):
+    if row["status"] == "needs_person" and not edits and proposal.get("problems"):
         raise ReadingError("this draft has problems: correct them, or enter the invoice by hand")
     if not proposal.get("supplier_code") or not proposal.get("invoice_number") or not proposal.get("invoice_date"):
         raise ReadingError("the supplier, the invoice number and the date are needed")
-    data = to_invoice_in(proposal, "email" if row["source"] == "email" else "upload", received_at)
+    documents: list[dict[str, Any]] = []
+    if (proposal.get("kind") or "po") == "non_po":
+        if row["document_id"]:
+            documents.append({"id": int(row["document_id"]), "kind": "copy"})
+        supporting = proposal.get("supporting_document_id")
+        if supporting:
+            documents.append({"id": int(supporting), "kind": "supporting"})
+    received = row["received_on"] or as_of
+    data = to_invoice_in(
+        proposal,
+        "email" if row["source"] == "email" else "upload",
+        row["received_at"] or received_at,
+        documents,
+    )
     try:
-        entered = invoices.enter_invoice(db, data, user_id, as_of=as_of)
+        entered = invoices.enter_invoice(db, data, user_id, as_of=received)
     except invoices.InvoiceError:
         db.rollback()
         raise
-    who = "service:invoice_reading" if automatic else f"user:{user_id}"
-    if automatic:  # no person entered it: the invoice says so (the audit row of this confirmation explains why)
-        db.execute(text("update invoice set entered_by = 'invoice_reading' where no = :n"), {"n": entered.no})
     db.execute(
         text(
             "update invoice_draft set status = 'applied', invoice_no = :n, decided_by = :by, decided_at = now() where id = :i"
         ),
-        {"n": entered.no, "by": who, "i": draft_id},
+        {"n": entered.no, "by": f"user:{user_id}", "i": draft_id},
     )
     audit.record(
-        db, SERVICE if automatic else Actor("user", str(user_id)), "invoice_draft.confirm", "invoice_draft", draft_id,
-        after={"invoice": entered.no, "status": entered.status, "edited": bool(edits), "automatic": automatic},
+        db, Actor("user", str(user_id)), "invoice_draft.confirm", "invoice_draft", draft_id,
+        after={"invoice": entered.no, "status": entered.status, "edited": bool(edits), "received_on": str(received)},
     )  # fmt: skip
     db.commit()
     return entered
@@ -847,7 +995,8 @@ def read_email(db: Session, tenant: str, email_id: int, gateway: Gateway, *, as_
     mail = (
         db.execute(
             text(
-                "select id, from_addr, subject, sent_at, attachment_ids from email_message where id = :i and direction = 'in'"
+                "select id, from_addr, subject, sent_at, created_at, received_on, auth, attachment_ids "
+                "from email_message where id = :i and direction = 'in'"
             ),
             {"i": email_id},
         )
@@ -857,7 +1006,6 @@ def read_email(db: Session, tenant: str, email_id: int, gateway: Gateway, *, as_
     if mail is None:
         return []
     ids: list[int] = []
-    sent = mail["sent_at"]
     documents = [int(x) for x in (mail["attachment_ids"] or [])]
     readable = 0
     for doc_id in documents:
@@ -881,7 +1029,9 @@ def read_email(db: Session, tenant: str, email_id: int, gateway: Gateway, *, as_
                 email_id=email_id,
                 document_id=doc_id,
                 sender=mail["from_addr"],
-                received_at=sent,
+                received_at=mail["created_at"],
+                received_on=mail["received_on"] or as_of,
+                auth=mail["auth"],
             )
         )
     already = db.execute(text("select 1 from invoice_draft where email_id = :e limit 1"), {"e": email_id}).first()

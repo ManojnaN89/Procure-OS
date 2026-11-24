@@ -69,7 +69,9 @@ def _terms(db: Session, code: str | None) -> dict[str, Any] | None:
 
 def accepted_on(db: Session, invoice: dict[str, Any]) -> date:
     """The day the goods were accepted (or the service confirmed): the latest acceptance on the order lines before the
-    invoice arrived."""
+    invoice arrived. A bill without an order is accepted when its authoriser says the supply was received."""
+    if invoice.get("kind") == "non_po":
+        return invoice["authorised_on"] or invoice["received_on"]  # type: ignore[no-any-return]
     day = db.execute(
         text(
             "select max(d) from (select g.accepted_on as d, l.po_no, l.po_line_no from goods_receipt g "
@@ -83,13 +85,22 @@ def accepted_on(db: Session, invoice: dict[str, Any]) -> date:
 
 
 def _goods_only(db: Session, lines_of: str, key: str) -> bool:
-    """Tax at source on goods (194Q) applies to goods. Services have other sections, which are not built yet."""
+    """Tax at source on goods (194Q) applies to goods. Services have other sections, which are not built yet. A bill
+    without an order is no purchase of goods: it carries its own category, and the section is block 12's."""
+    # NEEDS block 12: TDS for a bill by its line's own category_code replaces this 194Q-on-goods-only test.
     sql = (
         "select count(*) from invoice_line il join po_line pl on pl.po_no = il.po_no and pl.line_no = il.po_line_no "
         "join item i on i.code = pl.item_code where il.invoice_no = :k and i.kind = 'service'"
         if lines_of == "invoice"
         else "select count(*) from po_line pl join item i on i.code = pl.item_code where pl.po_no = :k and i.kind = 'service'"
     )
+    if (
+        lines_of == "invoice"
+        and db.execute(
+            text("select 1 from invoice_line where invoice_no = :k and po_no is null limit 1"), {"k": key}
+        ).first()
+    ):
+        return False
     return int(db.execute(text(sql), {"k": key}).scalar_one()) == 0
 
 

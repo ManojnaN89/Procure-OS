@@ -38,3 +38,6 @@ If the goods were never received, the Store has to post the receipt first. Use t
 ## Exceptions
 
 **Exceptions** lists everything stuck that needs a person, oldest first, with the reason, who must act, the next step and the age in working days; tick **Only mine** for what waits on you. Blocked invoices show there with what to do next.
+
+## Bills without an order
+On **Invoices**, answer **No** to **Is there a purchase order?** for a utility, a telephone bill or a professional fee. Pick the category (its limit is shown), the cost centre and GL, attach the bill copy and any supporting document the category names, and enter the lines. A bill that is not a duplicate goes to the cost centre's authoriser, then up the approval chain. **Without an order** lists them. A header or arithmetic fault can only be corrected and matched again: a bill is never released by proposal.

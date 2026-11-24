@@ -243,7 +243,7 @@ def invoices_credit(shop_: Session, ref: str, po_no: str, qty: str, price: str) 
         shop_,
         invoices.InvoiceIn(
             supplier_code="S1", supplier_invoice_no="CN-9", invoice_date=TODAY, type="credit_note", ref_invoice_no=ref,
-            lines=[invoices.InvLine(po_no, 1, D(qty), D(price))], supplier_gstin=S1_GSTIN, buyer_gstin="29BBBBB0000B1Z5",
+            lines=[invoices.InvLine(po_no, 1, D(qty), D(price))], supplier_gstin=S1_GSTIN, buyer_gstin="29BBBBB0000B1ZP",
         ),
         1, as_of=TODAY,
     )  # fmt: skip
@@ -327,7 +327,7 @@ def test_small_suppliers_come_first_and_a_credit_note_is_netted_in_the_same_paym
 
     inv2 = invoices.enter_invoice(
         ledger,
-        invoices.InvoiceIn("S2", "S2-1", TODAY, [invoices.InvLine(second, 1, D(10), D(100))], supplier_gstin=None, buyer_gstin="29BBBBB0000B1Z5"),
+        invoices.InvoiceIn("S2", "S2-1", TODAY, [invoices.InvLine(second, 1, D(10), D(100))], supplier_gstin=None, buyer_gstin="29BBBBB0000B1ZP"),
         1, as_of=TODAY,
     )  # fmt: skip
     ledger.execute(text("update supplier set gstin = null where code = 'S2'"))
@@ -454,7 +454,7 @@ def _two_payees(ledger: Session) -> tuple[str, str]:
     ledger.commit()
     inv2 = invoices.enter_invoice(
         ledger,
-        invoices.InvoiceIn("S2", "S2-1", TODAY, [invoices.InvLine(second, 1, D(10), D(100))], supplier_gstin=None, buyer_gstin="29BBBBB0000B1Z5"),
+        invoices.InvoiceIn("S2", "S2-1", TODAY, [invoices.InvLine(second, 1, D(10), D(100))], supplier_gstin=None, buyer_gstin="29BBBBB0000B1ZP"),
         1, as_of=TODAY,
     )  # fmt: skip
     ledger.execute(text("update invoice set due_date = '2026-11-12' where type = 'invoice'"))

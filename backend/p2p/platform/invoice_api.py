@@ -1,4 +1,5 @@
-"""The invoice screens' API: what can be invoiced, entering an invoice, the exceptions, and releasing a block."""
+"""The invoice screens' API: what can be invoiced, entering an invoice, the exceptions, releasing a block, and the two
+decisions on a bill without an order (authorise, approve, reject)."""
 
 from collections.abc import Callable
 from datetime import date
@@ -6,14 +7,18 @@ from decimal import Decimal, InvalidOperation
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, HTTPException
+from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from p2p.agents import invoice_exceptions
+from p2p.approvals import budget
+from p2p.approvals.workflow import name_of, org_code_of
 from p2p.formulas.calendar import business_today
 from p2p.formulas.money import format_qty
+from p2p.invoices import non_po
 from p2p.invoices import service as invoices
 from p2p.platform import routing
-from p2p.platform.permissions import can_anywhere, require
+from p2p.platform.permissions import can_anywhere, need_any, require
 from p2p.platform.rows import rows as _rows
 from p2p.receiving import kinds
 
@@ -82,15 +87,46 @@ def ready_to_invoice(db: Db, ctx: Ctx, supplier: str | None = None) -> list[dict
     ]
 
 
+SEE = ("invoice.view", "invoice.book", "invoice.match", "invoice.approve")
+
+
+def _may_see(db: Session, user_id: int, no: str) -> bool:
+    """A role that may see invoices, or the bill's own authoriser or a step approver (or their deputy), that bill only."""
+    if any(can_anywhere(db, user_id, action) for action in SEE):
+        return True
+    inv = db.execute(text("select authoriser from invoice where no = :n"), {"n": no}).first()
+    if inv is None:
+        return False
+    me = org_code_of(db, user_id)
+    if me is None:
+        return False
+    if inv[0] and me in {inv[0], non_po.deputy_of(db, str(inv[0]), business_today())}:
+        return True
+    step = db.execute(
+        text(
+            "select 1 from invoice_approval_step where invoice_no = :n "
+            "and (approver = :me or delegate = :me or exists (select 1 from delegation d where d.from_user = approver "
+            "and d.to_user = :me and d.start_date <= :d and (d.end_date is null or d.end_date >= :d))) limit 1"
+        ),
+        {"n": no, "me": me, "d": business_today()},
+    ).first()
+    return step is not None
+
+
 @router.get("/invoices")
-def list_invoices(db: Db, ctx: Ctx, status: str | None = None) -> list[dict[str, Any]]:
+def list_invoices(db: Db, ctx: Ctx, status: str | None = None, kind: str | None = None) -> list[dict[str, Any]]:
+    need_any(db, ctx.user_id, *SEE)
     rows = _rows(
         db,
-        "select i.no, i.type, i.supplier_code, coalesce(s.trade_name, s.legal_name) as supplier, i.supplier_invoice_no, "
+        "select i.no, i.type, i.kind, i.category_code, c.name as category, i.supplier_code, "
+        "coalesce(s.trade_name, s.legal_name) as supplier, i.supplier_invoice_no, "
         "i.invoice_date, i.total, i.status, i.payment_block, i.block_reason, i.duplicate_of, i.due_date "
-        "from invoice i join supplier s on s.code = i.supplier_code where (cast(:st as text) is null or i.status = :st) "
+        "from invoice i join supplier s on s.code = i.supplier_code "
+        "left join item_category c on c.code = i.category_code "
+        "where (cast(:st as text) is null or i.status = :st) and (cast(:k as text) is null or i.kind = :k) "
         "order by i.created_at desc, i.no desc limit 500",
         st=status,
+        k=kind,
     )
 
     def next_action(r: dict[str, Any]) -> str | None:
@@ -105,6 +141,8 @@ def list_invoices(db: Db, ctx: Ctx, status: str | None = None) -> list[dict[str,
             "next_action": next_action(r),
             "id": r["no"],
             "type": r["type"],
+            "kind": r["kind"],
+            "category": r["category"],
             "supplier_code": r["supplier_code"],
             "supplier": r["supplier"],
             "number": r["supplier_invoice_no"],
@@ -120,11 +158,38 @@ def list_invoices(db: Db, ctx: Ctx, status: str | None = None) -> list[dict[str,
     ]
 
 
+@router.get("/invoices/non-po/options")
+def non_po_options(
+    db: Db,
+    ctx: Annotated[routing.TenantContext, Depends(require("invoice.book"))],
+    supplier: str | None = None,
+) -> list[dict[str, Any]]:
+    """The categories a supplier may bill without an order, with their limits, documents, GL and a proposed cost centre."""
+    today = business_today()
+    rules = non_po.approved_categories(db, supplier, today) if supplier else non_po.rules_in_force(db, today)
+    return [
+        {
+            "category": r.category_code,
+            "name": r.category_name,
+            "max_value": _money(r.max_value),
+            "supporting_doc": r.supporting_doc,
+            "gl_code": r.gl_code,
+            "version": r.version,
+            "cost_centre_code": non_po.last_cost_centre(db, supplier, r.category_code) if supplier else None,
+        }
+        for r in rules
+    ]
+
+
 @router.get("/invoices/{no}")
 def get_invoice(no: str, db: Db, ctx: Ctx) -> dict[str, Any]:
+    if not _may_see(db, ctx.user_id, no):
+        raise HTTPException(403, "Not allowed: invoice.view")
     rows = _rows(
         db,
-        "select i.*, coalesce(s.trade_name, s.legal_name) as supplier from invoice i join supplier s on s.code = i.supplier_code "
+        "select i.*, coalesce(s.trade_name, s.legal_name) as supplier, c.name as category_name, "
+        "cc.name as cost_centre_name from invoice i join supplier s on s.code = i.supplier_code "
+        "left join item_category c on c.code = i.category_code left join cost_centre cc on cc.code = i.cost_centre_code "
         "where i.no = :n",
         n=no,
     )
@@ -145,10 +210,24 @@ def get_invoice(no: str, db: Db, ctx: Ctx) -> dict[str, Any]:
         "and payload->>'invoice' = :n",
         n=no,
     )
+    documents = _rows(
+        db,
+        "select l.kind, l.document_id, d.filename, d.doc_type from invoice_document_link l "
+        "join document d on d.id = l.document_id where l.invoice_no = :n order by l.kind, l.document_id",
+        n=no,
+    )
     can_work = can_anywhere(db, ctx.user_id, "invoice.match")
+    can_authorise, can_approve = non_po.may(db, no, ctx.user_id) if i["kind"] == "non_po" else (False, False)
+    checks = budget.check_invoice(db, no, business_today()) if i["kind"] == "non_po" else []
     return {
         "id": i["no"],
         "type": i["type"],
+        "kind": i["kind"],
+        "category": i["category_code"],
+        "category_name": i["category_name"],
+        "cost_centre": i["cost_centre_code"],
+        "cost_centre_name": i["cost_centre_name"],
+        "gl_code": lines[0]["gl_code"] if i["kind"] == "non_po" and lines else None,
         "supplier_code": i["supplier_code"],
         "supplier": i["supplier"],
         "number": i["supplier_invoice_no"],
@@ -158,6 +237,20 @@ def get_invoice(no: str, db: Db, ctx: Ctx) -> dict[str, Any]:
         "block": i["payment_block"],
         "reason": i["block_reason"],
         "duplicate_of": i["duplicate_of"],
+        "suspect_of": i["suspect_of"],
+        "not_duplicate_reason": i["not_duplicate_reason"],
+        "authoriser": i["authoriser"],
+        "authoriser_name": name_of(db, i["authoriser"]) if i["authoriser"] else None,
+        "authorised_by": i["authorised_by"],
+        "authorised_on": i["authorised_on"].isoformat() if i["authorised_on"] else None,
+        "approved_by": i["approved_by"],
+        "approval_rule": {"code": i["approval_rule_code"], "version": i["approval_rule_version"]}
+        if i["approval_rule_code"]
+        else None,
+        "over_budget_reason": i["over_budget_reason"],
+        "steps": non_po.steps(db, no) if i["kind"] == "non_po" else [],
+        "budget": [c.as_json() for c in checks],
+        "documents": documents,
         "ref_invoice_no": i["ref_invoice_no"],
         "supplier_gstin": i["supplier_gstin"],
         "buyer_gstin": i["buyer_gstin"],
@@ -178,11 +271,15 @@ def get_invoice(no: str, db: Db, ctx: Ctx) -> dict[str, Any]:
                 "po_no": ln["po_no"],
                 "po_line_no": ln["po_line_no"],
                 "name": ln["description"],
+                "hsn_sac": ln["hsn_sac"],
                 "qty": format_qty(ln["qty"]),
                 "uom": ln["uom"],
                 "unit_price": _money(ln["unit_price"]),
                 "gst_rate": _money(ln["gst_rate"]),
                 "taxable": _money(ln["taxable"]),
+                "category": ln["category_code"],
+                "cost_centre": ln["cost_centre_code"],
+                "gl_code": ln["gl_code"],
             }
             for ln in lines
         ],
@@ -208,17 +305,22 @@ def get_invoice(no: str, db: Db, ctx: Ctx) -> dict[str, Any]:
         "pending_release": pending[0] if pending else None,
         "can_enter": can_anywhere(db, ctx.user_id, "invoice.book"),
         "can_act": can_work and i["status"] == "blocked" and i["payment_block"] != "duplicate" and not pending,
+        "can_authorise": can_authorise,
+        "can_approve": can_approve,
     }
 
 
 def _error(call: Callable[[], dict[str, Any]]) -> dict[str, Any]:
     try:
         return call()
+    except invoices.InvoiceInputError as exc:
+        raise HTTPException(422, str(exc)) from None
     except invoices.InvoiceError as exc:
         message = str(exc)
         if "does not exist" in message:
             raise HTTPException(404, message) from None
-        raise HTTPException(403 if message.startswith("segregation") else 409, message) from None
+        first = ("segregation", "not your turn", "may not approve", "not linked", "this role")
+        raise HTTPException(403 if message.startswith(first) else 409, message) from None
 
 
 @router.post("/invoices")
@@ -228,6 +330,9 @@ def enter_invoice(
     raw_lines = payload.get("lines")
     if not isinstance(raw_lines, list):
         raise HTTPException(422, "lines must be a list")
+    kind = str(payload.get("kind") or "po")
+    if kind not in ("po", "non_po"):
+        raise HTTPException(422, "kind must be po or non_po")
     try:
         data = invoices.InvoiceIn(
             supplier_code=str(payload["supplier_code"]),
@@ -240,6 +345,12 @@ def enter_invoice(
             eway_bill_no=payload.get("eway_bill_no") or None,
             ref_invoice_no=payload.get("ref_invoice_no") or None,
             channel=str(payload.get("channel") or "manual"),
+            kind=kind,
+            category_code=payload.get("category_code") or None,
+            cost_centre_code=payload.get("cost_centre_code") or None,
+            gl_code=payload.get("gl_code") or None,
+            documents=list(payload.get("documents") or []),
+            not_duplicate_reason=payload.get("not_duplicate_reason") or None,
             taxable=_num(payload["taxable"], "taxable") if payload.get("taxable") not in (None, "") else None,
             cgst=_num(payload["cgst"], "cgst") if payload.get("cgst") not in (None, "") else None,
             sgst=_num(payload["sgst"], "sgst") if payload.get("sgst") not in (None, "") else None,
@@ -247,12 +358,14 @@ def enter_invoice(
             total=_num(payload["total"], "total") if payload.get("total") not in (None, "") else None,
             lines=[
                 invoices.InvLine(
-                    po_no=str(raw["po_no"]),
-                    po_line_no=int(raw["po_line_no"]),
+                    po_no=(str(raw["po_no"]) if raw.get("po_no") else None),
+                    po_line_no=(int(raw["po_line_no"]) if raw.get("po_line_no") else None),
                     qty=_num(raw.get("qty"), "qty"),
                     unit_price=_num(raw.get("unit_price"), "unit_price"),
                     discount=_num(raw.get("discount"), "discount", Decimal(0)),
                     gst_rate=_num(raw["gst_rate"], "gst_rate") if raw.get("gst_rate") not in (None, "") else None,
+                    description=raw.get("description") or None,
+                    hsn_sac=raw.get("hsn_sac") or None,
                 )
                 for raw in raw_lines
             ],
@@ -265,7 +378,9 @@ def enter_invoice(
         )
     except (KeyError, TypeError, ValueError):
         raise HTTPException(
-            422, "an invoice needs supplier_code, number, date and lines with po_no, po_line_no, qty and unit_price"
+            422,
+            "an invoice needs supplier_code, number, date and lines with qty and unit_price "
+            "(an invoice line names po_no and po_line_no; a bill line does not)",
         ) from None
 
     def enter() -> dict[str, Any]:
@@ -276,9 +391,68 @@ def enter_invoice(
             "result": done.result,
             "reasons": done.reasons,
             "duplicate_of": done.duplicate_of,
+            "kind": done.kind,
+            "authoriser": done.authoriser,
         }
 
     return _error(enter)
+
+
+def _decision(call: Callable[[], dict[str, Any]]) -> dict[str, Any]:
+    try:
+        return call()
+    except invoices.InvoiceError as exc:
+        message = str(exc)
+        if "does not exist" in message:
+            raise HTTPException(404, message) from None
+        if message.startswith(("segregation", "it is not your turn", "this role", "this login")):
+            raise HTTPException(403, message) from None
+        raise HTTPException(409, message) from None
+
+
+@router.post("/invoices/{no}/authorise")
+def authorise(no: str, payload: dict[str, Any], db: Db, ctx: Ctx) -> dict[str, Any]:
+    def go() -> dict[str, Any]:
+        return non_po.authorise(
+            db,
+            ctx.slug,
+            no,
+            ctx.user_id,
+            note=payload.get("note"),
+            over_budget_reason=payload.get("over_budget_reason"),
+        )
+
+    return _decision(go)
+
+
+@router.post("/invoices/{no}/approve")
+def approve(no: str, payload: dict[str, Any], db: Db, ctx: Ctx) -> dict[str, Any]:
+    # NEEDS block 12: a clean credit or debit note waits `received` for a second person and is approved through this
+    # same endpoint (block 10's interim: a clean note is approved at entry).
+    def go() -> dict[str, Any]:
+        return non_po.approve(
+            db,
+            ctx.slug,
+            no,
+            ctx.user_id,
+            note=payload.get("note"),
+            over_budget_reason=payload.get("over_budget_reason"),
+        )
+
+    return _decision(go)
+
+
+@router.post("/invoices/{no}/reject")
+def reject(no: str, payload: dict[str, Any], db: Db, ctx: Ctx) -> dict[str, str]:
+    reason = str(payload.get("reason") or "").strip()
+    if not reason:
+        raise HTTPException(422, "a reason is needed")
+
+    def go() -> dict[str, Any]:
+        non_po.reject(db, ctx.slug, no, ctx.user_id, reason)
+        return {"status": "cancelled"}
+
+    return _decision(go)
 
 
 @router.post("/invoices/{no}/rematch")

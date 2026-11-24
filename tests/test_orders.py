@@ -159,12 +159,12 @@ def _setup(db: Session) -> None:
     )
     x(
         text(
-            "update supplier set state_code = '27', gstin = '27AAAAA0000A1Z5', gst_reg_type = 'regular', payment_terms_code = 'NET30' where code = 'S1'"
+            "update supplier set state_code = '27', gstin = '27AAAAA0000A1Z2', gst_reg_type = 'regular', payment_terms_code = 'NET30' where code = 'S1'"
         )
     )
     x(
         text(
-            "update supplier set state_code = '29', gstin = '29CCCCC0000C1Z5', gst_reg_type = 'regular' where code = 'S2'"
+            "update supplier set state_code = '29', gstin = '29CCCCC0000C1ZG', gst_reg_type = 'regular' where code = 'S2'"
         )
     )
     x(
@@ -180,7 +180,7 @@ def _setup(db: Session) -> None:
             ),
             {"c": code},
         )
-    x(text("update location set gstin = '29BBBBB0000B1Z5', state_code = '29' where code = 'WH-BLR'"))
+    x(text("update location set gstin = '29BBBBB0000B1ZP', state_code = '29' where code = 'WH-BLR'"))
     x(text("update item set gst_rate_before = 18, gst_rate_after = 18 where code in ('A', 'D', 'R')"))
     x(
         text(
@@ -605,8 +605,8 @@ def test_one_order_per_supplier_carries_contract_and_awarded_lines_with_gst_work
     )
     assert (po["supplier_code"], po["supplier_gstin"], po["buyer_gstin"], po["ship_to_location"]) == (
         "S1",
-        "27AAAAA0000A1Z5",
-        "29BBBBB0000B1Z5",
+        "27AAAAA0000A1Z2",
+        "29BBBBB0000B1ZP",
         "WH-BLR",
     )
     assert (po["po_type"], po["contract_code"], po["rfq_no"], po["request_no"]) == ("standard", None, rfq, request)
@@ -1097,7 +1097,7 @@ def test_the_purchase_order_pages_show_lines_gst_charges_and_the_approval_trail(
 
     po = client.get(f"/api/purchase-orders/{po_no}", headers=approver).json()
     assert (po["taxable"], po["igst"], po["total"]) == ("1975.50", "355.59", "2331.09")
-    assert po["supplier_gstin"] == "27AAAAA0000A1Z5" and po["buyer_gstin"] == "29BBBBB0000B1Z5"
+    assert po["supplier_gstin"] == "27AAAAA0000A1Z2" and po["buyer_gstin"] == "29BBBBB0000B1ZP"
     assert [(ln["name"], ln["qty"], ln["unit_price"], ln["igst"], ln["source"]) for ln in po["lines"]] == [
         ("Bearing", "10", "100.0000", "180.00", "contract"),
         ("Seal", "5", "180.0000", "162.00", "award"),

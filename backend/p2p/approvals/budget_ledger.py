@@ -107,14 +107,56 @@ def post_receipt(
     return row
 
 
+def _bill_lines(db: Session, invoice_no: str, actor: Actor, paid_on: date, received_on: date) -> list[dict[str, Any]]:
+    """A bill without an order was paid: each line is spent from its own cost centre, GL and location, at its taxable
+    value, in the month the bill was received (a locked month moves it to the next open one)."""
+    rows: list[dict[str, Any]] = []
+    locked, current, event = locked_periods(db), _month(paid_on), _month(received_on)
+    for ln in db.execute(
+        text(
+            "select line_no, taxable, cost_centre_code, gl_code, location_code from invoice_line "
+            "where invoice_no = :n and gl_code is not null order by line_no"
+        ),
+        {"n": invoice_no},
+    ).mappings():
+        rows.append(
+            _insert(
+                db,
+                actor,
+                {
+                    "invoice_no": invoice_no,
+                    "source": "payment",
+                    "gr_no": None,
+                    "po_no": None,
+                    "po_line_no": ln["line_no"],
+                    "request_no": None,
+                    "request_line_no": None,
+                    "cost_centre_code": ln["cost_centre_code"],
+                    "gl_code": ln["gl_code"],
+                    "location_code": ln["location_code"],
+                    "event_period": event,
+                    "amount": D(ln["taxable"]),
+                },
+                current,
+                locked,
+            )
+        )
+    if rows:
+        audit.record(db, actor, "budget.actual", "invoice", invoice_no, after={"rows": rows})
+    return rows
+
+
 def post_payment(db: Session, invoice_no: str, actor: Actor, paid_on: date) -> list[dict[str, Any]]:
     """An invoice was paid: its lines that are not stocked items are spent at their taxable value, and its freight and
-    packing less a discount taken, in the month the invoice was received. The caller commits."""
+    packing less a discount taken, in the month the invoice was received. A bill without an order posts each line from
+    its own cost centre, GL and location. The caller commits."""
     inv = db.execute(
-        text("select received_on, type, discount_taken from invoice where no = :n"), {"n": invoice_no}
+        text("select received_on, type, discount_taken, kind from invoice where no = :n"), {"n": invoice_no}
     ).first()
     if inv is None or inv[1] != "invoice":
         return []
+    if inv[3] == "non_po":
+        return _bill_lines(db, invoice_no, actor, paid_on, inv[0])
     lines = [
         dict(r)
         for r in db.execute(
