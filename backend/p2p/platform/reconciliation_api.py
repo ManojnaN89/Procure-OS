@@ -10,6 +10,7 @@ from fastapi.responses import Response
 from sqlalchemy.orm import Session
 
 from p2p.formulas.calendar import business_today
+from p2p.formulas.fy import financial_year
 from p2p.invoices import bank_statement, reconciliation, trace, vendor_statement
 from p2p.invoices.service import InvoiceError
 from p2p.platform import files, ratelimit, routing, settings
@@ -76,7 +77,7 @@ def msme(db: Db, ctx: Ctx, as_of: str | None = None, within: int | None = None) 
 def statement_template(db: Db, ctx: Ctx) -> Response:
     need_any(db, ctx.user_id, "invoice.book")
     return Response(
-        content=("﻿" + vendor_statement.TEMPLATE).encode("utf-8"),
+        content=("ï»¿" + vendor_statement.TEMPLATE).encode("utf-8"),
         media_type="text/csv; charset=utf-8",
         headers={"Content-Disposition": 'attachment; filename="supplier-statement.csv"'},
     )
@@ -146,3 +147,62 @@ def confirm_bank_line(
         message = str(exc)
         status = 404 if "does not exist" in message else 403 if message.startswith("segregation") else 409
         raise HTTPException(status, message) from None
+
+
+@router.post("/reconciliation/bank-lines/{line_id}/not-ours")
+def not_ours_bank_line(
+    line_id: int,
+    payload: dict[str, Any],
+    db: Db,
+    ctx: Annotated[routing.TenantContext, Depends(require("payment.propose"))],
+) -> dict[str, Any]:
+    """A person says an open bank line is no payment of ours (bank charges), with a reason (R3.3)."""
+    reason = payload.get("reason")
+    if not isinstance(reason, str) or not reason.strip():
+        raise HTTPException(422, "a reason is needed to mark a bank line as not ours")
+    try:
+        return wire(bank_statement.not_ours(db, line_id, reason, ctx.user_id, tenant=ctx.slug))  # type: ignore[no-any-return]
+    except InvoiceError as exc:
+        message = str(exc)
+        raise HTTPException(404 if "does not exist" in message else 409, message) from None
+
+
+@router.post("/reconciliation/vendor-statements/{statement_id}/lines/{line_id}/resolve")
+def resolve_statement_line(
+    statement_id: int,
+    line_id: int,
+    payload: dict[str, Any],
+    db: Db,
+    ctx: Annotated[routing.TenantContext, Depends(require("invoice.book"))],
+) -> dict[str, Any]:
+    """AP marks a difference on a supplier's statement explained, with a note (R3.2)."""
+    try:
+        return wire(vendor_statement.resolve(db, statement_id, line_id, payload.get("note"), ctx.user_id))  # type: ignore[no-any-return]
+    except InvoiceError as exc:
+        message = str(exc)
+        raise HTTPException(
+            404 if "not on statement" in message else 409 if "already" in message or "matched" in message else 422,
+            message,
+        ) from None
+
+
+@router.get("/reconciliation/msme/year-end")
+def msme_year_end(db: Db, ctx: Ctx, fy: str | None = None) -> dict[str, Any]:
+    """Small suppliers at 31 March: principal unpaid, past the deadline, and the interest due and paid (R3.4)."""
+    need_any(db, ctx.user_id, *BOOKS)
+    from p2p.invoices import period_close  # noqa: PLC0415 - the year-end figures are block 13's
+
+    year = fy or financial_year(business_today())
+    try:
+        return wire(period_close.msme_year_end(db, year))  # type: ignore[no-any-return]
+    except period_close.PeriodCloseError as exc:
+        raise HTTPException(exc.status, str(exc)) from None
+
+
+@router.get("/reconciliation/msme/year-end-banner")
+def msme_banner(db: Db, ctx: Ctx) -> dict[str, Any]:
+    """From 1 March: how many small-supplier invoices will be past their deadline at 31 March (R3.4)."""
+    need_any(db, ctx.user_id, *BOOKS)
+    from p2p.invoices import period_close  # noqa: PLC0415
+
+    return wire(period_close.banner(db))  # type: ignore[no-any-return]

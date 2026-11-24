@@ -309,6 +309,14 @@ def test_closing_the_balance_after_a_part_delivery_ends_the_open_supply_and_tell
     store: Session, outbox: Outbox
 ) -> None:  # noqa: F811
     _watch_item_a(store)
+    store.execute(
+        text(
+            "insert into approval_rule (rule_code, document, min_value, max_value, category_code, department_code, "
+            "spend_type, approver_chain, version, effective_from) values "
+            "('SC-1', 'short_close', 0, 25000, 'ANY', 'ANY', 'ANY', 'auto', 1, '2024-11-01')"
+        )
+    )
+    store.commit()
     po_no, logins = _sent(store)
     _receive(store, po_no, "4")
     assert _on_the_way(store) == D(6)
@@ -316,12 +324,14 @@ def test_closing_the_balance_after_a_part_delivery_ends_the_open_supply_and_tell
 
     done = changes.close_balance(store, store.info["slug"], po_no, logins["buyer"], "Supplier cannot make the rest")
 
-    assert done["status"] == "closed" and done["supplier_told"] is True and "6 NOS" in done["closed"][0]
+    # block 13 R1: below the limit with no flag the buyer's own decision closes it at once
+    assert done["status"] == "closed" and done["risk"] == "low" and "balance closed" in outbox.sent[0]["subject"]
     line = store.execute(text("select status, received_qty, short_closed_qty from po_line")).one()
-    assert line == ("closed", D("4"), D("6"))
+    assert line == ("short_closed", D("4"), D("6"))
     assert _on_the_way(store) == D(0)
     po = store.execute(text("select status, closed_reason from po")).one()
-    assert po == ("closed", "Supplier cannot make the rest")
+    # block 13 R1.6-R1.7: the order is received, not closed; the reason lives on po_short_close
+    assert po == ("received", None)
     assert any("balance closed" in m["subject"] for m in outbox.sent)
     assert store.execute(text("select count(*) from audit_event where action = 'po.close_balance'")).scalar_one() == 1
 
@@ -518,6 +528,14 @@ def test_the_buyer_changes_an_order_over_the_api_and_others_cannot(store: Sessio
 
 
 def test_the_buyer_closes_the_balance_of_a_part_delivered_order_over_the_api(store: Session, outbox: Outbox) -> None:  # noqa: F811
+    store.execute(
+        text(
+            "insert into approval_rule (rule_code, document, min_value, max_value, category_code, department_code, "
+            "spend_type, approver_chain, version, effective_from) values "
+            "('SC-1', 'short_close', 0, 25000, 'ANY', 'ANY', 'ANY', 'auto', 1, '2024-11-01')"
+        )
+    )
+    store.commit()
     po_no, logins = _sent(store)
     _receive(store, po_no, "4")
     buyer = _headers(store.info["slug"], logins["buyer"], "Buyer")
@@ -525,6 +543,8 @@ def test_the_buyer_closes_the_balance_of_a_part_delivered_order_over_the_api(sto
 
     controls = client.get(f"{base}/controls", headers=buyer).json()
     assert (controls["can_close_balance"], controls["can_cancel"]) == (True, False)
+    seen = client.get(f"{base}/close-balance/preview", headers=buyer).json()
+    assert seen["risk"] == "low" and seen["value"] == "708.00"  # 6 x 100 + 18%
 
     done = client.post(f"{base}/close-balance", json={"reason": "Supplier stopped making it"}, headers=buyer)
 

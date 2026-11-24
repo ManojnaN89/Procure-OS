@@ -41,3 +41,7 @@ If you will be away, open **Settings** (the gear at the top) → **Away? Name a 
 
 ## Approving a forward buy
 A forward buy the buyer accepted comes to the person the forward-buy rule names (the purchase manager). Open the request from your task: **Approve the extra quantity** makes a new request for it, which goes through its own approval and budget check; **Decline** needs a reason. The figures are worked out again first; if anything changed you see the new recommendation instead.
+
+## Short-closes
+
+**My work** may show **Short-closes to approve**: the order, the balance per line, the value including GST, why it is high risk (production still needs it, an advance open, goods on the way) and the buyer's reason. **Approve** closes the balance and sends the need back to the store check; **Reject** needs a note. If goods arrived while it waited, the decision is refused: the buyer asks again.

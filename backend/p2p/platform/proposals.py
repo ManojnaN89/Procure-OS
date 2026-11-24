@@ -26,6 +26,10 @@ class ProposalError(Exception):
     pass
 
 
+class StaleError(ProposalError):
+    """What a proposal was made for changed before it was decided; the proposal must be asked for again."""
+
+
 @dataclass(frozen=True)
 class ProposalRef:
     id: int
@@ -40,6 +44,22 @@ EXECUTORS: dict[str, Executor] = {}
 
 Guard = Callable[[Session, dict[str, Any], Actor], None]
 GUARDS: dict[str, Guard] = {}
+
+# NEEDS block 9: `platform/proposals.closer(action)` is block 9's hook (a rejected excess). Block 13 adds this interim
+# so a rejected `po.short_close` knows its outcome; block 9's version replaces it at merge (same name and shape).
+Closer = Callable[[Session, dict[str, Any], Actor, str, str], None]
+CLOSERS: dict[str, Closer] = {}
+
+
+def closer(action: str) -> Callable[[Closer], Closer]:
+    """What happens to a proposal's subject when the proposal is rejected or expires (a row back to waiting)."""
+
+    def wrap(fn: Closer) -> Closer:
+        CLOSERS[action] = fn
+        return fn
+
+    return wrap
+
 
 # While an executor runs: the proposal's id and who proposed it (an executor that records the maker reads it here).
 RUNNING: ContextVar[tuple[int, Actor] | None] = ContextVar("proposal_running", default=None)
@@ -161,6 +181,9 @@ def approve(
         except permissions.PermissionDenied:
             db.rollback()
             raise
+        except StaleError:
+            db.rollback()
+            raise
         except Exception as exc:  # the action's own refusal (segregation of duties, not the named person): a 403
             db.rollback()
             raise permissions.PermissionDenied(str(exc)) from None
@@ -267,6 +290,9 @@ def reject(db: Session, proposal_id: int, user_id: int, reason: str, *, now: dat
 
     recommendations.on_decision(db, dict(p.payload or {}), user_id, accepted=False, note=reason)
     _set(db, proposal_id, "rejected", user_id, now or datetime.now(UTC), reason)
+    stop = CLOSERS.get(p.action)
+    if stop is not None:
+        stop(db, dict(p.payload or {}), sod.user(user_id), "rejected", reason)
 
 
 def withdraw(db: Session, proposal_id: int, user_id: int | None, note: str) -> None:
@@ -280,15 +306,19 @@ def withdraw(db: Session, proposal_id: int, user_id: int | None, note: str) -> N
 
 def expire_due(db: Session, now: datetime | None = None, *, action: str | None = None) -> int:
     """Proposals past their expiry without a decision become expired (of one action only, when it is given)."""
+    moment = now or datetime.now(UTC)
     rows = db.execute(
         text(
             "update proposal set status = 'expired', decided_at = :n where status = 'pending' and expires_at <= :n "
-            "and (cast(:a as text) is null or action = :a) returning id"
+            "and (cast(:a as text) is null or action = :a) returning id, action, payload"
         ),
-        {"n": now or datetime.now(UTC), "a": action},
+        {"n": moment, "a": action},
     ).all()
     for r in rows:
         audit.record(db, audit.SYSTEM, "proposal.expired", "proposal", r[0])
+        stop = CLOSERS.get(str(r[1]))
+        if stop is not None:
+            stop(db, dict(r[2] or {}), audit.SYSTEM, "expired", "expired before a decision")
     db.commit()
     return len(rows)
 

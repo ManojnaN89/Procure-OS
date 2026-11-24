@@ -25,6 +25,7 @@ from p2p.formulas import payment as rules
 from p2p.formulas.money import format_inr
 from p2p.formulas.words import count
 from p2p.invoices.service import InvoiceError
+from p2p.orders import closure
 from p2p.platform import audit, emails, notifications, numbering, proposals
 from p2p.platform.sod import Actor, user
 
@@ -642,7 +643,15 @@ def mark_paid(
                 {"d": paid_on, "i": a[0], "x": a[1]},
             )
             budget_ledger.post_payment(db, a[0], user(user_id), paid_on)
-            closed += close_case(db, a[0], user_id)
+            # block 13: the order closes only when supply is complete and the money is settled (D-12)
+            linked = db.execute(
+                text("select po_no from invoice_line where invoice_no = :i and po_no is not null limit 1"),
+                {"i": a[0]},
+            ).first()
+            if linked is not None:
+                done = closure.check(db, str(linked[0]), user(user_id), tenant=tenant, commit=False)
+                if done["closed"]:
+                    closed.append(str(linked[0]))
         p["utr"] = utr
     db.execute(text("update payment_run set status = 'paid' where no = :n"), {"n": no})
     audit.record(
@@ -652,47 +661,13 @@ def mark_paid(
     for p in payments:
         _remit(db, p, paid_on, p["utr"])
     for po_no in dict.fromkeys(closed):
-        _notify_closed(db, tenant, po_no)
+        notify_closed(db, tenant, po_no)
     return closed
 
 
-def close_case(db: Session, invoice_no: str, user_id: int) -> list[str]:
-    """When an order line has been received, invoiced and paid in full its line is closed, and the order and request with it."""
-    closed: list[str] = []
-    for po_no, line_no in db.execute(
-        text("select distinct po_no, po_line_no from invoice_line where invoice_no = :n"), {"n": invoice_no}
-    ).all():
-        line = db.execute(
-            text(
-                "select qty, received_qty, invoiced_qty, status from po_line where po_no = :p and line_no = :l for update"
-            ),
-            {"p": po_no, "l": line_no},
-        ).first()
-        if line is None or line[3] in ("closed", "cancelled"):
-            continue
-        unpaid = db.execute(
-            text(
-                "select count(*) from invoice_line l join invoice i on i.no = l.invoice_no "
-                "where l.po_no = :p and l.po_line_no = :l and i.type = 'invoice' and i.status in ('approved', 'blocked', 'received')"
-            ),
-            {"p": po_no, "l": line_no},
-        ).scalar_one()
-        if D(line[1]) >= D(line[0]) and D(line[2]) >= D(line[1]) and unpaid == 0:
-            db.execute(
-                text("update po_line set status = 'closed' where po_no = :p and line_no = :l"),
-                {"p": po_no, "l": line_no},
-            )
-        else:
-            continue
-        open_lines = db.execute(
-            text("select count(*) from po_line where po_no = :p and status not in ('closed', 'cancelled')"),
-            {"p": po_no},
-        ).scalar_one()
-        if open_lines == 0:
-            db.execute(text("update po set status = 'closed' where no = :p"), {"p": po_no})
-            closed.append(po_no)
-            audit.record(db, user(user_id), "po.close", "po", po_no, after={"status": "closed"})
-    return closed
+# NEEDS block 12: settlement.py calls `closure.check` on settlement and `closure.reopen` on a reversal; its two
+# `close_case` call sites replace the one above (H12-5). `close_case` is removed with block 13: lines close with their
+# order (OP-5).
 
 
 def _login_of(db: Session, tenant: str, org_code: str | None) -> int | None:
@@ -700,11 +675,18 @@ def _login_of(db: Session, tenant: str, org_code: str | None) -> int | None:
     return notifications.login_of(db, tenant, org_code)
 
 
-def _notify_closed(db: Session, tenant: str | None, po_no: str) -> None:
+def notify_closed(db: Session, tenant: str | None, po_no: str) -> None:
     """Tell the person who asked for the goods, and the buyer, that the order is paid and closed: once each per order."""
     if not tenant:
         return
     try:
+        already = {
+            int(r[0])
+            for r in db.execute(
+                text("select user_id from notification where title = :t and user_id is not null"),
+                {"t": f"Order {po_no} is paid and closed"},
+            )
+        }
         people = [
             r[0]
             for r in db.execute(
@@ -722,7 +704,7 @@ def _notify_closed(db: Session, tenant: str | None, po_no: str) -> None:
             ),
             {"p": po_no},
         ).scalar()
-        told: set[int] = set()
+        told: set[int] = set(already)
         for code in [*people, buyer]:
             uid = _login_of(db, tenant, code)
             if uid is None or uid in told:

@@ -37,6 +37,8 @@ TABLES: list[tuple[str, str, tuple[str, ...] | None]] = [
     ("approval_rule", "approval_rule", None),
     ("item", "item", ("code",)),
     ("item_location", "item_location", ("item_code", "location_code")),
+    ("item_standard_price", "item_standard_price", ("item_code", "version")),
+    ("ledger_map", "ledger_map", ("purpose", "version")),
     ("item_substitute", "item_substitute", ("item_code", "substitute_code")),
     ("uom_conversion", "uom_conversion", ("item_code", "from_uom", "to_uom")),
     ("stock_opening", "stock_opening", ("item_code", "location_code")),

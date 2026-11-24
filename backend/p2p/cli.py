@@ -117,6 +117,44 @@ def _budget(args: argparse.Namespace) -> int:
     return 0
 
 
+def _close(args: argparse.Namespace) -> int:
+    """The month-end close: preview, then close as the Finance login given by --as (R7, gate 9)."""
+    from sqlalchemy.orm import Session
+
+    from p2p.invoices import period_close
+    from p2p.platform import permissions
+
+    with Session(routing.engine_for(args.tenant)) as db:
+        user_id = users.user_id_by_email(args.tenant, args.as_) or notifications_login(db, args.tenant, args.as_)
+        if user_id is None or not permissions.can_anywhere(db, user_id, "budget.manage"):
+            print(f"{args.as_} has no login that may close a month (budget.manage)")
+            return 1
+        try:
+            seen = period_close.preview(db, args.period)
+            for line in seen["blocking"]:
+                print(f"blocked: {line}")
+            for warn in seen["warnings"]:
+                print(f"warning: {warn['words']}")
+            if seen["blocking"]:
+                return 1
+            if args.dry_run:
+                print(f"{args.period} can close; nothing written")
+                return 0
+            done = period_close.close(db, args.period, user_id, args.reason or "month-end close")
+        except period_close.PeriodCloseError as exc:
+            print(f"not done: {exc}")
+            return 1
+    print(f"{done['period']} closed by {done['locked_by']}; received not invoiced {format_inr(done['grni_total'])}")
+    print(f"export: {done['export']['vouchers']} vouchers, debit {format_inr(done['export']['debit'])}")
+    return 0
+
+
+def notifications_login(db: object, tenant: str, person: str) -> int | None:
+    from p2p.platform import notifications
+
+    return notifications.login_of(db, tenant, person)  # type: ignore[arg-type]
+
+
 def _forward_buy(args: argparse.Namespace) -> int:
     """Forward-buy recommendations for one item or every item with a live request."""
     from sqlalchemy.orm import Session
@@ -238,6 +276,12 @@ def main(argv: list[str] | None = None) -> int:
     bclose.add_argument("fy")
     bclose.add_argument("--as", dest="person", required=True)
     bclose.add_argument("--note")
+    cl = sub.add_parser("close", help="preview or close a month (Finance, budget.manage)")
+    cl.add_argument("tenant")
+    cl.add_argument("period")
+    cl.add_argument("--as", dest="as_", required=True)
+    cl.add_argument("--reason")
+    cl.add_argument("--dry-run", action="store_true")
     fwd = sub.add_parser("forward-buy")
     fwd.add_argument("tenant")
     fwd.add_argument("--item")
@@ -256,6 +300,8 @@ def main(argv: list[str] | None = None) -> int:
         return company_cli.run(args)
     if args.group == "budget":
         return _budget(args)
+    if args.group == "close":
+        return _close(args)
     if args.group == "forward-buy":
         return _forward_buy(args)
 

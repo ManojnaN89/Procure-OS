@@ -202,12 +202,20 @@ const ReconciliationView = {
     if (!box) return;
     box.innerHTML = `<div class="panel" style="margin-bottom:12px;"><div class="panel-title">${this.esc(s.supplier_code)} · ${formatDate(s.period_from)} to ${formatDate(s.period_to)}</div>
       ${(s.unreadable || []).length ? `<div style="font-size:12.5px;color:var(--warning-text);margin-bottom:6px;">Not read: ${s.unreadable.map((u) => `line ${this.esc(u.row)} (${this.esc(u.why)})`).join(", ")}</div>` : ""}
-      <table class="data-table"><thead><tr><th>LINE</th><th>DATE</th><th>DOCUMENT</th><th>THEIRS</th><th>OURS</th><th>DIFFERENCE</th><th>OUTCOME</th><th>WHY</th></tr></thead><tbody>
-      ${s.results.map((r) => { const [label, badge] = this.OUTCOME[r.outcome] || [r.outcome, ""]; return `<tr><td class="cell-muted">${this.esc(r.row_no ?? "")}</td><td>${r.doc_date ? formatDate(r.doc_date) : ""}</td>
+      <table class="data-table"><thead><tr><th>LINE</th><th>DATE</th><th>DOCUMENT</th><th>THEIRS</th><th>OURS</th><th>DIFFERENCE</th><th>OUTCOME</th><th>WHY</th><th></th></tr></thead><tbody>
+      ${s.results.map((r) => { const [label, badge] = this.OUTCOME[r.outcome] || [r.outcome, ""]; const open = r.outcome !== "matched" && r.row_no != null; return `<tr><td class="cell-muted">${this.esc(r.row_no ?? "")}</td><td>${r.doc_date ? formatDate(r.doc_date) : ""}</td>
         <td>${this.esc(String(r.doc_type).replace(/_/g, " "))} ${this.esc(r.doc_no)}${r.our_ref ? `<div class="cell-muted" style="font-size:11px;">ours ${this.esc(r.our_ref)}</div>` : ""}</td>
         <td>${this.money(r.their_amount)}</td><td>${this.money(r.our_amount)}</td><td>${r.difference != null && Number(r.difference) ? formatCurrency(r.difference) : ""}</td>
-        <td><span class="badge ${badge}">${this.esc(label)}</span></td><td class="cell-muted" style="font-size:12px;">${this.esc(r.reason)}</td></tr>`; }).join("")}
-      </tbody></table></div>`;
+        <td><span class="badge ${badge}">${this.esc(label)}</span>${r.flag ? `<div class="cell-muted" style="font-size:11px;">${this.esc(r.flag)}</div>` : ""}</td><td class="cell-muted" style="font-size:12px;">${this.esc(r.reason)}${r.note ? `<div>Explained: ${this.esc(r.note)}</div>` : ""}</td>
+        <td>${open && !r.resolved_by ? `<span class="btn btn-sm" data-explain="${this.esc(r.id)}" data-statement="${this.esc(s.id)}">Mark explained</span>` : ""}</td></tr>`; }).join("")}
+      </tbody></table>
+      <p class="cell-muted" style="font-size:12px;margin-top:6px;">${this.esc(s.explained_words || "")}</p></div>`;
+    box.querySelectorAll("[data-explain]").forEach((b) => b.addEventListener("click", async () => {
+      const note = window.prompt("Why is this difference explained?");
+      if (!note) return;
+      const res = await API.postJSON(`/api/reconciliation/vendor-statements/${encodeURIComponent(b.dataset.statement)}/lines/${encodeURIComponent(b.dataset.explain)}/resolve`, { note });
+      if (res.ok) this.showStatement(await API.getJSON(`/api/reconciliation/vendor-statements/${encodeURIComponent(b.dataset.statement)}`));
+    }));
   },
 
   async bank(body) {
@@ -221,6 +229,7 @@ const ReconciliationView = {
           ${rows.map((r) => `<tr><td>${r.value_date ? formatDate(r.value_date) : ""}</td><td>${this.esc(r.narration || "")}<div class="cell-muted" style="font-size:11px;">${this.esc(r.utr || "")}</div></td><td>${formatCurrency(r.amount)}</td>
             <td class="cell-muted" style="font-size:12px;">${this.esc(r.why || "")}</td>
             <td>${r.suggestions.length ? `<select data-line="${this.esc(r.id)}" style="padding:4px;">${r.suggestions.map((p) => `<option value="${this.esc(p)}">${this.esc(p)}</option>`).join("")}</select> <div class="btn btn-primary btn-sm" data-confirm="${this.esc(r.id)}">Confirm</div>` : `<span class="cell-muted" style="font-size:12px;">no payment of this amount is waiting</span>`}
+            <div class="btn btn-sm" data-notours="${this.esc(r.id)}">Not ours</div>
             <div class="cell-muted" data-note="${this.esc(r.id)}" style="font-size:11.5px;color:var(--warning-text);"></div></td></tr>`).join("")}</tbody></table></div>`
         : `<div class="empty-state">Every imported bank line is matched.</div>`;
       box.querySelectorAll("[data-confirm]").forEach((b) => b.addEventListener("click", async () => {
@@ -229,6 +238,13 @@ const ReconciliationView = {
         const res = await API.postJSON(`/api/reconciliation/bank-lines/${encodeURIComponent(id)}/confirm`, { payment });
         if (res.ok) return this.bank(body);
         box.querySelector(`[data-note="${CSS.escape(id)}"]`).textContent = res.data.detail || "That did not work.";
+      }));
+      box.querySelectorAll("[data-notours]").forEach((b) => b.addEventListener("click", async () => {
+        const reason = window.prompt("Why is this line not a payment of ours? (for example, bank charges)");
+        if (!reason) return;
+        const res = await API.postJSON(`/api/reconciliation/bank-lines/${encodeURIComponent(b.dataset.notours)}/not-ours`, { reason });
+        if (res.ok) return this.bank(body);
+        box.querySelector(`[data-note="${CSS.escape(b.dataset.notours)}"]`).textContent = res.data.detail || "That did not work.";
       }));
     } catch (err) { this.denied(box, err); }
   },

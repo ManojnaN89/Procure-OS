@@ -71,6 +71,7 @@ LATER = (
     "period RFQ: award waiting for the director",
     "quotation request with a negotiation brief",
     "quotation request closed short, a case for the buyer",
+    "order short-closed, supply done and money open",
 )
 STAGES = EARLY + LATER
 
@@ -344,6 +345,9 @@ def populate(slug: str = demo.MAIN) -> Populated:
         except Exception as exc:  # noqa: BLE001 - the early stages stand; the report says where the rest stopped
             run.out.stopped = f"{type(exc).__name__}: {exc}"
         run.work()
+        from p2p.invoices import price_measures  # noqa: PLC0415 - block 13's measures for the cases just made
+
+        price_measures.record(run.db, business_today())
         run.out.low_items_left = _still_low(run)
     finally:
         run.db.rollback()
@@ -440,6 +444,16 @@ def _later(run: _Run) -> None:
     run.call(FINANCE, "POST", f"/api/payment-runs/{paid_run}/paid", {"paid_on": run.day()})
     run.work()
     _stage(run, LATER[9], first["invoice"])
+
+    # Block 13: a part-delivered contract order whose balance the buyer closes below the limit; supply is complete and
+    # the money is still open, so the order waits for its invoice and settlement
+    _, po = run.contract_order("RM-05", 10, "Shafts for the January service kits")
+    run.approve_order(po)
+    run.send_order(po)
+    run.receive(po, Decimal("0.5"))
+    run.call(BUYER, "POST", f"/api/purchase-orders/{po}/close-balance",
+             {"reason": "The supplier cannot make the rest this quarter"})  # fmt: skip
+    _stage(run, LATER[13], po)
 
     po = run.received_order("RM-04", 10, "Impellers for the service centre")
     _expect(run.invoice(po), "approved", "the invoice of the second run")

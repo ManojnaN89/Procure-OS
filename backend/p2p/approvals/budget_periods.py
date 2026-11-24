@@ -103,25 +103,13 @@ def periods(db: Session, fy: str, today: date, user_id: int | None = None) -> di
 
 
 def lock(db: Session, period: str, user_id: int, reason: str, today: date) -> dict[str, Any]:
-    """Lock an ended month (every earlier month of its year first). The caller has `budget.manage`."""
-    if not rules.valid_period(period):
-        raise PeriodError(f"'{period}' is not a month like 2026-11")
-    why = (reason or "").strip()
-    if not why:
-        raise PeriodError("a reason is needed to lock a month")
-    refused = rules.lockable(period, today, set(locks(db)))
-    if refused == "not ended":
-        raise PeriodError(f"{period} has not ended")
-    if refused:
-        raise PeriodError(f"{period} cannot be locked: {refused}", 409)
-    who = _who(db, user_id)
-    at = db.execute(
-        text("insert into budget_period_lock (period, locked_by, reason) values (:p, :b, :r) returning locked_at"),
-        {"p": period, "b": who, "r": why},
-    ).scalar_one()
-    audit.record(db, user(user_id), "budget.period_lock", "budget_period", period, after={"locked_by": who}, reason=why)
-    db.commit()
-    return {"period": period, "status": "locked", "locked_by": who, "locked_at": at.isoformat()}
+    """Lock an ended month (every earlier month of its year first), with the month-end work (block 13 R7.1)."""
+    from p2p.invoices import period_close  # noqa: PLC0415 - the month-end close builds on this module
+
+    try:
+        return period_close.close(db, period, user_id, reason, today)
+    except period_close.PeriodCloseError as exc:
+        raise PeriodError(str(exc), exc.status) from None
 
 
 def carried(db: Session) -> list[dict[str, Any]]:
@@ -158,11 +146,13 @@ def close_year(db: Session, fy: str, user_id: int, note: str | None, today: date
     who = _who(db, user_id)
     held = set(locks(db))
     newly = [p for p in rules.fy_periods(fy) if p not in held]
+    from p2p.invoices import period_close  # noqa: PLC0415 - the month-end work is block 13's
+
     for p in newly:
-        db.execute(
-            text("insert into budget_period_lock (period, locked_by, reason) values (:p, :b, :r)"),
-            {"p": p, "b": who, "r": f"Year end FY {fy}"},
-        )
+        try:
+            period_close.close(db, p, user_id, f"Year end FY {fy}", today)
+        except period_close.PeriodCloseError as exc:
+            raise PeriodError(str(exc), exc.status) from None
     keep = carried(db)
     req = sum((Decimal(r["held_by_requests"]) for r in keep), Decimal(0))
     ord_ = sum((Decimal(r["held_by_orders"]) for r in keep), Decimal(0))

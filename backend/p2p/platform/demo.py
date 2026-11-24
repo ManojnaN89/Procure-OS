@@ -22,6 +22,7 @@ from sqlalchemy.orm import Session
 
 from p2p.agents import autonomy
 from p2p.config import REPO_ROOT
+from p2p.formulas.calendar import business_today
 from p2p.formulas.words import count
 from p2p.masters.importer import ImportReport, import_masters
 from p2p.platform import audit, company_state, readiness, routing, tenants, users
@@ -250,6 +251,12 @@ def reset_company(
         configure(db, demo, slug)
         configure_autonomy(db, demo)
         request_jobs.queue_daily_check(db, slug)
+        from p2p.invoices import price_measures  # noqa: PLC0415 - block 13's daily job
+        from p2p.orders import closure  # noqa: PLC0415
+
+        closure.schedule(slug)
+        price_measures.record(db, business_today())  # the measures of what the dataset already holds
+        price_measures.schedule(slug)
         people = db.execute(text("select code, name, designation, email from org_user order by code")).all()
         held: dict[str, set[str]] = {}
         for code, role in db.execute(text("select user_code, role from org_user_role")):

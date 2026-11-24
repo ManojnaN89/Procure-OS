@@ -45,3 +45,6 @@ Open **Control tower**. Under **Budgets, this financial year so far** each cost 
 ## Budgets: months, year end and adjustments
 
 The budgets panel on the control tower shows each budget with what requests hold, what orders hold and what was spent (stock when it is accepted, the rest when it is paid). Lock a month once it has ended (the earlier months first) with a reason; nothing is booked in a locked month after that, a late posting goes to the next open month. From 1 April close the year: open requests and orders carry into the new year, unspent budget lapses. To add to, take from or move a budget, use **Adjust a budget**: another finance person approves it.
+## Close and measure
+
+**Close** previews and closes a month (the measures, received-not-invoiced frozen, the final accounting export and the lock), compares GSTR-2B, and shows PPV, contract variance, market gap, potential and realised saving in their own lists, with the standard price versions. **Reconciliation > Small suppliers** has the year-end view.

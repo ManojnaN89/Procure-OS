@@ -57,6 +57,8 @@ CARRIED: dict[str, str | None] = {
             "approval_rule",
             "item",
             "item_location",
+            "item_standard_price",
+            "ledger_map",
             "item_substitute",
             "uom_conversion",
             "stock_opening",
@@ -124,6 +126,9 @@ NOT_CARRIED = (
     "period_demand_line", "award_decision", "award_letter", "contract_link",
     # block 7: the versions of an order
     "po_version",
+    # block 13: short-closes, measures, GSTR-2B, month closes and their exports are transactions
+    "po_short_close", "price_measure", "gstr2b_import", "gstr2b_line", "period_close", "accounting_export",
+    "accounting_export_doc",
     # loaded fresh into the new database
     "ref_gst_rate", "ref_gst_state", "ref_holiday", "ref_hsn_sac", "ref_load", "ref_rbi_bank_rate", "ref_tds_section",
     "ref_uom",

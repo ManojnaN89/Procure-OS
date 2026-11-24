@@ -100,6 +100,8 @@ POLICIES: dict[str, Policy] = {
     "market_benchmark": Policy("K", why="kept as it is; a benchmark does not change: add a new one"),
     "budget_period_lock": Policy("C", noun="locked budget months", where="the budgets panel (Finance)"),
     "forward_buy_rule": Policy("C", noun="forward-buy rules", where="the buying rules screen"),
+    "item_standard_price": Policy("C", noun="standard prices", where="the Standard prices page"),
+    "ledger_map": Policy("C", noun="ledger maps", where="the company setup screen"),
 }
 DEFAULT = Policy("U")  # bank, region, payment terms, GL accounts, GST registrations, items, item details, sanctions
 

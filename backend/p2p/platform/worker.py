@@ -49,7 +49,11 @@ def load_handlers() -> None:
     """Import the modules that register handlers."""
     from p2p.agents import capabilities, intake, planning, supplier_comms  # noqa: F401, PLC0415 - agent jobs
     from p2p.approvals import chasing  # noqa: F401, PLC0415 - approval reminders
-    from p2p.invoices import reading  # noqa: F401, PLC0415 - reads invoice mails into drafts
+    from p2p.invoices import (
+        price_measures,  # noqa: F401, PLC0415 - the daily price measures
+        reading,  # noqa: F401, PLC0415 - reads invoice mails into drafts
+    )
+    from p2p.orders import closure  # noqa: F401, PLC0415 - the daily order closure check
     from p2p.orders import jobs as order_jobs  # noqa: F401, PLC0415
     from p2p.platform import alerts, emails, events, notifications, outbox, setting_changes, tasks  # noqa: F401, PLC0415
     from p2p.requests import jobs  # noqa: F401, PLC0415

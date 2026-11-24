@@ -13,8 +13,9 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
+from p2p.approvals import rules as approval_rules
 from p2p.approvals.workflow import ApprovalError
-from p2p.orders import changes, confirmation, dispatch_notes, document, versions
+from p2p.orders import changes, confirmation, dispatch_notes, document, short_close, versions
 from p2p.platform import routing
 from p2p.platform.permissions import PermissionDenied, can_anywhere, require
 
@@ -229,9 +230,40 @@ def cancel_order(no: str, payload: dict[str, Any], db: Db, ctx: Buyer) -> dict[s
     )
 
 
+@router.get("/purchase-orders/{no}/close-balance/preview")
+def preview_close_balance(no: str, db: Db, ctx: Buyer, lines: str | None = None) -> dict[str, Any]:
+    """The chosen lines' balances and value, the risk and its flags, and who would decide (R1.2)."""
+    chosen = [int(x) for x in lines.split(",") if x.strip().isdigit()] if lines else None
+    if lines and chosen is None:
+        raise HTTPException(422, "lines is a comma-separated list of line numbers")
+    try:
+        return short_close.preview(db, no, chosen)
+    except changes.InputError as exc:
+        raise HTTPException(422, str(exc)) from None
+    except changes.ChangeError as exc:
+        raise HTTPException(404 if "does not exist" in str(exc) else 409, str(exc)) from None
+    except approval_rules.ApprovalRuleError as exc:
+        raise HTTPException(409, str(exc)) from None
+
+
 @router.post("/purchase-orders/{no}/close-balance")
 def close_balance(no: str, payload: dict[str, Any], db: Db, ctx: Buyer) -> dict[str, Any]:
-    return _guard(lambda: changes.close_balance(db, ctx.slug, no, ctx.user_id, payload.get("reason")))
+    raw = payload.get("lines")
+    lines = None
+    if raw is not None:
+        if not isinstance(raw, list) or not all(isinstance(x, int) for x in raw):
+            raise HTTPException(422, "lines is a list of line numbers")
+        lines = [int(x) for x in raw]
+    return _guard(lambda: changes.close_balance(db, ctx.slug, no, ctx.user_id, payload.get("reason"), lines))
+
+
+@router.post("/purchase-orders/{no}/short-closes/{short_close_id}/withdraw")
+def withdraw_short_close(no: str, short_close_id: int, db: Db, ctx: Ctx) -> dict[str, Any]:
+    """The asker takes back a short-close that waits (R1.8)."""
+    try:
+        return short_close.withdraw(db, no, short_close_id, ctx.user_id)
+    except changes.ChangeError as exc:
+        raise HTTPException(404 if "does not exist" in str(exc) else 409, str(exc)) from None
 
 
 # ---- the supplier's answer: proposed changes and dispatch notes -------------------------------------

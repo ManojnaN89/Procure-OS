@@ -388,3 +388,40 @@ def confirm(
     missing = _settle(db, pay["run_no"], user_id, tenant)
     db.commit()
     return {"line": line_id, "payment": payment_no, "run": pay["run_no"], "run_paid": missing == 0}
+
+
+def not_ours(
+    db: Session, line_id: int, reason: str | None, user_id: int, *, tenant: str | None = None
+) -> dict[str, Any]:
+    """A person says an open bank line is no payment of ours (bank charges); its task completes when none is left."""
+    why = (reason or "").strip()
+    if not why:
+        raise InvoiceError("a reason is needed to mark a bank line as not ours")
+    line = (
+        db.execute(text("select * from bank_statement_line where id = :i for update"), {"i": line_id})
+        .mappings()
+        .first()
+    )
+    if line is None:
+        raise InvoiceError(f"bank line {line_id} does not exist")
+    if line["status"] != "open":
+        raise InvoiceError(f"bank line {line_id} is already {line['status']}")
+    db.execute(
+        text(
+            "update bank_statement_line set status = 'not_ours', why = :w, confirmed_by = :u, confirmed_at = now() "
+            "where id = :i"
+        ),
+        {"w": why, "u": str(user_id), "i": line_id},
+    )
+    audit.record(
+        db, user(user_id), "bank_statement.not_ours", "bank_statement_line", str(line_id),
+        before={"status": "open"}, after={"status": "not_ours", "reason": why},
+    )  # fmt: skip
+    db.commit()
+    left = int(db.execute(text("select count(*) from bank_statement_line where status = 'open'")).scalar_one())
+    if left == 0:
+        for (task_id,) in db.execute(
+            text("select id from task where kind = 'bank_statement_lines' and status in ('open', 'overdue')")
+        ).all():
+            tasks.complete_task(db, int(task_id), user_id)
+    return {"line": line_id, "status": "not_ours", "open_left": left}

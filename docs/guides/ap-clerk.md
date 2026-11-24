@@ -38,3 +38,7 @@ If the goods were never received, the Store has to post the receipt first. Use t
 ## Exceptions
 
 **Exceptions** lists everything stuck that needs a person, oldest first, with the reason, who must act, the next step and the age in working days; tick **Only mine** for what waits on you. Blocked invoices show there with what to do next.
+
+## GSTR-2B and statement differences
+
+**Close > GSTR-2B check** takes the portal's JSON or our CSV; the results show ours and theirs side by side and one task comes to you when anything is not matched. **Reconciliation > Supplier statements** lets you **Mark explained** a difference with a note.

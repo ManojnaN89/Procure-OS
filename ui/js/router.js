@@ -20,6 +20,7 @@ const Router = {
     invoices: InvoicesView,
     payments: PaymentsView,
     reconciliation: ReconciliationView,
+    close: CloseView,
     contracts: ContractsView,
     assistant: AssistantPageView,
     trail: TrailPageView,

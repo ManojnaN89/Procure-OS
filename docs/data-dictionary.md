@@ -261,6 +261,18 @@ Platform additions to the tables above: `invoice.advance_used`, `invoice.advance
 
 **vendor_statement_line** · supplier_code, statement_date, supplier_invoice_no, invoice_date, amount, our_invoice_no (empty: an invoice the supplier says it sent that we never received) · *the supplier's side of a statement of account*
 
+**Short-close, closure and month-end (block 13).** `po_short_close` is one ask to close a balance: the lines and their
+values, the value including GST, the risk (`low` or `high`), the flags that made it high, the rule code and version,
+the named approver and proposal, the reason, and its status (`waiting`, `closed`, `rejected`, `stale`, `withdrawn`).
+`item_standard_price` holds the standard price versions (version 1 from the item master; a later version is proposed
+by Finance and approved by another holder of `price.standard`, and ends the version before it). `price_measure` is one
+row per measure and event (`ppv`, `contract_variance`, `market_gap`, `saving_potential`, `saving_realised`), with its
+part, source line, reference price and the reference it used. `gstr2b_import` and `gstr2b_line` keep each uploaded
+GSTR-2B and every document's outcome; the tolerance version used is on the import. `period_close` is a closed month:
+who, why, the checklist as shown, the frozen received-not-invoiced lines and total, and its final export.
+`accounting_export` is a month's final voucher file with its hash; `accounting_export_doc` records each document in
+one final export. `ledger_map` is the versioned purpose-to-ledger map the export reads.
+
 Reconciliation in the platform (plan step 13, P1-39): received not invoiced is worked out when asked, per order line, from goods accepted (at the order price, on `goods_receipt.accepted_on`) and service entries (`amount_accepted` on `accepted_on`) against invoice lines (`taxable`, on `invoice.received_on`; credit notes take off, cancelled invoices count nothing). Small suppliers are checked against the MSMED Act deadline: the days agreed in writing (`supplier.agreed_payment_days`, at most the setting `msme_max_days`, 45) or, without an agreement, `msme_no_agreement_days` (15), counted from the latest acceptance before the invoice came; `msme_warn_days` (7) lists those reaching it soon. The platform's statement tables are in C8.
 
 ### C6. Messages and files

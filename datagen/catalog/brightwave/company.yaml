@@ -107,6 +107,8 @@ approval_rules: |
   POA-01,po_amendment,0.00,100000.00,ANY,ANY,ANY,ANY,auto,1,2025-04-01,
   POA-02,po_amendment,100000.01,999999999.00,ANY,ANY,ANY,ANY,cfo,1,2025-04-01,
   VAR-01,price_variance,0.00,999999999.00,ANY,ANY,ANY,ANY,cfo,1,2025-04-01,
+  SC-01,short_close,0.00,25000.00,ANY,ANY,ANY,ANY,auto,1,2025-04-01,
+  SC-02,short_close,25000.01,999999999.00,ANY,ANY,ANY,ANY,cfo,1,2025-04-01,
   PAY-01,payment_run,0.00,999999999.00,ANY,ANY,ANY,ANY,cfo,1,2025-04-01,
   SUP-01,supplier_activation,0.00,999999999.00,ANY,ANY,ANY,ANY,cfo,1,2025-04-01,
   FWD-01,forward_buy,0.00,999999999.00,ANY,ANY,ANY,ANY,cfo,1,2025-04-01,
@@ -150,6 +152,8 @@ settings:
   - [msme_max_days, "45", Most days a micro or small supplier may be paid in when agreed in writing (MSMED Act section 15)]
   - [msme_no_agreement_days, "15", Days a micro or small supplier must be paid in without a written agreement (MSMED Act section 15)]
   - [msme_warn_days, "7", Invoices of small suppliers reaching their deadline within this many days are listed]
+  - [ppv_recognition, invoice, "When accounting PPV is recognised: invoice (default), receipt or both"]
+  - [accounts_export_format, generic_csv, The accounting export file format]
 
 # Versioned as a set (task 3.2): version 1 is the full set; a later version copies the one before it with its
 # changes [key, category, value]. A match keeps the version in force on the day the invoice was received.
@@ -166,6 +170,7 @@ tolerances:
       - [supplier_change_pct, "5.00", Supplier quantity change noted by the agent up to this percent]
       - [supplier_price_pct, "2.00", Supplier price rise a buyer may accept up to this percent; above it the purchase manager decides]
       - [supplier_date_days, "3", Supplier delivery date slip accepted by the agent up to this many days]
+      - [gstr2b_diff_abs, "1.00", GSTR-2B and our books agree when each tax head and the taxable value differ by at most this]
   - version: 2
     effective_from: "2027-01-01"  # waiting to start
     note: "IT hardware: rupee tolerance per line raised"
@@ -486,3 +491,7 @@ period_scenarios:
 # IGST and is approved again (generator/version_scenarios.py, truth/truth_po_versions.csv)
 version_scenarios:
   - {name: P4, title: The delivery place moves to another state, item: LP-01, supplier: SUP-001, gst: "18", need_by: "2026-12-14", versions: [{location: OFF-BLR, qty: "2", price: "62000.00", price_record_version: "1", terms: NET30}, {location: OFF-HYD}]}
+
+# Standard price versions (13.2, block 0b OP-19): version 2 is 2% above version 1 from 1 December 2026.
+standard_price_versions:
+  - [LP-01, "63240.00", 2, "2026-12-01", "OEM list rise of 2%"]
