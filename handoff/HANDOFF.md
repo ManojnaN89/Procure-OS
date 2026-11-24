@@ -6,7 +6,7 @@ This is for the AI coding tool (ChatGPT Codex) that builds blocks 9 to 13 of thi
 
 | Who | Does what |
 |---|---|
-| **You (the builder)** | Build one block at a time from its spec, with unit tests. Open one pull request per block. |
+| **You (the builder)** | Build each block from its spec, with unit tests. The five blocks run in parallel, one task each. Open one pull request per block. |
 | **The owner's machine** | Writes the block's **evals** blind, from the spec only, without seeing your code. Then pulls your PR and runs the full check: all tests (about 2 h 20 min), all evals, both demo companies and the browser walk-throughs. Failures come back to you as a fix list. |
 | **The owner** | Answers questions, and merges at the end. |
 
@@ -22,9 +22,21 @@ This is for the AI coding tool (ChatGPT Codex) that builds blocks 9 to 13 of thi
 | 12 | payment | `handoff/specs/block12-spec.md` | `phase1-block12` | 0190 | E168-E175 |
 | 13 | reconcile and close | `handoff/specs/block13-spec.md` | `phase1-block13` | 0200 | E176-E183 |
 
-- Blocks are built **strictly in order**. Each block's branch is made from the previous block once that block is merged. Start a block only when the owner says its branch is ready.
+### The five blocks are built in parallel
+All five blocks are built at the same time, each in its own task. All five branches start from the same commit: block 8 plus this handoff. The owner's machine then merges them in order (9, 10, 11, 12, 13), connects them, writes the evals, and runs the full check. These rules make that merge possible:
+
+1. **Migration parent.** Every block's migration has `down_revision = "0150"`, the last migration on your branch. Keep your own `revision` number (0160, 0170 and so on). The owner's machine chains them 0160 → 0170 → 0180 → 0190 → 0200 at merge.
+2. **Build only your own block's parts.** `handoff/specs/blocks9-13-interfaces.md` says who owns each shared thing.
+   - If your block **extends or calls** something an earlier block owns (for example, block 12 extends block 9's `recovery_claim`), don't build the earlier block's part yourself.
+   - Write your code against the names in the interfaces file.
+   - Mark each such place with a comment `# NEEDS block N: <what>`, so it can be connected at merge.
+   - Skip or mark `xfail` any test that needs the missing part, with the same reason.
+   - List every such place in the PR description.
+3. **Only change what your block needs in shared files** (`platform/exceptions.py`, `invoices/service.py`, `platform/proposals.py`, `invoices/payment.py`, `ui/js/...`, `CLAUDE.md`, the demo data). Add to them; don't reorganise or reformat them, so the five changes merge cleanly.
+4. **Demo data.** Add the people, roles, categories and suppliers your spec names, using its codes exactly. Don't renumber existing rows.
+
 - **Never open a PR into `main`.** `main` does not have blocks 0-8 yet; everything reaches `main` together at the end.
-- Read `handoff/specs/blocks9-13-interfaces.md` for what each block owns, and what a later block extends. **An earlier block never calls code a later block builds.**
+- **An earlier block never calls code a later block builds.**
 - The latest existing migration is `0150_supplier_confirmation_versions.py`, and the latest eval is E143. Use only your block's numbers. Numbers E184-E199 and any other migration are taken elsewhere.
 - Some specs cite `planning/...` files and line numbers. Those are the owner's private plan, which is not in the repo. The spec quotes what matters; if something is missing, ask.
 
