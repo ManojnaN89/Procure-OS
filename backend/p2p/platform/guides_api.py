@@ -26,6 +26,7 @@ ROLE_GUIDE = {
     "Approver": "approver",
     "Buyer": "buyer",
     "Store": "store",
+    "Quality": "quality",
     "AP": "ap-clerk",
     "Finance": "finance",
     "Admin": "admin",

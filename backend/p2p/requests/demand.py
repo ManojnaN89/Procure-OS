@@ -33,7 +33,7 @@ from p2p.platform import audit, company_state, tenants
 from p2p.platform.sod import Actor
 from p2p.requests import material, reservation
 from p2p.requests.demand_changes import Applier, Change, classify
-from p2p.requests.demand_files import KINDS, DemandFile, Reference, check_qty, status_of
+from p2p.requests.demand_files import KINDS, TEMPLATES, DemandFile, Reference, check_qty, status_of
 
 
 class DemandError(Exception):
@@ -71,9 +71,9 @@ def current_mapping(db: Session, kind: str) -> tuple[int, dict[str, str]]:
 
 def save_mapping(db: Session, actor: Actor, kind: str, columns: dict[str, str]) -> int:
     """Save a new version of the column mapping of a kind of file; earlier versions stay. Returns the new version."""
-    spec = KINDS.get(kind)
+    spec = TEMPLATES.get(kind)
     if spec is None:
-        raise DemandError(f"there is no kind of file called {kind}; choose one of: {', '.join(KINDS)}")
+        raise DemandError(f"there is no kind of file called {kind}; choose one of: {', '.join(TEMPLATES)}")
     ours = {c for c, _ in spec.columns}
     unknown = sorted(set(columns) - ours)
     if unknown:
@@ -96,9 +96,9 @@ def save_mapping(db: Session, actor: Actor, kind: str, columns: dict[str, str]) 
 
 def template_csv(kind: str) -> str:
     """Our template for a kind of file: the header and one example row."""
-    spec = KINDS.get(kind)
+    spec = TEMPLATES.get(kind)
     if spec is None:
-        raise DemandError(f"there is no kind of file called {kind}; choose one of: {', '.join(KINDS)}")
+        raise DemandError(f"there is no kind of file called {kind}; choose one of: {', '.join(TEMPLATES)}")
     out = io.StringIO(newline="")
     writer = csv.writer(out, lineterminator="\r\n")
     writer.writerow([c for c, _ in spec.columns])

@@ -32,6 +32,7 @@ LOGINS = [
     "planthead",
     "production",
     "purchasemanager",
+    "quality",
     "store",
 ]
 
@@ -74,7 +75,7 @@ def test_the_main_demo_company_is_apex() -> None:
         demo.company("flow")
 
 
-def test_each_of_the_ten_people_signs_in_with_the_role_the_script_names(apex: Apex) -> None:
+def test_each_of_the_eleven_people_signs_in_with_the_role_the_script_names(apex: Apex) -> None:
     logins = _logins(apex.credentials)
 
     assert sorted(email.split("@")[0] for email in logins) == LOGINS
@@ -89,6 +90,7 @@ def test_each_of_the_ten_people_signs_in_with_the_role_the_script_names(apex: Ap
         "Approver",
         "Buyer",
         "Finance",
+        "Quality",
         "Requester",
         "Store",
     ]
@@ -174,8 +176,8 @@ def test_making_the_company_twice_leaves_one_company_and_one_set_of_logins(apex:
     apex.db.close()  # its database is about to be dropped and made again
     again = demo.reset_company(demo.company("apex"), apex.dataset, credentials=apex.credentials, slug=apex.slug)
 
-    assert len(again.logins) == 10 and again.report is not None and again.report.rejected == []
-    assert len(_logins(apex.credentials)) == 10
+    assert len(again.logins) == 11 and again.report is not None and again.report.rejected == []
+    assert len(_logins(apex.credentials)) == 11
     with Session(routing.engine_for(apex.slug)) as fresh:
         assert fresh.execute(text("select count(*) from request")).scalar_one() == 0  # the earlier requests are gone
     with Session(tenants.control_engine()) as control:

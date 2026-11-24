@@ -542,6 +542,128 @@ def _line_edit(
     return entry
 
 
+def apply_excess(
+    db: Session,
+    tenant: str | None,
+    po_no: str,
+    line_no: int,
+    qty: Decimal,
+    *,
+    approved_by: Actor,
+    rule_code: str | None,
+    rule_version: int | None,
+    band: Decimal | None,
+    reason: str,
+) -> dict[str, Any]:
+    """Accept goods above the order by revising the line to what it counts plus the excess (9.3.2).
+
+    The approval carries: the new version is recorded as approved by the proposal's approver, so the order is not sent
+    back to draft and no second round starts. The caller commits, then mails the version to the supplier.
+    """
+    why = _reason(reason)
+    po = _locked(db, po_no)
+    if po["status"] not in WITH_SUPPLIER + ("received",):
+        raise ChangeError(f"{po_no} is {po['status']}: goods above it cannot be accepted")
+    if (
+        po["status"] == "received"
+        and not db.execute(
+            text("select 1 from po_line where po_no = :n and line_no = :l and status = 'received'"),
+            {"n": po_no, "l": line_no},
+        ).first()
+    ):
+        raise ChangeError(f"{po_no} is received: line {line_no} cannot take more")
+    ln = dict(
+        db.execute(
+            text("select * from po_line where po_no = :n and line_no = :l for update"), {"n": po_no, "l": line_no}
+        )
+        .mappings()
+        .one()
+    )
+    if ln["status"] not in ("open", "part_received", "received"):
+        raise ChangeError(f"line {line_no} is {ln['status']}: the excess cannot be accepted on it")
+    if qty <= Decimal(ln["received_qty"]):
+        raise ChangeError(f"line {line_no}: {format_qty(ln['received_qty'])} is already received; nothing to add")
+    supplier = db.execute(
+        text("select state_code, gstin, gst_reg_type from supplier where code = :c"), {"c": po["supplier_code"]}
+    ).one()
+    supplier_state = supplier[0] or (str(supplier[1])[:2] if supplier[1] else None)
+    gstin, place = service.place_of_supply(db, po["ship_to_location"])
+    if not supplier_state or not place:
+        raise ChangeError(
+            "the state of the supplier or of the delivery place is unknown, so the GST cannot be worked out"
+        )
+    del gstin
+    tax = _Tax(supplier_state, place, Registration(supplier[2] or "regular"))
+    amounts = tax.amounts(qty, Decimal(ln["unit_price"]), ln["gst_rate"])
+    db.execute(
+        text(
+            "update po_line set qty = :q, taxable = :t, cgst = :c, sgst = :s, igst = :i, "
+            "status = case when :q <= received_qty then 'received' else 'part_received' end "
+            "where po_no = :n and line_no = :l"
+        ),
+        {
+            "q": qty, "t": amounts.taxable, "c": amounts.cgst, "s": amounts.sgst, "i": amounts.igst,
+            "n": po_no, "l": line_no,
+        },
+    )  # fmt: skip
+    parts = [
+        LineAmounts(r[0], r[1], r[2], r[3])
+        for r in db.execute(
+            text("select taxable, cgst, sgst, igst from po_line where po_no = :n and status <> 'cancelled'"),
+            {"n": po_no},
+        )
+    ] + [
+        LineAmounts(r[0], r[1], r[2], r[3])
+        for r in db.execute(text("select amount, cgst, sgst, igst from po_charge where po_no = :n"), {"n": po_no})
+    ]
+    totals = order_totals(parts)
+    version = int(po["version"]) + 1
+    db.execute(
+        text(
+            "update po set taxable = :t, cgst = :c, sgst = :s, igst = :i, total = :tot, version = :v, "
+            "acknowledged_version = null, acknowledged_at = null where no = :n"
+        ),
+        {
+            "t": totals.taxable, "c": totals.cgst, "s": totals.sgst, "i": totals.igst, "tot": totals.total,
+            "v": version, "n": po_no,
+        },
+    )  # fmt: skip
+    base = approved_versions.baseline(db, po_no)
+    db.execute(
+        text(
+            "insert into po_revision (po_no, version, changed_by, reason, changes, total_before, total_after, "
+            "reapproval, baseline_version, material) values (:n, :v, :u, :r, cast(:c as jsonb), :tb, :ta, false, :bv, "
+            "'[]')"
+        ),
+        {
+            "n": po_no, "v": version, "u": approved_by.identity, "r": why,
+            "c": json.dumps([{"line": line_no, "qty": {"from": str(ln["qty"]), "to": str(qty)}},
+                             {"excess": "accepted by revision"}], default=str),
+            "tb": Decimal(po["total"]), "ta": totals.total, "bv": base.version if base else None,
+        },
+    )  # fmt: skip
+    versions.record(db, po_no, made_by="proposal:receipt.excess_accept", reason=why)
+    approved_versions.record(
+        db, po_no, approved_by=approved_by.identity, rule_code=rule_code, rule_version=rule_version, band=band
+    )
+    audit.record(
+        db, approved_by, "po.revise", "po", po_no,
+        before={"version": version - 1, "total": po["total"]},
+        after={"version": version, "total": totals.total, "excess": True, "line": line_no,
+               "qty": {"from": str(ln["qty"]), "to": str(qty)}, "approval_carried": True,
+               "rule": f"{rule_code}:v{rule_version}" if rule_code else None},
+        reason=why,
+    )  # fmt: skip
+    return {"version": version, "total": totals.total, "po": po}
+
+
+def mail_version(
+    db: Session, tenant: str | None, po: dict[str, Any], version: int, why: str, supplier_asked: bool = False
+) -> bool:
+    """Mail a new version with its respond link, as any carried revision (block 8's acknowledgement rules)."""
+    return _mail_version(db, tenant, po, version, why, supplier_asked)
+
+
 def revise(
     db: Session,
     tenant: str | None,
@@ -555,13 +677,44 @@ def revise(
     approved_change: bool = False,
     supplier_asked: bool = False,
     change_id: int | None = None,
+    excess_id: int | None = None,
+    approved_by: Actor | None = None,
+    rule_code: str | None = None,
+    rule_version: int | None = None,
+    band: Decimal | None = None,
 ) -> dict[str, Any]:
     """Make a new version of the order: the quantity or need-by date of open lines, a contract line moved to the
     contract price in force, the delivery place, payment terms or delivery terms. `seen_version` is the version the
     person saw (a later one is refused). `approved_change` is a supplier's change a person has already accepted: it may
     change the price. A material change against the last approved version (Q19) goes through approval again; any other
     carries the approval, and if the supplier already has the order clears its acknowledgement and mails the new
-    version's document with a link to answer it."""
+    version's document with a link to answer it.
+
+    With `excess_id` it accepts goods above the order (9.3.2): the line becomes what it counts plus the excess, and the
+    version is recorded as approved by `approved_by`, so the approval carries and nothing goes back to draft.
+    """
+    if excess_id is not None:
+        if approved_by is None:
+            raise ChangeError("accepting goods above the order needs the person who approved it")
+        excess = db.execute(text("select * from receipt_excess where id = :i"), {"i": excess_id}).mappings().first()
+        if excess is None:
+            raise ChangeError(f"there is no excess {excess_id}")
+        line = db.execute(
+            text("select received_qty from po_line where po_no = :p and line_no = :l"),
+            {"p": excess["po_no"], "l": excess["po_line_no"]},
+        ).first()
+        if line is None:
+            raise ChangeError(f"line {excess['po_line_no']} is not on {excess['po_no']}")
+        made = apply_excess(
+            db, tenant, po_no, int(excess["po_line_no"]), Decimal(line[0]) + Decimal(excess["qty"]),
+            approved_by=approved_by, rule_code=rule_code, rule_version=rule_version, band=band,
+            reason=reason or "",
+        )  # fmt: skip
+        return {
+            "version": made["version"], "status": str(db.execute(text("select status from po where no = :n"), {"n": po_no}).scalar_one()),
+            "total": str(made["total"]), "reapproval": False, "material": [], "approval_carried": True,
+            "header_changes": [], "touchless_lost": False, "supplier_told": False, "po": made["po"],
+        }  # fmt: skip
     why = _reason(reason)
     header = header if header is not None and not header.empty() else None
     if not changes and header is None:

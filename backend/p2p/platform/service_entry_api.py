@@ -18,7 +18,7 @@ from p2p.formulas.money import format_inr, format_qty
 from p2p.platform import permissions, proposals, ratelimit, routing
 from p2p.platform.link_pages import Refused, open_company, page
 from p2p.platform.permissions import can_anywhere, require
-from p2p.receiving import goods, service_links, services, unordered
+from p2p.receiving import goods, reversal, service_links, services, unordered
 
 router = APIRouter(tags=["services and unordered receipts"])
 Db = Annotated[Session, Depends(routing.tenant_session)]
@@ -95,6 +95,9 @@ def services_to_confirm(db: Db, ctx: Ctx) -> dict[str, Any]:
                 "amount": str(e["amount_accepted"]), "on": e["accepted_on"].isoformat(), "via": e["via"],
                 "period_from": e["period_from"].isoformat() if e["period_from"] else None,
                 "period_to": e["period_to"].isoformat() if e["period_to"] else None,
+                "status": e["status"],
+                "reversed_on": e["reversed_on"].isoformat() if e["reversed_on"] else None,
+                "can_reverse": e["status"] == "posted" and me is not None and e["accepted_by"] == me,
             }
             for e in made
         ],
@@ -125,6 +128,17 @@ def confirm_service(payload: dict[str, Any], db: Db, ctx: Ctx) -> dict[str, Any]
 
     result: dict[str, Any] = _guard(run)
     return result
+
+
+@router.post("/api/services/entries/{no}/reverse")
+def reverse_service(no: str, payload: dict[str, Any], db: Db, ctx: Ctx) -> dict[str, Any]:
+    """Reverse a service entry: its confirmer or the person who asked for it, inside the window or by proposal (9.7.6)."""
+    try:
+        return reversal.reverse_service_entry(
+            db, ctx.slug, no, ctx.user_id, str(payload.get("reason") or ""), as_of=business_today()
+        )
+    except reversal.ReversalError as exc:
+        raise HTTPException(exc.status, str(exc)) from None
 
 
 # ---- the emailed link -------------------------------------------------------------------------
@@ -282,7 +296,7 @@ def order_unordered(no: str, payload: dict[str, Any], db: Db, ctx: Buyer) -> dic
 
 @router.post("/api/unordered-receipts/{no}/receive")
 def receive_unordered(no: str, db: Db, ctx: Store) -> dict[str, Any]:
-    gr_no: str = _guard(lambda: unordered.receive_on_order(db, no, ctx.user_id, as_of=business_today()))
+    gr_no: str = _guard(lambda: unordered.receive_on_order(db, ctx.slug, no, ctx.user_id, as_of=business_today()))
     goods.tell_requesters(db, ctx.slug, gr_no)
     goods.reserve_arrived(db, ctx.slug, gr_no)
     return {"receipt": no, "goods_receipt": gr_no}
@@ -290,5 +304,15 @@ def receive_unordered(no: str, db: Db, ctx: Store) -> dict[str, Any]:
 
 @router.post("/api/unordered-receipts/{no}/returned")
 def returned_unordered(no: str, payload: dict[str, Any], db: Db, ctx: Store) -> dict[str, Any]:
-    _guard(lambda: unordered.mark_returned(db, no, ctx.user_id, payload.get("ref"), as_of=business_today()))
-    return {"receipt": no, "status": "returned"}
+    return_no: str = _guard(
+        lambda: unordered.mark_returned(
+            db,
+            ctx.slug,
+            no,
+            ctx.user_id,
+            payload.get("challan"),
+            payload.get("vehicle"),
+            as_of=business_today(),
+        )
+    )
+    return {"receipt": no, "status": "returned", "return_no": return_no}

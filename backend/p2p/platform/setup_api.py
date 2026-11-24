@@ -75,6 +75,7 @@ PERMISSIONS: dict[str, str] = {
     "benchmark.verify": "Verify or reject market benchmarks others entered",
     "price.view": "See an item's prices side by side",
     "grn.create": "Receive and inspect goods",
+    "grn.inspect": "Inspect goods",
     "grn.unordered_approve": "Approve goods received without an order",
     "stock.view": "See stock",
     "stock.issue": "Issue stock for use",

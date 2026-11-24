@@ -450,6 +450,13 @@ const PurchaseOrdersView = {
           <div class="table-foot">${UI.totals([["Taxable", po.taxable], ["IGST", po.igst], ["CGST", po.cgst], ["SGST", po.sgst], ["Total", po.total]])}</div>
         </div>
         <div id="supplierMessagesBox"></div>
+        <div class="panel" style="margin-top:12px;">
+          <div class="panel-title">Goods, returns and claims</div>
+          ${po.receipts.length ? `<div style="font-size:12.5px;">Receipts: ${po.receipts.map((r) => `<a href="#/receiving/${this.esc(r.id)}" style="color:var(--accent-tint);">${this.esc(r.id)}</a>${r.status === "reversed" ? " (reversed)" : ""}`).join(", ")}</div>` : `<div class="cell-muted" style="font-size:12.5px;">No goods received yet.</div>`}
+          ${po.excess.length ? `<div style="font-size:12.5px;margin-top:6px;">Above the order: ${po.excess.map((e) => `${this.esc(e.qty)} ${this.esc(e.uom || "")} on ${this.esc(e.gr_no)} (${this.esc(e.status)})`).join(", ")}</div>` : ""}
+          ${po.returns.length ? `<div style="font-size:12.5px;margin-top:6px;">Returns: ${po.returns.map((r) => `<a href="#/returns/${this.esc(r.no)}" style="color:var(--accent-tint);">${this.esc(r.no)}</a> (${this.esc(r.status)})`).join(", ")}</div>` : ""}
+          ${po.claims.length ? `<div style="font-size:12.5px;margin-top:6px;">Recovery claims: ${po.claims.map((c) => `${this.esc(c.no)} ${formatCurrency(c.total)} (${this.esc(c.status)})`).join(", ")}</div>` : ""}
+        </div>
         </div>
         <div class="doc-side">
         <div class="panel">

@@ -143,7 +143,7 @@ def test_the_order_price_replaces_the_estimate_and_stock_is_spent_when_accepted(
         r.s, po_no, [goods.LineIn(line_no, D(60))], goods.Header(challan="DC-2"), r.uid("U02"), as_of=date(2026, 11, 25)
     )
     assert r.s.execute(text("select count(*) from budget_actual where po_no = :p"), {"p": po_no}).scalar_one() == 0
-    goods.inspect(r.s, posted.no, [goods.Decision(line_no, D(58), D(2), "Two with cracked seals")], r.uid("U02"),
+    goods.inspect(r.s, posted.no, [goods.Decision(line_no, D(58), D(2), "Two with cracked seals")], r.uid("U11"),
                   as_of=date(2026, 11, 25))  # fmt: skip
     _same_as_truth(r, mo2, "BG1", "after_inspection")
 

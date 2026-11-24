@@ -9,3 +9,5 @@ invoice_booking,PI,company,{prefix}-{fy4}-{seq:06d},fy
 payment_run,PR,company,{prefix}-{fy4}-{seq:04d},fy
 payment,PAY,company,{prefix}-{fy4}-{seq:06d},fy
 return_to_vendor,RTV,location,{prefix}-{loc}-{fy4}-{seq:04d},fy
+supplier_return,RTN,location,{prefix}-{loc}-{fy4}-{seq:05d},fy
+recovery_claim,RCL,location,{prefix}-{loc}-{fy4}-{seq:05d},fy

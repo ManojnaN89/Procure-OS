@@ -1,13 +1,16 @@
 """Goods receipt: what arrived against a sent order, checked, accepted or rejected, and put into stock.
 
 A receipt is posted by a store person who is not the buyer, an approver or the requester of that order (segregation of
-duties). Over-delivery beyond the company's tolerance for the item's category is refused. An item that needs inspection
-waits: a stocked one goes into stock as quarantine (receiving/quality.py), but nothing counts for the order until the
-inspection says how much was accepted; then the accepted part becomes usable and the rejected part blocked. What is
-accepted raises the received quantity of the order line (which the invoice match uses later) and, for stocked items,
-the usable stock.
+duties). An item that needs inspection (its item or its category says so) waits: a stocked one goes into stock as
+quarantine (receiving/quality.py), but nothing counts for the order until an inspection by someone else says how much was
+accepted; then the accepted part becomes usable and the rejected part blocked. Goods above what the order may still take
+(the tolerance version in force) are not refused: they are held in quarantine as excess (`receipt_excess`) for the buyer,
+who accepts them by revising the order or returns them (`receiving/excess.py`). Units rejected at the gate go back with a
+return challan (`receiving/returns.py`). What is accepted raises the received quantity of the order line (which the invoice
+match uses later) and, for stocked items, the usable stock.
 A service line is not received here: the requester confirms it (receiving/services.py). A serialised item needs one serial
-number per unit received, and a serial already on file for the item is refused.
+number per unit received; a serial already received for the item is refused, and the serials of rejected units are kept
+with their status so they no longer block the replacement (DF-31).
 """
 
 import logging
@@ -25,7 +28,7 @@ from p2p.formulas import receiving as rules
 from p2p.formulas.calendar import business_today
 from p2p.formulas.money import format_qty
 from p2p.invoices import tolerances
-from p2p.platform import audit, notifications, numbering
+from p2p.platform import audit, notifications, numbering, reference, tasks
 from p2p.platform.sod import Actor, user
 from p2p.receiving import quality
 from p2p.receiving.kinds import service_lines
@@ -33,6 +36,7 @@ from p2p.requests import reservation
 
 log = logging.getLogger(__name__)
 RECEIVABLE = ("sent", "acknowledged", "part_received")
+SLA_HOURS = Decimal(18)  # a buyer's next step on a receipt is counted in working hours (as block 8)
 
 
 class ReceiptError(Exception):
@@ -46,6 +50,7 @@ class LineIn:
     qty_rejected: Decimal | None = None
     reject_reason: str | None = None
     serials: list[str] | None = None  # one per unit received, for a serialised item
+    rejected_serials: list[str] | None = None  # one per unit rejected, from those received
 
 
 @dataclass
@@ -64,6 +69,8 @@ class Posted:
     po_status: str
     pending_inspection: list[int] = field(default_factory=list)
     accepted: dict[int, Decimal] = field(default_factory=dict)
+    excess: dict[int, Decimal] = field(default_factory=dict)  # units above the order held for the buyer
+    return_no: str | None = None  # the gate rejection's return challan
 
 
 @dataclass
@@ -72,6 +79,7 @@ class Decision:
     qty_accepted: Decimal
     qty_rejected: Decimal
     reason: str | None = None
+    rejected_serials: list[str] | None = None
 
 
 def over_pct(db: Session, category: str | None, on: date | None = None) -> Decimal:
@@ -103,11 +111,11 @@ def conflict_of(db: Session, po: dict[str, Any], user_id: int, *, requester_may:
 
 
 def _counted(db: Session, po_no: str, line_no: int) -> Decimal:
-    """Accepted so far, plus what waits for inspection."""
+    """Accepted so far against the order line: what was accepted at the gate or the inspection, less excess held."""
     return Decimal(
         db.execute(
             text(
-                "select coalesce(sum(coalesce(g.qty_accepted, g.qty_received)), 0) from gr_line g "
+                "select coalesce(sum(coalesce(g.qty_accepted, 0) - coalesce(g.qty_excess, 0)), 0) from gr_line g "
                 "where g.po_no = :p and g.po_line_no = :l"
             ),
             {"p": po_no, "l": line_no},
@@ -116,23 +124,41 @@ def _counted(db: Session, po_no: str, line_no: int) -> Decimal:
 
 
 def _item(db: Session, item_code: str | None) -> dict[str, Any]:
-    none = {"stocked": False, "inspection_required": False, "serialised": False, "category_code": None}
+    none = {
+        "stocked": False, "inspection_required": False, "category_inspection": False, "serialised": False,
+        "category_code": None, "name": None, "uom": None,
+    }  # fmt: skip
     if not item_code:
         return none
     row = (
         db.execute(
-            text("select stocked, inspection_required, serialised, category_code from item where code = :c"),
+            text(
+                "select i.stocked, i.inspection_required, coalesce(c.inspection_required, false) as category_inspection, "
+                "i.serialised, i.category_code, i.name, coalesce(i.purchase_uom, i.base_uom) as uom "
+                "from item i left join item_category c on c.code = i.category_code where i.code = :c"
+            ),
             {"c": item_code},
         )
         .mappings()
         .first()
     )
-    return dict(row) if row else none
+    return {**none, **dict(row)} if row else none
+
+
+def needs_inspection(item: dict[str, Any]) -> bool:
+    return rules.needs_inspection(item["inspection_required"], item["category_inspection"])
 
 
 def _ratio(line: dict[str, Any]) -> Decimal:
     """Stock units per unit of the order line."""
     return Decimal(line["base_qty"]) / Decimal(line["qty"]) if line["base_qty"] else Decimal(1)
+
+
+def room_for(db: Session, po_no: str, line_no: int, item_code: str | None, ordered: Decimal, as_of: date) -> Decimal:
+    """What may still be received against a line on a date, from the tolerance version in force (the ERP import asks
+    before it posts; a receipt computes it itself)."""
+    item = _item(db, item_code)
+    return rules.room_left(ordered, _counted(db, po_no, line_no), over_pct(db, item["category_code"], as_of))
 
 
 def count_accepted(
@@ -144,11 +170,13 @@ def count_accepted(
     as_of: date,
     *,
     in_stock: bool = False,
+    move_stock: bool = True,
     actor: Actor = audit.SYSTEM,
 ) -> None:
     """What was accepted (or confirmed, for a service) counts against the order line, and stocked goods go into stock
     (unless they are there already, in quarantine: `in_stock`). A stocked line's accepted goods are spent against its
-    budget now, at the order price (D-10)."""
+    budget now, at the order price (D-10). `move_stock` is False for a receipt from the ERP: its stock comes through the
+    stock import (OP-17)."""
     if accepted <= 0:
         return
     total = Decimal(line["received_qty"]) + accepted
@@ -157,7 +185,7 @@ def count_accepted(
         {"t": total, "s": rules.line_status(Decimal(line["qty"]), total), "p": po["no"], "l": line["line_no"]},
     )
     item = _item(db, line["item_code"])
-    if item["stocked"] and line["item_code"] and not in_stock:
+    if item["stocked"] and line["item_code"] and not in_stock and move_stock:
         ratio = _ratio(line)
         db.execute(
             text(
@@ -177,18 +205,55 @@ def count_accepted(
     budget_ledger.post_receipt(db, gr_no, po["no"], int(line["line_no"]), accepted, as_of, actor)
 
 
-def refresh_order(db: Session, po_no: str) -> str:
-    """The order's status from its lines."""
+def refresh_order(db: Session, po_no: str, *, fallback_to: str | None = None) -> str:
+    """The order's status from its lines; when nothing is received any more, `fallback_to` (sent, or the version the
+    supplier acknowledged) when one is given."""
     statuses = [r[0] for r in db.execute(text("select status from po_line where po_no = :p"), {"p": po_no})]
     new = rules.order_status(statuses)
+    if new is None and fallback_to is not None:
+        new = fallback_to
     if new:
-        db.execute(text("update po set status = :s where no = :p"), {"s": new, "p": po_no})
-        return new
+        current = db.execute(text("select status from po where no = :p"), {"p": po_no}).scalar_one()
+        # a held or closed status is not reopened by a line changing under it
+        if current not in ("closed", "cancelled", "draft", "submitted", "approved"):
+            db.execute(text("update po set status = :s where no = :p"), {"s": new, "p": po_no})
+        return str(current) if current in ("closed", "cancelled") else new
     return str(db.execute(text("select status from po where no = :p"), {"p": po_no}).scalar_one())
 
 
-def _serials(db: Session, item_code: str, ln: LineIn) -> list[str]:
-    """The serial numbers of a serialised item: one per unit received, none already on file for the item."""
+def uncount(
+    db: Session,
+    po: dict[str, Any],
+    line: dict[str, Any],
+    qty: Decimal,
+    as_of: date,
+    *,
+    source: str,
+    gr_no: str | None,
+    actor: Actor,
+) -> Decimal:
+    """Take a counted quantity back off the order line (a counted return, or a receipt reversal): the line and the order
+    take their status from the lines, and the budget takes back what the goods spent. The caller commits. Returns the
+    quantity the line has received now."""
+    left = max(Decimal(line["received_qty"]) - qty, Decimal(0))
+    db.execute(
+        text("update po_line set received_qty = :t, status = :s where po_no = :p and line_no = :l"),
+        {"t": left, "s": rules.line_status(Decimal(line["qty"]), left), "p": po["no"], "l": line["line_no"]},
+    )
+    budget_ledger.post_reversal(db, gr_no, po["no"], int(line["line_no"]), qty, as_of, source, actor)
+    return left
+
+
+def order_fallback(po: dict[str, Any]) -> str:
+    """Where a sent order goes back to when nothing is received any more: the version the supplier acknowledged, if it
+    acknowledged the version it is at, else sent."""
+    if int(po.get("acknowledged_version") or 0) == int(po.get("version") or 0) and po.get("acknowledged_version"):
+        return "acknowledged"
+    return "sent"
+
+
+def _serials(db: Session, item_code: str, ln: LineIn, *, as_of: date) -> list[str]:
+    """The serial numbers of a serialised item: one per unit received, none already received for the item."""
     try:
         numbers = rules.check_serials(ln.serials or [], ln.qty_received)
     except ValueError as exc:
@@ -196,18 +261,117 @@ def _serials(db: Session, item_code: str, ln: LineIn) -> list[str]:
     taken = sorted(
         r[0]
         for r in db.execute(
-            text("select serial from serial_number where item_code = :i and serial = any(:s)"),
+            text("select serial from serial_number where item_code = :i and serial = any(:s) and status = 'received'"),
             {"i": item_code, "s": numbers},
         )
     )
     if taken:
         raise ReceiptError(
             f"line {ln.po_line_no}: {'serial number' if len(taken) == 1 else 'serial numbers'} already received for {item_code}: {', '.join(taken)}"
-        )
+        )  # fmt: skip
     return numbers
 
 
-def post_receipt(db: Session, po_no: str, lines: list[LineIn], header: Header, user_id: int, *, as_of: date) -> Posted:
+def _purchase_manager_login(db: Session, tenant: str) -> int | None:
+    """The first active Purchase Manager with a login, the chain a receipt case escalates to."""
+    for (code,) in db.execute(
+        text("select code from org_user where active and lower(designation) = 'purchase manager' order by code")
+    ).all():
+        uid = notifications.login_of(db, tenant, str(code))
+        if uid is not None:
+            return uid
+    return None
+
+
+def open_excess(db: Session, gr_no: str, line_no: int, qty: Decimal, uom: str | None, hold_id: int | None) -> int:
+    """One `receipt_excess` row, waiting for the buyer. The caller commits."""
+    return int(
+        db.execute(
+            text(
+                "insert into receipt_excess (gr_no, po_no, po_line_no, qty, uom, hold_id) "
+                "select :g, po_no, po_line_no, :q, :u, :h from gr_line where gr_no = :g and po_line_no = :l returning id"
+            ),
+            {"g": gr_no, "l": line_no, "q": qty, "u": uom, "h": hold_id},
+        ).scalar_one()
+    )
+
+
+def excess_task(
+    db: Session,
+    tenant: str,
+    gr_no: str,
+    po: dict[str, Any],
+    line: dict[str, Any],
+    excess_id: int,
+    qty: Decimal,
+    uom: str | None,
+    item_name: str | None,
+    location: str,
+) -> int | None:
+    """The buyer's task: accept the excess by revising the order, or return it (18 working hours)."""
+    if not po.get("buyer"):
+        return None
+    assignee = notifications.login_of(db, tenant, str(po["buyer"]))
+    if assignee is None:
+        return None
+    words = f"{format_qty(qty)} {uom or ''}".strip()
+    title = f"{words} of {item_name or 'an item'} arrived above {po['no']} on {gr_no}"
+    task_id = tasks.create_task(
+        db,
+        tenant,
+        kind="receipt_excess",
+        title=title,
+        assignee=assignee,
+        sla_hours=SLA_HOURS,
+        escalation_chain=[x for x in [_purchase_manager_login(db, tenant)] if x],
+        payload={
+            "gr_no": gr_no,
+            "po_no": po["no"],
+            "line_no": line["line_no"],
+            "excess_id": excess_id,
+            "calendar_location": location,
+        },
+        email_note="Accept them by revising the order, or return them",
+        calendar=reference.calendar_for_location(db, location),
+    )
+    db.execute(text("update receipt_excess set task_id = :t where id = :i"), {"t": task_id, "i": excess_id})
+    return task_id
+
+
+def _gate_return(
+    db: Session,
+    tenant: str | None,
+    user_id: int,
+    po: dict[str, Any],
+    gr_no: str,
+    rejected: list[dict[str, Any]],
+    as_of: date,
+) -> str | None:
+    """The units rejected at the gate go back with the delivery: one return challan, already dispatched (OP-9)."""
+    if not rejected:
+        return None
+    from p2p.receiving import returns  # noqa: PLC0415 - returns builds on receipts
+
+    return returns.gate_return(db, tenant, user_id, po, gr_no, rejected, as_of)
+
+
+def post_receipt(
+    db: Session,
+    po_no: str,
+    lines: list[LineIn],
+    header: Header,
+    user_id: int,
+    *,
+    as_of: date,
+    tenant: str | None = None,
+    source: str = "platform",
+    external_ref: str | None = None,
+    external_lines: dict[int, str] | None = None,
+    erp: bool = False,
+    received_by: str | None = None,
+    skip_conflict: bool = False,
+    move_stock: bool = True,
+) -> Posted:
     found = db.execute(text("select * from po where no = :n for update"), {"n": po_no}).mappings().first()
     if found is None:
         raise ReceiptError(f"{po_no} does not exist")
@@ -218,19 +382,21 @@ def post_receipt(db: Session, po_no: str, lines: list[LineIn], header: Header, u
         raise ReceiptError("a receipt needs at least one line")
     if len({ln.po_line_no for ln in lines}) != len(lines):
         raise ReceiptError("a line appears twice in the receipt")
-    conflict = conflict_of(db, po, user_id)
-    if conflict:
-        raise ReceiptError(f"segregation of duties: {conflict}")
+    if not skip_conflict:
+        conflict = conflict_of(db, po, user_id)
+        if conflict:
+            raise ReceiptError(f"segregation of duties: {conflict}")
     order_lines = {
         r["line_no"]: dict(r)
         for r in db.execute(
             text("select * from po_line where po_no = :n order by line_no for update"), {"n": po_no}
         ).mappings()
     }
-    plan: list[tuple[LineIn, dict[str, Any], dict[str, Any], rules.SplitResult | None]] = []
+    plan: list[tuple[LineIn, dict[str, Any], dict[str, Any], rules.SplitResult | None, rules.ExcessSplit]] = []
     result: rules.SplitResult | None
     services = service_lines(db, po_no)
     serials: dict[int, list[str]] = {}
+    rejected_serials: dict[int, list[str]] = {}
     for ln in lines:
         row = order_lines.get(ln.po_line_no)
         if row is None or row["status"] not in ("open", "part_received"):
@@ -241,20 +407,14 @@ def post_receipt(db: Session, po_no: str, lines: list[LineIn], header: Header, u
             )
         item = _item(db, row["item_code"])
         if item["serialised"]:
-            serials[ln.po_line_no] = _serials(db, row["item_code"], ln)
-        room = rules.room_left(
-            Decimal(row["qty"]), _counted(db, po_no, ln.po_line_no), over_pct(db, item["category_code"], as_of)
-        )
-        if ln.qty_received > room:
-            raise ReceiptError(
-                f"line {ln.po_line_no} ({row['description']}): {ln.qty_received} is more than the {room} that may still be received"
-            )
-        if item["inspection_required"]:
+            serials[ln.po_line_no] = _serials(db, row["item_code"], ln, as_of=as_of)
+        waiting = needs_inspection(item) and not erp
+        if waiting:
             if ln.qty_rejected:
                 raise ReceiptError(f"line {ln.po_line_no} needs inspection: the inspection decides what is rejected")
             if ln.qty_received <= 0:
                 raise ReceiptError("the quantity received must be more than zero")
-            plan.append((ln, row, item, None))
+            plan.append((ln, row, item, None, rules.ExcessSplit(Decimal(0), Decimal(0))))
             continue
         try:
             result = rules.split(ln.qty_received, ln.qty_rejected)
@@ -262,23 +422,40 @@ def post_receipt(db: Session, po_no: str, lines: list[LineIn], header: Header, u
             raise ReceiptError(f"line {ln.po_line_no}: {exc}") from None
         if result.rejected > 0 and not (ln.reject_reason or "").strip():
             raise ReceiptError(f"line {ln.po_line_no}: a reason is needed for the rejected quantity")
-        plan.append((ln, row, item, result))
+        if item["serialised"] and result.rejected > 0:
+            rejected_serials[ln.po_line_no] = rules.check_rejected_serials(
+                result.rejected, ln.rejected_serials or [], serials[ln.po_line_no], ln.po_line_no
+            )
+        room = rules.room_left(
+            Decimal(row["qty"]), _counted(db, po_no, ln.po_line_no), over_pct(db, item["category_code"], as_of)
+        )
+        if item["serialised"] and result.accepted > room:
+            raise ReceiptError(
+                f"line {ln.po_line_no} ({row['description']}): {result.accepted} is more than the {room} that may still be received"
+            )  # fmt: skip
+        split = rules.split_excess(result.accepted, room)
+        if erp and split.excess > 0:  # a row above the order is left out before it gets here (OP-18)
+            raise ReceiptError(
+                f"line {ln.po_line_no} ({row['description']}): {result.accepted} is more than the {room} that may still be received"
+            )
+        plan.append((ln, row, item, result, split))
 
-    pending = [ln.po_line_no for ln, _, _, res in plan if res is None]
+    pending = [ln.po_line_no for ln, _, _, res, _ in plan if res is None]
     me = org_code_of(db, user_id) or f"user:{user_id}"
+    by = received_by or me
     gr_no = numbering.next_number(db, "goods_receipt", as_of, location_code=po["ship_to_location"])
     db.execute(
         text(
             "insert into goods_receipt (no, po_no, location_code, received_by, delivery_challan_no, supplier_invoice_ref, "
-            "eway_bill_no, vehicle_no, inspection_status, accepted_on, remarks, posted_by, tolerance_version) values "
-            "(:no, :po, :loc, :by, :dc, :inv, :ew, :veh, :ins, :acc, :rem, :u, :tv)"
+            "eway_bill_no, vehicle_no, inspection_status, accepted_on, remarks, posted_by, tolerance_version, source, "
+            "external_ref) values (:no, :po, :loc, :by, :dc, :inv, :ew, :veh, :ins, :acc, :rem, :u, :tv, :src, :ext)"
         ),
         {
             "tv": tolerances.in_force(db, as_of).version,
             "no": gr_no,
             "po": po_no,
             "loc": po["ship_to_location"],
-            "by": me,
+            "by": by,
             "dc": header.challan,
             "inv": header.invoice_ref,
             "ew": header.eway_bill,
@@ -287,23 +464,36 @@ def post_receipt(db: Session, po_no: str, lines: list[LineIn], header: Header, u
             "acc": None if pending else as_of,
             "rem": header.remarks,
             "u": str(user_id),
+            "src": source,
+            "ext": external_ref,
         },
     )
     for line_no, numbers in serials.items():
         for serial in numbers:
             db.execute(
                 text(
-                    "insert into serial_number (item_code, serial, gr_no, po_no, po_line_no) values (:i, :s, :g, :p, :l)"
+                    "insert into serial_number (item_code, serial, gr_no, po_no, po_line_no, status) "
+                    "values (:i, :s, :g, :p, :l, 'received') on conflict do nothing"
                 ),
                 {"i": order_lines[line_no]["item_code"], "s": serial, "g": gr_no, "p": po_no, "l": line_no},
             )
-    accepted_by_line: dict[int, Decimal] = {}
-    quarantined: dict[int, str] = {}
-    for ln, row, item, result in plan:
+    for line_no, numbers in rejected_serials.items():
         db.execute(
             text(
-                "insert into gr_line (gr_no, po_no, po_line_no, qty_received, qty_accepted, qty_rejected, reject_reason) "
-                "values (:g, :p, :l, :r, :a, :x, :why)"
+                "update serial_number set status = 'rejected' where gr_no = :g and po_line_no = :l and serial = any(:s)"
+            ),
+            {"g": gr_no, "l": line_no, "s": numbers},
+        )
+    accepted_by_line: dict[int, Decimal] = {}
+    excess_by_line: dict[int, Decimal] = {}
+    quarantined: dict[int, str] = {}
+    gate: list[dict[str, Any]] = []
+    for ln, row, item, result, split in plan:
+        db.execute(
+            text(
+                "insert into gr_line (gr_no, po_no, po_line_no, qty_received, qty_accepted, qty_rejected, "
+                "reject_reason, qty_excess, external_line) values "
+                "(:g, :p, :l, :r, :a, :x, :why, :e, :ext)"
             ),
             {
                 "g": gr_no,
@@ -313,19 +503,69 @@ def post_receipt(db: Session, po_no: str, lines: list[LineIn], header: Header, u
                 "a": None if result is None else result.accepted,
                 "x": None if result is None else result.rejected,
                 "why": (ln.reject_reason or "").strip() or None,
+                "e": split.excess if result is not None else Decimal(0),
+                "ext": (external_lines or {}).get(ln.po_line_no),
             },
         )
-        if result is not None:
-            accepted_by_line[ln.po_line_no] = result.accepted
-            count_accepted(db, gr_no, po, row, result.accepted, as_of, actor=user(user_id))
-        elif item["stocked"] and row["item_code"]:
-            qty = (ln.qty_received * _ratio(row)).quantize(rules.QTY)
-            cost = rules.stock_unit_cost(Decimal(row["unit_price"]), Decimal(row["qty"]), row["base_qty"])
-            quality.receive_into_quarantine(
-                db, gr_no, ln.po_line_no, row["item_code"], po["ship_to_location"], qty, cost, me, as_of
+        if result is None:
+            if item["stocked"] and row["item_code"]:
+                qty = (ln.qty_received * _ratio(row)).quantize(rules.QTY)
+                cost = rules.stock_unit_cost(Decimal(row["unit_price"]), Decimal(row["qty"]), row["base_qty"])
+                quality.receive_into_quarantine(
+                    db, gr_no, ln.po_line_no, row["item_code"], po["ship_to_location"], qty, cost, me, as_of
+                )
+                quarantined[ln.po_line_no] = str(qty)
+            continue
+        if result.rejected > 0:
+            gate.append(
+                {
+                    "line": ln.po_line_no,
+                    "row": row,
+                    "qty": result.rejected,
+                    "reason": (ln.reject_reason or "").strip(),
+                    "serials": rejected_serials.get(ln.po_line_no, []),
+                }
             )
-            quarantined[ln.po_line_no] = str(qty)
+        if split.counted <= 0:
+            continue
+        accepted_by_line[ln.po_line_no] = split.counted
+        count_accepted(
+            db, gr_no, po, row, split.counted, as_of, in_stock=False, move_stock=move_stock, actor=user(user_id)
+        )
+        if split.excess > 0:
+            excess_by_line[ln.po_line_no] = split.excess
+            hold_id = None
+            if item["stocked"] and row["item_code"]:
+                qty = (split.excess * _ratio(row)).quantize(rules.QTY)
+                cost = rules.stock_unit_cost(Decimal(row["unit_price"]), Decimal(row["qty"]), row["base_qty"])
+                hold_id = quality.receive_excess(
+                    db, gr_no, ln.po_line_no, row["item_code"], po["ship_to_location"], qty, cost, me, as_of
+                )
+            excess_id = open_excess(db, gr_no, ln.po_line_no, split.excess, row["uom"], hold_id)
+            if tenant:
+                excess_task(
+                    db,
+                    tenant,
+                    gr_no,
+                    po,
+                    row,
+                    excess_id,
+                    split.excess,
+                    row["uom"],
+                    row["description"],
+                    po["ship_to_location"],
+                )
+    return_no = _gate_return(db, tenant, user_id, po, gr_no, gate, as_of)
     status = refresh_order(db, po_no)
+    if gate:
+        audit.record(
+            db,
+            user(user_id),
+            "grn.gate_return",
+            "goods_receipt",
+            gr_no,
+            after={"return": return_no},
+        )
     audit.record(
         db,
         user(user_id),
@@ -336,24 +576,38 @@ def post_receipt(db: Session, po_no: str, lines: list[LineIn], header: Header, u
             "po": po_no,
             "lines": {ln.po_line_no: str(ln.qty_received) for ln in lines},
             "accepted": {k: str(v) for k, v in accepted_by_line.items()},
+            "excess": {k: str(v) for k, v in excess_by_line.items()},
             "pending_inspection": pending,
             "quarantine": quarantined,
             "po_status": status,
+            "return_no": return_no,
             **({"serials": serials} if serials else {}),
         },
     )
     db.commit()
-    return Posted(gr_no, po_no, status, pending, accepted_by_line)
+    return Posted(gr_no, po_no, status, pending, accepted_by_line, excess_by_line, return_no)
 
 
-def inspect(db: Session, gr_no: str, decisions: list[Decision], user_id: int, *, as_of: date) -> Posted:
-    """Record what the inspection accepted and rejected on the lines that were waiting."""
+def inspect(
+    db: Session, gr_no: str, decisions: list[Decision], user_id: int, *, as_of: date, tenant: str | None = None
+) -> Posted:
+    """Record what the inspection accepted and rejected on the lines that were waiting. The person who received the
+    goods, the order's buyer, an approver or the requester may not inspect them (DF-35)."""
     gr = db.execute(text("select * from goods_receipt where no = :n for update"), {"n": gr_no}).mappings().first()
     if gr is None:
         raise ReceiptError(f"{gr_no} does not exist")
     if gr["inspection_status"] != "pending":
         raise ReceiptError(f"{gr_no} is not waiting for inspection")
+    me = org_code_of(db, user_id) or f"user:{user_id}"
+    if me == gr["received_by"] or str(user_id) == str(gr["posted_by"]):
+        raise ReceiptError("segregation of duties: the person who received the goods cannot also inspect them")
     po = dict(db.execute(text("select * from po where no = :n for update"), {"n": gr["po_no"]}).mappings().one())
+    conflict = conflict_of(db, po, user_id)
+    if conflict:
+        raise ReceiptError(
+            "segregation of duties: "
+            + conflict.replace("receive the goods", "inspect the goods").replace("receive them", "inspect them")
+        )
     waiting = {
         r["po_line_no"]: dict(r)
         for r in db.execute(
@@ -367,7 +621,9 @@ def inspect(db: Session, gr_no: str, decisions: list[Decision], user_id: int, *,
         )
     order_lines = {
         r["line_no"]: dict(r)
-        for r in db.execute(text("select * from po_line where po_no = :n for update"), {"n": po["no"]}).mappings()
+        for r in db.execute(
+            text("select * from po_line where po_no = :n order by line_no for update"), {"n": po["no"]}
+        ).mappings()
     }
     for line_no, line in waiting.items():
         d = given[line_no]
@@ -379,47 +635,101 @@ def inspect(db: Session, gr_no: str, decisions: list[Decision], user_id: int, *,
             raise ReceiptError(f"line {line_no}: a reason is needed for the rejected quantity")
     total_rejected = Decimal(0)
     accepted_by_line: dict[int, Decimal] = {}
-    me = org_code_of(db, user_id) or f"user:{user_id}"
+    excess_by_line: dict[int, Decimal] = {}
     blocked: dict[int, int] = {}
+    inspected_serials: dict[int, list[str]] = {}
     for line_no, d in given.items():
+        row = order_lines[line_no]
+        item = _item(db, row["item_code"])
+        received_serials = [
+            r[0]
+            for r in db.execute(
+                text("select serial from serial_number where gr_no = :g and po_line_no = :l and status = 'received'"),
+                {"g": gr_no, "l": line_no},
+            )
+        ]
+        rejected = d.qty_rejected
+        if item["serialised"] and rejected > 0:
+            try:
+                numbers = rules.check_rejected_serials(rejected, d.rejected_serials or [], received_serials, line_no)
+            except ValueError as exc:
+                raise ReceiptError(str(exc)) from None
+        else:
+            numbers = []
+        room = rules.room_left(
+            Decimal(row["qty"]), _counted(db, po["no"], line_no), over_pct(db, item["category_code"], as_of)
+        )
+        if item["serialised"] and d.qty_accepted > room:
+            raise ReceiptError(
+                f"line {line_no} ({row['description']}): {d.qty_accepted} is more than the {room} that may still be received"
+            )  # fmt: skip
+        split = rules.split_excess(d.qty_accepted, room)
         db.execute(
             text(
-                "update gr_line set qty_accepted = :a, qty_rejected = :x, reject_reason = :why where gr_no = :g and po_line_no = :l"
+                "update gr_line set qty_accepted = :a, qty_rejected = :x, reject_reason = :why, qty_excess = :e "
+                "where gr_no = :g and po_line_no = :l"
             ),
             {
                 "a": d.qty_accepted,
-                "x": d.qty_rejected,
+                "x": rejected,
                 "why": (d.reason or "").strip() or None,
+                "e": split.excess,
                 "g": gr_no,
                 "l": line_no,
             },
         )
-        total_rejected += d.qty_rejected
-        accepted_by_line[line_no] = d.qty_accepted
-        ratio = _ratio(order_lines[line_no])
-        held = quality.inspect_hold(
-            db, gr_no, line_no, (d.qty_accepted * ratio).quantize(rules.QTY),
-            (d.qty_rejected * ratio).quantize(rules.QTY), d.reason, me, as_of,
+        total_rejected += rejected
+        accepted_by_line[line_no] = split.counted
+        if d.qty_accepted > split.counted:
+            excess_by_line[line_no] = split.excess
+        for serial in numbers:
+            inspected_serials.setdefault(line_no, []).append(serial)
+        ratio = _ratio(row)
+        held, excess_hold = quality.inspect_hold(
+            db, gr_no, line_no, (split.counted * ratio).quantize(rules.QTY),
+            (split.excess * ratio).quantize(rules.QTY), (rejected * ratio).quantize(rules.QTY), d.reason, me, as_of,
         )  # fmt: skip
         if held is not None:
             blocked[line_no] = held
-        in_stock = db.execute(
-            text("select 1 from stock_hold where source = 'receipt' and gr_no = :g and gr_line_no = :l"),
-            {"g": gr_no, "l": line_no},
-        ).first()
+        if split.excess > 0:
+            excess_id = open_excess(db, gr_no, line_no, split.excess, row["uom"], excess_hold)
+            if tenant:
+                excess_task(
+                    db,
+                    tenant,
+                    gr_no,
+                    po,
+                    row,
+                    excess_id,
+                    split.excess,
+                    row["uom"],
+                    row["description"],
+                    po["ship_to_location"],
+                )
         count_accepted(
             db,
             gr_no,
             po,
-            order_lines[line_no],
-            d.qty_accepted,
+            row,
+            split.counted,
             as_of,
-            in_stock=in_stock is not None,
+            in_stock=True,
             actor=user(user_id),
         )
+        if numbers:
+            db.execute(
+                text(
+                    "update serial_number set status = 'rejected' where gr_no = :g and po_line_no = :l "
+                    "and serial = any(:s)"
+                ),
+                {"g": gr_no, "l": line_no, "s": numbers},
+            )
     db.execute(
-        text("update goods_receipt set inspection_status = :s, accepted_on = :d where no = :n"),
-        {"s": "failed" if total_rejected > 0 else "passed", "d": as_of, "n": gr_no},
+        text(
+            "update goods_receipt set inspection_status = :s, accepted_on = :d, inspected_by = :by, inspected_at = now() "
+            "where no = :n"
+        ),
+        {"s": "failed" if total_rejected > 0 else "passed", "d": as_of, "by": me, "n": gr_no},
     )
     status = refresh_order(db, po["no"])
     audit.record(
@@ -431,12 +741,15 @@ def inspect(db: Session, gr_no: str, decisions: list[Decision], user_id: int, *,
         after={
             "accepted": {k: str(v) for k, v in accepted_by_line.items()},
             "rejected": str(total_rejected),
+            "excess": {k: str(v) for k, v in excess_by_line.items()},
             "quarantine": "decided",
             "blocked_holds": blocked,
+            "inspected_by": me,
+            "serials": inspected_serials or None,
         },
     )
     db.commit()
-    return Posted(gr_no, po["no"], status, [], accepted_by_line)
+    return Posted(gr_no, po["no"], status, [], accepted_by_line, excess_by_line)
 
 
 def reserve_arrived(db: Session, tenant: str, gr_no: str) -> None:
@@ -469,8 +782,8 @@ def tell_requesters(db: Session, tenant: str, gr_no: str, *, inspected: bool = F
         rows = (
             db.execute(
                 text(
-                    "select g.po_line_no, l.description, l.uom, l.request_no, g.qty_received, g.qty_accepted, g.qty_rejected "
-                    "from gr_line g join po_line l on l.po_no = g.po_no and l.line_no = g.po_line_no "
+                    "select g.po_line_no, l.description, l.uom, l.request_no, g.qty_received, g.qty_accepted, g.qty_rejected, "
+                    "g.qty_excess from gr_line g join po_line l on l.po_no = g.po_no and l.line_no = g.po_line_no "
                     "where g.gr_no = :n order by g.po_line_no"
                 ),
                 {"n": gr_no},
@@ -505,6 +818,10 @@ def tell_requesters(db: Session, tenant: str, gr_no: str, *, inspected: bool = F
                     )
                 else:
                     lines.append(f"- {what}: {format_qty(r['qty_accepted'])} accepted")
+                if Decimal(r["qty_excess"] or 0) > 0:
+                    lines.append(
+                        f"  {format_qty(r['qty_excess'])} above the order held in quarantine; the buyer decides"
+                    )
             if not lines:
                 continue
             title = f"Inspection done for {gr['po_no']}" if inspected else f"Goods arrived for {gr['po_no']}"
@@ -522,4 +839,45 @@ def tell_requesters(db: Session, tenant: str, gr_no: str, *, inspected: bool = F
     except Exception:  # noqa: BLE001 - telling people must never undo or hide a receipt
         db.rollback()
         log.warning("could not notify about receipt %s", gr_no, exc_info=True)
+        return 0
+
+
+def tell_reversed(db: Session, tenant: str, gr_no: str, reason: str) -> int:
+    """The buyer and the people who asked for the goods hear that a receipt was reversed (3.6)."""
+    try:
+        gr = db.execute(text("select po_no from goods_receipt where no = :n"), {"n": gr_no}).mappings().first()
+        if gr is None:
+            return 0
+        po = db.execute(text("select buyer from po where no = :p"), {"p": gr["po_no"]}).mappings().one()
+        codes = {
+            r[0]
+            for r in db.execute(
+                text(
+                    "select distinct r.requester from po_line l join request r on r.no = l.request_no "
+                    "where l.po_no = :p and r.requester is not null"
+                ),
+                {"p": gr["po_no"]},
+            )
+        }
+        if po["buyer"]:
+            codes.add(str(po["buyer"]))
+        told = 0
+        for code in sorted(codes):
+            uid = notifications.login_of(db, tenant, code)
+            if uid is None:
+                continue
+            notifications.notify(
+                db,
+                tenant,
+                uid,
+                "goods_reversed",
+                f"Receipt {gr_no} was reversed: {reason}",
+                f"Receipt {gr_no} of {gr['po_no']} was reversed: {reason}",
+                link=f"#/receiving/{gr_no}",
+            )
+            told += 1
+        return told
+    except Exception:  # noqa: BLE001 - telling people must never undo or hide the reversal
+        db.rollback()
+        log.warning("could not notify about the reversal of %s", gr_no, exc_info=True)
         return 0

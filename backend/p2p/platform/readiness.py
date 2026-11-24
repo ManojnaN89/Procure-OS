@@ -29,9 +29,11 @@ DOCUMENT_TYPES = (
     "payment",
     "payment_run",
     "po",
+    "recovery_claim",
     "request",
     "rfq",
     "service_receipt",
+    "supplier_return",
     "unordered_receipt",
 )
 # who may approve each kind of document the approval rules cover
@@ -82,12 +84,14 @@ SEPARATION = (
     Separation("SEP-13", "an invoice block released", "invoice.book", "invoice.approve", ("invoices/service.py",)),
     Separation("SEP-14", "a payment run approved", "payment.propose", "chain:payment_run", ("invoices/payment.py",)),
     Separation("SEP-15", "a bank match confirmed", "chain:payment_run", "payment.propose", ("invoices/bank_statement.py",)),
+    Separation("SEP-16", "an inspection decided", "grn.create", "grn.inspect", ("receiving/goods.py",)),
 )  # fmt: skip
 # modules with a segregation-of-duties refusal that another check covers
 COVERED_ELSEWHERE = {
     "approvals/workflow.py": "approvers (a requester never approves their own request)",
     "receiving/goods.py": "duties (requester, receiver and invoice approver differ)",
     "receiving/services.py": "duties (requester, receiver and invoice approver differ)",
+    "receiving/reversal.py": "duties (neither the buyer, an approver nor the requester reverses a receipt)",
 }
 
 

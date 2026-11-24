@@ -124,6 +124,7 @@ ROLE_ORDER = (
     ("ap", "AP"),
     ("buyer", "Buyer"),
     ("store", "Store"),
+    ("quality", "Quality"),
     ("approver", "Approver"),
 )
 

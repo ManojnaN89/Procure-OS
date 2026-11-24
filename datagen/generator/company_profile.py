@@ -42,6 +42,7 @@ from confirmation_scenarios import check as check_confirmation  # noqa: E402
 from confirmation_scenarios import write_confirmation  # noqa: E402
 from version_scenarios import check as check_versions  # noqa: E402
 from version_scenarios import write_versions  # noqa: E402
+from receipt_scenarios import write_receipts  # noqa: E402
 from demand_scenarios import write_scenarios  # noqa: E402
 from stock_scenarios import write_stock  # noqa: E402
 import cutover  # noqa: E402
@@ -638,6 +639,7 @@ def build(profile: CompanyProfile, out: Path) -> dict[str, dict[str, int]]:
     write_quotes(profile.data, out)  # block 6: last prices paid, negotiation briefs, the A/B case, order totals
     write_versions(profile.data, out)  # block 7: every version of each order, its tax, approver and materiality
     write_confirmation(profile.data, out)  # block 8: the supplier confirmation figures and dates
+    write_receipts(profile.data, out)  # block 9: the receipt figures of its scenarios, worked out here
     manifest = {
         "dataset": profile.dataset,
         "profile": profile.name,

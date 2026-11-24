@@ -34,6 +34,7 @@ from p2p.platform.price_api import router as price_router
 from p2p.platform.prospect_api import router as prospect_router
 from p2p.platform.quote_api import router as quote_router
 from p2p.platform.reconciliation_api import router as reconciliation_router
+from p2p.platform.returns_api import router as returns_router
 from p2p.platform.service_entry_api import router as service_entry_router
 from p2p.platform.setup_api import router as setup_router
 from p2p.platform.stock_api import router as stock_router
@@ -87,6 +88,7 @@ app.include_router(payment_router)
 app.include_router(reconciliation_router)
 app.include_router(supplier_agent_router)
 app.include_router(service_entry_router)
+app.include_router(returns_router)
 app.include_router(ui_sockets)
 
 

@@ -29,7 +29,7 @@ const ReceivingView = {
         : `<div class="empty-next"><strong>Nothing is waiting to be received.</strong><br>Orders appear here once they have been sent to the supplier and confirmed.</div>`;
       document.getElementById("receiptsWrap").innerHTML = receipts.length
         ? `<table class="data-table"><thead><tr><th>RECEIPT</th><th>ORDER</th><th>SUPPLIER</th><th>WHEN</th><th>STATUS</th></tr></thead><tbody>
-            ${receipts.map((r) => `<tr data-id="${this.esc(r.id)}"><td class="cell-muted">${this.esc(r.id)}</td><td>${this.esc(r.po_no)}</td><td>${this.esc(r.supplier)}</td><td class="cell-muted">${formatDate(r.received_at)}</td><td>${this.esc(this.INSPECTION[r.inspection] || "received")}</td></tr>`).join("")}
+            ${receipts.map((r) => `<tr data-id="${this.esc(r.id)}"><td class="cell-muted">${this.esc(r.id)}</td><td>${this.esc(r.po_no)}</td><td>${this.esc(r.supplier)}</td><td class="cell-muted">${formatDate(r.received_at)}</td><td>${r.status === "reversed" ? "reversed" : this.esc(this.INSPECTION[r.inspection] || "received")}${r.source && r.source !== "platform" ? ` <span class="cell-muted">(${this.esc(r.source)})</span>` : ""}</td></tr>`).join("")}
           </tbody></table>`
         : `<div class="empty-state">No goods have been received yet.</div>`;
       document.querySelectorAll("#receiptsWrap tr[data-id]").forEach((tr) => {
@@ -42,6 +42,13 @@ const ReceivingView = {
         });
       });
       w.querySelectorAll(".recv-send").forEach((btn) => btn.addEventListener("click", () => this.send(btn.dataset.po)));
+      w.querySelectorAll(".recv-serials").forEach((input) => input.addEventListener("input", () => {
+        const box = input.closest("tr").querySelector(".recv-serialbox");
+        const numbers = input.value.split(/[,\n]/).map((s) => s.trim()).filter(Boolean);
+        box.innerHTML = numbers.length
+          ? `<span class="cell-muted">Rejected:</span> ${numbers.map((s) => `<label style="margin-right:8px;"><input type="checkbox" value="${this.esc(s)}"> ${this.esc(s)}</label>`).join("")}`
+          : "";
+      }));
     } catch {
       const w = document.getElementById("waitingWrap");
       if (w) w.innerHTML = `<div class="empty-state">Couldn't load the goods to come.</div>`;
@@ -71,7 +78,7 @@ const ReceivingView = {
           <table class="data-table"><thead><tr><th>ITEM</th><th>ORDERED</th><th>RECEIVED SO FAR</th><th>ARRIVED NOW</th><th>REJECTED</th><th>REASON FOR REJECTION</th></tr></thead><tbody>
             ${o.lines.map((l) => `
               <tr data-line="${this.esc(l.line_no)}">
-                <td>${this.esc(l.name)}<div class="cell-muted" style="font-size:11px;">${this.esc(l.item_code || "")}${l.due ? ` · due ${formatDate(l.due)} (${l.due_source === "promised" ? "promised" : "needed"})` : ""}${l.late ? ' · <span style="color:var(--warning-text);font-weight:600;">late</span>' : ""}</div>${l.serialised ? `<input class="recv-serials" placeholder="Serial numbers, one per unit, commas between" aria-label="Serial numbers: ${this.esc(l.name)}" style="width:100%;margin-top:4px;">` : ""}</td>
+                <td>${this.esc(l.name)}<div class="cell-muted" style="font-size:11px;">${this.esc(l.item_code || "")}${l.due ? ` · due ${formatDate(l.due)} (${l.due_source === "promised" ? "promised" : "needed"})` : ""}${l.late ? ' · <span style="color:var(--warning-text);font-weight:600;">late</span>' : ""}</div>${l.serialised ? `<input class="recv-serials" placeholder="Serial numbers, one per unit, commas between" aria-label="Serial numbers: ${this.esc(l.name)}" style="width:100%;margin-top:4px;"><div class="recv-serialbox" style="font-size:11px;margin-top:2px;" aria-label="Serials rejected: ${this.esc(l.name)}"></div>` : ""}</td>
                 <td data-label="Ordered">${this.esc(l.ordered)} <span class="cell-muted">${this.esc(l.uom)}</span></td>
                 <td data-label="Received so far">${this.esc(l.received)}</td>
                 <td data-label="Arrived now"><input class="recv-qty" type="number" inputmode="decimal" min="0" step="any" aria-label="Arrived now: ${this.esc(l.name)}" style="width:100px;"></td>
@@ -101,6 +108,7 @@ const ReceivingView = {
         qty_rejected: tr.querySelector(".recv-rej").value,
         reject_reason: tr.querySelector(".recv-why").value,
         serials: tr.querySelector(".recv-serials") ? tr.querySelector(".recv-serials").value.split(/[,\n]/).map((s) => s.trim()).filter(Boolean) : undefined,
+        rejected_serials: tr.querySelector(".recv-serialbox") ? [...tr.querySelectorAll(".recv-serialbox input:checked")].map((i) => i.value) : undefined,
       }))
       .filter((l) => l.qty_received !== "" && Number(l.qty_received) > 0);
     if (!lines.length) { note.textContent = "Enter the quantity that arrived on at least one line."; return; }
@@ -120,22 +128,31 @@ const ReceivingView = {
     try {
       const g = await API.getJSON(`/api/receipts/${encodeURIComponent(id)}`);
       const pending = g.inspection === "pending";
+      const rejected = (l) => l.serials.filter((s) => s.status === "received");
       container.innerHTML = `
         <div class="page-header">
           <a href="#/receiving" style="color:var(--text-muted);font-size:12px;text-decoration:none;">← Goods receipt</a>
           <h1 style="margin-top:6px;">${this.esc(g.id)}</h1>
-          <p>for <a href="#/purchase-orders/${this.esc(g.po_no)}" style="color:var(--accent-tint)">${this.esc(g.po_no)}</a> · ${formatDate(g.received_at)} · received by ${this.esc(g.received_by)}${this.INSPECTION[g.inspection] ? ` · ${this.esc(this.INSPECTION[g.inspection])}` : ""}</p>
+          <p>for <a href="#/purchase-orders/${this.esc(g.po_no)}" style="color:var(--accent-tint)">${this.esc(g.po_no)}</a> · ${formatDate(g.received_at)} · received by ${this.esc(g.received_by)}${g.status === "reversed" ? ' · <strong style="color:var(--warning-text);">reversed</strong>' : this.INSPECTION[g.inspection] ? ` · ${this.esc(this.INSPECTION[g.inspection])}` : ""}${g.source !== "platform" ? ` · ${this.esc(g.source)}${g.external_ref ? ` ${this.esc(g.external_ref)}` : ""}` : ""}${g.inspected_by ? ` · inspected by ${this.esc(g.inspected_by)}` : ""}</p>
         </div>
         <div class="panel" style="margin-bottom:12px;font-size:12.5px;color:var(--text-secondary);">
           ${g.challan ? `Challan ${this.esc(g.challan)} · ` : ""}${g.invoice_ref ? `supplier invoice ${this.esc(g.invoice_ref)} · ` : ""}${g.vehicle ? `vehicle ${this.esc(g.vehicle)} · ` : ""}deliver to ${this.esc(g.location)}${g.remarks ? `<div style="margin-top:6px;">${this.esc(g.remarks)}</div>` : ""}
+          ${g.status === "reversed" ? `<div style="margin-top:6px;color:var(--warning-text);">Reversed on ${formatDate(g.reversed_on)}: ${this.esc(g.reversal_reason || "")}</div>` : ""}
+          ${g.returns.length ? `<div style="margin-top:6px;">Returns: ${g.returns.map((r) => `<a href="#/returns/${this.esc(r.no)}" style="color:var(--accent-tint)">${this.esc(r.no)}</a> (${this.esc(r.status)})`).join(", ")}</div>` : ""}
         </div>
-        <div class="table-wrap"><table class="data-table"><thead><tr><th>ITEM</th><th>RECEIVED</th><th>ACCEPTED</th><th>REJECTED</th></tr></thead><tbody>
+        <div class="table-wrap"><table class="data-table"><thead><tr><th>ITEM</th><th>RECEIVED</th><th>ACCEPTED</th><th>REJECTED</th><th>ABOVE THE ORDER</th></tr></thead><tbody>
           ${g.lines.map((l) => `<tr data-line="${this.esc(l.line_no)}"><td>${this.esc(l.name)}<div class="cell-muted" style="font-size:11px;">${this.esc(l.item_code || "")}</div></td>
             <td>${this.esc(l.received)} <span class="cell-muted">${this.esc(l.uom)}</span></td>
             <td>${pending && g.can_inspect ? `<input class="insp-acc" type="number" min="0" step="any" value="${this.esc(l.received)}" style="width:90px;padding:5px;">` : this.esc(l.accepted ?? "waiting")}</td>
-            <td>${pending && g.can_inspect ? `<input class="insp-rej" type="number" min="0" step="any" value="0" style="width:80px;padding:5px;"> <input class="insp-why" placeholder="Reason" style="padding:5px;">` : `${this.esc(l.rejected ?? "")}${l.reason ? ` <span class="cell-muted">“${this.esc(l.reason)}”</span>` : ""}`}</td></tr>`).join("")}
+            <td>${pending && g.can_inspect ? `<input class="insp-rej" type="number" min="0" step="any" value="0" style="width:80px;padding:5px;"> <input class="insp-why" placeholder="Reason" style="padding:5px;">${rejected(l).length ? `<div class="insp-serialbox" style="font-size:11px;margin-top:4px;"><span class="cell-muted">Rejected serials:</span> ${rejected(l).map((s) => `<label style="margin-right:8px;"><input type="checkbox" value="${this.esc(s.serial)}"> ${this.esc(s.serial)}</label>`).join("")}</div>` : ""}` : `${this.esc(l.rejected ?? "")}${l.reason ? ` <span class="cell-muted">“${this.esc(l.reason)}”</span>` : ""}`}</td>
+            <td>${this.esc(l.excess || "0")}${l.excess_status ? ` <span class="cell-muted">${this.esc(l.excess_status)}</span>` : ""}</td></tr>`).join("")}
         </tbody></table></div>
         ${pending && g.can_inspect ? `<div style="margin-top:10px;"><div class="btn btn-primary btn-sm" id="inspectBtn">Record inspection</div><div id="inspectNote" style="font-size:12px;color:var(--warning-text);margin-top:6px;"></div></div>` : ""}
+        ${g.can_reverse ? `<div class="panel" style="margin-top:12px;"><h3 style="margin-top:0;">${g.reverse_by === "proposal" ? "Ask the purchase manager to reverse it" : "Reverse this receipt"}</h3>
+          <p class="cell-muted" style="font-size:12px;">The whole receipt is reversed. ${g.reverse_by === "proposal" ? `The correction window ended on ${formatDate(g.window_end)}: a purchase manager must approve.` : `Inside the window (until ${formatDate(g.window_end)}).`}</p>
+          <input class="rev-reason" placeholder="Why is the receipt reversed?" style="width:100%">
+          <div style="margin-top:8px;"><div class="btn btn-secondary btn-sm" id="reverseBtn">${g.reverse_by === "proposal" ? "Propose the reversal" : "Reverse"}</div></div>
+          <div id="reverseNote" style="font-size:12px;color:var(--warning-text);margin-top:6px;"></div></div>` : ""}
       `;
       const btn = document.getElementById("inspectBtn");
       if (btn) {
@@ -145,10 +162,25 @@ const ReceivingView = {
             qty_accepted: tr.querySelector(".insp-acc").value,
             qty_rejected: tr.querySelector(".insp-rej").value || "0",
             reason: tr.querySelector(".insp-why").value,
+            rejected_serials: [...tr.querySelectorAll(".insp-serialbox input:checked")].map((i) => i.value),
           }));
           const res = await API.postJSON(`/api/receipts/${encodeURIComponent(id)}/inspect`, { lines });
           if (res.ok) return this.renderDetail(container, id);
           document.getElementById("inspectNote").textContent = res.data.detail || "The inspection was not recorded.";
+        });
+      }
+      const reverse = document.getElementById("reverseBtn");
+      if (reverse) {
+        reverse.addEventListener("click", async () => {
+          const res = await API.postJSON(`/api/receipts/${encodeURIComponent(id)}/reverse`, {
+            reason: container.querySelector(".rev-reason").value.trim(),
+          });
+          if (!res.ok) { document.getElementById("reverseNote").textContent = res.data.detail || "The receipt was not reversed."; return; }
+          if (res.data.proposal_id) {
+            document.getElementById("reverseNote").textContent = `Asked the purchase manager (proposal ${res.data.proposal_id}).`;
+            return;
+          }
+          return this.renderDetail(container, id);
         });
       }
     } catch {

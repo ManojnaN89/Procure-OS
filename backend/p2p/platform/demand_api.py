@@ -14,7 +14,7 @@ from p2p.platform import files, ratelimit, routing
 from p2p.platform.permissions import need_any, require
 from p2p.platform.sod import user
 from p2p.requests import demand, demand_cases
-from p2p.requests.demand_files import KINDS
+from p2p.requests.demand_files import TEMPLATES
 
 router = APIRouter(prefix="/api/demand", tags=["demand"])
 Db = Annotated[Session, Depends(routing.tenant_session)]
@@ -23,8 +23,8 @@ Ctx = Annotated[routing.TenantContext, Depends(routing.tenant_context)]
 
 
 def _kind(kind: str) -> str:
-    if kind not in KINDS:
-        raise HTTPException(404, f"There is no kind of file called {kind}. Choose one of: {', '.join(KINDS)}.")
+    if kind not in TEMPLATES:
+        raise HTTPException(404, f"There is no kind of file called {kind}. Choose one of: {', '.join(TEMPLATES)}.")
     return kind
 
 
@@ -32,7 +32,7 @@ def _kind(kind: str) -> str:
 def kinds(db: Db, ctx: Importer) -> list[dict[str, Any]]:
     """Each kind of ERP file with our columns and the client's names for them (the mapping in use)."""
     out = []
-    for f in KINDS.values():
+    for f in TEMPLATES.values():
         version, mapping = demand.current_mapping(db, f.kind)
         out.append(
             {

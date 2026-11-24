@@ -108,7 +108,8 @@ def histories(db: Session, as_of: date | None = None) -> dict[str, History]:
             "greatest((g.gate_entry_at at time zone :tz)::date - l.promised_date, 0) "
             "from gr_line gl join goods_receipt g on g.no = gl.gr_no join po on po.no = gl.po_no "
             "join po_line l on l.po_no = gl.po_no and l.line_no = gl.po_line_no "
-            "where l.promised_date is not null and (g.gate_entry_at at time zone :tz)::date <= :c"
+            "where l.promised_date is not null and g.status = 'posted' "
+            "and (g.gate_entry_at at time zone :tz)::date <= :c"
         ),
         {"tz": TZ_NAME, "c": cutoff},
     ):
@@ -120,7 +121,8 @@ def histories(db: Session, as_of: date | None = None) -> dict[str, History]:
         text(
             "select po.supplier_code, gl.qty_received, gl.qty_accepted, gl.qty_rejected from gr_line gl "
             "join goods_receipt g on g.no = gl.gr_no join po on po.no = gl.po_no "
-            "where gl.qty_accepted is not null and (g.gate_entry_at at time zone :tz)::date <= :c"
+            "where gl.qty_accepted is not null and g.status = 'posted' "
+            "and (g.gate_entry_at at time zone :tz)::date <= :c"
         ),
         {"tz": TZ_NAME, "c": cutoff},
     ):

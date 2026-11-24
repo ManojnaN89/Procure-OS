@@ -188,8 +188,11 @@ def reject(db: Session, no: str, user_id: int, reason: str) -> None:
     db.commit()
 
 
-def mark_returned(db: Session, no: str, user_id: int, ref: str | None, *, as_of: date) -> None:
-    """The store records that rejected goods went back to the supplier (with the return challan, if any)."""
+def mark_returned(
+    db: Session, tenant: str | None, no: str, user_id: int, challan: str | None, vehicle: str | None, *, as_of: date
+) -> str:
+    """The store records that rejected goods went back to the supplier: a dispatched return document (RTN) with its
+    challan and vehicle, and the supplier is mailed. Returns the return number."""
     row = _row(db, no)
     refused = (
         row["proposal_id"]
@@ -199,14 +202,28 @@ def mark_returned(db: Session, no: str, user_id: int, ref: str | None, *, as_of:
     )
     if row["status"] != "rejected" and not (row["status"] == "pending" and refused):
         raise UnorderedError(f"{no} is {row['status']}: only rejected goods are returned")
+    from p2p.receiving import returns  # noqa: PLC0415 - returns build on receipts
+
+    db.commit()  # release the row: the return creates and commits its own document
+    return_no = returns.unordered_return(db, tenant, user_id, dict(row), challan, vehicle, as_of=as_of)
     db.execute(
-        text("update unordered_receipt set status = 'returned', returned_on = :d, return_ref = :r where no = :n"),
-        {"d": as_of, "r": (ref or "").strip() or None, "n": no},
+        text(
+            "update unordered_receipt set status = 'returned', returned_on = :d, return_ref = :r, return_no = :rn "
+            "where no = :n"
+        ),
+        {"d": as_of, "r": (challan or "").strip() or None, "rn": return_no, "n": no},
     )
     audit.record(
-        db, user(user_id), "unordered.return", "unordered_receipt", no, after={"status": "returned", "ref": ref}
+        db,
+        user(user_id),
+        "unordered.return",
+        "unordered_receipt",
+        no,
+        after={"status": "returned", "return": return_no},
+        reason=None,
     )
     db.commit()
+    return return_no
 
 
 def raise_order(db: Session, tenant: str, no: str, user_id: int, unit_price: Decimal, *, as_of: date) -> str:
@@ -275,7 +292,7 @@ def raise_order(db: Session, tenant: str, no: str, user_id: int, unit_price: Dec
     return po_no
 
 
-def receive_on_order(db: Session, no: str, user_id: int, *, as_of: date) -> str:
+def receive_on_order(db: Session, tenant: str, no: str, user_id: int, *, as_of: date) -> str:
     """Once the after-the-fact order is sent, the store posts the goods receipt on it: the goods enter stock now and the
     invoice matches as for any order. Returns the goods receipt number."""
     row = _row(db, no)
@@ -294,6 +311,7 @@ def receive_on_order(db: Session, no: str, user_id: int, *, as_of: date) -> str:
         goods.Header(challan=row["challan"], remarks=f"Received without an order ({no})"),
         user_id,
         as_of=as_of,
+        tenant=tenant,
     )
     db.execute(
         text("update unordered_receipt set status = 'received', gr_no = :g where no = :n and status = 'ordered'"),

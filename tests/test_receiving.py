@@ -84,7 +84,9 @@ def store(shop: Session) -> Session:  # noqa: F811
     shop.execute(
         text(
             "insert into number_series (document_type, prefix, scope, format, reset) "
-            "values ('goods_receipt', 'GRN', 'location', '{prefix}-{loc}-{fy4}-{seq:05d}', 'fy')"
+            "values ('goods_receipt', 'GRN', 'location', '{prefix}-{loc}-{fy4}-{seq:05d}', 'fy'), "
+            "('supplier_return', 'RTN', 'location', '{prefix}-{loc}-{fy4}-{seq:05d}', 'fy'), "
+            "('recovery_claim', 'RCL', 'location', '{prefix}-{loc}-{fy4}-{seq:05d}', 'fy')"
         )
     )
     shop.execute(
@@ -217,7 +219,7 @@ def test_what_is_waiting_for_inspection_is_said_so_and_the_result_is_told_again(
     slug = store.info["slug"]
     store.execute(text("update item set inspection_required = true where code = 'A'"))
     store.commit()
-    po_no, _ = _sent(store)
+    po_no, logins = _sent(store)
     store.execute(text("update request set requester = 'U4'"))
     store.commit()
 
@@ -225,7 +227,7 @@ def test_what_is_waiting_for_inspection_is_said_so_and_the_result_is_told_again(
     goods.tell_requesters(store, slug, done.no)
     assert "10 received, waiting for inspection" in _told(store)[0][2]
 
-    checked = goods.inspect(store, done.no, [Decision(1, D("10"), D("0"))], 1, as_of=TODAY)
+    checked = goods.inspect(store, done.no, [Decision(1, D("10"), D("0"))], logins["director"], as_of=TODAY)
     goods.tell_requesters(store, slug, checked.no, inspected=True)
 
     told = _told(store)
@@ -255,17 +257,19 @@ def test_a_part_receipt_leaves_the_order_open_for_the_rest(store: Session, outbo
         _receive(store, po_no, "1")  # nothing more is expected against a complete order
 
 
-def test_over_delivery_is_accepted_up_to_the_tolerance_of_the_category_and_not_a_unit_more(
+def test_goods_up_to_the_tolerance_are_counted_and_what_is_above_waits_in_quarantine(
     store: Session, outbox: Outbox
 ) -> None:  # noqa: F811
-    po_no, _ = _sent(store)  # item A, category C1: the ANY tolerance of 5%
+    po_no, logins = _sent(store)  # item A, category C1: the ANY tolerance of 5%
 
-    with pytest.raises(ReceiptError, match="more than the 10.5000 that may still be received"):
-        _receive(store, po_no, "10.5001")
-    assert _on_hand(store) == D("0")
-    _receive(store, po_no, "10.5")  # exactly the limit
-
+    over = _receive(store, po_no, "10.5001")
+    assert over.accepted == {1: D("10.5")} and over.excess == {1: D("0.0001")}
     assert _line(store) == (D("10.5"), "received")
+    assert _on_hand(store) == D("10.5")
+
+    po2, _ = _sent(store, qty="20", logins=logins)
+    at_limit = _receive(store, po2, "21")
+    assert at_limit.accepted == {1: D("21")} and at_limit.excess == {}
 
 
 def test_a_category_with_its_own_tolerance_uses_it(store: Session, outbox: Outbox) -> None:  # noqa: F811
@@ -273,9 +277,9 @@ def test_a_category_with_its_own_tolerance_uses_it(store: Session, outbox: Outbo
     store.commit()
     po_no, _ = _sent(store, item="D", qty="4", price="40", cat="C2")  # packaging: 10%
 
-    with pytest.raises(ReceiptError, match="4.4000"):
-        _receive(store, po_no, "4.4001")
-    _receive(store, po_no, "4.4")
+    over = _receive(store, po_no, "4.4001")
+    assert over.accepted == {1: D("4.4")} and over.excess == {1: D("0.0001")}
+    assert _line(store) == (D("4.4"), "received")
 
 
 def test_what_is_received_in_parts_counts_together_against_the_tolerance(store: Session, outbox: Outbox) -> None:  # noqa: F811
@@ -286,9 +290,8 @@ def test_what_is_received_in_parts_counts_together_against_the_tolerance(store: 
 
     po2, _ = _sent(store, qty="20", logins=logins)
     _receive(store, po2, "12", line=1)
-    with pytest.raises(ReceiptError, match="9.0000 that may still be received"):
-        _receive(store, po2, "9.5")  # 12 + 9.5 = 21.5 > 21
-    _receive(store, po2, "9")
+    over = _receive(store, po2, "9.5", line=1)  # 12 + 9.5 = 21.5 against the room of 21
+    assert over.accepted == {1: D("9")} and over.excess == {1: D("0.5")}
 
 
 def test_rejected_goods_need_a_reason_stay_out_of_stock_and_leave_the_line_open_for_a_replacement(
@@ -389,49 +392,55 @@ def test_an_item_that_needs_inspection_waits_and_nothing_counts_until_it_is_insp
 ) -> None:  # noqa: F811
     store.execute(text("update item set inspection_required = true where code = 'A'"))
     store.commit()
-    po_no, _ = _sent(store)
+    po_no, logins = _sent(store)
 
     done = _receive(store, po_no, "10")
 
     assert done.pending_inspection == [1] and done.po_status == "sent"
     assert (_line(store), _on_hand(store)) == ((D("0"), "open"), D("0"))
     assert store.execute(text("select inspection_status, accepted_on from goods_receipt")).one() == ("pending", None)
-    # a second delivery cannot use up more than the order allows while the first one waits
-    with pytest.raises(ReceiptError, match="0.5000 that may still be received"):
-        _receive(store, po_no, "1")
+    # a second delivery while the first waits for inspection is taken into quarantine too: nothing counts until then
+    second = _receive(store, po_no, "1")
+    assert second.pending_inspection == [1] and _line(store) == (D("0"), "open")
     with pytest.raises(ReceiptError, match="decides what is rejected"):
         _receive(store, po_no, "0.5", rejected="0.1", reason="x")
 
     with pytest.raises(ReceiptError, match="add up to the 10.0000 received"):
-        goods.inspect(store, done.no, [Decision(1, D("9"), D("0"))], 1, as_of=TODAY)
+        goods.inspect(store, done.no, [Decision(1, D("9"), D("0"))], logins["director"], as_of=TODAY)
     with pytest.raises(ReceiptError, match="reason is needed"):
-        goods.inspect(store, done.no, [Decision(1, D("8"), D("2"))], 1, as_of=TODAY)
+        goods.inspect(store, done.no, [Decision(1, D("8"), D("2"))], logins["director"], as_of=TODAY)
     with pytest.raises(ReceiptError, match="decide every line"):
-        goods.inspect(store, done.no, [], 1, as_of=TODAY)
-    checked = goods.inspect(store, done.no, [Decision(1, D("8"), D("2"), "Out of specification")], 1, as_of=TODAY)
+        goods.inspect(store, done.no, [], logins["director"], as_of=TODAY)
+    checked = goods.inspect(
+        store, done.no, [Decision(1, D("8"), D("2"), "Out of specification")], logins["director"], as_of=TODAY
+    )
 
     assert checked.po_status == "part_received" and (_line(store), _on_hand(store)) == (
         (D("8"), "part_received"),
         D("8"),
     )
-    assert store.execute(text("select inspection_status, accepted_on from goods_receipt")).one() == ("failed", TODAY)
-    assert store.execute(text("select qty_accepted, qty_rejected, reject_reason from gr_line")).one() == (
+    assert store.execute(
+        text("select inspection_status, accepted_on from goods_receipt where no = :n"), {"n": done.no}
+    ).one() == ("failed", TODAY)
+    assert store.execute(
+        text("select qty_accepted, qty_rejected, reject_reason from gr_line where gr_no = :n"), {"n": done.no}
+    ).one() == (
         D("8"),
         D("2"),
         "Out of specification",
     )
     with pytest.raises(ReceiptError, match="not waiting for inspection"):
-        goods.inspect(store, done.no, [Decision(1, D("8"), D("2"), "again")], 1, as_of=TODAY)
+        goods.inspect(store, done.no, [Decision(1, D("8"), D("2"), "again")], logins["director"], as_of=TODAY)
     assert store.execute(text("select count(*) from audit_event where action = 'grn.inspect'")).scalar_one() == 1
 
 
 def test_an_inspection_that_rejects_nothing_passes(store: Session, outbox: Outbox) -> None:  # noqa: F811
     store.execute(text("update item set inspection_required = true where code = 'A'"))
     store.commit()
-    po_no, _ = _sent(store)
+    po_no, logins = _sent(store)
     done = _receive(store, po_no, "10")
 
-    goods.inspect(store, done.no, [Decision(1, D("10"), D("0"))], 1, as_of=TODAY)
+    goods.inspect(store, done.no, [Decision(1, D("10"), D("0"))], logins["director"], as_of=TODAY)
 
     assert store.execute(text("select inspection_status from goods_receipt")).scalar_one() == "passed"
     assert _po_status(store) == "received"
@@ -509,7 +518,10 @@ def test_the_api_lets_a_store_person_receive_and_nobody_else(store: Session, out
             "received": "6",
             "accepted": "6",
             "rejected": "0",
+            "excess": "0",
+            "excess_status": None,
             "reason": None,
+            "serials": [],
         }
     ]
     assert [r["id"] for r in client.get("/api/receipts", headers=h_store).json()] == ["GRN-BLR-2627-00001"]
@@ -528,7 +540,7 @@ def test_the_api_lets_a_store_person_receive_and_nobody_else(store: Session, out
         ({"lines": [{"line_no": 1, "qty_received": "NaN"}]}, 422),
         ({"lines": [{"line_no": 1, "qty_received": "Infinity"}]}, 422),
         ({"lines": [{"qty_received": "1"}]}, 422),
-        ({"lines": [{"line_no": 1, "qty_received": "11"}]}, 409),
+        ({"lines": [{"line_no": 1, "qty_received": "0"}]}, 409),
         ({"lines": [{"line_no": 1, "qty_received": "5", "qty_rejected": "1"}]}, 409),
     ],
 )
@@ -561,66 +573,77 @@ def test_the_api_inspection_and_the_separation_of_duties_answer_with_the_right_c
     slug, sfx = store.info["slug"], store.info["sfx"]
     keeper = users.create_user(slug, f"store{sfx}@x.example", PASSWORD, "A Store", "Store")
     h = _headers(slug, keeper, "Store")
+    checker = users.create_user(slug, f"quality{sfx}@x.example", PASSWORD, "A Quality Inspector", "Quality")
+    h_check = _headers(slug, checker, "Quality")
     # a store login that is the buyer in the organisation (the stores head's own address) is refused
     conflicted = _headers(slug, logins["stores"], "Store")
     line = {"lines": [{"line_no": 1, "qty_received": "10"}]}
     assert client.post(f"/api/purchase-orders/{po_no}/receive", json=line, headers=conflicted).status_code == 403
 
     gr = client.post(f"/api/purchase-orders/{po_no}/receive", json=line, headers=h).json()["receipt"]
-    assert client.get(f"/api/receipts/{gr}", headers=h).json()["can_inspect"] is True
+    assert client.get(f"/api/receipts/{gr}", headers=h).json()["can_inspect"] is False  # the receiver cannot
+    assert client.get(f"/api/receipts/{gr}", headers=h_check).json()["can_inspect"] is True
     assert (
         client.post(
             f"/api/receipts/{gr}/inspect",
             json={"lines": [{"line_no": 1, "qty_accepted": "9", "qty_rejected": "0"}]},
-            headers=h,
+            headers=h_check,
         ).status_code
         == 409
     )
-    assert client.post(f"/api/receipts/{gr}/inspect", json={"lines": [{"line_no": 1}]}, headers=h).status_code == 422
-    assert client.post(f"/api/receipts/{gr}/inspect", json={"lines": []}, headers=h).status_code == 422
+    assert client.post(f"/api/receipts/{gr}/inspect", json={"lines": [{"line_no": 1}]}, headers=h_check).status_code == 422
+    assert client.post(f"/api/receipts/{gr}/inspect", json={"lines": []}, headers=h_check).status_code == 422
     ok = client.post(
         f"/api/receipts/{gr}/inspect",
         json={"lines": [{"line_no": 1, "qty_accepted": "10", "qty_rejected": "0"}]},
-        headers=h,
+        headers=h_check,
     )
     assert ok.status_code == 200 and ok.json()["po_status"] == "received"
-    assert client.get(f"/api/receipts/{gr}", headers=h).json()["can_inspect"] is False
+    assert client.get(f"/api/receipts/{gr}", headers=h_check).json()["can_inspect"] is False
     assert (
         client.post(
             "/api/receipts/NOPE/inspect",
             json={"lines": [{"line_no": 1, "qty_accepted": "1", "qty_rejected": "0"}]},
-            headers=h,
+            headers=h_check,
         ).status_code
         == 404
     )
 
 
-def test_two_receipts_at_the_same_moment_cannot_together_take_in_more_than_the_order_allows(
+def test_two_receipts_at_the_same_moment_together_counted_never_take_in_more_than_the_order_allows(
     store: Session, outbox: Outbox
 ) -> None:  # noqa: F811
-    po_no, _ = _sent(store)
+    po_no, logins = _sent(store)
     slug = store.info["slug"]
     outcomes: list[str] = []
     barrier = threading.Barrier(2)
 
-    def worker() -> None:
+    def worker(user_id: int) -> None:
         with Session(routing.engine_for(slug)) as mine:
             barrier.wait()
             try:
-                _receive(mine, po_no, "7")  # two of these would be 14 against a limit of 10.5
+                _receive(mine, po_no, "7", user=user_id)  # two of these would be 14 against a limit of 10.5
                 outcomes.append("ok")
             except ReceiptError:
                 mine.rollback()
                 outcomes.append("refused")
 
-    threads = [threading.Thread(target=worker) for _ in range(2)]
+    threads = [threading.Thread(target=worker, args=(uid,)) for uid in (1, logins["cfo"])]
     for t in threads:
         t.start()
     for t in threads:
         t.join()
 
-    assert sorted(outcomes) == ["ok", "refused"]
-    assert _line(store)[0] == D("7") and store.execute(text("select count(*) from goods_receipt")).scalar_one() == 1
+    # both go on: the room is taken by the first, the rest of the second waits as excess, so counted never passes 10.5
+    assert sorted(outcomes) == ["ok", "ok"]
+    counted = store.execute(
+        text("select coalesce(sum(qty_accepted - qty_excess), 0) from gr_line where po_no = :p"), {"p": po_no}
+    ).scalar_one()
+    excess = store.execute(
+        text("select coalesce(sum(qty_excess), 0) from gr_line where po_no = :p"), {"p": po_no}
+    ).scalar_one()
+    assert counted == D("10.5") and excess == D("3.5")
+    assert _line(store)[0] == D("10.5") and store.execute(text("select count(*) from goods_receipt")).scalar_one() == 2
 
 
 # ---- block 2: goods waiting for inspection are in the store as quarantine (task 4.1) ------------------------------
@@ -650,9 +673,11 @@ def test_inspection_receipt_waits_in_quarantine_and_is_not_invoiceable(store: Se
 def test_rejected_at_inspection_goes_to_blocked(store: Session, outbox: Outbox) -> None:  # noqa: F811
     store.execute(text("update item set inspection_required = true, stocked = true where code = 'A'"))
     store.commit()
-    po_no, _ = _sent(store)
+    po_no, logins = _sent(store)
     done = _receive(store, po_no, "10")
-    goods.inspect(store, done.no, [Decision(1, D("8"), D("2"), "Out of specification")], 1, as_of=TODAY)
+    goods.inspect(
+        store, done.no, [Decision(1, D("8"), D("2"), "Out of specification")], logins["director"], as_of=TODAY
+    )
     assert _quality(store) == {"usable": D(8), "quarantine": D(0), "blocked": D(2)}
     assert _line(store) == (D(8), "part_received")
     holds = store.execute(text("select quality, left_qty, reason, closed_at is null from stock_hold order by id")).all()

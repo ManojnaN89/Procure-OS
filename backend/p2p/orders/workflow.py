@@ -105,6 +105,14 @@ def _chain(
         rule = _above(db, rule, today)
 
 
+def people_for(
+    db: Session, po: dict[str, Any], total: Decimal, today: date, also: frozenset[str] = frozenset()
+) -> tuple[rules.ApprovalRule, list[rules.Step]]:
+    """The band and people who would approve an order at this total, never one of its makers (nor `also`): the excess
+    revision asks the person the `po` rows name for the new total (9.3.1, OP-6). A band with nobody moves up."""
+    return _chain(db, po, rules.find_rule(db, "po", total, today), today, also)
+
+
 def refuse_outside_band(db: Session, po: dict[str, Any], person: str | None, today: date | None = None) -> None:
     """Accepting an order's price is for the people its approval band names, or a higher band, never its makers. This
     is the approver's limit for that decision, from the same rule rows that approve the order (DF-08)."""

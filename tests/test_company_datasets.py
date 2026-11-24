@@ -309,7 +309,7 @@ def test_the_masters_load_into_a_new_company_with_nothing_left_out_and_one_login
     report = import_masters(db, datasets[name], dry_run=True)
 
     assert made.report.rejected == [] and report.rejected == [] and report.warnings == []
-    assert len(made.logins) == 10  # nine roles and a second administrator (D-22)
+    assert len(made.logins) == 11  # nine roles, quality, and a second administrator (D-22)
     assert all(email.endswith(gen.CompanyProfile.named(name)["company"]["email_domain"]) for email, _, _ in made.logins)
 
 

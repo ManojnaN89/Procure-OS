@@ -75,6 +75,7 @@ people:
   - {code: U08, name: Sanjay Rao, designation: Purchase Manager, department: PUR, manager: U07, limit: "500000.00", login: purchasemanager, roles: [requester, approver]}
   - {code: U09, name: Meera Iyer, designation: Director, department: MGT, manager: "", limit: "99999999.00", login: director, roles: [requester, approver]}
   - {code: U10, name: Kavita Bhosale, designation: ERP Administrator, department: FIN, manager: U05, limit: "0.00", login: admin2, roles: [requester, admin]}  # the second administrator who approves control changes (D-22)
+  - {code: U11, name: Swati Patil, designation: Quality Inspector, department: PRD, manager: U07, limit: "0.00", login: quality, roles: [requester, quality]}
 
 # how a role named in an approval chain becomes a person (the approver_role table)
 approver_roles:
@@ -139,7 +140,7 @@ settings:
   - [auto_approve_requires_budget, "true", Auto-approval only when budget is available]
   - [po_send_requires_confirmation, "true", A person confirms before a PO is sent to a supplier]
   - [manual_mark_paid, "true", "Synthetic demo data only, Finance may record a payment by hand (off for every real company until settlement evidence is built)"]
-  - [grn_edit_window_days, "3", Days a goods receipt can be corrected after posting]
+  - [grn_edit_window_days, "3", Working days after posting in which the store may reverse a goods receipt; later the purchase manager approves]
   - [invoice_receipt_mailbox, invoices@apexpumps.example, Mailbox where supplier invoices arrive]
   - [request_mailbox, requests@apexpumps.example, Mailbox where staff email requests]
   - [purchase_mailbox, purchase@apexpumps.example, Mailbox buyers use for supplier correspondence]

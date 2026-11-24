@@ -31,6 +31,7 @@ const InvoicesView = {
         </div>
       </div>
       <div id="invDrafts"></div>
+      <div id="claimWrap"></div>
       <div class="tabs" id="invFilter">
         <button class="tab active" data-s="">All</button>
         <button class="tab" data-s="blocked">Blocked</button>
@@ -40,6 +41,7 @@ const InvoicesView = {
       <div class="table-wrap" id="tableWrap"><div class="empty-state">Loading…</div></div>`;
     document.getElementById("newInvoice").addEventListener("click", () => { window.location.hash = "#/invoices/new"; });
     this.wireDrafts(container);
+    this.paintClaims();
     const load = async (status) => {
       const wrap = document.getElementById("tableWrap");
       try {
@@ -112,6 +114,19 @@ const InvoicesView = {
         note.textContent = res.data.detail || "That did not work.";
       }));
     });
+  },
+
+  // Recovery claims raised by counted returns with no replacement (block 9): read only for AP.
+  async paintClaims() {
+    const box = document.getElementById("claimWrap");
+    if (!box) return;
+    let claims;
+    try { claims = await API.getJSON("/api/recovery-claims"); } catch { box.innerHTML = ""; return; }
+    if (!claims.length) { box.innerHTML = ""; return; }
+    box.innerHTML = `<div class="panel" style="margin-bottom:14px;"><div class="panel-title">Recovery claims (${claims.length})</div>
+      <table class="data-table"><thead><tr><th>CLAIM</th><th>SUPPLIER</th><th>ORDER</th><th>QTY</th><th>TAXABLE</th><th>TAX</th><th>TOTAL</th><th>INVOICES</th><th>STATUS</th></tr></thead><tbody>
+        ${claims.map((c) => `<tr><td class="cell-muted">${this.esc(c.no)}<div style="font-size:11px;">${this.esc(c.return_no)}</div></td><td>${this.esc(c.supplier)}</td><td><a href="#/purchase-orders/${this.esc(c.po_no)}" style="color:var(--accent-tint);">${this.esc(c.po_no)}</a></td><td>${this.esc(c.qty)}</td><td>${formatCurrency(c.taxable)}</td><td>${formatCurrency(Number(c.cgst) + Number(c.sgst) + Number(c.igst))}</td><td>${formatCurrency(c.total)}</td><td class="cell-muted" style="font-size:11px;">${this.esc((c.invoices || []).join(", "))}</td><td>${this.esc(c.status)}${c.debit_note_no ? ` <span class="cell-muted">${this.esc(c.debit_note_no)}</span>` : ""}</td></tr>`).join("")}
+      </tbody></table></div>`;
   },
 
   async renderEntry(container) {

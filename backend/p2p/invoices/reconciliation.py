@@ -38,9 +38,19 @@ def received_vs_invoiced(db: Session, as_of: date, supplier: str | None = None) 
         "select l.po_no, l.po_line_no as line_no, g.accepted_on as day, coalesce(l.qty_accepted, 0) as qty, "
         "round(coalesce(l.qty_accepted, 0) * pl.unit_price, 2) as value from gr_line l "
         "join goods_receipt g on g.no = l.gr_no join po_line pl on pl.po_no = l.po_no and pl.line_no = l.po_line_no "
-        "join po on po.no = l.po_no where g.accepted_on <= :d and (cast(:s as text) is null or po.supplier_code = :s) "
+        "join po on po.no = l.po_no where g.accepted_on <= :d "
+        "and (g.status = 'posted' or g.reversed_on > :d) "
+        "and (cast(:s as text) is null or po.supplier_code = :s) "
         "union all select e.po_no, e.po_line_no, e.accepted_on, e.qty_accepted, e.amount_accepted from service_entry e "
-        "join po on po.no = e.po_no where e.accepted_on <= :d and (cast(:s as text) is null or po.supplier_code = :s)",
+        "join po on po.no = e.po_no where e.accepted_on <= :d "
+        "and (e.status = 'posted' or e.reversed_on > :d) "
+        "and (cast(:s as text) is null or po.supplier_code = :s) "
+        "union all select rl.po_no, rl.po_line_no, r.dispatched_on, -rl.qty, "
+        "round(-rl.qty * pl.unit_price, 2) from supplier_return_line rl "
+        "join supplier_return r on r.no = rl.return_no "
+        "join po_line pl on pl.po_no = rl.po_no and pl.line_no = rl.po_line_no "
+        "join po on po.no = rl.po_no where rl.counted and r.status = 'dispatched' and r.dispatched_on <= :d "
+        "and (cast(:s as text) is null or po.supplier_code = :s)",
         p,
     )
     invoices = _events(
