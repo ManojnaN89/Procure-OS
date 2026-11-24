@@ -598,7 +598,15 @@ def _run(db: Session, payload: dict[str, Any], actor: Actor) -> dict[str, Any]:
 
 
 @proposals.closer(ACTION)
-def _closed(db: Session, payload: dict[str, Any], actor: Actor, status: str, note: str) -> None:
+def _closed(db: Session, proposal_id: int, payload: dict[str, Any], actor: Actor) -> None:
+    # Block 9's hook passes the proposal id, not its outcome: read rejected vs expired from the proposal row.
+    proposal = (
+        db.execute(text("select status, decision_note from proposal where id = :i"), {"i": proposal_id})
+        .mappings()
+        .first()
+    )
+    status = str(proposal["status"]) if proposal else "expired"
+    note = str(proposal["decision_note"] or "") if proposal else ""
     row = (
         db.execute(
             text("select po_no, status, asked_by from po_short_close where id = :i for update"),

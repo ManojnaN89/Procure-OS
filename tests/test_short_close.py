@@ -193,3 +193,18 @@ def test_given_production_still_needs_the_balance_when_asked_then_the_need_goes_
     ).scalar()
     assert draft is not None and "Short for" in draft  # the need went back to the store check
     assert short.execute(text("select status from po where no = :p"), {"p": po_no}).scalar_one() == "received"
+
+
+def test_given_a_waiting_short_close_when_the_named_person_rejects_it_then_the_row_is_rejected(
+    short: Session,
+) -> None:
+    po_no, logins = _goods(short, qty="200", price="220", received="40")
+    asked = short_close.ask(short, None, po_no, logins["keeper"], "Supplier will not deliver the rest")
+
+    proposals.reject(short, int(asked["proposal_id"]), logins["director"], "Keep the balance open")
+
+    row = short.execute(text("select status, note from po_short_close")).one()
+    assert (row[0], row[1]) == ("rejected", "Keep the balance open")
+    assert short.execute(text("select status from po_line")).scalar_one() == "part_received"
+    assert short.execute(text("select count(*) from audit_event where action = 'po.short_close_rejected'")
+                        ).scalar_one() == 1  # fmt: skip

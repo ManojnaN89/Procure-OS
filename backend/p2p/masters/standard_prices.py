@@ -155,8 +155,8 @@ def _approved(db: Session, payload: dict[str, Any], actor: Actor) -> dict[str, A
 
 
 @proposals.closer(ACTION)
-def _not_approved(db: Session, payload: dict[str, Any], actor: Actor, status: str, note: str) -> None:
-    """A refused version is kept as rejected; it never becomes active."""
+def _not_approved(db: Session, proposal_id: int, payload: dict[str, Any], actor: Actor) -> None:
+    """A refused version is kept as rejected; it never becomes active (block 9's closer shape)."""
     db.execute(
         text(
             "update item_standard_price set status = 'rejected' where item_code = :i and version = :v "

@@ -46,8 +46,8 @@ Guard = Callable[[Session, dict[str, Any], Actor], None]
 GUARDS: dict[str, Guard] = {}
 
 # NEEDS block 9: `platform/proposals.closer(action)` is block 9's hook (a rejected excess). Block 13 adds this interim
-# so a rejected `po.short_close` knows its outcome; block 9's version replaces it at merge (same name and shape).
-Closer = Callable[[Session, dict[str, Any], Actor, str, str], None]
+# in block 9's exact four-argument shape; block 9's version replaces it at merge unchanged.
+Closer = Callable[[Session, int, dict[str, Any], Actor], None]
 CLOSERS: dict[str, Closer] = {}
 
 
@@ -292,7 +292,7 @@ def reject(db: Session, proposal_id: int, user_id: int, reason: str, *, now: dat
     _set(db, proposal_id, "rejected", user_id, now or datetime.now(UTC), reason)
     stop = CLOSERS.get(p.action)
     if stop is not None:
-        stop(db, dict(p.payload or {}), sod.user(user_id), "rejected", reason)
+        stop(db, proposal_id, dict(p.payload or {}), sod.user(user_id))
 
 
 def withdraw(db: Session, proposal_id: int, user_id: int | None, note: str) -> None:
@@ -318,7 +318,7 @@ def expire_due(db: Session, now: datetime | None = None, *, action: str | None =
         audit.record(db, audit.SYSTEM, "proposal.expired", "proposal", r[0])
         stop = CLOSERS.get(str(r[1]))
         if stop is not None:
-            stop(db, dict(r[2] or {}), audit.SYSTEM, "expired", "expired before a decision")
+            stop(db, int(r[0]), dict(r[2] or {}), audit.SYSTEM)
     db.commit()
     return len(rows)
 
