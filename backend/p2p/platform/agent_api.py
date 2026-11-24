@@ -8,6 +8,7 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from p2p.agents import invoice_exceptions
+from p2p.invoices import service as invoices
 from p2p.platform import ratelimit, routing
 from p2p.platform.permissions import can_anywhere
 
@@ -54,4 +55,6 @@ async def explain_invoice(no: str, ctx: Ctx) -> dict[str, Any]:
 def last_diagnosis(no: str, db: Db, ctx: Ctx) -> dict[str, Any]:
     if db.execute(text("select 1 from invoice where no = :n"), {"n": no}).first() is None:
         raise HTTPException(404, "Not found")
+    if not invoices.can_read(db, ctx.user_id, no):
+        raise HTTPException(403, "Not allowed: invoice.view, invoice.match or invoice.approve")
     return {"diagnosis": invoice_exceptions.latest(db, no)}

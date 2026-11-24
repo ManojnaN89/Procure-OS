@@ -79,9 +79,10 @@ SEPARATION = (
     Separation("SEP-10", "a market benchmark verified", "benchmark.enter", "benchmark.verify", ("sourcing/benchmarks.py",)),
     Separation("SEP-11", "a direct buy or a looser buying route agreed", "rfq.create", "sourcing.route_approve", ("sourcing/service.py",)),
     Separation("SEP-12", "goods received without an order approved", "grn.create", "grn.unordered_approve", ("receiving/unordered.py",)),
-    Separation("SEP-13", "an invoice block released", "invoice.book", "invoice.approve", ("invoices/service.py",)),
+    Separation("SEP-13", "an invoice block released", "invoice.book", "invoice.approve", ("invoices/release.py",)),
     Separation("SEP-14", "a payment run approved", "payment.propose", "chain:payment_run", ("invoices/payment.py",)),
     Separation("SEP-15", "a bank match confirmed", "chain:payment_run", "payment.propose", ("invoices/bank_statement.py",)),
+    Separation("SEP-17", "an invoice price variance accepted", "invoice.book", "chain:price_variance", ("invoices/release.py",)),
 )  # fmt: skip
 # modules with a segregation-of-duties refusal that another check covers
 COVERED_ELSEWHERE = {

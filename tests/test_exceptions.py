@@ -61,7 +61,7 @@ def test_given_a_price_block_when_ap_looks_then_it_shows_why_who_and_what_next_a
     assert [r for r in _rows(svc, logins["keeper"]) if r["kind"] == "invoice"] == []  # no invoice permission
 
 
-def test_given_a_release_asked_for_when_it_waits_then_finance_owns_it_but_not_who_entered_it_and_once_released_it_drops_off(
+def test_given_a_price_release_asked_for_when_it_waits_then_the_rule_names_its_person_and_not_who_entered_it(
     svc: Session, outbox: Outbox
 ) -> None:  # noqa: F811
     po_no, logins = _goods(svc, qty="10", price="1000")
@@ -69,13 +69,14 @@ def test_given_a_release_asked_for_when_it_waits_then_finance_owns_it_but_not_wh
     held = _invoice(svc, po_no, "10", "1060", user=ap)
     pid = invoices.request_release(svc, held.no, "agreed with the supplier", ap)
 
-    row = _one(svc, logins["cfo"], "invoice")
-    assert row["owner"].startswith("Finance or an approver") and row["mine"] is True
+    row = _one(svc, logins["procurement"], "invoice")
+    assert row["owner"] == "Head - Procurement: Procure Vikram" and row["mine"] is True  # VAR-01 names the head
     assert row["next_step"] == "Approve or reject the release on Approvals"
     assert _one(svc, ap, "invoice")["mine"] is False  # the person who entered it may not release it
+    assert _one(svc, logins["cfo"], "invoice")["mine"] is False  # Finance no longer accepts a price variance
     assert [r for r in _rows(svc, logins["cfo"]) if r["kind"] == "proposal"] == []  # shown once, on the invoice
 
-    proposals.approve(svc, pid, logins["cfo"])
+    proposals.approve(svc, pid, logins["procurement"])
 
     assert [r for r in _rows(svc, ap) if r["kind"] == "invoice"] == []
 

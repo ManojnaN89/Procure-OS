@@ -250,6 +250,9 @@ def reset_company(
         configure(db, demo, slug)
         configure_autonomy(db, demo)
         request_jobs.queue_daily_check(db, slug)
+        from p2p.platform import exception_cases  # noqa: PLC0415 - cases build on the platform
+
+        exception_cases.schedule(slug)
         people = db.execute(text("select code, name, designation, email from org_user order by code")).all()
         held: dict[str, set[str]] = {}
         for code, role in db.execute(text("select user_code, role from org_user_role")):

@@ -46,4 +46,4 @@ When readiness has no blocker, write the reason at the top and press **Propose g
 
 ## What happened, and if you are stuck
 
-**Audit** (who did what), **Agent runs**, **Rule decisions** and **Model calls** show what the programs did and which rule version they used. A refused change says why. A change that needs a reason does nothing until the reason box has text.
+**Audit** (who did what), **Agent runs**, **Rule decisions** and **Model calls** show what the programs did and which rule version they used. A refused change says why. A change that needs a reason does nothing until the reason box has text. A background job that fails its last attempt is a **job_failed** case on **Exceptions** for the first administrator: read the error, fix the cause, then **Run again**.

@@ -32,6 +32,9 @@ class ProposalRef:
     action: str
     status: str
     payload: dict[str, Any]
+    proposed_by_type: str = "user"
+    proposed_by_id: str = ""
+    proposed_for: str | None = None
 
 
 Executor = Callable[[Session, dict[str, Any], Actor], dict[str, Any] | None]
@@ -40,6 +43,12 @@ EXECUTORS: dict[str, Executor] = {}
 
 Guard = Callable[[Session, dict[str, Any], Actor], None]
 GUARDS: dict[str, Guard] = {}
+
+# After a decision: what to tell the asker (a release's outcome, block 11). Runs in the same transaction as the result.
+AfterExecution = Callable[[Session, "ProposalRef", str, dict[str, Any] | None, Actor], None]
+AFTER_EXECUTION: dict[str, AfterExecution] = {}
+Rejected = Callable[[Session, "ProposalRef", Actor, str], None]
+REJECTED: dict[str, Rejected] = {}
 
 # While an executor runs: the proposal's id and who proposed it (an executor that records the maker reads it here).
 RUNNING: ContextVar[tuple[int, Actor] | None] = ContextVar("proposal_running", default=None)
@@ -59,6 +68,26 @@ def guard(action: str) -> Callable[[Guard], Guard]:
 
     def wrap(fn: Guard) -> Guard:
         GUARDS[action] = fn
+        return fn
+
+    return wrap
+
+
+def after_execution(action: str) -> Callable[[AfterExecution], AfterExecution]:
+    """Register what to do once an action has run (or failed): the asker is told the outcome."""
+
+    def wrap(fn: AfterExecution) -> AfterExecution:
+        AFTER_EXECUTION[action] = fn
+        return fn
+
+    return wrap
+
+
+def rejected(action: str) -> Callable[[Rejected], Rejected]:
+    """Register what to do when an action is rejected: the asker is told, with the reason."""
+
+    def wrap(fn: Rejected) -> Rejected:
+        REJECTED[action] = fn
         return fn
 
     return wrap
@@ -190,8 +219,22 @@ def approve(
     audit.record(
         db, approver, f"proposal.executed_{execution}", "proposal", proposal_id, after={"result": result}, reason=note
     )
+    tell = AFTER_EXECUTION.get(p.action)
+    if tell is not None:
+        tell(
+            db,
+            ProposalRef(
+                proposal_id, p.action, "approved", dict(p.payload), p.proposed_by_type, str(p.proposed_by_id),
+                p.proposed_for,
+            ),
+            execution,
+            result,
+            approver,
+        )  # fmt: skip
     db.commit()
-    return ProposalRef(proposal_id, p.action, "approved", dict(p.payload))
+    return ProposalRef(
+        proposal_id, p.action, "approved", dict(p.payload), p.proposed_by_type, str(p.proposed_by_id), p.proposed_for
+    )
 
 
 def _recommended(db: Session, p: Any, user_id: int, note: str | None, now: datetime) -> None:
@@ -267,6 +310,18 @@ def reject(db: Session, proposal_id: int, user_id: int, reason: str, *, now: dat
 
     recommendations.on_decision(db, dict(p.payload or {}), user_id, accepted=False, note=reason)
     _set(db, proposal_id, "rejected", user_id, now or datetime.now(UTC), reason)
+    tell = REJECTED.get(p.action)
+    if tell is not None:
+        tell(
+            db,
+            ProposalRef(
+                proposal_id, p.action, "rejected", dict(p.payload), p.proposed_by_type, str(p.proposed_by_id),
+                p.proposed_for,
+            ),
+            sod.user(user_id),
+            reason,
+        )  # fmt: skip
+        db.commit()
 
 
 def withdraw(db: Session, proposal_id: int, user_id: int | None, note: str) -> None:

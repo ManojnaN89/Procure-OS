@@ -86,12 +86,12 @@ def test_an_invoice_is_judged_under_the_version_of_the_day_it_was_received_and_k
     outbox: Outbox,  # noqa: F811
 ) -> None:
     _version(ledger, "price_abs", "300", date(2026, 11, 10))  # the rupee tolerance cut from the 10th
-    before, logins = _goods(ledger, qty="10", price="1000")
-    after, _ = _goods(ledger, qty="11", price="1000", logins=logins)
+    before, logins = _goods(ledger, qty="100", price="1000")
+    after, _ = _goods(ledger, qty="101", price="1000", logins=logins)
 
-    # Rs 40 a unit is 4% (above the 2%), and Rs 400 on the line: inside 500, outside 300
-    old = _invoice(ledger, before, "10", "1040", number="A", on=date(2026, 11, 9))
-    new = _invoice(ledger, after, "10", "1040", number="B", on=date(2026, 11, 10))
+    # Rs 4 a unit is 0.4% (inside 2%), and Rs 400 on the line: inside 500, outside 300 (both tests must hold)
+    old = _invoice(ledger, before, "100", "1004", number="A", on=date(2026, 11, 9))
+    new = _invoice(ledger, after, "100", "1004", number="B", on=date(2026, 11, 10))
 
     assert (old.status, old.result) == ("approved", "within_tolerance")
     assert (new.status, new.result, new.reasons) == ("blocked", "blocked", ["price_variance"])
@@ -102,7 +102,7 @@ def test_an_invoice_is_judged_under_the_version_of_the_day_it_was_received_and_k
     audit = ledger.execute(
         text("select entity_id, rule_version from audit_event where action = 'invoice.match' order by id")
     ).all()
-    assert audit == [(old.no, "tolerance v1"), (new.no, "tolerance v2")]
+    assert audit == [(old.no, "tolerance v1; match rules 2"), (new.no, "tolerance v2; match rules 2")]
 
 
 def test_matching_again_after_a_later_version_gives_the_same_result_and_version(

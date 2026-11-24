@@ -27,7 +27,7 @@ Open **Inventory**. On the row of the item click **Issue** to take stock out for
 
 Safety stock is kept back: an issue that would use it is refused with "Only 2 is free; 2 is safety stock". Click **Ask to use safety stock** and say why; your manager (Vikram Joshi at Apex) approves it on My work, then the issue is posted. On **Material requests** a line short only because of safety stock has **Use safety stock** for the same request.
 
-**Hold** on an Inventory row puts usable stock in quarantine or blocked, with a reason (damage, expiry, a suspect lot). If that stock was set aside, the order needed last gives it back and the store check buys again for it. **Holds** lists the held lots: **Release** sends a quantity back to usable (set aside at once) or, from quarantine, to blocked. Every hold and decision needs a reason.
+**Hold** on an Inventory row puts usable stock in quarantine or blocked, with a reason (damage, expiry, a suspect lot). If that stock was set aside, the order needed last gives it back and the store check buys again for it. **Holds** lists the held lots: **Release** sends a quantity back to usable (set aside at once) or, from quarantine, to blocked. Every open hold is also a held-stock case on **Exceptions**, with a due date: decide it there with the same buttons. Every hold and decision needs a reason.
 
 ## Material requests for production orders
 

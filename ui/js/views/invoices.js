@@ -184,19 +184,23 @@ const InvoicesView = {
         <div class="doc-main">
         ${i.reason ? UI.callout(i.status === "blocked" ? "warning" : "info", i.status === "cancelled" && i.duplicate_of ? `Copy of ${i.duplicate_of}` : "Why it is blocked", `<p>${this.esc(i.reason)}</p>${i.status === "blocked" && i.can_act ? "<p>Fix it with the supplier (a credit note or a corrected invoice), match it again, or ask another person to release it. The buttons below do each of these.</p>" : ""}`) : ""}
         ${i.pending_release ? UI.callout("info", "Waiting for approval", `<p>${this.esc(i.pending_release.summary)}. An approver decides it under Admin → Approvals.</p>`) : ""}
-        <div class="table-wrap" style="margin-bottom:12px;"><table class="data-table"><thead><tr><th>ORDER LINE</th><th>ITEM</th><th>QTY</th><th>PRICE</th><th>TAXABLE</th><th>MATCH</th></tr></thead><tbody>
+        <div class="table-wrap" style="margin-bottom:12px;"><table class="data-table"><thead><tr><th>ORDER LINE</th><th>ITEM</th><th>QTY</th><th>PRICE</th><th>TAXABLE</th><th>GST</th><th>MATCH</th></tr></thead><tbody>
           ${i.lines.map((l) => { const m = i.match.find((x) => x.line_no === l.line_no) || {};
-            return `<tr><td>${this.esc(l.po_no)} / ${this.esc(l.po_line_no)}</td><td>${this.esc(l.name)}</td><td>${this.esc(l.qty)} <span class="cell-muted">${this.esc(l.uom)}</span></td><td>${formatCurrency(l.unit_price)}</td><td>${formatCurrency(l.taxable)}</td>
-              <td>${m.result ? `<span class="badge ${m.result === "blocked" ? "badge-held" : "badge-approved"}">${this.esc(m.result.replace("_", " "))}</span>${m.reason ? `<div class="cell-muted" style="font-size:11px;">${this.esc(this.REASON[m.reason] || m.reason)}</div>` : ""}` : ""}</td></tr>`; }).join("")}
+            const g = m.gst;
+            const gstCell = g ? `${this.esc(g.order_rate)}% order / ${this.esc(g.invoice_rate)}% invoice${(g.expected.cgst !== g.charged.cgst || g.expected.sgst !== g.charged.sgst || g.expected.igst !== g.charged.igst) ? `<div class="cell-muted" style="font-size:11px;">CGST ${formatCurrency(g.expected.cgst)} / ${formatCurrency(g.charged.cgst)}, SGST ${formatCurrency(g.expected.sgst)} / ${formatCurrency(g.charged.sgst)}, IGST ${formatCurrency(g.expected.igst)} / ${formatCurrency(g.charged.igst)} (expected / charged)</div>` : ""}` : "";
+            return `<tr><td>${this.esc(l.po_no)} / ${this.esc(l.po_line_no)}</td><td>${this.esc(l.name)}</td><td>${this.esc(l.qty)} <span class="cell-muted">${this.esc(l.uom)}</span></td><td>${formatCurrency(l.unit_price)}</td><td>${formatCurrency(l.taxable)}</td><td>${gstCell}</td>
+              <td>${m.result ? `<span class="badge ${m.result === "blocked" ? "badge-held" : "badge-approved"}">${this.esc(m.result.replace("_", " "))}</span>${(m.reasons && m.reasons.length ? m.reasons : (m.reason ? [m.reason] : [])).map((r) => `<div class="cell-muted" style="font-size:11px;">${this.esc(this.REASON[r] || r)}</div>`).join("")}${m.variance_value && m.variance_value !== "0.00" ? `<div class="cell-muted" style="font-size:11px;">Variance ${formatCurrency(m.variance_value)}</div>` : ""}` : ""}</td></tr>`; }).join("")}
         </tbody></table>
           <div class="table-foot">${UI.totals([["Taxable", i.taxable], ["CGST", i.cgst], ["SGST", i.sgst], ["IGST", i.igst], ["Total", i.total]])}</div></div>
-        ${(() => { const t = (i.match.find((m) => m.tolerance) || {}).tolerance; return t ? `<div class="cell-muted" style="font-size:12px;margin-bottom:6px;">Judged under tolerance version ${this.esc(t.version)} (from ${formatDate(t.effective_from)})</div>` : ""; })()}
+        ${(() => { const t = (i.match.find((m) => m.tolerance) || {}).tolerance; return t ? `<div class="cell-muted" style="font-size:12px;margin-bottom:6px;">Judged under tolerance version ${this.esc(t.version)} (from ${formatDate(t.effective_from)}) and match rules ${this.esc(i.match_rules || 2)}</div>` : ""; })()}
         ${problems.filter((m) => m.line_no === null && m.detail).map((m) => `<div class="cell-muted" style="font-size:12px;margin-bottom:6px;">${this.esc(m.detail)}</div>`).join("")}
+        ${i.status === "blocked" && i.release && !i.release.allowed ? UI.callout("info", "Not released by a person", `<p>${this.esc(i.release.why_not || "")}</p>`) : ""}
         ${i.can_act ? `<div class="panel"><div class="panel-title">What you can do</div><div class="btn-row">
             <div class="btn btn-primary" id="invExplain"><i class="ti ti-search"></i>Explain why and what to do</div>
             <div class="btn" id="invRematch"><i class="ti ti-refresh"></i>Match again</div>
-            <div class="btn" id="invRelease"><i class="ti ti-lock-open"></i>Ask to pay it anyway</div>
+            ${i.release && i.release.allowed ? `<div class="btn" id="invRelease"><i class="ti ti-lock-open"></i>${i.release.kind === "price" ? "Accept the price and pay" : "Ask to pay it anyway"}</div>` : ""}
             <div class="btn btn-danger" id="invCancel"><i class="ti ti-x"></i>Cancel (a corrected invoice is coming)</div></div>
+          ${i.release && i.release.allowed && i.release.kind === "price" ? `<div class="cell-muted" style="font-size:12px;margin-top:6px;">The variance is ${formatCurrency(i.release.variance)}, decided by ${this.esc(i.release.approver_name || "the price rule's person")} (${this.esc(i.release.role || "price variance rule")}, rule VAR-01).</div>` : ""}
           <div id="invWhy" class="form-grid" style="display:none;margin-top:12px;grid-template-columns:minmax(200px,1fr) auto;"><label>Why? (needed)<input id="invReason" placeholder="For example: the supplier's price rose and the stock is needed"></label> <div class="btn btn-primary" id="invWhyOk">Send</div></div></div>` : ""}
         <div id="invAdvice"></div>
         <div id="invNote" style="font-size:12.5px;color:var(--warning-text);margin-top:8px;"></div>
@@ -216,15 +220,23 @@ const InvoicesView = {
         </div>
         </div>`;
       const note = document.getElementById("invNote");
-      const FIX = { credit_note: "Ask the supplier for a credit note", corrected_invoice: "Ask the supplier for a corrected invoice", wait_for_receipt: "Wait for the goods receipt, then match again", request_release: "Ask for a release" };
+      const FIX = { credit_note: "Ask the supplier for a credit note", corrected_invoice: "Ask the supplier for a corrected invoice", wait_for_receipt: "Wait for the goods; the invoice is matched again when they are accepted", wait_for_confirmation: "Wait for the requester to confirm the service; the invoice is matched again by itself", request_release: "Ask for a release" };
       const showAdvice = (d) => {
         if (!d) return;
         document.getElementById("invAdvice").innerHTML = `<div class="panel" style="margin-top:12px;font-size:12.5px;">
           <div class="panel-title">What to do</div>
           <p style="margin:0 0 8px;">${this.esc(d.explanation)}</p>
           <p style="margin:0 0 8px;"><strong>${this.esc(FIX[d.fix] || d.fix)}.</strong> Only a person can release the block; this is advice.</p>
-          <div class="cell-muted" style="font-size:11.5px;margin-bottom:4px;">Draft message to the supplier (copy it into your email; nothing is sent):</div>
-          <pre style="white-space:pre-wrap;font-size:12px;margin:0;">${this.esc((d.vendor_email || {}).body || d.vendor_body || "")}</pre></div>`;
+          <div class="cell-muted" style="font-size:11.5px;margin-bottom:4px;">The query to the supplier (edit it, then send it from here):</div>
+          <input id="invQSubject" value="${this.esc((d.vendor_email || {}).subject || "")}" style="padding:6px;width:100%;margin-bottom:6px;">
+          <textarea id="invQBody" rows="6" style="padding:6px;width:100%;">${this.esc((d.vendor_email || {}).body || d.vendor_body || "")}</textarea>
+          <div class="btn btn-primary btn-sm" id="invQuery" style="margin-top:6px;">Send the query to the supplier</div></div>`;
+        document.getElementById("invQuery").addEventListener("click", async () => {
+          const res = await API.postJSON(`/api/invoices/${encodeURIComponent(id)}/query`, {
+            subject: document.getElementById("invQSubject").value, body: document.getElementById("invQBody").value,
+          });
+          if (res.ok) { note.textContent = `Sent to ${res.data.to}.`; } else { note.textContent = res.data.detail || "That did not work."; }
+        });
       };
       if (i.status === "blocked") API.getJSON(`/api/invoices/${encodeURIComponent(id)}/diagnosis`).then((r) => showAdvice(r.diagnosis)).catch(() => {});
       const post = async (verb, body) => {

@@ -156,8 +156,9 @@ tolerances:
     note: Set up with the company
     values:
       - [price_pct, "2.00", Invoice price above PO price by this percent is within tolerance]
-      - [price_abs, "500.00", Or by this many rupees per line]
+      - [price_abs, "500.00", And at most this many rupees per line]
       - [qty_pct, "5.00", Invoiced quantity above received quantity by this percent is within tolerance]
+      - [tax_line_abs, "1.00", GST on an invoice line may differ from the order's by at most this many rupees per tax]
       - [small_diff_abs, "100.00", Total invoice difference up to this amount is accepted]
       - [receipt_over_pct, "2.00", Receipt above ordered quantity by this percent is accepted]
       - [supplier_change_pct, "5.00", Supplier quantity change noted by the agent up to this percent]
@@ -676,7 +677,8 @@ history:
     invoice_not_received: 2  # on the supplier's statement, never received
     grni_month_end: 3  # invoice more than a month after the receipt
     tolerance_edge_qty: 2  # bearings invoiced 3% over what was accepted: June within version 1, August blocked by version 2
-    tolerance_edge_price: 2  # Rs 400 over on a small line: March within version 1's Rs 500, August blocked by version 2's Rs 300
+    tolerance_edge_price: 2  # a line Rs 301 to 499 over on 1.5% to 1.9%: March within version 1's Rs 500, August blocked by version 2's Rs 300
+    gst_mismatch: 2  # one line billed at 18% for a 5% item, one line's CGST Rs 5.00 above: each blocked, cancelled, corrected
   tolerance_edges:  # invoices either side of tolerance version 2 (1 Jul 2026), each judged by its received date
     qty: {supplier: SUP-002, item: RM-06, pct: "3", months: ["2026-06", "2026-08"]}
     price: {over: "400.00", months: ["2026-03", "2026-08"]}

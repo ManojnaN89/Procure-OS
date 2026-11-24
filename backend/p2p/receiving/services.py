@@ -19,7 +19,6 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from p2p.approvals.workflow import name_of, org_code_of
-from p2p.formulas import matching
 from p2p.formulas import receiving as rules
 from p2p.platform import audit, numbering
 from p2p.platform.sod import Actor, user
@@ -128,25 +127,10 @@ def confirm(db: Session, c: Confirmation, user_id: int, *, as_of: date, via: str
         },
     )  # fmt: skip
     db.commit()
-    return Confirmed(no, c.po_no, c.po_line_no, done.qty, done.amount, status, _rematch(db, c.po_no, c.po_line_no))
+    from p2p.invoices import rematch  # noqa: PLC0415 - invoices builds on receiving
 
-
-def _rematch(db: Session, po_no: str, line_no: int) -> list[str]:
-    """Invoices held because the service was not confirmed are matched again now (the same rules, nothing overridden)."""
-    from p2p.invoices import service as invoices  # noqa: PLC0415 - invoices builds on receiving
-
-    held = [
-        r[0]
-        for r in db.execute(
-            text(
-                "select distinct i.no from invoice i join invoice_line l on l.invoice_no = i.no "
-                "join match_result m on m.invoice_no = i.no and m.resolved_at is null and m.reason_codes = :why "
-                "where i.status = 'blocked' and l.po_no = :p and l.po_line_no = :l order by i.no"
-            ),
-            {"why": matching.SERVICE, "p": po_no, "l": line_no},
-        )
-    ]
-    return [no for no in held if invoices.match_invoice(db, no, REMATCH).status == "approved"]
+    rematched = rematch.after_accepted(db, c.po_no, [c.po_line_no], REMATCH, grn=no)
+    return Confirmed(no, c.po_no, c.po_line_no, done.qty, done.amount, status, rematched)
 
 
 _OPEN = """

@@ -38,17 +38,19 @@ MAX_STEPS = 7
 # the causes, named as the dataset names the problems it plants
 CAUSES = (
     "price_mismatch", "qty_mismatch", "rejected_qty_invoiced", "goods_not_received", "wrong_gstin",
-    "composition_tax", "e_invoice_missing", "arithmetic",
+    "composition_tax", "e_invoice_missing", "arithmetic", "service_not_confirmed", "gst_mismatch",
 )  # fmt: skip
 NEXT_ACTION = {
     "credit_note": "Ask the supplier for a credit note",
     "corrected_invoice": "Ask the supplier for a corrected invoice",
-    "wait_for_receipt": "Wait for the goods receipt, then match again",
+    "wait_for_receipt": "Wait for the goods; the invoice is matched again when they are accepted",
+    "wait_for_confirmation": "Wait for the requester to confirm the service; the invoice is matched again by itself",
     "request_release": "Ask for a release",
 }  # what a person does next, in the words the Invoices screen uses
 BY_REASON = {
     "tax_not_allowed": "composition_tax", "irn_missing": "e_invoice_missing", "gstin_mismatch": "wrong_gstin",
-    "arithmetic_mismatch": "arithmetic", "price_variance": "price_mismatch",
+    "arithmetic_mismatch": "arithmetic", "price_variance": "price_mismatch", "gst_mismatch": "gst_mismatch",
+    "service_not_confirmed": "service_not_confirmed",
 }  # fmt: skip
 
 SYSTEM = (
@@ -132,8 +134,12 @@ def gather(db: Session, invoice_no: str) -> dict[str, Any] | None:
                 "received_gross": Decimal(got["gross"]), "accepted": Decimal(got["accepted"]),
                 "rejected": Decimal(got["rejected"]), "receipts": int(got["receipts"]),
                 "invoiced_by_others": Decimal(others), "result": match["reason_codes"] if match else None,
+                "reasons": list(match["reasons"] or ([match["reason_codes"]] if match and match["reason_codes"] else []))
+                if match
+                else [],
                 "qty_var": Decimal(match["qty_var"] or 0) if match else Decimal(0),
                 "price_var": Decimal(match["price_var"] or 0) if match else Decimal(0),
+                "gst_detail": match["detail"] if match else None,
             }
         )  # fmt: skip
     order = (
@@ -164,9 +170,10 @@ def _header_reason(facts: dict[str, Any]) -> str | None:
 
 
 def _line_cause(ln: dict[str, Any]) -> str:
-    if ln["result"] == "price_variance":
+    reasons = set(ln["reasons"])
+    if "price_variance" in reasons:
         return "price_mismatch"
-    if ln["receipts"] == 0:
+    if ln["receipts"] == 0 and "qty_over_received" in reasons:
         return "goods_not_received"
     overage = ln["qty_var"]
     if ln["rejected"] > 0 and ln["rejected"] >= overage:
@@ -175,21 +182,31 @@ def _line_cause(ln: dict[str, Any]) -> str:
 
 
 def classify(facts: dict[str, Any]) -> tuple[str, dict[str, Any] | None]:
-    """The cause, and the invoice line it is about (None for a problem with the invoice as a whole)."""
+    """The cause, and the invoice line it is about (None for a problem with the invoice as a whole).
+
+    The primary cause follows the invoice header, then service, quantity, GST and price, as the block's spec orders
+    them. The line's own reasons decide which of the line problems it is.
+    """
     header = _header_reason(facts)
     if header and header in BY_REASON:
         return BY_REASON[header], None
-    for ln in facts["lines"]:
-        if ln["result"] in ("price_variance", "qty_over_received"):
-            return _line_cause(ln), ln
+    for reason, cause in (
+        ("service_not_confirmed", "service_not_confirmed"),
+        ("qty_over_received", None),
+        ("gst_mismatch", "gst_mismatch"),
+        ("price_variance", "price_mismatch"),
+    ):
+        for ln in facts["lines"]:
+            if reason in ln["reasons"] or ln["result"] == reason:
+                return (cause or _line_cause(ln)), ln
     return "arithmetic", None
 
 
 def _fix(cause: str, ln: dict[str, Any] | None) -> str:
     if cause == "rejected_qty_invoiced":
         return "credit_note"
-    if cause == "goods_not_received":
-        return "wait_for_receipt"
+    if cause in ("goods_not_received", "service_not_confirmed"):
+        return "wait_for_confirmation" if cause == "service_not_confirmed" else "wait_for_receipt"
     if cause == "qty_mismatch" and ln is not None and ln["invoice_qty"] <= ln["order_qty"] - ln["invoiced_by_others"]:
         # the quantity billed is still within what was ordered and not yet invoiced: the rest of the goods may simply not have come yet
         return "wait_for_receipt"
@@ -243,6 +260,19 @@ def diagnose(db: Session, invoice_no: str) -> Diagnosis | None:
             f"it bills {_n(ln['invoice_qty'])} {ln['uom']} of {ln['item']} for order {ln['po_no']}, but our goods receipts show "
             f"{_n(ln['accepted'])} accepted. Please send a corrected invoice for the quantity delivered, or tell us when the rest will arrive."
         )
+    elif cause == "service_not_confirmed" and ln:
+        why = (
+            f"The invoice bills {_n(ln['invoice_qty'])} {ln['uom']} of {ln['item']} on {where}, but the service has not "
+            "been confirmed by the person who asked for it."
+        )
+        ask = (
+            f"we have not yet confirmed the service invoiced on order {ln['po_no']}. Our requester will confirm it; "
+            "the invoice is matched again by itself after that."
+        )
+    elif cause == "gst_mismatch" and ln:
+        detail = ln.get("gst_detail") or "the GST rate or amount does not match the order"
+        why = f"The GST on {where} does not match the order: {detail}."
+        ask = f"the GST on {where} does not match order {ln['po_no']} ({detail}). Please send a corrected invoice with the order's GST."
     elif cause == "wrong_gstin":
         mine = facts["order"].get("buyer_gstin")
         which = (
@@ -484,3 +514,56 @@ def latest(db: Session, invoice_no: str) -> dict[str, Any] | None:
     r = rows[0]
     r["created_at"] = r["created_at"].isoformat()
     return r
+
+
+class QueryError(Exception):
+    pass
+
+
+def send_query(db: Session, tenant: str, invoice_no: str, subject: str, body: str, user_id: int) -> dict[str, Any]:
+    """AP sends the edited query to the supplier's order contact, through the outbox (OP-15, 11.9.2).
+
+    The agent never sends; the mail is kept against the invoice and the latest diagnosis records it.
+    """
+    from p2p.invoices import service as invoices  # noqa: PLC0415 - invoices builds on this module's causes
+    from p2p.masters import suppliers  # noqa: PLC0415
+    from p2p.platform import audit, outbox, settings  # noqa: PLC0415
+
+    inv = (
+        db.execute(text("select status, supplier_code from invoice where no = :n"), {"n": invoice_no})
+        .mappings()
+        .first()
+    )
+    if inv is None:
+        raise invoices.InvoiceError(f"{invoice_no} does not exist")
+    if inv["status"] != "blocked":
+        raise QueryError("only a blocked invoice has a query to send")
+    contact = suppliers.order_contact(db, str(inv["supplier_code"]))
+    if contact is None:
+        raise QueryError("the supplier has no order contact with an email; add one in supplier records")
+    email, _name = contact
+    reply_to = settings.value(db, "invoice_receipt_mailbox", "") or None
+    message_id = outbox.queue_email(
+        db,
+        to=email,
+        subject=subject.strip(),
+        body=body.strip(),
+        linked_type="invoice",
+        linked_ref=invoice_no,
+        reply_to=reply_to,
+    )
+    db.execute(
+        text(
+            "update invoice_diagnosis set query_email_id = (select id from email_message where message_id = :m), "
+            "query_sent_by = :u, query_sent_at = now() where id = (select id from invoice_diagnosis "
+            "where invoice_no = :n order by id desc limit 1)"
+        ),
+        {"m": message_id, "u": user_id, "n": invoice_no},
+    )
+    audit.record(
+        db, Actor("user", str(user_id)), "invoice.query_sent", "invoice", invoice_no,
+        after={"to": email, "email_id": message_id},
+    )  # fmt: skip
+    db.commit()
+    outbox.send_now(tenant, [message_id])
+    return {"email_id": message_id, "to": email}

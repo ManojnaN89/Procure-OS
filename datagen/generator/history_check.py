@@ -157,12 +157,23 @@ class HistoryCheck:
         """GST and totals of orders and invoices worked out again; payments, allocations and bank lines agree."""
         state = self.loc["state_code"]
         po_of = {r["no"]: r for r in self.t["po"]}
+        planted_gst = {r["invoice_no"] for r in self.k["truth_match_expected"] if r.get("planted") == "gst_mismatch"}
         for kind, head, lines, key in (("po", self.t["po"], self.t["po_line"], "po_no"),
                                        ("invoice", self.t["invoice"], self.t["invoice_line"], "invoice_no")):  # fmt: skip
             sums: dict[str, list[Decimal]] = defaultdict(lambda: [Decimal(0)] * 4)
             for ln in lines:
                 h = po_of[ln["po_no"]]
                 value = q2(Decimal(ln["qty"]) * Decimal(ln["unit_price"]))
+                if kind == "invoice" and ln[key] in planted_gst:
+                    # a planted GST problem is meant to disagree with the order; its own amounts still add up
+                    s = sums[ln[key]]
+                    s[0], s[1], s[2], s[3] = (
+                        s[0] + value,
+                        s[1] + Decimal(ln["cgst"]),
+                        s[2] + Decimal(ln["sgst"]),
+                        s[3] + Decimal(ln["igst"]),
+                    )
+                    continue
                 item = ln["item_code"] if kind == "po" else self.line_item[(ln["po_no"], ln["po_line_no"])]
                 rate = self.rate(item, h["created_at"][:10])
                 if Decimal(ln["gst_rate"]) != rate:
@@ -363,19 +374,21 @@ class HistoryCheck:
         return sum(1 for n in lots.values() if n > 1)
 
     def mismatches(self) -> None:
-        """Price and quantity problems judged again from the order, the receipt and the tolerances: the first line
-        that is out decides, as in truth_match_expected."""
+        """Price, quantity and GST per line judged again from the order, the receipt and the tolerances: every reason
+        the line has, in the match's order, as in truth_match_expected."""
         price = {(r["po_no"], r["line_no"]): Decimal(r["unit_price"]) for r in self.t["po_line"]}
+        rate = {(r["po_no"], r["line_no"]): Decimal(r["gst_rate"]) for r in self.t["po_line"]}
         grn_ref = {g["no"]: g["supplier_invoice_ref"].removesuffix("-R") for g in self.t["goods_receipt"]}
         accepted: dict[tuple[str, str, str], Decimal] = defaultdict(Decimal)
         for ln in self.t["gr_line"]:
             accepted[(grn_ref[ln["gr_no"]], ln["po_no"], ln["po_line_no"])] += Decimal(ln["qty_accepted"])
-        found: dict[str, str] = {}
+        found: dict[str, list[str]] = {}
         judged: dict[str, str] = {}  # the tolerance version in force on the day each invoice was received
         number = {r["no"]: r for r in self.t["invoice"]}
+        supplier = {s["code"]: s for s in self.m["supplier"]}
         for ln in self.t["invoice_line"]:
             inv = number[ln["invoice_no"]]
-            if inv["payment_block"] == "duplicate" or inv["no"] in found:
+            if inv["payment_block"] == "duplicate":
                 continue
             item = self.items[self.line_item[(ln["po_no"], ln["po_line_no"])]]
             version, tol = tolerance_on(
@@ -383,21 +396,44 @@ class HistoryCheck:
             )
             judged[inv["no"]] = str(version)
             ordered, qty = price[(ln["po_no"], ln["po_line_no"])], Decimal(ln["qty"])
+            reasons = found.setdefault(inv["no"], [])
             diff = Decimal(ln["unit_price"]) - ordered
+            if diff > 0 and not (diff <= ordered * tol["price_pct"] / 100 and diff * qty <= tol["price_abs"]):
+                reasons.append("price_variance")
             got = accepted.get((inv["supplier_invoice_no"].removesuffix("-R"), ln["po_no"], ln["po_line_no"]))
-            if diff > 0 and not (diff <= ordered * tol["price_pct"] / 100 or diff * qty <= tol["price_abs"]):
-                found[inv["no"]] = "price_variance"
-            elif got is not None and qty > got + got * tol["qty_pct"] / 100:
-                found[inv["no"]] = "qty_over_received"
+            if got is not None and qty > got + got * tol["qty_pct"] / 100:
+                reasons.append("qty_over_received")
+            order_rate = rate[(ln["po_no"], ln["po_line_no"])]
+            taxable = Decimal(ln["taxable"])
+            if Decimal(ln["gst_rate"]) != order_rate:
+                reasons.append("gst_mismatch")
+            else:
+                intra = supplier[inv["supplier_code"]]["state_code"] == self.loc["state_code"]
+                want = (
+                    (taxable * order_rate / 200).quantize(CENT, ROUND_HALF_UP),
+                    (taxable * order_rate / 200).quantize(CENT, ROUND_HALF_UP),
+                    Decimal("0.00"),
+                ) if intra else (
+                    Decimal("0.00"),
+                    Decimal("0.00"),
+                    (taxable * order_rate / 100).quantize(CENT, ROUND_HALF_UP),
+                )  # fmt: skip
+                tolerance = Decimal(tol.get("tax_line_abs", "1.00"))
+                if any(
+                    abs(Decimal(ln[k]) - w) > tolerance for k, w in zip(("cgst", "sgst", "igst"), want, strict=True)
+                ):
+                    reasons.append("gst_mismatch")
         for r in self.k["truth_match_expected"]:
             if judged.get(r["invoice_no"]) != r["tolerance_version"]:
                 self.bad(
                     f"invoice {r['invoice_no']}: truth says tolerance version {r['tolerance_version']}, "
                     f"it was received under {judged.get(r['invoice_no'])}"
                 )
-            if found.get(r["invoice_no"], "") != r["reason_codes"]:
+            says = [x for x in str(r.get("reasons") or r["reason_codes"] or "").split(";") if x]
+            if found.get(r["invoice_no"], []) != says:
                 self.bad(
-                    f"invoice {r['invoice_no']}: the data says '{found.get(r['invoice_no'], '')}', truth says '{r['reason_codes']}'"
+                    f"invoice {r['invoice_no']}: the data says '{';'.join(found.get(r['invoice_no'], []))}', "
+                    f"truth says '{';'.join(says)}'"
                 )
 
     def closed_items(self) -> None:

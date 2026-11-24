@@ -7,6 +7,7 @@ never take the same job. A job claimed by a worker that died is picked up again 
 import hashlib
 import json
 import logging
+import threading
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -22,6 +23,7 @@ log = logging.getLogger(__name__)
 LOCK_TIMEOUT = timedelta(minutes=5)
 MAX_ATTEMPTS = 5
 BACKOFF = timedelta(minutes=1)
+HEARTBEAT_SECONDS = 60
 
 
 @dataclass(frozen=True)
@@ -51,7 +53,7 @@ def load_handlers() -> None:
     from p2p.approvals import chasing  # noqa: F401, PLC0415 - approval reminders
     from p2p.invoices import reading  # noqa: F401, PLC0415 - reads invoice mails into drafts
     from p2p.orders import jobs as order_jobs  # noqa: F401, PLC0415
-    from p2p.platform import alerts, emails, events, notifications, outbox, setting_changes, tasks  # noqa: F401, PLC0415
+    from p2p.platform import alerts, emails, events, exception_cases, notifications, outbox, setting_changes, tasks  # noqa: F401, PLC0415
     from p2p.requests import jobs  # noqa: F401, PLC0415
     from p2p.sourcing import jobs as sourcing_jobs  # noqa: F401, PLC0415
     from p2p.sourcing import reminders  # noqa: F401, PLC0415
@@ -147,7 +149,7 @@ def _claim(
         return [(r[0], r[1], r[2], r[3], r[4]) for r in rows]
 
 
-def _finish(job_id: int, now: datetime, error: str | None) -> None:
+def _finish(job_id: int, now: datetime, error: str | None, tenant: str | None = None, kind: str | None = None) -> None:
     engine = tenants.control_engine()
     with engine.begin() as c:
         if error is None:
@@ -167,6 +169,30 @@ def _finish(job_id: int, now: datetime, error: str | None) -> None:
                 text("update job set status = 'queued', locked_at = null, last_error = :e, run_at = :r where id = :i"),
                 {"e": error, "r": now + BACKOFF * attempts, "i": job_id},
             )
+    if error is not None and attempts >= MAX_ATTEMPTS and tenant is not None:
+        from p2p.platform import exception_cases  # noqa: PLC0415 - cases build on the worker
+
+        try:
+            exception_cases.open_job_failure(tenant, job_id, kind or "a job", attempts, error, now)
+        except Exception as exc:  # noqa: BLE001 - a case that cannot be opened must not stop the worker
+            log.warning("job %s failed and its case could not be opened: %s", job_id, exc)
+
+
+def heartbeat(job_id: int, now: datetime | None = None) -> None:
+    """While a handler runs, say the job is still alive: a second worker does not take it (DF-24)."""
+    with tenants.control_engine().begin() as c:
+        c.execute(
+            text("update job set locked_at = :n where id = :i and status = 'running'"),
+            {"n": now or datetime.now(UTC), "i": job_id},
+        )
+
+
+def _beat(job_id: int, stop: threading.Event) -> None:  # pragma: no cover - the thread itself
+    while not stop.wait(HEARTBEAT_SECONDS):
+        try:
+            heartbeat(job_id)
+        except Exception:  # noqa: BLE001 - a missed beat is only a longer lock, retried next time
+            log.warning("could not refresh job %s's lock", job_id)
 
 
 def run_once(now: datetime | None = None, limit: int = 10, tenant: str | None = None) -> int:
@@ -176,12 +202,18 @@ def run_once(now: datetime | None = None, limit: int = 10, tenant: str | None = 
     now = now or datetime.now(UTC)
     taken = _claim(now, limit, tenant)
     for job_id, tenant, kind, payload, created_at in taken:
+        stop = threading.Event()
+        beat = threading.Thread(target=_beat, args=(job_id, stop), daemon=True)
+        beat.start()
         try:
             HANDLERS[kind](JobContext(job_id, tenant, payload, now, created_at))
-            _finish(job_id, now, None)
+            _finish(job_id, now, None, tenant, kind)
         except Exception as exc:  # noqa: BLE001 - recorded on the job and retried
             log.warning("job %s (%s) failed: %s", job_id, kind, exc)
-            _finish(job_id, now, f"{type(exc).__name__}: {str(exc)[:300]}")
+            _finish(job_id, now, f"{type(exc).__name__}: {str(exc)[:300]}", tenant, kind)
+        finally:
+            stop.set()
+            beat.join(timeout=1)
     return len(taken)
 
 
