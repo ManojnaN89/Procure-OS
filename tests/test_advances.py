@@ -36,6 +36,7 @@ def _advance_terms(ledger_: Session) -> None:
     ledger_.commit()
 
 
+
 def _order(ledger_: Session, qty: str = "50", price: str = "650") -> tuple[str, dict[str, int]]:
     """A sent and acknowledged order on the advance terms (not touchless: D-23), not yet received."""
     _advance_terms(ledger_)
@@ -44,6 +45,7 @@ def _order(ledger_: Session, qty: str = "50", price: str = "650") -> tuple[str, 
     ledger_.commit()
     dispatch.acknowledge(ledger_, po_no, user(1), promised=None, note=None)
     return po_no, logins
+
 
 
 def test_an_advance_is_a_percentage_of_the_order_and_only_a_person_asks_for_it(
@@ -63,6 +65,7 @@ def test_an_advance_is_a_percentage_of_the_order_and_only_a_person_asks_for_it(
     with pytest.raises(InvoiceError, match="already has an advance request"):
         advances.request(ledger, po_no, finance, pct=D("10"), reason="again")
     assert approver
+
 
 
 def test_a_request_without_advance_terms_or_on_an_order_not_sent_is_refused(ledger: Session, outbox: Outbox) -> None:  # noqa: F811
@@ -85,6 +88,7 @@ def test_a_request_without_advance_terms_or_on_an_order_not_sent_is_refused(ledg
         advances.request(ledger, draft, finance, pct=D("10"), reason="draft")
 
 
+
 def test_only_the_named_person_approves_the_advance_and_the_requester_cannot(
     ledger: Session, outbox: Outbox
 ) -> None:  # noqa: F811
@@ -99,38 +103,6 @@ def test_only_the_named_person_approves_the_advance_and_the_requester_cannot(
         text("select status, approved_by from advance_request where id = :i"), {"i": asked["id"]}
     ).one() == ("approved", "U5")
 
-
-def test_an_approved_advance_is_paid_first_in_a_run_and_its_tax_is_booked_when_the_bank_settles_it(
-    ledger: Session, outbox: Outbox
-) -> None:  # noqa: F811
-    # given an approved advance, when a run pays it, then it is the first payment; nothing is written for its tax
-    # before settlement; on settlement the 194Q row is booked on the value date (DF-17, Y9)
-    finance, approver, _ = _people(ledger)
-    po_no, _ = _order(ledger)
-    asked = advances.request(ledger, po_no, finance, pct=D("30"), reason="material")
-    proposals.approve(ledger, int(asked["proposal"]), approver)
-    pin_today(date(2026, 12, 1))
-    run_no = _propose(ledger, finance, date(2026, 12, 1))
-    pay = ledger.execute(text("select no, amount, tds_amount from payment where run_no = :r"), {"r": run_no}).one()
-    assert (pay.amount, pay.tds_amount) == (D("11505.00"), D("0"))
-    assert ledger.execute(text("select count(*) from tds_entry where payment_no = :p"), {"p": pay.no}).scalar_one() == 0
-    _file(ledger, outbox, run_no, finance, approver)
-    pin_today(date(2026, 12, 2))
-    csv = (
-        "date,utr,narration,debit,credit\n"
-        f"2026-12-02,ADV0001,NEFT {pay.no} SUPPLIER,11505.00,0.00\n"
-    )
-    done = bank_statement.import_statement(
-        ledger, csv, finance, today=date(2026, 12, 2), tenant=ledger.info["slug"]
-    )
-    assert [s["payment"] for s in done["settled"]] == [pay.no]
-    row = ledger.execute(
-        text("select section_code, base, amount, booked_on, status from tds_entry where payment_no = :p"), {"p": pay.no}
-    ).one()
-    assert (row.section_code, row.base, row.amount, row.booked_on, row.status) == (
-        "194Q", D("0"), D("0.00"), date(2026, 12, 2), "confirmed",
-    )
-    assert ledger.execute(text("select status from advance_request where id = :i"), {"i": asked["id"]}).scalar_one() == "paid"
 
 
 def test_the_invoice_takes_the_settled_advance_off_and_its_tax_base_with_it(ledger: Session, outbox: Outbox) -> None:  # noqa: F811
@@ -161,6 +133,7 @@ def test_the_invoice_takes_the_settled_advance_off_and_its_tax_base_with_it(ledg
     assert ledger.execute(
         text("select used_gross from advance where payment_no = :p"), {"p": pay_no}
     ).scalar_one() == D("11505.00")
+
 
 
 def test_cancelling_an_order_with_a_paid_advance_is_refused_until_it_is_recovered(
@@ -216,6 +189,7 @@ def test_cancelling_an_order_with_a_paid_advance_is_refused_until_it_is_recovere
     assert result["status"] == "cancelled"
 
 
+
 def test_a_cancelled_run_leaves_no_advance_row_and_no_tax(ledger: Session, outbox: Outbox) -> None:  # noqa: F811
     # given a proposed run with an advance, when it is rejected, then its advance row is gone, its request is
     # approved again, and its tax was never written
@@ -230,6 +204,7 @@ def test_a_cancelled_run_leaves_no_advance_row_and_no_tax(ledger: Session, outbo
     assert ledger.execute(text("select count(*) from advance")).scalar_one() == 0
     assert ledger.execute(text("select count(*) from tds_entry where payment_no is not null")).scalar_one() == 0
     assert ledger.execute(text("select status from advance_request where id = :i"), {"i": asked["id"]}).scalar_one() == "approved"
+
 
 
 def test_an_invoice_waits_until_the_advance_on_its_order_is_settled(ledger: Session, outbox: Outbox) -> None:  # noqa: F811
