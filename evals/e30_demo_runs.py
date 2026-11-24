@@ -834,7 +834,7 @@ def pay_many(
             expect(page.locator("#duePreview")).to_contain_text(no)
             expect(page.locator("#duePreview")).to_contain_text(money(amount))
         page.locator("#planRun").click()
-        expect(page.locator("#appContent")).to_contain_text("Waiting for the owner")
+        expect(page.locator("#appContent")).to_contain_text("Waiting for the person")
     d.sync()
     run = str(one(db, "select no from payment_run"))
     c.same(
@@ -871,9 +871,20 @@ def pay_many(
         409,
     )
 
-    decide_in_approvals(d, "owner", "Payment runs to approve", "Pay ", what="approves the payment run")
+    with d.step("owner", "emails itself a code and approves the run on its page") as page:
+        d.go("owner", "dashboard")
+        expect(page.locator("#myWork")).to_contain_text("Payment runs to approve")
+        page.locator("#myWork a", has_text=run).first.click()
+        page.wait_for_load_state("networkidle")
+        page.locator("#sendCode").click()
+        found = re.search(r"Your one-time code is (\d{6})", str(d.outbox.sent[-1]["body"]))
+        assert found, "no code was mailed to the run's approver"
+        page.locator("#code").fill(found.group(1))
+        page.locator("#approveRun").click()
+        expect(page.locator("#appContent")).to_contain_text("Approved")
+    d.sync()
     c.same(
-        "payment run status after the owner approves",
+        "payment run status after its approver approves",
         one(db, "select status from payment_run where no = :n", n=run),
         "approved",
     )
@@ -899,11 +910,19 @@ def pay_many(
         (f[2], f[3], D(f[4])),
         (bank["account_no"], bank["ifsc"], owed),
     )
-    with d.step("finance", f"records that the bank has paid, on {run_date}") as page:
-        page.locator("#paidOn").fill(run_date.isoformat())
-        page.locator("#markPaid").click()
-        # the run is drawn again without the button once it is paid ("bank reference" is also in the page's help text)
-        expect(page.locator("#markPaid")).to_have_count(0)
+    paid_rows = db.execute(
+        text("select no, amount from payment where run_no = :r order by no"), {"r": run}
+    ).all()
+    statement = "date,utr,narration,debit,credit\n" + "\n".join(
+        f"{run_date.isoformat()},UTR{run_date:%y%m%d}{n:04d},NEFT {p[0]} SUPPLIER,{p[1]},0.00"
+        for n, p in enumerate(paid_rows, start=1)
+    ) + "\n"
+    with d.step("finance", f"imports the bank statement that settles the run on {run_date}") as page:
+        page.locator("#stmtFile").set_input_files(
+            {"name": "statement.csv", "mimeType": "text/csv", "buffer": statement.encode()}
+        )
+        page.locator("#importStmt").click()
+        expect(page.locator("#appContent")).to_contain_text("Settled by the bank")
     d.sync()
     for no, _, taxable, _ in invoices:
         c.same(
@@ -1609,7 +1628,7 @@ def run_straight_through(d: Demo, c: Checks, co: Company, pick: Pick, by_documen
     audit_trail(
         d, c,
         ("request.create", "request.approve", "rfq.create", "rfq.send", "po.create", "po.approve", "po.send",
-         "payment_run.propose", "payment_run.approve", "payment_run.file", "payment_run.paid", "po.close",
+         "payment_run.propose", "payment_run.approve", "payment_run.file", "payment.record", "payment.settle", "payment.remit", "po.close",
          *(("email.receive", "quote_draft.create", "invoice_draft.create") if by_documents else ())),
     )  # fmt: skip
     separation_of_duties(
@@ -1618,7 +1637,7 @@ def run_straight_through(d: Demo, c: Checks, co: Company, pick: Pick, by_documen
             "requester": {"request.submit": "buyer"},
             "approver": {"request.approve": "stores_head", **order_approver(d), "payment_run.approve": "owner"},
             "receiver": {"grn.post": "store"},
-            "payer": {"payment_run.propose": "finance", "payment_run.paid": "finance"},
+            "payer": {"payment_run.propose": "finance", "payment.record": "finance", "payment.settle": "finance", "payment.remit": "finance"},
         },
         also={"rfq.send": "buyer", "quote.enter": "buyer", "rfq.award": "buyer", "po.send": "buyer", "invoice.enter": "ap", "invoice.match": "ap", "payment_run.file": "finance"},
     )  # fmt: skip
@@ -1836,7 +1855,7 @@ def run_part_delivery(d: Demo, c: Checks, co: Company, pick: Pick, by_documents:
     audit_trail(
         d, c,
         ("request.create", "request.approve", "po.create", "po.approve", "po.send", "grn.post", "invoice.enter",
-         "supplier.chase", "payment_run.propose", "payment_run.approve", "payment_run.paid", "po.close",
+         "supplier.chase", "payment_run.propose", "payment_run.approve", "payment.record", "payment.settle", "payment.remit", "po.close",
          *(("email.receive", "quote_draft.create", "invoice_draft.create") if by_documents else ())),
     )  # fmt: skip
     separation_of_duties(
@@ -1845,7 +1864,7 @@ def run_part_delivery(d: Demo, c: Checks, co: Company, pick: Pick, by_documents:
             "requester": {"request.submit": "buyer"},
             "approver": {"request.approve": "stores_head", **order_approver(d), "payment_run.approve": "owner"},
             "receiver": {"grn.post": "store"},
-            "payer": {"payment_run.propose": "finance", "payment_run.paid": "finance"},
+            "payer": {"payment_run.propose": "finance", "payment.record": "finance", "payment.settle": "finance", "payment.remit": "finance"},
         },
         also={"po.send": "buyer", "invoice.enter": "ap", "payment_run.file": "finance"},
     )  # fmt: skip
@@ -2072,7 +2091,7 @@ def run_blocked_invoice(d: Demo, c: Checks, co: Company, pick: Pick, by_document
     audit_trail(
         d, c,
         ("request.create", "po.create", "po.approve", "po.send", "invoice.release_block", "payment_run.propose",
-         "payment_run.approve", "payment_run.paid", "po.close", *(("invoice_draft.create",) if by_documents else ())),
+         "payment_run.approve", "payment.record", "payment.settle", "payment.remit", "po.close", *(("invoice_draft.create",) if by_documents else ())),
     )  # fmt: skip
     separation_of_duties(
         d, c, co,
@@ -2081,7 +2100,7 @@ def run_blocked_invoice(d: Demo, c: Checks, co: Company, pick: Pick, by_document
             "approver": {**order_approver(d), "payment_run.approve": "owner"},
             "receiver": {"grn.post": "store"},
             "invoice approver": {"invoice.release_block": "plant_head"},
-            "payer": {"payment_run.propose": "finance", "payment_run.paid": "finance"},
+            "payer": {"payment_run.propose": "finance", "payment.record": "finance", "payment.settle": "finance", "payment.remit": "finance"},
         },
         also={"po.send": "buyer", "invoice.enter": "ap", "payment_run.file": "finance"},
     )  # fmt: skip

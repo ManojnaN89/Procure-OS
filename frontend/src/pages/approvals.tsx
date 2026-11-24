@@ -82,6 +82,14 @@ function ProposalCard({ p, onDone }: { p: Proposal; onDone: () => void }) {
 						{JSON.stringify(p.payload, null, 2)}
 					</pre>
 				</details>
+				{p.action === "payment_run.approve" ? (
+					<p className="text-sm">
+						Approve it on the run's page (a one-time code is needed):{" "}
+						<a className="text-primary underline" href={`/#/payments/${String(p.payload.run_no ?? "")}`}>
+							open the run
+						</a>
+					</p>
+				) : null}
 				{mode === "edit" ? (
 					<Field label="Edit the details before approving (JSON)">
 						<Textarea
@@ -118,7 +126,7 @@ function ProposalCard({ p, onDone }: { p: Proposal; onDone: () => void }) {
 						</Button>
 					) : (
 						<Button
-							disabled={decide.isPending}
+							disabled={decide.isPending || p.action === "payment_run.approve"}
 							onClick={() => approve(mode === "edit")}
 						>
 							{mode === "edit"

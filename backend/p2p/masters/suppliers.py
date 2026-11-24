@@ -14,7 +14,7 @@ from sqlalchemy.orm import Session
 
 from p2p.formulas import supplier_master as rules
 from p2p.formulas.calendar import business_today
-from p2p.invoices import payment
+from p2p.invoices import runs
 from p2p.platform import audit, files, proposals, settings
 from p2p.platform.sod import Actor, user
 
@@ -258,7 +258,7 @@ def _set_bank(
         before={"accounts": [f"{mask(a)} {i}" for a, i in old]}, after={"account": f"{mask(account_no)} {ifsc}"},
         reason=reason,
     )  # fmt: skip
-    payment.take_out_supplier(db, code, actor, f"the bank account of {code} changed and is not verified yet")
+    runs.take_out_supplier(db, code, actor, f"the bank account of {code} changed and is not verified yet")
 
 
 @proposals.executor("supplier.set_bank")

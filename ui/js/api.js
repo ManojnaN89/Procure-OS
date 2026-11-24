@@ -71,6 +71,13 @@ const API = {
     try { data = await res.json(); } catch {}
     return { ok: res.ok, data };
   },
+  // A file and fields together (a payment's proof, a returned payment's line): same { ok, data } answer.
+  async postForm(path, formData) {
+    const res = await Auth.fetch(`${this.base}${path}`, { method: "POST", body: formData });
+    let data = {};
+    try { data = await res.json(); } catch {}
+    return { ok: res.ok, data };
+  },
   async runReplenishment(dryRun) {
     const res = await Auth.fetch(`${this.base}/api/replenishment/run`, {
       method: "POST",

@@ -105,14 +105,14 @@ CARRIED: dict[str, str | None] = {
     "demand_import": "id in (select import_id from joiner_kit)",  # the import a carried joiner kit came from
 }
 NOT_CARRIED = (
-    "advance", "advance_adjustment", "agent_run", "agent_step", "alert", "approval_step", "audit_event",
+    "advance", "advance_adjustment", "advance_request", "agent_run", "agent_step", "alert", "approval_step", "audit_event",
     "autonomy_outcome", "award", "bank_statement_line", "budget_actual", "case_event", "checkpoint_blobs",
     "checkpoint_migrations", "checkpoint_writes", "checkpoints", "cutover_import", "cutover_supplier_ytd",
     "delivery_reminder", "demand_change", "demand_change_case", "dispatch_note", "dispatch_note_line", "email_message",
     "goods_receipt", "gr_line", "intake_pending", "invoice", "invoice_charge", "invoice_diagnosis", "invoice_draft",
     "invoice_line", "match_result", "material_request", "material_request_buy", "material_request_line",
     "material_requirement", "model_cache", "model_call", "notification", "number_counter", "one_time_code", "payment",
-    "payment_allocation", "payment_run", "planning_note", "po", "po_approval_step", "po_change", "po_charge",
+    "payment_allocation", "payment_run", "payment_run_approval", "planning_note", "po", "po_approval_step", "po_change", "po_charge",
     "po_commitment", "po_line", "po_revision", "product_demand", "production_order", "proposal", "purchase_case", "quote",
     "quote_draft", "quote_line", "request", "request_check", "request_line", "rfq", "rfq_line", "rfq_supplier",
     "rule_evaluation", "serial_number", "service_entry", "setup_change", "sourcing_decision", "stock_hold",

@@ -26,7 +26,12 @@ A buyer's proposed award of a period RFQ comes to the person who approves orders
 Once the supplier has accepted the contract's terms, a second person activates it (**My work** → **Contracts to activate**, then **Activate this contract**): never its maker and never whoever approved its award.
 
 ## Decide the rest
-Payment runs, releasing a blocked invoice, supplier changes, held orders and goods received without an order (also on **Receive without order**) are under **Admin** → **Approvals**. Click **Approve** or **Reject**. Nothing runs until you do.
+Payment runs, releasing a blocked invoice, supplier changes, held orders, advances and goods received without an order (also on **Receive without order**) are under **Admin** → **Approvals**. Click **Approve** or **Reject**. Nothing runs until you do.
+
+## A payment run (the person PAY-01 names)
+Only the person the rule names (the director at Apex, the CFO at Brightwave), or their deputy for the date, decides a run, and only on its own page: **Admin** → **Approvals** links to it. Open the run, check the totals, the MSME deadlines, the discounts and what was left out, press **Email me a code**, then type the code and **Approve**. A code works once and expires in ten minutes; a run whose total changed needs a new one. Reject with a reason if something is wrong: the run is cancelled and its invoices are due again.
+
+An **advance** on an order is its own approval: open it from **My work**, approve or reject with a reason. It carries no code; the run that pays it does. You cannot approve an advance you asked for or an order you made.
 
 ## Suppliers, contracts, prospects and market prices
 **Vendors** → open a vendor → **Verify** a document after you compare it with the original. **Contracts** → open a draft → **Activate this contract**. A prospect's identity is checked on its vendor page (**Identity check**: method, the PAN or GST certificate scan, a note) by someone other than the buyer who registered or invited it. A flag (a contact, address or mail domain shared with another supplier) is cleared with a reason only after you have looked into it. Checking identity does not activate the supplier: activation is still its own approval. **Approved for** on a vendor page shows where a supplier may supply each category; a change asked by someone else waits for you in **Approvals**. Under **Contracts** → **Market prices**, verify or reject the benchmarks others entered (never your own).

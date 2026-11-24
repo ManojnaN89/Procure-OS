@@ -52,7 +52,7 @@ def norm(number: str) -> str:
 
 
 def run(ctx) -> Outcome:  # noqa: C901 - one story, told in order
-    from p2p.invoices import payment
+    from p2p.invoices import payment, runs
     from p2p.main import app
     from p2p.platform import proposals
 
@@ -229,11 +229,10 @@ def run(ctx) -> Outcome:  # noqa: C901 - one story, told in order
     finance, owner = world.logins["Finance"], world.logins["Approver"]
     last_due = db.execute(text("select max(due_date) from invoice where status = 'approved'")).scalar()
     run_date = last_due + timedelta(days=1)
-    run_no = payment.propose_run(db, run_date, finance, window_days=0)
-    pid = db.execute(text("select proposal_id from payment_run where no = :n"), {"n": run_no}).scalar_one()
-    proposals.approve(db, pid, owner)
-    payment.generate_file(db, run_no, finance)
-    payment.mark_paid(db, run_no, finance, paid_on=run_date)
+    run_no = runs.propose_run(db, run_date, finance, window_days=0)["run"]
+    lib.approve_run(world, run_no)
+    runs.generate_file(db, run_no, finance)
+    lib.settle_run(world, run_no, run_date)
 
     # ---- 4. supplier statements ----
     def upload(supplier: str, body: str, name: str, **period: date) -> Any:

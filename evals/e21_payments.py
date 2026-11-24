@@ -21,7 +21,7 @@ REQUIREMENT = (
 
 
 def run(ctx) -> Outcome:
-    from p2p.invoices import payment
+    from p2p.invoices import payment, runs
     from p2p.platform import proposals, sod
 
     out = Outcome(True)
@@ -91,24 +91,24 @@ def run(ctx) -> Outcome:
     before_blocked = {
         x[0] for x in db.execute(text("select no from invoice where status in ('blocked', 'cancelled', 'received')"))
     }
-    run_no = payment.propose_run(db, run_date, finance, window_days=0)
+    run_no = runs.propose_run(db, run_date, finance, window_days=0)["run"]
     total = D(db.execute(text("select total from payment_run where no = :n"), {"n": run_no}).scalar_one())
     out.metrics["invoices in the run"] = db.execute(
         text("select count(*) from payment_allocation a join invoice i on i.no = a.invoice_no where i.type = 'invoice'")
     ).scalar_one()
     try:
-        payment.generate_file(db, run_no, finance)
+        runs.generate_file(db, run_no, finance)
         out.find("high", "a bank file was made for a run nobody approved")
     except Exception:  # noqa: BLE001 - this refusal is the point
         db.rollback()
     pid = db.execute(text("select proposal_id from payment_run where no = :n"), {"n": run_no}).scalar_one()
     try:
-        proposals.approve(db, pid, finance)
+        runs.approve_step(db, run_no, finance, None)
         out.find("high", "the person who proposed the run approved it")
     except Exception:  # noqa: BLE001 - separation of duties
         db.rollback()
-    proposals.approve(db, pid, owner)
-    file_text = payment.generate_file(db, run_no, finance)
+    lib.approve_run(world, run_no)
+    file_text = runs.generate_file(db, run_no, finance)
     parsed = list(csv.DictReader(io.StringIO(file_text)))
     file_total = sum((D(x["amount"]) for x in parsed), D(0))
     if file_total != total:
@@ -140,12 +140,12 @@ def run(ctx) -> Outcome:
     if len(in_run) != len(set(in_run)):
         out.find("high", "an invoice is in the run twice")
     try:
-        payment.propose_run(db, run_date, finance, window_days=0)
+        runs.propose_run(db, run_date, finance, window_days=0)
         out.find("high", "invoices already in a run were put into a second run")
     except Exception:  # noqa: BLE001 - nothing left to pay is the right answer
         db.rollback()
 
-    closed = payment.mark_paid(db, run_no, finance, paid_on=run_date)
+    closed = lib.settle_run(world, run_no, run_date)
     db.commit()
     unpaid = db.execute(
         text("select count(*) from invoice where no = any(:n) and status <> 'paid'"), {"n": in_run}

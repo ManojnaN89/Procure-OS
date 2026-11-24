@@ -191,6 +191,9 @@ def _known(db: Session, proposal_id: int) -> None:
     """A proposal of this company, else 404 (another company's id is simply not here)."""
     if db.execute(text("select 1 from proposal where id = :i"), {"i": proposal_id}).first() is None:
         raise HTTPException(404, "Not found")
+    action = db.execute(text("select action from proposal where id = :i"), {"i": proposal_id}).scalar()
+    if action == "payment_run.approve":
+        raise HTTPException(409, "a payment run is decided on its page, with a one-time code")
 
 
 @router.post("/proposals/{proposal_id}/approve")

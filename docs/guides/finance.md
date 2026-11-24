@@ -1,47 +1,46 @@
 # Finance guide
 
-You plan the payment runs and record that the bank paid.
+You plan the payment runs, keep the tax at source and record what the bank did. The tax owner confirms TDS here too.
 
 ## What you see when you log in
 
-**Dashboard** → **My work**: **Invoices due: plan a payment run**, **Runs waiting for the owner's approval**, **Approved runs: make the bank file**, **Runs sent to the bank: record the payment**.
+**Dashboard** → **My work**: **Invoices due: plan a payment run**, **Runs waiting for the owner's approval**, **Approved runs: make the bank file**, **My work**, **TDS to confirm**.
 
 ## Plan a run
 
-1. Open **Payments** and click **See what is due**. It lists approved invoices due within the window, small suppliers first, one payment per supplier, with tax at source worked out and credit notes taken off.
+1. Open **Payments** and click **See what is due**. It lists approved invoices whose pay-by day is in the window, small suppliers first, one payment per supplier, with TDS, notes, advances and any discount worked out. **Held back** says why an invoice is not there: TDS to confirm, bank account not verified, a bank change waiting, a block, an unsettled advance, or the run that already holds it.
 2. Check it, then click **Send the run for approval**.
 
-## The owner approves
+## The approver the rule names
 
-The Approver approves the run under **Admin** → **Approvals**. Until then there is no bank file.
+The run goes to the person `PAY-01` names (the director at Apex, the CFO at Brightwave), never to you if you proposed it. They open the run, press **Email me a code**, and approve with the code. The run is refused for anyone else, even another approver. Nothing leaves the bank before that.
 
 ## Pay
 
-1. Open the approved run and click **Make the bank file**. **Show the bank file** shows it again.
-2. Upload it at the bank. When the bank has paid, click **The bank has paid this run**.
-3. Invoices become paid, the orders close, and each supplier gets a payment advice.
+1. Open the approved run and click **Make the bank file**. **Show the bank file** shows it again. The run must be filed on its run date; an unfiled run is cancelled that evening.
+2. For each payment press **Record this payment** with the bank reference (letters and digits, 6 to 30), the value date and a proof (PDF or photo). A reference is never made up. With a UTR the supplier's advice goes now.
+3. **Import the bank statement**: a CSV with a date, the bank reference, the narration and the debit. Each debit line settles its own payment; a line without a UTR leaves the UTR empty. A credit line that names one of our payments is listed as "Maybe a return" — a person then presses **Bank returned it**, never the import. A run is paid when none of its payments waits and at least one is settled.
 
-Or, instead of step 2, choose the bank's statement (a CSV with a date, the bank reference, the narration and the debit) and click **Import the bank statement**. A payment is settled when the narration carries its payment number and the amount is exact; a run is settled when all its payments are on the statement. Every other line is listed on the page and goes to you as a task.
+## What a payment does
 
-You cannot enter a date in the future for the payment.
+On settlement the invoices become **paid**, notes grow what they have used, the budget takes the actual (stock was already spent at receipt), a finished order closes, an advance is taken off the order's invoices, and the supplier gets an advice with the real reference. A returned payment or a reversal reopens the invoices and the order lines.
 
-## Bank lines and small suppliers
+## Tax at source
 
-1. Open **Reconciliation** and choose **Bank lines**: the statement lines no payment fitted, each with the payments of the same amount it could be. Choose the payment and click **Confirm**. The amounts must agree, and the person who approved the run cannot confirm it. When every payment of a run is on the bank, the run is paid.
-2. **Small suppliers** lists unpaid invoices of micro and small suppliers that are late, or due within the days you give: at most 45 days from acceptance when agreed in writing, 15 days without (MSMED Act section 15; the days are company settings).
+**TDS to confirm** lists the rows the platform worked out: 194Q on the part of a supplier's year above 50 lakh, 194C and 194J on the whole base once their threshold is crossed, advance TDS when it is paid. Confirm one or several, or change the section with a reason; the amount is always worked out again, never typed. A zero row under the item category's own section is already confirmed. An invoice with a row waiting is not paid.
 
-## Release a blocked invoice
+## Advances
 
-If AP asked to pay a blocked invoice anyway, you may decide it under **Admin** → **Approvals** if you did not enter it.
+A buyer asks for one on the order. The purchase manager approves it. It is paid first in the next run (with its TDS shown), and the order's invoice then takes it off. Cancelling an order with a paid advance is refused until a debit note recovers what was not used: **Advances** → **Recover**, then another finance person approves the note.
 
-## What you cannot do, and if you are stuck
+## Notes
 
-You cannot approve a run you proposed. You cannot make the bank file before approval. A small supplier's invoice may have an earlier due date than the terms say (the law caps it). The run page shows each due date. **Exceptions** lists everything stuck that needs a person, oldest first, with the reason, who must act, the next step and the age in working days; tick **Only mine** for what waits on you. A release you may decide shows there as yours.
+A credit or debit note enters **received**; another person with `invoice.approve` approves it. Approved notes are netted in the supplier's next payment, linked notes first then oldest, never below zero; the rest waits.
+
+## What you cannot do
+
+You cannot approve a run you proposed, mark a run paid by hand, or invent a reference. You cannot settle a payment without the bank's line. The person who approved a run cannot record or confirm its payments. **Exceptions** lists everything stuck, oldest first, with who must act and the next step.
 
 ## Watch the budgets
 
-Open **Control tower**. Under **Budgets, this financial year so far** each cost centre and account shows its budget, what requests already hold, what was spent, and what is left. A figure in red is over budget.
-
-## Budgets: months, year end and adjustments
-
-The budgets panel on the control tower shows each budget with what requests hold, what orders hold and what was spent (stock when it is accepted, the rest when it is paid). Lock a month once it has ended (the earlier months first) with a reason; nothing is booked in a locked month after that, a late posting goes to the next open month. From 1 April close the year: open requests and orders carry into the new year, unspent budget lapses. To add to, take from or move a budget, use **Adjust a budget**: another finance person approves it.
+**Control tower** shows each cost centre's budget, what requests and orders hold, what was spent and what is left. Lock a month once it has ended; from 1 April close the year; **Adjust a budget** needs another finance person. A small supplier's legal deadline is the MSMED one: at most 45 days from acceptance when agreed in writing, 15 days without.

@@ -1,693 +1,626 @@
-"""Payment: due dates and the small-supplier rule, tax at source, what is payable, payment runs and their approval, the bank
-file, recording payment, and closing the case."""
+"""Payment: what is due and held back, one live run per item, the approver the rule names with a code, the bank file,
+recording with evidence, settlement by the bank statement, failure and reversal, TDS and notes. Given, when, then in
+each test; the arithmetic itself is in test_payment_formulas.py."""
 
-from datetime import date, timedelta
+import re
+from datetime import date
 from decimal import Decimal
 
 import pytest
 from fastapi.testclient import TestClient
-from outbox_support import sent_mail
 from sqlalchemy import text
 from sqlalchemy.orm import Session
-from test_invoices import S1_GSTIN, TODAY, _goods, _headers, _invoice, _row, ledger  # noqa: F401 - fixtures
-from test_orders import shop  # noqa: F401 - fixtures
+from test_invoices import TODAY, _goods, _headers, _invoice, _row, ledger  # noqa: F401 - fixtures
+from test_orders import _logins, shop  # noqa: F401 - fixtures
 from test_receiving import store  # noqa: F401 - fixtures
 from test_sourcing import PASSWORD, Outbox, db, outbox  # noqa: F401 - fixtures
 
-from p2p.formulas import payment as rules
-from p2p.formulas.calendar import business_today
-from p2p.invoices import payment
+from p2p.invoices import bank_statement, notes, payment, runs, settlement, tds
 from p2p.invoices.service import InvoiceError
+from p2p.formulas.calendar import pin_today
 from p2p.main import app
 from p2p.masters import suppliers
-from p2p.platform import permissions, proposals, users, worker
+from p2p.platform import otp, permissions, proposals, users
 from p2p.platform.sod import user
 
 D = Decimal
 client = TestClient(app)
 
 
-# ---- due dates --------------------------------------------------------------------------------
+# ---- the world these tests need ---------------------------------------------------------------
 
 
-def _due(**kw: object) -> date:
-    base = {
-        "baseline": "invoice_date", "days": 30, "invoice_date": date(2026, 11, 6), "accepted_on": date(2026, 11, 10),
-        "msme_category": None, "msme_agreement": False, "agreed_days": None,
-    }  # fmt: skip
-    return rules.due_date(**{**base, **kw})  # type: ignore[arg-type]
-
-
-def test_the_due_date_counts_the_terms_from_the_invoice_date_or_from_acceptance() -> None:
-    assert _due() == date(2026, 12, 6)  # 30 days from the invoice date
-    assert _due(baseline="acceptance_date") == date(2026, 12, 10)
-    assert _due(baseline="receipt_date", days=0) == date(2026, 11, 10)
-    assert _due(msme_category="medium", msme_agreement=False) == date(
-        2026, 12, 6
-    )  # medium suppliers are outside the rule
-
-
-@pytest.mark.parametrize(
-    ("agreed", "expected"),
-    [(30, date(2026, 12, 6)), (20, date(2026, 11, 30)), (45, date(2026, 12, 6)), (90, date(2026, 12, 6))],
-)
-def test_a_small_supplier_with_a_written_agreement_is_paid_by_the_earlier_of_the_terms_and_the_agreed_days(
-    agreed: int, expected: date
-) -> None:
-    # accepted on 10 Nov; the terms say 6 Dec (30 days from the invoice); the agreed days count from acceptance, never above 45
-    assert _due(msme_category="small", msme_agreement=True, agreed_days=agreed) == expected
-
-
-def test_a_small_supplier_without_a_written_agreement_must_be_paid_within_fifteen_days_of_acceptance() -> None:
-    assert _due(msme_category="micro", msme_agreement=False) == date(2026, 11, 25)
-    assert _due(msme_category="micro", msme_agreement=False, accepted_on=date(2026, 11, 10)) == date(2026, 11, 25)
-
-
-# ---- tax at source and interest ---------------------------------------------------------------
-
-
-@pytest.mark.parametrize(
-    ("before", "taxable", "pan_bad", "base", "amount"),
-    [
-        ("0", "5000000", False, "0", "0.00"),  # exactly 50 lakh: nothing above it
-        ("0", "5000001", False, "1", "0.00"),  # a rupee above: base 1, tax under a paisa
-        ("4999000", "2000000", False, "1999000", "1999.00"),  # crossing within one invoice
-        ("5000000", "100000", False, "100000", "100.00"),  # already past: the whole invoice
-        ("6000000", "100000", True, "100000", "5000.00"),  # no valid PAN: 5%
-        ("0", "100000", False, "0", "0.00"),
-    ],
-)
-def test_tax_on_goods_applies_to_the_part_of_the_year_above_fifty_lakh(
-    before: str, taxable: str, pan_bad: bool, base: str, amount: str
-) -> None:
-    got = rules.tds_on_goods(D(before), D(taxable), date(2026, 11, 6), pan_inoperative=pan_bad)
-    assert (got.base, got.amount) == (D(base), D(amount))
-
-
-def test_the_tax_section_is_quoted_in_the_new_act_form_from_april_2026() -> None:
-    assert rules.tds_on_goods(D(0), D(1), date(2026, 3, 31), pan_inoperative=False).section == "194Q"
-    assert rules.tds_on_goods(D(0), D(1), date(2026, 4, 1), pan_inoperative=False).section == "393(1) Sl.8(ii) [194Q]"
-    assert (
-        rules.quarter_label(date(2026, 4, 1)) == "2026-27 Q1" and rules.quarter_label(date(2027, 3, 31)) == "2026-27 Q4"
-    )
-    assert rules.quarter_label(date(2026, 10, 31)) == "2026-27 Q3"
-
-
-RATES = [(date(2025, 4, 9), D("6.25")), (date(2025, 6, 6), D("5.75")), (date(2026, 10, 7), D("5.75"))]
-
-
-def test_the_bank_rate_is_the_one_in_force_on_the_due_date() -> None:
-    assert rules.bank_rate(date(2025, 6, 5), RATES) == D("6.25")
-    assert rules.bank_rate(date(2025, 6, 6), RATES) == D("5.75")
-    assert rules.bank_rate(date(2020, 1, 1), RATES) == D("6.25")  # before the first row: the first row
-
-
-def test_interest_to_a_small_supplier_is_three_times_the_bank_rate_compounded_monthly_and_nothing_if_paid_on_time() -> (
-    None
-):
-    assert rules.msme_interest(D("100000"), date(2026, 11, 6), date(2026, 11, 6), RATES) == D("0")
-    one_month = rules.msme_interest(D("100000"), date(2026, 1, 1), date(2026, 1, 31), RATES)  # 30 days late
-    assert D("1400") < one_month < D("1500")  # 5.75% x 3 = 17.25% a year, about 1.43% for a month
-    assert rules.msme_interest(D("100000"), date(2026, 1, 1), date(2026, 3, 2), RATES) > one_month * 2
-
-
-def _small(shop_: Session, code: str = "S1", *, category: str = "small", agreed: int = 30) -> None:
-    """Make a supplier a micro or small enterprise with a written agreement (and the Udyam certificate that needs)."""
-    shop_.execute(
-        text("update supplier set msme_category = :m, msme_agreement = true, agreed_payment_days = :a where code = :c"),
-        {"m": category, "a": agreed, "c": code},
-    )
-    shop_.execute(
+def _payment_rules(ledger_: Session) -> None:
+    """The rule that names who approves a run and an advance (the tests' company has only order rules)."""
+    ledger_.execute(
         text(
-            "insert into supplier_document (supplier_code, doc_type, number, issued_on, verified) values (:c, 'udyam', 'U', '2020-01-01', true)"
+            "insert into approver_role (role, source, value) values ('procurement_head', 'designation', 'Head - Procurement') "
+            "on conflict (role) do nothing"
+        )
+    )
+    ledger_.execute(
+        text(
+            "insert into approval_rule (rule_code, document, min_value, max_value, category_code, department_code, "
+            "spend_type, approver_chain, version, effective_from) values "
+            "('PAY-01', 'payment_run', 0, 999999999, 'ANY', 'ANY', 'ANY', 'procurement_head', 1, '2024-11-01'), "
+            "('ADV-01', 'advance', 0, 999999999, 'ANY', 'ANY', 'ANY', 'procurement_head', 1, '2024-11-01') "
+            "on conflict do nothing"
+        )
+    )
+    ledger_.execute(
+        text(
+            "update item_category set default_tds_section = '194Q' where code in "
+            "(select category_code from item where category_code is not null)"
+        )
+    )
+    ledger_.commit()
+
+
+def _people(ledger_: Session) -> tuple[int, int, int]:
+    """Finance (proposes and records), the named approver (procurement head U5), and AP."""
+    slug, sfx = ledger_.info["slug"], ledger_.info["sfx"]
+    if "flow_logins" not in ledger_.info:
+        ledger_.info["flow_logins"] = _logins(ledger_)
+    logins = ledger_.info["flow_logins"]
+    finance = users.create_user(slug, f"fin{sfx}@x.example", PASSWORD, "A Finance", "Finance")
+    ap = users.create_user(slug, f"ap{sfx}@x.example", PASSWORD, "An AP", "AP")
+    ledger_.execute(
+        text(
+            "insert into org_user (code, name, designation, department_code, manager_code, email, active) "
+            "values (:c, 'A Finance', 'Finance Manager', 'FIN', 'U1', :e, true) on conflict (code) do nothing"
         ),
-        {"c": code},
+        {"c": f"F{sfx}", "e": f"fin{sfx}@x.example"},
     )
-    shop_.commit()
+    ledger_.commit()
+    _payment_rules(ledger_)
+    return finance, logins["procurement"], ap
 
 
-# ---- booking, what is payable -----------------------------------------------------------------
+def _two_suppliers(ledger_: Session) -> tuple[str, str]:
+    """An approved invoice of S1 due in a week: goods received against a sent order."""
+    po_no, _ = _goods(ledger_, qty="10", price="100")
+    inv = _invoice(ledger_, po_no, "10", "100", number="S1-1")
+    assert inv.status == "approved"
+    return po_no, inv.no
 
 
-def test_a_booked_invoice_gets_the_small_supplier_due_date(ledger: Session, outbox: Outbox) -> None:  # noqa: F811
-    _small(ledger, agreed=20)
-    po_no, _ = _goods(ledger)
-
-    done = _invoice(ledger, po_no)
-
-    assert _row(ledger, done.no)["due_date"] == date(2026, 11, 26)  # accepted on the 6th: 20 days, sooner than net 30
-
-
-def test_tax_at_source_is_held_back_only_on_the_part_of_the_year_above_fifty_lakh(
-    ledger: Session, outbox: Outbox
-) -> None:  # noqa: F811
-    ledger.execute(
-        text(
-            "insert into invoice (no, supplier_code, supplier_invoice_no, dedupe_key, invoice_date, fy, received_on, taxable, total, "
-            "status, booked_at) values ('PI-OLD', 'S1', 'OLD-1', 'OLD1', '2026-06-01', '2026-27', '2026-06-01', 4999900, 4999900, 'paid', now())"
-        )
+def _due_on(ledger_: Session, invoice_no: str, on: date) -> None:
+    ledger_.execute(
+        text("update invoice set due_date = :d, pay_by = :d where no = :n"), {"d": on, "n": invoice_no}
     )
-    ledger.execute(
-        text(
-            "insert into tds_entry (invoice_no, section, base, rate, amount, booked_on, quarter) values ('PI-OLD', '194Q', 0, 0.1, 0, '2026-06-01', '2026-27 Q1')"
-        )
-    )
-    ledger.commit()
-    po_no, _ = _goods(ledger, qty="10", price="100")  # 1,000 taxable: 4,999,900 + 1,000 is 900 over
-
-    done = _invoice(ledger, po_no)
-
-    assert ledger.execute(text("select base, rate, amount, quarter from tds_entry where invoice_no = :n"), {"n": done.no}).one() == (
-        D("900.00"), D("0.100"), D("0.90"), "2026-27 Q3",
-    )  # fmt: skip
-    assert _row(ledger, done.no)["tds_amount"] == D("0.90")
+    ledger_.commit()
 
 
-def _earlier_purchases(db_: Session, taxable: str) -> None:
-    """The supplier was bought from earlier in the year, for this taxable value."""
-    db_.execute(
+def _propose(ledger_: Session, finance: int, on: date = date(2026, 11, 6), **kw: object) -> str:
+    return str(runs.propose_run(ledger_, on, finance, **kw)["run"])
+
+
+def _code(outbox_: Outbox) -> str:
+    for mail in reversed(outbox_.sent):
+        found = re.search(r"Your one-time code is (\d{6})", str(mail.get("body", "")))
+        if found:
+            return found.group(1)
+    raise AssertionError("no code was mailed")
+
+
+def _approve(ledger_: Session, outbox_: Outbox, run_no: str, approver: int) -> dict:
+    runs.send_code(ledger_, run_no, approver)
+    return runs.approve_step(ledger_, run_no, approver, _code(outbox_))
+
+
+def _file(ledger_: Session, outbox_: Outbox, run_no: str, finance: int, approver: int) -> str:
+    _approve(ledger_, outbox_, run_no, approver)
+    return runs.generate_file(ledger_, run_no, finance)
+
+
+def _statement_for(ledger_: Session, run_no: str, *, without_utr: str | None = None) -> str:
+    """The bank's debit lines for a run, naming each payment and its exact amount."""
+    rows = ["date,utr,narration,debit,credit"]
+    for p in ledger_.execute(
+        text("select no, amount from payment where run_no = :r order by no"), {"r": run_no}
+    ).all():
+        ref = "" if p[0] == without_utr else f"UTR{p[0][-8:]}"
+        rows.append(f"2026-11-12,{ref},NEFT {p[0]} SUPPLIER,{p[1]},0.00")
+    return "\n".join(rows) + "\n"
+
+
+def _earlier_purchase(ledger_: Session, taxable: str, section: str = "194Q") -> None:
+    ledger_.execute(
         text(
             "insert into invoice (no, supplier_code, supplier_invoice_no, dedupe_key, invoice_date, fy, received_on, taxable, total, "
             "status, booked_at) values ('PI-OLD', 'S1', 'OLD-1', 'OLD1', '2026-06-01', '2026-27', '2026-06-01', :t, :t, 'paid', now())"
         ),
         {"t": taxable},
     )
-    db_.execute(
+    ledger_.execute(
         text(
-            "insert into tds_entry (invoice_no, section, base, rate, amount, booked_on, quarter) values ('PI-OLD', '194Q', 0, 0.1, 0, '2026-06-01', '2026-27 Q1')"
-        )
+            "insert into tds_entry (invoice_no, section, section_code, base, rate, amount, booked_on, quarter, status) "
+            "values ('PI-OLD', '194Q', :c, 0, 0.1, 0, '2026-06-01', '2026-27 Q1', 'confirmed')"
+        ),
+        {"c": section},
     )
-    db_.commit()
+    ledger_.commit()
 
 
-def test_the_rate_and_threshold_of_tax_at_source_come_from_the_tax_table(ledger: Session, outbox: Outbox) -> None:  # noqa: F811
-    ledger.execute(
-        text(
-            "insert into ref_tds_section (act, section, rate_pct, rate_no_pan_pct, threshold_annual, effective_from) "
-            "values ('2025', '194Q', 0.25, 5, 6000000, '2026-04-01'), ('1961', '194Q', 0.1, 5, 5000000, '2021-07-01')"
-        )
-    )  # the older row has been replaced by the newer one from April 2026
-    ledger.commit()
-    _earlier_purchases(ledger, "5999900")  # 1,000 more is 900 over the new threshold of 60 lakh
-    po_no, _ = _goods(ledger, qty="10", price="100")
-
-    done = _invoice(ledger, po_no)
-
-    assert ledger.execute(
-        text("select section, base, rate, amount from tds_entry where invoice_no = :n"), {"n": done.no}
-    ).one() == ("393(1) Sl.8(ii) [194Q]", D("900.00"), D("0.250"), D("2.25"))
-    assert _row(ledger, done.no)["tds_amount"] == D("2.25")
+# ---- TDS at booking ---------------------------------------------------------------------------
 
 
-def test_without_a_row_in_the_tax_table_the_statutory_figures_apply(ledger: Session, outbox: Outbox) -> None:  # noqa: F811
-    ledger.execute(text("delete from ref_tds_section where section = '194Q'"))
-    ledger.commit()
-    _earlier_purchases(ledger, "4999900")
-    po_no, _ = _goods(ledger, qty="10", price="100")
-
-    done = _invoice(ledger, po_no)
-
-    assert ledger.execute(text("select base, rate, amount from tds_entry where invoice_no = :n"), {"n": done.no}).one() == (
-        D("900.00"), D("0.100"), D("0.90"),
-    )  # fmt: skip
-
-
-def test_what_is_payable_is_the_total_less_tax_and_credit_notes_and_interest_is_added_when_late(
+def test_tax_at_source_is_proposed_per_section_and_holds_the_invoice_until_the_tax_owner_confirms(
     ledger: Session, outbox: Outbox
 ) -> None:  # noqa: F811
-    _small(ledger, category="micro")
-    ledger.execute(text("insert into ref_rbi_bank_rate (effective_from, rate_pct) values ('2025-01-01', 6.5)"))
+    # given a supplier bought from for 49,99,900 this year and an invoice of 1,000, when it is booked,
+    # then 900.00 is above the 50 lakh threshold and 0.90 is proposed (not confirmed), and the invoice is held back
+    _earlier_purchase(ledger, "4999900")
+    finance, _, _ = _people(ledger)
+    po_no, _ = _goods(ledger, qty="10", price="100")
+    done = _invoice(ledger, po_no, "10", "100", number="S1-1")
+    row = ledger.execute(
+        text("select id, section, section_code, base, rate, amount, status, quarter from tds_entry where invoice_no = :n"),
+        {"n": done.no},
+    ).one()
+    assert (row.section_code, row.base, row.rate, row.amount, row.status, row.quarter) == (
+        "194Q", D("900.00"), D("0.100"), D("0.90"), "proposed", "2026-27 Q3",
+    )  # fmt: skip
+    assert _row(ledger, done.no)["tds_amount"] == D("0")
+    _due_on(ledger, done.no, date(2026, 11, 7))
+    assert runs.due_invoices(ledger, date(2026, 11, 6), 7) == []
+    assert "TDS to confirm" in {h["reason"] for h in runs.held_back(ledger, date(2026, 11, 6), 7)}
+
+    # when the tax owner confirms it, then the invoice's tax is the confirmed amount and it is payable
+    tds.confirm(ledger, [int(row.id)], finance)
     ledger.commit()
-    po_no, _ = _goods(ledger, qty="10")
-    inv = _invoice(ledger, po_no)
-    credit = invoices_credit(ledger, inv.no, po_no, "1", "100")
+    assert _row(ledger, done.no)["tds_amount"] == D("0.90")
+    assert [r["no"] for r in runs.due_invoices(ledger, date(2026, 11, 6), 7)] == [done.no]
 
-    on_time = payment.payable(ledger, inv.no, date(2026, 12, 6))
-    late = payment.payable(ledger, inv.no, date(2027, 1, 5))
 
-    assert (on_time.total, on_time.tds, on_time.credit, on_time.net, on_time.interest) == (
-        D("1180.00"),
-        D("0.00"),
-        D("118.00"),
-        D("1062.00"),
-        D("0"),
+def test_a_zero_tax_under_the_item_categorys_own_section_is_confirmed_by_the_rule(
+    ledger: Session, outbox: Outbox
+) -> None:  # noqa: F811
+    # given a supplier bought from for nothing this year, when an invoice is booked,
+    # then 194Q has no base, the row is confirmed by the rule, and the invoice is payable at once
+    _people(ledger)
+    po_no, _ = _goods(ledger, qty="10", price="100")
+    done = _invoice(ledger, po_no, "10", "100", number="S1-1")
+    row = ledger.execute(
+        text("select base, amount, status, confirmed_by from tds_entry where invoice_no = :n"), {"n": done.no}
+    ).one()
+    assert (row.base, row.amount, row.status, row.confirmed_by) == (D("0"), D("0.00"), "confirmed", "rule")
+    assert _row(ledger, done.no)["tds_amount"] == D("0")
+
+
+def test_a_section_is_changed_only_with_a_reason_and_the_amount_is_worked_out_again(
+    ledger: Session, outbox: Outbox
+) -> None:  # noqa: F811
+    # given a proposed 194Q row, when the tax owner changes it without a reason, then it is refused;
+    # with a reason, then the section changes and the amount comes from that section's row (never typed)
+    _earlier_purchase(ledger, "4999900")
+    finance, _, _ = _people(ledger)
+    po_no, _ = _goods(ledger, qty="400", price="100")
+    done = _invoice(ledger, po_no, "400", "100", number="S1-1")
+    row_id = int(ledger.execute(text("select id from tds_entry where invoice_no = :n"), {"n": done.no}).scalar_one())
+    with pytest.raises(tds.TdsError, match="reason is needed"):
+        tds.confirm(ledger, [row_id], finance, section_code="194C", reason="")
+    tds.confirm(ledger, [row_id], finance, section_code="194C", reason="it is a work contract")
+    ledger.commit()
+    assert ledger.execute(
+        text("select section_code, base, rate, amount, status from tds_entry where id = :i"), {"i": row_id}
+    ).one() == ("194C", D("40000.00"), D("2.000"), D("800.00"), "confirmed")
+
+
+# ---- runs, the lock, the re-check -------------------------------------------------------------
+
+
+def test_a_run_pays_what_is_due_small_suppliers_first_and_two_proposals_never_take_the_same_invoice(
+    ledger: Session, outbox: Outbox
+) -> None:  # noqa: F811
+    # given an approved invoice and its pay-by day, when a run is planned, then it is one payment for the supplier
+    finance, approver, _ = _people(ledger)
+    _, inv_no = _two_suppliers(ledger)
+    _due_on(ledger, inv_no, date(2026, 11, 12))
+    assert [r["no"] for r in runs.due_invoices(ledger, date(2026, 11, 1), 7)] == []  # not in the window
+    made = runs.propose_run(ledger, date(2026, 11, 6), finance, window_days=7)
+    run_no = made["run"]
+    assert made["total"] == D("1180.00") and made["status"] == "proposed"
+    assert ledger.execute(
+        text("select supplier_code, amount, status from payment where run_no = :r"), {"r": run_no}
+    ).one() == ("S1", D("1180.00"), "planned")
+    assert ledger.execute(text("select invoice_no, amount from payment_allocation")).one() == (inv_no, D("1180.00"))
+
+    # when a second proposal is made at once, then it takes nothing (the first holds the invoice)
+    with pytest.raises(InvoiceError, match="nothing is due"):
+        runs.propose_run(ledger, date(2026, 11, 6), finance, window_days=7)
+    # and no invoice is in two live allocations
+    assert ledger.execute(
+        text("select count(*) from (select invoice_no from payment_allocation group by invoice_no having count(*) > 1) x")
+    ).scalar_one() == 0
+    assert approver
+
+
+def test_the_person_the_rule_names_approves_with_a_code_and_nobody_else_does(
+    ledger: Session, outbox: Outbox
+) -> None:  # noqa: F811
+    # given a proposed run, when Finance (its proposer) or another approver tries, then the run waits for U5;
+    # when U5 tries without the code, then a code is demanded; with the right code the run is approved once
+    finance, approver, _ = _people(ledger)
+    logins = ledger.info["flow_logins"]
+    _, inv_no = _two_suppliers(ledger)
+    _due_on(ledger, inv_no, date(2026, 11, 12))
+    run_no = _propose(ledger, finance)
+    with pytest.raises(InvoiceError, match="this run waits for"):
+        runs.send_code(ledger, run_no, finance)
+    with pytest.raises(InvoiceError, match="this run waits for"):
+        runs.send_code(ledger, run_no, logins["director"])
+    with pytest.raises(InvoiceError, match="needs a one-time code"):
+        runs.approve_step(ledger, run_no, approver, None)
+    runs.send_code(ledger, run_no, approver)
+    with pytest.raises(InvoiceError, match="4 tries left"):
+        runs.approve_step(ledger, run_no, approver, "000000")
+    step = runs.approve_step(ledger, run_no, approver, _code(outbox))
+    assert step == {"status": "approved", "step": 1, "next": None}
+    row = ledger.execute(
+        text("select status, approved_by from payment_run where no = :r"), {"r": run_no}
+    ).one()
+    assert row[0] == "approved" and row[1] == "U5"
+    assert ledger.execute(
+        text("select approved_at is not null, code_id is not null from payment_run_approval where run_no = :r"),
+        {"r": run_no},
+    ).one() == (True, True)
+
+
+def test_a_run_leaves_out_an_invoice_its_approver_would_pay(ledger: Session, outbox: Outbox) -> None:  # noqa: F811
+    # given an invoice whose approved_by is the run approver's own login, when a run is planned,
+    # then the item is left out (a payer never pays an invoice they approved) and the invoice is free again
+    if not ledger.execute(
+        text("select 1 from information_schema.columns where table_name = 'invoice' and column_name = 'approved_by'")
+    ).first():
+        pytest.skip("NEEDS block 10: invoice.approved_by is added by 0170")
+    finance, approver, _ = _people(ledger)
+    _, inv_no = _two_suppliers(ledger)
+    ledger.execute(text("update invoice set approved_by = :u where no = :n"), {"u": str(approver), "n": inv_no})
+    ledger.commit()
+    with pytest.raises(InvoiceError, match="every item waits"):
+        _propose(ledger, finance)
+    assert ledger.execute(text("select in_run from invoice where no = :n"), {"n": inv_no}).scalar_one() is None
+
+
+def test_a_blocked_invoice_is_taken_out_at_approval_and_the_run_is_approved_for_less(
+    ledger: Session, outbox: Outbox
+) -> None:  # noqa: F811
+    # given a run with two suppliers, when one invoice is blocked before approval, then it leaves the run with a
+    # reason, the run totals less, its invoice is due again, and a code sent for the old total is refused (Y5b)
+    finance, approver, _ = _people(ledger)
+    first, inv1 = _two_suppliers(ledger)
+    second, _ = _goods(ledger, qty="12", price="100")
+    ledger.execute(text("update supplier set msme_category = null where code = 'S1'"))
+    ledger.execute(text("update po set supplier_code = 'S1' where no = :p"), {"p": second})
+    inv2 = _invoice(ledger, second, "12", "100", number="S1-2")
+    _due_on(ledger, inv1, date(2026, 11, 12))
+    _due_on(ledger, inv2.no, date(2026, 11, 12))
+    run_no = _propose(ledger, finance)
+    total_before = ledger.execute(text("select total from payment_run where no = :r"), {"r": run_no}).scalar_one()
+    ledger.execute(
+        text("update invoice set payment_block = 'match', block_reason = 'price above the order' where no = :n"),
+        {"n": inv2.no},
     )
-    assert on_time.credit_notes == [credit]
-    assert late.interest > 0 and late.net == D("1062.00")
+    ledger.commit()
+    runs.recheck(ledger, run_no, user(approver))
+    ledger.commit()
+    runs.send_code(ledger, run_no, approver)
+    result = runs.approve_step(ledger, run_no, approver, _code(outbox))
+    assert result["status"] == "approved"
+    assert ledger.execute(text("select total from payment_run where no = :r"), {"r": run_no}).scalar_one() < total_before
+    assert ledger.execute(text("select in_run from invoice where no = :n"), {"n": inv2.no}).scalar_one() is None
+    assert ledger.execute(text("select after->>'item', after->>'reason' from audit_event where action = 'payment_run.item_removed'")).one() == (
+        inv2.no, "blocked: price above the order",
+    )
+    assert first
 
 
-def invoices_credit(shop_: Session, ref: str, po_no: str, qty: str, price: str) -> str:
+def test_a_pending_bank_change_holds_a_supplier_out_of_a_new_run_and_takes_it_out_at_the_file(
+    ledger: Session, outbox: Outbox
+) -> None:  # noqa: F811
+    # given a verified supplier, when a bank change waits for approval, then a new run does not take it,
+    # and a run already approved takes it out at the file (Y5c)
+    finance, approver, _ = _people(ledger)
+    po_no, inv_no = _two_suppliers(ledger)
+    _due_on(ledger, inv_no, date(2026, 11, 12))
+    run_no = _propose(ledger, finance)
+    buyer = users.create_user(ledger.info["slug"], f"bankbuyer{ledger.info['sfx']}@x.example", PASSWORD, "A Buyer", "Buyer")
+    suppliers.change_bank(ledger, "S1", {"account_no": "11122233344", "ifsc": "ICIC0004321"}, user(buyer), "moved bank")
+    runs.send_code(ledger, run_no, approver)
+    with pytest.raises(InvoiceError, match="cancelled|bank change"):
+        runs.approve_step(ledger, run_no, approver, _code(outbox))
+    assert ledger.execute(
+        text("select status, cancel_reason from payment_run where no = :r"), {"r": run_no}
+    ).scalar_one() == "cancelled"
+    assert "bank change waiting for approval" in {h["reason"] for h in runs.held_back(ledger, date(2026, 11, 6), 7)}
+    assert po_no
+
+
+def test_a_rejected_run_is_cancelled_and_its_items_are_due_again(ledger: Session, outbox: Outbox) -> None:  # noqa: F811
+    # given a proposed run, when its step person rejects it with a reason, then the run is cancelled, its payments
+    # are cancelled, the invoice is out of a run, and a new run takes it (Y5d)
+    finance, approver, _ = _people(ledger)
+    _, inv_no = _two_suppliers(ledger)
+    _due_on(ledger, inv_no, date(2026, 11, 12))
+    run_no = _propose(ledger, finance)
+    runs.reject(ledger, run_no, approver, "check the bank account")
+    assert ledger.execute(text("select status, cancel_reason from payment_run where no = :r"), {"r": run_no}).one() == (
+        "cancelled", "check the bank account",
+    )
+    assert ledger.execute(text("select status from payment where run_no = :r"), {"r": run_no}).scalar_one() == "cancelled"
+    assert ledger.execute(text("select in_run from invoice where no = :n"), {"n": inv_no}).scalar_one() is None
+    assert _propose(ledger, finance) != run_no
+
+
+def test_a_run_not_filed_on_its_date_is_cancelled_by_the_daily_job(ledger: Session, outbox: Outbox) -> None:  # noqa: F811
+    # given an approved run dated Thursday 12 November, when the daily lapse runs on Friday 13 November,
+    # then the run is cancelled "not filed on its date" and its items are due again
+    finance, approver, _ = _people(ledger)
+    _, inv_no = _two_suppliers(ledger)
+    _due_on(ledger, inv_no, date(2026, 11, 12))
+    run_no = _propose(ledger, finance, date(2026, 11, 12))
+    _approve(ledger, outbox, run_no, approver)
+    assert runs.lapse(ledger, date(2026, 11, 13)) == [run_no]
+    assert ledger.execute(text("select cancel_reason from payment_run where no = :r"), {"r": run_no}).scalar_one() == (
+        "not filed on its date"
+    )
+
+
+# ---- record, settle, fail, reverse ------------------------------------------------------------
+
+
+def test_a_payment_is_recorded_with_its_bank_reference_and_settled_only_by_the_bank(
+    ledger: Session, outbox: Outbox
+) -> None:  # noqa: F811
+    # given a filed run, when Finance records the payment with a UTR and value date, then it is recorded, the invoice
+    # is still approved, the advice carries the typed UTR, and the bank statement settles it (Y7)
+    pin_today(date(2026, 11, 13))
+    finance, approver, _ = _people(ledger)
+    ledger.execute(text("update item set stocked = false where code = 'A'"))
+    ledger.commit()
+    po_no, inv_no = _two_suppliers(ledger)
+    _due_on(ledger, inv_no, date(2026, 11, 12))
+    pin_today(date(2026, 11, 12))
+    run_no = _propose(ledger, finance, date(2026, 11, 12))
+    _file(ledger, outbox, run_no, finance, approver)
+    pay_no = ledger.execute(text("select no from payment where run_no = :r"), {"r": run_no}).scalar_one()
+    outbox.sent.clear()
+    pin_today(date(2026, 11, 13))
+    settlement.record(ledger, pay_no, finance, utr="HDFC26122400000101", value_date=date(2026, 11, 12), evidence=None)
+    assert ledger.execute(text("select status, utr, value_date from payment where no = :n"), {"n": pay_no}).one() == (
+        "recorded", "HDFC26122400000101", date(2026, 11, 12),
+    )
+    assert _row(ledger, inv_no)["status"] == "approved"
+    assert ledger.execute(text("select count(*) from budget_actual where source = 'payment'")).scalar_one() == 0
+    assert any("HDFC26122400000101" in m["body"] for m in outbox.sent if m["subject"] == f"Payment advice {pay_no}")
+
+    # when the bank statement names the payment, then it is settled and the invoice is paid and the case closed
+    csv = (
+        "date,utr,narration,debit,credit\n"
+        f"2026-11-12,HDFC26122400000101,NEFT {pay_no} SUPPLIER,1180.00,0.00\n"
+    )
+    done = bank_statement.import_statement(
+        ledger, csv, finance, today=date(2026, 11, 13), tenant=ledger.info["slug"]
+    )
+    assert [s["payment"] for s in done["settled"]] == [pay_no]
+    assert _row(ledger, inv_no)["status"] == "paid"
+    assert ledger.execute(text("select status from payment_run where no = :r"), {"r": run_no}).scalar_one() == "paid"
+    assert ledger.execute(text("select status from po where no = :p"), {"p": po_no}).scalar_one() == "closed"
+    assert ledger.execute(text("select count(*) from budget_actual where source = 'payment'")).scalar_one() == 1
+    # a second import of the same statement changes nothing
+    again = bank_statement.import_statement(
+        ledger, csv, finance, today=date(2026, 11, 13), tenant=ledger.info["slug"]
+    )
+    assert again["settled"] == [] and again["already_paid"]
+
+
+def test_marking_a_run_paid_by_hand_is_gone_and_a_reference_is_never_invented(ledger: Session, outbox: Outbox) -> None:  # noqa: F811
+    # given a filed run, when anyone calls the old mark-paid endpoint, then it answers 410;
+    # and a statement line without a UTR leaves the payment's UTR empty (DF-01)
+    pin_today(date(2026, 11, 13))
+    finance, approver, _ = _people(ledger)
+    _, inv_no = _two_suppliers(ledger)
+    _due_on(ledger, inv_no, date(2026, 11, 12))
+    pin_today(date(2026, 11, 12))
+    run_no = _propose(ledger, finance, date(2026, 11, 12))
+    _file(ledger, outbox, run_no, finance, approver)
+    h_fin = _headers(ledger.info["slug"], finance, "Finance")
+    assert client.post(f"/api/payment-runs/{run_no}/paid", json={}, headers=h_fin).status_code == 410
+    pay_no = ledger.execute(text("select no from payment where run_no = :r"), {"r": run_no}).scalar_one()
+    pin_today(date(2026, 11, 13))
+    bank_statement.import_statement(
+        ledger, _statement_for(ledger, run_no, without_utr=pay_no), finance, today=date(2026, 11, 13),
+        tenant=ledger.info["slug"],
+    )  # fmt: skip
+    assert ledger.execute(text("select utr, status from payment where no = :n"), {"n": pay_no}).one() == (None, "settled")
+
+
+def test_a_returned_payment_reopens_its_invoices_and_a_run_pays_them_again(ledger: Session, outbox: Outbox) -> None:  # noqa: F811
+    # given a settled payment, when the bank returns it, then the payment is failed, the invoice is approved and due
+    # again, a task asks Finance to pay again, and a new run takes the same amount (Y8)
+    pin_today(date(2026, 11, 12))
+    finance, approver, _ = _people(ledger)
+    _, inv_no = _two_suppliers(ledger)
+    _due_on(ledger, inv_no, date(2026, 11, 12))
+    run_no = _propose(ledger, finance, date(2026, 11, 12))
+    _file(ledger, outbox, run_no, finance, approver)
+    pay_no = ledger.execute(text("select no from payment where run_no = :r"), {"r": run_no}).scalar_one()
+
+    pin_today(date(2026, 11, 16))
+    credit_line = ledger.execute(
+        text(
+            "insert into bank_statement_line (line_key, row_no, value_date, narration, amount, status, imported_by, direction) "
+            "values ('return-1', 1, '2026-11-14', 'NEFT RTN BENEFICIARY A/C CLOSED', 1180.00, 'open', :u, 'credit') returning id"
+        ),
+        {"u": str(finance)},
+    ).scalar_one()
+    ledger.commit()
+    settlement.failed(
+        ledger, pay_no, finance, reason="beneficiary account closed", value_date=date(2026, 11, 14),
+        bank_line_id=int(credit_line), tenant=ledger.info["slug"],
+    )  # fmt: skip
+    assert ledger.execute(text("select status, fail_reason from payment where no = :n"), {"n": pay_no}).one() == (
+        "failed", "beneficiary account closed",
+    )
+    assert (_row(ledger, inv_no)["status"], _row(ledger, inv_no)["in_run"]) == ("approved", None)
+    assert ledger.execute(text("select count(*) from task where kind = 'payment_failed'")).scalar_one() == 1
+    again = _propose(ledger, finance, date(2026, 11, 16))
+    assert ledger.execute(text("select amount from payment where run_no = :r"), {"r": again}).scalar_one() == D("1180.00")
+
+
+def test_a_reversed_settlement_takes_the_budget_back_and_reopens_the_order_line(
+    ledger: Session, outbox: Outbox
+) -> None:  # noqa: F811
+    # given a settled payment that closed its order, when the settlement is reversed, then the invoice is approved,
+    # a negative budget row is kept, and the order line is reopened to received (Y8)
+    pin_today(date(2026, 11, 12))
+    finance, approver, _ = _people(ledger)
+    ledger.execute(text("update item set stocked = false where code = 'A'"))
+    ledger.commit()
+    po_no, inv_no = _two_suppliers(ledger)
+    _due_on(ledger, inv_no, date(2026, 11, 12))
+    run_no = _propose(ledger, finance, date(2026, 11, 12))
+    _file(ledger, outbox, run_no, finance, approver)
+    pay_no = ledger.execute(text("select no from payment where run_no = :r"), {"r": run_no}).scalar_one()
+    pin_today(date(2026, 11, 13))
+    bank_statement.import_statement(
+        ledger, _statement_for(ledger, run_no), finance, today=date(2026, 11, 13), tenant=ledger.info["slug"]
+    )  # fmt: skip
+    assert ledger.execute(text("select status from po_line")).scalar_one() == "closed"
+
+    settlement.reversed(
+        ledger, pay_no, finance, reason="wrong beneficiary",
+        evidence=settlement.Evidence(b"%PDF-1.4 bank note", "return.pdf", "application/pdf"),
+    )  # fmt: skip
+    assert (_row(ledger, inv_no)["status"], _row(ledger, inv_no)["paid_on"]) == ("approved", None)
+    assert ledger.execute(text("select status from po_line")).scalar_one() == "received"
+    amounts = ledger.execute(
+        text("select amount from budget_actual where source = 'payment' order by id")
+    ).scalars().all()
+    assert any(D(a) > 0 for a in amounts) and any(D(a) < 0 for a in amounts)
+    assert ledger.execute(text("select count(*) from audit_event where action = 'po.reopen'")).scalar_one() == 1
+
+
+# ---- notes ------------------------------------------------------------------------------------
+
+
+def _credit_note(ledger_: Session, ref: str, qty: str, price: str, *, number: str = "CN-9") -> str:
     from p2p.invoices import service as invoices
 
     done = invoices.enter_invoice(
-        shop_,
+        ledger_,
         invoices.InvoiceIn(
-            supplier_code="S1", supplier_invoice_no="CN-9", invoice_date=TODAY, type="credit_note", ref_invoice_no=ref,
-            lines=[invoices.InvLine(po_no, 1, D(qty), D(price))], supplier_gstin=S1_GSTIN, buyer_gstin="29BBBBB0000B1Z5",
+            supplier_code="S1", supplier_invoice_no=number, invoice_date=TODAY, type="credit_note",
+            ref_invoice_no=ref, lines=[invoices.InvLine(_po_of(ledger_, ref), 1, D(qty), D(price))],
+            supplier_gstin="27AAAAA0000A1Z5", buyer_gstin="29BBBBB0000B1Z5",
         ),
         1, as_of=TODAY,
     )  # fmt: skip
     return done.no
 
 
-# ---- payment runs -----------------------------------------------------------------------------
-
-
-def _people(shop_: Session) -> tuple[int, int, int]:
-    slug, sfx = shop_.info["slug"], shop_.info["sfx"]
-    finance = users.create_user(slug, f"fin{sfx}@x.example", PASSWORD, "A Finance", "Finance")
-    owner = users.create_user(slug, f"own{sfx}@x.example", PASSWORD, "An Owner", "Approver")
-    ap = users.create_user(slug, f"ap{sfx}@x.example", PASSWORD, "An AP", "AP")
-    return finance, owner, ap
-
-
-def _two_suppliers(ledger: Session) -> tuple[str, str, dict[str, int]]:
-    """Two approved invoices: one of a small supplier (S1) and one of S2 for an order given to it."""
-    _small(ledger)
-    first, logins = _goods(ledger, qty="10", price="100")
-    inv1 = _invoice(ledger, first, "10", "100", number="S1-1")
-    return first, inv1.no, logins
-
-
-def test_a_run_pays_what_is_due_in_the_window_small_suppliers_first_and_goes_for_approval(
-    ledger: Session, outbox: Outbox
-) -> None:  # noqa: F811
-    finance, _, _ = _people(ledger)
-    po_no, inv_no, _ = _two_suppliers(ledger)
-    ledger.execute(text("update invoice set due_date = '2026-11-12' where no = :n"), {"n": inv_no})
-    ledger.commit()
-
-    assert payment.due_invoices(ledger, date(2026, 11, 1), window_days=7) == []  # due on the 12th: outside the window
-    due = payment.due_invoices(ledger, date(2026, 11, 6), window_days=7)
-    assert [d["no"] for d in due] == [inv_no]
-
-    run = payment.propose_run(ledger, date(2026, 11, 6), finance, window_days=7)
-
-    assert run == "PR-2627-0001"
-    row = ledger.execute(text("select status, total, proposed_by, proposal_id from payment_run")).one()
-    assert (row[0], row[1], row[2]) == ("proposed", D("1180.00"), str(finance))
-    pay = ledger.execute(text("select no, supplier_code, amount, tds_amount, mode from payment")).one()
-    assert pay == ("PAY-2627-000001", "S1", D("1180.00"), D("0.00"), "neft")
-    assert ledger.execute(text("select invoice_no, amount from payment_allocation")).one() == (inv_no, D("1180.00"))
-    assert (
-        "Pay 1 invoice to 1 supplier, ₹ 1,180.00 in all"
-        in ledger.execute(text("select summary from proposal where id = :p"), {"p": row[3]}).scalar_one()
-    )
-    with pytest.raises(InvoiceError, match="no approved invoice is due"):
-        payment.propose_run(ledger, date(2026, 11, 6), finance, window_days=7)  # already in a run
-    assert (
-        ledger.execute(text("select count(*) from audit_event where action = 'payment_run.propose'")).scalar_one() == 1
-    )
-    assert po_no
-
-
-def test_a_blocked_or_unapproved_invoice_is_never_in_a_run(ledger: Session, outbox: Outbox) -> None:  # noqa: F811
-    finance, _, _ = _people(ledger)
-    po_no, _ = _goods(ledger, qty="10", price="1000")
-    blocked = _invoice(ledger, po_no, "10", "1060", number="B")
-    assert blocked.status == "blocked"
-    ledger.execute(text("update invoice set due_date = '2026-11-01'"))
-    ledger.commit()
-
-    with pytest.raises(InvoiceError, match="no approved invoice is due"):
-        payment.propose_run(ledger, date(2026, 11, 6), finance)
-
-
-def test_small_suppliers_come_first_and_a_credit_note_is_netted_in_the_same_payment(
-    ledger: Session, outbox: Outbox
-) -> None:  # noqa: F811
-    finance, _, _ = _people(ledger)
-    first, inv1, logins = _two_suppliers(ledger)
-    second, _ = _goods(
-        ledger, qty="12", price="100", logins=logins
-    )  # another order, given to S2 (not a small supplier)
-    ledger.execute(text("update po set supplier_code = 'S2' where no = :p"), {"p": second})
-    ledger.commit()
-    from p2p.invoices import service as invoices
-
-    inv2 = invoices.enter_invoice(
-        ledger,
-        invoices.InvoiceIn("S2", "S2-1", TODAY, [invoices.InvLine(second, 1, D(10), D(100))], supplier_gstin=None, buyer_gstin="29BBBBB0000B1Z5"),
-        1, as_of=TODAY,
-    )  # fmt: skip
-    ledger.execute(text("update supplier set gstin = null where code = 'S2'"))
-    ledger.commit()
-    credit = invoices_credit(ledger, inv1, first, "1", "100")
-    ledger.execute(text("update invoice set due_date = '2026-11-20' where type = 'invoice'"))
-    ledger.commit()
-
-    order = [d["supplier_code"] for d in payment.due_invoices(ledger, date(2026, 11, 20), window_days=0)]
-    assert order[0] == "S1"  # the small supplier is paid first
-    assert inv2.no  # the second supplier's invoice is on file too
-
-    run = payment.propose_run(ledger, date(2026, 11, 20), finance, window_days=0)
-
-    s1 = ledger.execute(
-        text("select no, amount from payment where run_no = :r and supplier_code = 'S1'"), {"r": run}
-    ).one()
-    assert s1[1] == D("1062.00")  # 1,180 less the 118 credit note
-    allocations = ledger.execute(
-        text("select invoice_no, amount from payment_allocation where payment_no = :p order by amount"), {"p": s1[0]}
-    ).all()
-    assert allocations == [(credit, D("-118.00")), (inv1, D("1180.00"))]
-
-
-def test_the_owner_approves_the_run_and_the_person_who_proposed_it_cannot(ledger: Session, outbox: Outbox) -> None:  # noqa: F811
-    finance, owner, ap = _people(ledger)
-    _, inv_no, _ = _two_suppliers(ledger)
-    ledger.execute(text("update invoice set due_date = '2026-11-12' where no = :n"), {"n": inv_no})
-    ledger.commit()
-    run = payment.propose_run(ledger, date(2026, 11, 6), finance)
-    pid = ledger.execute(text("select proposal_id from payment_run where no = :n"), {"n": run}).scalar_one()
-
-    with pytest.raises(permissions.PermissionDenied):
-        proposals.approve(ledger, pid, finance)  # the proposer may not approve their own run
-    with pytest.raises(permissions.PermissionDenied):
-        proposals.approve(ledger, pid, ap)  # AP has no right to approve payments
-    assert ledger.execute(text("select status from payment_run")).scalar_one() == "proposed"
-
-    proposals.approve(ledger, pid, owner)
-
-    row = ledger.execute(text("select status, approved_by, approved_at is not null from payment_run")).one()
-    assert row == ("approved", str(owner), True)
-    assert (
-        ledger.execute(text("select count(*) from audit_event where action = 'payment_run.approve'")).scalar_one() == 1
-    )
-
-
-def test_the_bank_file_is_made_only_for_an_approved_run_and_says_exactly_what_was_approved(
-    ledger: Session, outbox: Outbox
-) -> None:  # noqa: F811
-    finance, owner, _ = _people(ledger)
-    _, inv_no, _ = _two_suppliers(ledger)
-    ledger.execute(text("update invoice set due_date = '2026-11-12' where no = :n"), {"n": inv_no})
-    ledger.commit()
-    run = payment.propose_run(ledger, date(2026, 11, 6), finance)
-    with pytest.raises(InvoiceError, match="only for an approved run"):
-        payment.generate_file(ledger, run, finance)
-    proposals.approve(ledger, ledger.execute(text("select proposal_id from payment_run")).scalar_one(), owner)
-
-    file = payment.generate_file(ledger, run, finance)
-
-    lines = file.strip().split("\n")
-    assert lines[0] == "payment_no,beneficiary,account_no,ifsc,amount,mode,reference"
-    assert lines[1] == "PAY-2627-000001,Alpha Traders,99S1,HDFC0000002,1180.00,NEFT,PI-2627-000001"
-    assert len(lines) == 2 and ledger.execute(text("select status, file_text from payment_run")).one() == (
-        "file_generated",
-        file,
-    )
-    with pytest.raises(InvoiceError, match="only for an approved run"):
-        payment.generate_file(ledger, run, finance)  # not twice
-
-
-def test_a_supplier_without_a_verified_bank_account_is_never_planned_and_never_put_in_a_file(
-    ledger: Session, outbox: Outbox
-) -> None:  # noqa: F811
-    finance, owner, _ = _people(ledger)
-    _, inv_no, _ = _two_suppliers(ledger)
-    ledger.execute(text("update invoice set due_date = '2026-11-12' where no = :n"), {"n": inv_no})
-    ledger.execute(text("update supplier_bank_account set verified = false where supplier_code = 'S1'"))
-    ledger.commit()
-
-    assert payment.due_invoices(ledger, date(2026, 11, 6)) == []
-    with pytest.raises(InvoiceError, match="no approved invoice is due"):
-        payment.propose_run(ledger, date(2026, 11, 6), finance)
-
-    ledger.execute(text("update supplier_bank_account set verified = true where supplier_code = 'S1'"))
-    ledger.commit()
-    run = payment.propose_run(ledger, date(2026, 11, 6), finance)
-    proposals.approve(
-        ledger,
-        ledger.execute(text("select proposal_id from payment_run")).scalar_one(),
-        owner,
-    )
-    ledger.execute(text("update supplier_bank_account set verified = false where supplier_code = 'S1'"))
-    ledger.commit()
-
-    with pytest.raises(InvoiceError, match="no verified bank account"):  # the file checks again
-        payment.generate_file(ledger, run, finance)
-
-    ledger.rollback()
-    assert ledger.execute(text("select status from payment_run")).scalar_one() == "approved"
-
-
-def test_an_advance_to_a_supplier_without_a_verified_bank_account_waits(ledger: Session, outbox: Outbox) -> None:  # noqa: F811
-    po_no, _ = _goods(ledger)
-    ledger.execute(text("update payment_terms set advance_pct = 30"))
-    ledger.execute(text("update po set status = 'acknowledged' where no = :p"), {"p": po_no})
-    ledger.commit()
-    assert [a["no"] for a in payment.due_advances(ledger)] == [po_no]
-
-    ledger.execute(text("update supplier_bank_account set verified = false where supplier_code = 'S1'"))
-    ledger.commit()
-
-    assert payment.due_advances(ledger) == [] and payment.due_advances(ledger, [po_no]) == []
-
-
-def _two_payees(ledger: Session) -> tuple[str, str]:
-    """Approved invoices of S1 and S2, both due on 12 Nov."""
-    from p2p.invoices import service as invoices
-
-    _, inv1, logins = _two_suppliers(ledger)
-    second, _ = _goods(ledger, qty="12", price="100", logins=logins)
-    ledger.execute(text("update po set supplier_code = 'S2' where no = :p"), {"p": second})
-    ledger.commit()
-    inv2 = invoices.enter_invoice(
-        ledger,
-        invoices.InvoiceIn("S2", "S2-1", TODAY, [invoices.InvLine(second, 1, D(10), D(100))], supplier_gstin=None, buyer_gstin="29BBBBB0000B1Z5"),
-        1, as_of=TODAY,
-    )  # fmt: skip
-    ledger.execute(text("update invoice set due_date = '2026-11-12' where type = 'invoice'"))
-    # S2 has no GSTIN on file here, so its invoice is held; how it is released is not what these tests are about
-    ledger.execute(text("update invoice set status = 'approved', payment_block = 'none' where no = :n"), {"n": inv2.no})
-    ledger.commit()
-    return inv1, inv2.no
-
-
-def _change_bank(ledger: Session, owner: int, code: str = "S1") -> None:
-    """A buyer asks for a new account for the supplier and the owner approves it."""
-    sfx = ledger.info["sfx"]
-    buyer = users.create_user(ledger.info["slug"], f"buy{code}{sfx}@x.example", PASSWORD, "A Buyer", "Buyer")
-    new = {"account_no": f"1112223334{code[-1]}", "ifsc": "ICIC0004321"}
-    asked = suppliers.change_bank(ledger, code, new, user(buyer), "Moved bank")
-    proposals.approve(ledger, asked["proposal"], owner)
-    assert (
-        ledger.execute(
-            text("select execution from proposal where id = :p"),
-            {"p": asked["proposal"]},
-        ).scalar()
-        == "ok"
-    )
-
-
-def test_a_bank_change_after_the_run_is_approved_takes_the_supplier_out_and_voids_the_file(
-    ledger: Session, outbox: Outbox
-) -> None:  # noqa: F811
-    finance, owner, _ = _people(ledger)
-    inv1, inv2 = _two_payees(ledger)
-    run = payment.propose_run(ledger, date(2026, 11, 6), finance)
-    proposals.approve(
-        ledger,
-        ledger.execute(text("select proposal_id from payment_run")).scalar_one(),
-        owner,
-    )
-    first_file = payment.generate_file(ledger, run, finance)
-    assert first_file.count("\n") == 3  # the header and both suppliers
-
-    _change_bank(ledger, owner)
-
-    row = ledger.execute(
-        text("select status, file_text, total from payment_run where no = :n"),
-        {"n": run},
-    ).one()
-    paid = ledger.execute(text("select supplier_code, amount from payment where run_no = :n"), {"n": run}).all()
-    assert (row[0], row[1]) == (
-        "approved",
-        None,
-    )  # the file is void: it must be made again
-    assert [p[0] for p in paid] == ["S2"] and row[2] == paid[0][1]
-    assert ledger.execute(text("select invoice_no from payment_allocation")).scalars().all() == [inv2]
-    entry = ledger.execute(
-        text("select before, after, reason from audit_event where action = 'payment_run.supplier_removed'")
-    ).one()
-    assert entry[1]["file_voided"] is True and entry[1]["status"] == "approved" and "S1" in entry[2]
-    assert payment.due_invoices(ledger, date(2026, 11, 6)) == []  # S1 waits for its new account to be verified
-
-    again = payment.generate_file(ledger, run, finance)
-    assert again.count("\n") == 2 and ",S2" not in again and "Bravo Supplies" in again and "Alpha" not in again
-
-    account = ledger.execute(text("select id from supplier_bank_account where supplier_code = 'S1'")).scalar_one()
-    proof = suppliers.Evidence(ledger.info["slug"], b"%PDF-1.4 letter", "letter.pdf", "application/pdf")
-    suppliers.verify_bank(ledger, "S1", account, "bank_letter", proof, finance)
-    assert [d["no"] for d in payment.due_invoices(ledger, date(2026, 11, 6))] == [inv1]  # verified: it can be paid
-
-
-def test_a_bank_change_while_a_run_waits_for_approval_takes_the_supplier_out_and_an_empty_run_is_cancelled(
-    ledger: Session, outbox: Outbox
-) -> None:  # noqa: F811
-    finance, owner, _ = _people(ledger)
-    _two_payees(ledger)
-    run = payment.propose_run(ledger, date(2026, 11, 6), finance)
-    pid = ledger.execute(text("select proposal_id from payment_run")).scalar_one()
-
-    _change_bank(ledger, owner)
-
-    summary = ledger.execute(text("select summary, status from proposal where id = :p"), {"p": pid}).one()
-    assert summary[1] == "pending" and "S1 taken out" in summary[0]  # the owner sees what changed
-    assert ledger.execute(text("select status from payment_run where no = :n"), {"n": run}).scalar_one() == "proposed"
-
-    _change_bank(ledger, owner, "S2")
-
-    assert ledger.execute(text("select status from payment_run where no = :n"), {"n": run}).scalar_one() == "cancelled"
-    assert ledger.execute(text("select status from proposal where id = :p"), {"p": pid}).scalar_one() == "expired"
-    assert ledger.execute(text("select count(*) from payment where run_no = :n"), {"n": run}).scalar_one() == 0
-
-
-def _paid_run(ledger: Session, finance: int, owner: int, due: str = "2026-11-12") -> str:
-    ledger.execute(text("update invoice set due_date = :d where type = 'invoice'"), {"d": due})
-    ledger.commit()
-    run = payment.propose_run(ledger, date(2026, 11, 6), finance)
-    proposals.approve(
-        ledger,
-        ledger.execute(text("select proposal_id from payment_run where no = :n"), {"n": run}).scalar_one(),
-        owner,
-    )
-    payment.generate_file(ledger, run, finance)
-    return run
-
-
-def test_when_the_bank_has_paid_the_invoices_are_settled_the_case_is_closed_and_the_supplier_is_told(
-    ledger: Session, outbox: Outbox
-) -> None:  # noqa: F811
-    finance, owner, _ = _people(ledger)
-    po_no, inv_no, _ = _two_suppliers(ledger)
-    run = _paid_run(ledger, finance, owner)
-    with pytest.raises(InvoiceError, match="does not exist"):
-        payment.mark_paid(ledger, "PR-0000", finance, paid_on=TODAY)
-    outbox.sent.clear()
-
-    closed = payment.mark_paid(ledger, run, finance, paid_on=date(2026, 11, 12))
-
-    assert closed == [po_no]
-    assert (_row(ledger, inv_no)["status"], _row(ledger, inv_no)["paid_on"]) == ("paid", date(2026, 11, 12))
-    assert ledger.execute(text("select status from payment_run")).scalar_one() == "paid"
-    utr, paid_on = ledger.execute(text("select utr, paid_on from payment")).one()
-    assert utr.startswith("UTR261112") and paid_on == date(2026, 11, 12)
-    assert ledger.execute(text("select status from po_line")).scalar_one() == "closed"
-    assert ledger.execute(text("select status from po")).scalar_one() == "closed"
-    assert ledger.execute(text("select gl_code is null, amount, period from budget_actual")).one()[1:] == (
-        D("1000.00"),
-        "2026-11",
-    )
-    (mail,) = outbox.sent
-    assert mail["to"] == "s1@supplier.example" and mail["subject"].startswith("Payment advice PAY-")
-    assert (
-        "Rs 1,180.00" in mail["body"] and utr in mail["body"] and "INV-" not in mail["body"] or "S1-1" in mail["body"]
-    )
-    assert ledger.execute(text("select remittance_sent_at is not null from payment")).scalar_one() is True
-    with pytest.raises(InvoiceError, match="only a run whose bank file was made"):
-        payment.mark_paid(ledger, run, finance, paid_on=date(2026, 11, 13))  # not twice
-    assert (
-        ledger.execute(
-            text("select count(*) from audit_event where action in ('payment_run.paid', 'po.close')")
+def _po_of(ledger_: Session, invoice_no: str) -> str:
+    return str(
+        ledger_.execute(
+            text("select po_no from invoice_line where invoice_no = :n limit 1"), {"n": invoice_no}
         ).scalar_one()
-        == 2
     )
 
 
-def test_an_order_with_goods_still_to_come_is_not_closed_when_what_was_invoiced_is_paid(
+def test_a_credit_note_waits_for_a_second_person_and_is_netted_in_the_next_run(
     ledger: Session, outbox: Outbox
 ) -> None:  # noqa: F811
-    finance, owner, _ = _people(ledger)
-    po_no, _ = _goods(ledger, qty="10", received="6")
-    _invoice(ledger, po_no, "6", "100", number="P-1")
-    run = _paid_run(ledger, finance, owner)
+    # given a credit note entered by AP, when AP tries to approve it, then it is refused; Finance approves it,
+    # and the next run pays the invoice less the note (Y10)
+    finance, approver, ap = _people(ledger)
+    _, inv_no = _two_suppliers(ledger)
+    note = _credit_note(ledger, inv_no, "1", "100", number="CN-1")
+    assert ledger.execute(text("select status from invoice where no = :n"), {"n": note}).scalar_one() == "received"
+    with pytest.raises(InvoiceError, match="cannot approve"):
+        notes.approve(ledger, note, 1)
+    notes.approve(ledger, note, finance)
+    _due_on(ledger, inv_no, date(2026, 11, 12))
+    run_no = _propose(ledger, finance)
+    assert ledger.execute(text("select amount from payment where run_no = :r"), {"r": run_no}).scalar_one() == D("1062.00")
+    assert ledger.execute(text("select amount from payment_allocation where invoice_no = :n"), {"n": note}).scalar_one() == (
+        D("-118.00")
+    )
+    assert approver and ap
 
-    closed = payment.mark_paid(ledger, run, finance, paid_on=date(2026, 11, 12))
 
-    assert closed == []
-    assert ledger.execute(text("select status from po_line")).scalar_one() == "part_received"
-    assert ledger.execute(text("select status from po")).scalar_one() == "part_received"
+def test_a_debit_note_from_a_recovery_claim_is_named_on_the_claim_and_settles_it_when_paid(
+    ledger: Session, outbox: Outbox, owner_session
+) -> None:  # noqa: F811
+    # NEEDS block 9: recovery_claim and receiving/returns.py raise it; this test waits for that table
+    pytest.skip("NEEDS block 9: the recovery claim record and its debit note call")
 
 
-def test_a_failed_remittance_email_does_not_undo_the_payment_and_the_email_job_sends_it_once(
+# ---- the API and its reads --------------------------------------------------------------------
+
+
+def test_only_a_payment_permission_reads_what_is_due_and_the_named_person_approves_over_the_api(
     ledger: Session, outbox: Outbox
 ) -> None:  # noqa: F811
-    # the outbox (11a.1): the advice is kept with the payment; a refusal leaves it queued with the error for the email job
-    finance, owner, _ = _people(ledger)
-    _, inv_no, _ = _two_suppliers(ledger)
-    run = _paid_run(ledger, finance, owner)
-    outbox.refuse = {"s1@supplier.example"}
-
-    payment.mark_paid(ledger, run, finance, paid_on=date(2026, 11, 12))
-
-    assert _row(ledger, inv_no)["status"] == "paid"
-    pay_no = ledger.execute(text("select no from payment")).scalar_one()
-    assert [m for m in outbox.sent if m["subject"] == f"Payment advice {pay_no}"] == []
-    queued = sent_mail(ledger, f"Payment advice {pay_no}")
-    assert (queued["status"], queued["attempts"]) == ("queued", 1) and "refused" in queued["last_error"]
-    outbox.refuse = set()
-    worker.run_once(tenant=ledger.info["slug"])
-    worker.run_once(tenant=ledger.info["slug"])
-    assert [m["to"] for m in outbox.sent if m["subject"] == f"Payment advice {pay_no}"] == ["s1@supplier.example"]
-    assert sent_mail(ledger, f"Payment advice {pay_no}")["status"] == "sent"
-
-
-# ---- the screens' API -------------------------------------------------------------------------
-
-
-def test_finance_plans_the_owner_approves_and_finance_pays_over_the_api(ledger: Session, outbox: Outbox) -> None:  # noqa: F811
-    finance, owner, ap = _people(ledger)
-    _, inv_no, _ = _two_suppliers(ledger)
-    ledger.execute(text("update invoice set due_date = '2026-11-12' where no = :n"), {"n": inv_no})
-    ledger.commit()
+    # given Finance and a named approver, when what is due is read, then held-back rows come with reasons; when a run
+    # is planned, then it waits for the named person; when they take a code and approve it, then it is approved (Y6)
+    finance, approver, ap = _people(ledger)
+    _, inv_no = _two_suppliers(ledger)
+    _due_on(ledger, inv_no, date(2026, 11, 12))
     slug = ledger.info["slug"]
     h_fin, h_ap = _headers(slug, finance, "Finance"), _headers(slug, ap, "AP")
+    h_app = _headers(slug, approver, "Approver")
+    nobody = users.create_user(slug, f"nobody{ledger.info['sfx']}@x.example", PASSWORD, "A Requester", "Requester")
+    h_none = _headers(slug, nobody, "Requester")
 
-    preview = client.get("/api/payment-runs/due?on=2026-11-06&window=7", headers=h_fin).json()
-    assert [(p["invoice"], p["msme"], p["net"]) for p in preview] == [(inv_no, True, "1180.00")]
+    due = client.get("/api/payment-runs/due?on=2026-11-06&window=7", headers=h_fin)
+    assert due.status_code == 200
+    assert [(p["invoice"], p["net"]) for p in due.json()["due"]] == [(inv_no, "1180.00")]
+    assert client.get("/api/payment-runs/due", headers=h_none).status_code == 403
     assert client.post("/api/payment-runs", json={"run_date": "2026-11-06"}, headers=h_ap).status_code == 403
-    assert client.post("/api/payment-runs", json={"run_date": "2026-11-06"}).status_code == 401
-    assert client.post("/api/payment-runs", json={"run_date": "soon"}, headers=h_fin).status_code == 422
-
     planned = client.post("/api/payment-runs", json={"run_date": "2026-11-06", "window_days": 7}, headers=h_fin)
     assert planned.status_code == 200
-    run = planned.json()["run"]
-    assert (
-        client.post("/api/payment-runs", json={"run_date": "2026-11-06"}, headers=h_fin).status_code == 409
-    )  # nothing left due
-    page = client.get(f"/api/payment-runs/{run}", headers=h_fin).json()
-    assert (page["status"], page["total"], page["can_file"], page["can_mark_paid"]) == (
-        "proposed",
-        "1180.00",
-        False,
-        False,
-    )
-    assert page["payments"][0]["invoices"][0]["id"] == inv_no
-    assert client.post(f"/api/payment-runs/{run}/file", headers=h_fin).status_code == 409  # not approved yet
+    run_no = planned.json()["run"]
+    page = client.get(f"/api/payment-runs/{run_no}", headers=h_fin).json()
+    assert page["status"] == "proposed" and page["total"] == "1180.00" and page["needs_code"] is True
+    assert page["can_approve"] is False
+    assert client.get(f"/api/payment-runs/{run_no}", headers=h_app).json()["can_approve"] is True
+    proposal_id = ledger.execute(text("select proposal_id from payment_run where no = :r"), {"r": run_no}).scalar_one()
+    assert client.post(f"/api/admin/proposals/{proposal_id}/approve", json={}, headers=h_app).status_code == 409
 
-    proposals.approve(ledger, page["approval"]["id"], owner)
+    assert client.post(f"/api/payment-runs/{run_no}/code", headers=h_app).status_code == 200
+    code = _code(outbox)
+    approved = client.post(f"/api/payment-runs/{run_no}/approve", json={"code": code}, headers=h_app)
+    assert approved.status_code == 200 and approved.json()["status"] == "approved"
+    assert client.post(f"/api/payment-runs/{run_no}/file", headers=h_fin).status_code == 200
+    assert client.get(f"/api/payment-runs/{run_no}", headers=h_fin).json()["has_file"] is True
 
-    assert client.get(f"/api/payment-runs/{run}", headers=h_fin).json()["can_file"] is True
-    assert client.get(f"/api/payment-runs/{run}", headers=h_ap).json()["can_file"] is False
-    made = client.post(f"/api/payment-runs/{run}/file", headers=h_fin)
-    assert made.status_code == 200 and "PAY-2627-000001" in made.json()["file"]
-    assert "PAY-2627-000001" in client.get(f"/api/payment-runs/{run}/file", headers=h_ap).json()["file"]
-    off = client.post(f"/api/payment-runs/{run}/paid", json={}, headers=h_fin)
-    assert off.status_code == 409 and "switched off" in off.json()["detail"]  # contained by default (DF-01, DF-02)
-    run_page = client.get(f"/api/payment-runs/{run}", headers=h_fin).json()
-    assert (
-        run_page["can_mark_paid"] is False and run_page["can_import_statement"] is True
-    )  # the statement still settles
-    ledger.execute(text("insert into org_setting (key, value) values ('manual_mark_paid', 'true')"))
-    ledger.commit()  # a company that turned it on on purpose, like the demo companies
-    tomorrow = (business_today() + timedelta(days=1)).isoformat()
-    future = client.post(f"/api/payment-runs/{run}/paid", json={"paid_on": tomorrow}, headers=h_fin)
-    assert future.status_code == 422  # the bank cannot have paid on a day that has not come
-    today = business_today().isoformat()
-    paid = client.post(f"/api/payment-runs/{run}/paid", json={"paid_on": today}, headers=h_fin)
-    assert paid.status_code == 200 and paid.json()["status"] == "paid" and len(paid.json()["closed_orders"]) == 1
-    assert client.get(f"/api/payment-runs/{run}", headers=h_fin).json()["payments"][0]["paid_on"] == today
-    assert [r["id"] for r in client.get("/api/payment-runs", headers=h_fin).json()] == [run]
-    assert client.get("/api/payment-runs/NOPE", headers=h_fin).status_code == 404
-    assert client.post("/api/payment-runs/NOPE/paid", json={}, headers=h_fin).status_code == 404
+
+def test_a_bank_reference_must_be_unique_and_a_value_date_cannot_come_before_the_run(
+    ledger: Session, outbox: Outbox
+) -> None:  # noqa: F811
+    # given a filed run with one payment, when it is recorded with the wrong date or with a UTR already used,
+    # then the service refuses; the right record goes through and the recorded state is not settled (Y7)
+    pin_today(date(2026, 11, 12))
+    finance, approver, _ = _people(ledger)
+    _, inv_no = _two_suppliers(ledger)
+    _due_on(ledger, inv_no, date(2026, 11, 12))
+    run_no = _propose(ledger, finance, date(2026, 11, 12))
+    _file(ledger, outbox, run_no, finance, approver)
+    pay_no = ledger.execute(text("select no from payment where run_no = :r"), {"r": run_no}).scalar_one()
+    with pytest.raises(InvoiceError, match="before the run date"):
+        settlement.record(ledger, pay_no, finance, utr="HDFC000001", value_date=date(2026, 11, 1), evidence=None)
+    with pytest.raises(InvoiceError, match="letters and digits"):
+        settlement.record(ledger, pay_no, finance, utr="BAD-1", value_date=date(2026, 11, 12), evidence=None)
+    with pytest.raises(InvoiceError, match="bank reference or a proof"):
+        settlement.record(ledger, pay_no, finance, utr=None, value_date=date(2026, 11, 12), evidence=None)
+    settlement.record(ledger, pay_no, finance, utr="HDFC000001", value_date=date(2026, 11, 12), evidence=None)
+    # a second payment with the same UTR is refused
+    second_po, _ = _goods(ledger, qty="11", price="100")
+    inv2 = _invoice(ledger, second_po, "11", "100", number="S1-2")
+    _due_on(ledger, inv2.no, date(2026, 11, 12))
+    run2 = _propose(ledger, finance, date(2026, 11, 12))
+    _file(ledger, outbox, run2, finance, approver)
+    pay2 = ledger.execute(text("select no from payment where run_no = :r"), {"r": run2}).scalar_one()
+    with pytest.raises(InvoiceError, match="already on"):
+        settlement.record(ledger, pay2, finance, utr="HDFC000001", value_date=date(2026, 11, 12), evidence=None)

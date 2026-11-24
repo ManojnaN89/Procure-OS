@@ -67,7 +67,7 @@ def replay(
     `suppliers` and `goods_only` restrict it to the orders (and what follows from them) of
     those suppliers that carry no service line; `advances` pays the dataset's advances (through a payment run approved by
     the Approver login) on the day it paid them, so that invoices received later can take them off."""
-    from p2p.invoices import payment
+    from p2p.invoices import advances, payment, runs
     from p2p.invoices import service as invoices
     from p2p.platform import proposals, sod
 
@@ -171,11 +171,20 @@ def replay(
             p = advance_rows[key]
             on = date.fromisoformat(p["paid_on"])
             try:
-                run = payment.propose_run(db, on, finance, advances_only=True, po_nos=[p["po_no"]])
-                pid = db.execute(text("select proposal_id from payment_run where no = :n"), {"n": run}).scalar_one()
-                proposals.approve(db, pid, owner)
-                payment.generate_file(db, run, finance)
-                payment.mark_paid(db, run, finance, paid_on=on)
+                # the order is inserted as it ended up (received); an advance is asked for while it was acknowledged
+                original = db.execute(text("select status from po where no = :p"), {"p": p["po_no"]}).scalar_one()
+                db.execute(text("update po set status = 'acknowledged' where no = :p"), {"p": p["po_no"]})
+                asked = advances.request(db, p["po_no"], finance, reason="the dataset's advance", tenant=world.slug)
+                db.execute(text("update po set status = :s where no = :p"), {"s": original, "p": p["po_no"]})
+                proposals.approve(
+                    db,
+                    int(asked["proposal"]),
+                    world.org_logins.get(str(asked["approver"])) or world.logins["Approver"],
+                )
+                run = runs.propose_run(db, on, finance, advances_only=True, po_nos=[p["po_no"]])["run"]
+                lib.approve_run(world, run)
+                runs.generate_file(db, run, finance)
+                lib.settle_run(world, run, on)
                 advance_payment[key] = db.execute(
                     text("select no from payment where run_no = :r"), {"r": run}
                 ).scalar_one()

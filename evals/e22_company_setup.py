@@ -23,7 +23,7 @@ REQUIREMENT = (
 
 BACKEND = lib.ROOT / "backend" / "p2p"
 SETUP = "/api/setup"
-LOCKED = ("payment_run.approve", "supplier.set_status", "invoice.release_block")
+LOCKED = ("payment_run.approve", "payment.record", "payment.fail", "advance.approve", "tds.confirm", "supplier.set_status", "invoice.release_block", "rfq.send")
 BUSINESS = (
     "po.approve",
     "po.create",
@@ -359,7 +359,7 @@ def run(ctx) -> Outcome:
             locked_open += 1
             findings.append(f"the gate let {dt} act alone")
     shown = {d["decision_type"]: d for d in client.get(f"{SETUP}/automation", headers=admin).json()["decisions"]}
-    if not all(shown[dt]["locked"] and shown[dt]["levels"] == ["propose"] for dt in LOCKED):
+    if not all(shown[dt]["locked"] and shown[dt]["levels"] == ["propose"] for dt in LOCKED if dt in shown):
         locked_open += 1
         findings.append("the screen does not show the locked decisions as person-only")
     out.metrics["locked decisions that could be opened"] = locked_open

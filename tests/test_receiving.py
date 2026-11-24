@@ -105,7 +105,7 @@ def _sent(
     cat: str = "C1",
     logins: dict[str, int] | None = None,
 ) -> tuple[str, dict[str, int]]:
-    logins = logins or _logins(shop)
+    logins = logins or shop.info.get("flow_logins") or _logins(shop)
     _price(shop, "S1", item, price)
     request = _request(shop, f"R-{item}-{qty}", [(item, qty, None, cat)])
     _source(shop, request, dispatch=False)

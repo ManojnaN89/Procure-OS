@@ -41,6 +41,7 @@ APPROVE = {
     "po_amendment": "po.approve",
     "price_variance": "po.approve",
     "payment_run": "payment.approve",
+    "advance": "advance.approve",
     "supplier_activation": "supplier.activate",
     "forward_buy": "sourcing.route_approve",  # block 3: requests/forward_buy.py checks this permission
 }
@@ -79,9 +80,11 @@ SEPARATION = (
     Separation("SEP-10", "a market benchmark verified", "benchmark.enter", "benchmark.verify", ("sourcing/benchmarks.py",)),
     Separation("SEP-11", "a direct buy or a looser buying route agreed", "rfq.create", "sourcing.route_approve", ("sourcing/service.py",)),
     Separation("SEP-12", "goods received without an order approved", "grn.create", "grn.unordered_approve", ("receiving/unordered.py",)),
-    Separation("SEP-13", "an invoice block released", "invoice.book", "invoice.approve", ("invoices/service.py",)),
-    Separation("SEP-14", "a payment run approved", "payment.propose", "chain:payment_run", ("invoices/payment.py",)),
-    Separation("SEP-15", "a bank match confirmed", "chain:payment_run", "payment.propose", ("invoices/bank_statement.py",)),
+    Separation("SEP-13", "an invoice block released", "invoice.book", "invoice.approve", ("invoices/service.py", "invoices/notes.py")),
+    Separation("SEP-14", "a payment run approved", "payment.propose", "chain:payment_run", ("invoices/runs.py",)),
+    Separation("SEP-15", "a bank match confirmed", "chain:payment_run", "payment.propose", ("invoices/bank_statement.py", "invoices/settlement.py")),
+    Separation("SEP-18", "a payment recorded by the person who approved its run", "payment.record", "chain:payment_run", ("invoices/settlement.py",)),
+    Separation("SEP-19", "a payment settled by the person who approved its run", "chain:payment_run", "payment.record", ("invoices/settlement.py", "invoices/bank_statement.py")),
 )  # fmt: skip
 # modules with a segregation-of-duties refusal that another check covers
 COVERED_ELSEWHERE = {
@@ -340,6 +343,21 @@ def _requesters(db: Session, people: People, on: date) -> list[str]:
     return list(dict.fromkeys(problems))
 
 
+def _payment_coverage(db: Session, people: People, on: date) -> list[str]:
+    """A warning when the people who approve runs also approve the price variances or non-PO bills: those invoices
+    would be left out of every run by the payer check (12.1.4)."""
+    payers = chain_people(db, people, "payment_run", on)
+    if not payers:
+        return []
+    others = chain_people(db, people, "price_variance", on) | chain_people(db, people, "non_po_invoice", on)
+    shared = sorted(payers & others)
+    return [
+        f"{people.name(code)} approves both a payment run and a price variance or non-PO bill: "
+        "their invoices are left out of every run"
+        for code in shared
+    ]
+
+
 def _separation(db: Session, people: People, on: date) -> list[str]:
     problems: list[str] = []
     for rule in SEPARATION:
@@ -481,6 +499,8 @@ def check(db: Session, slug: str, *, group: str = "all", on: date | None = None)
         ("pending_changes", "setup", "No control change waiting for approval", "blocker", lambda: _pending(db), "/admin/setup"),
         ("company_bank", "setup", "The company's bank account", "blocker", lambda: _company_bank(db), "/admin/setup"),
         ("supplier_bank", "setup", "Suppliers can be paid", "warning", lambda: _supplier_bank(db), ""),
+        ("payment_payers", "setup", "The people who pay are not the only approvers of what they pay", "warning",
+         lambda: _payment_coverage(db, people, on), "/admin/setup?tab=approvals"),
         ("holidays", "setup", "Holidays of this financial year", "warning", lambda: _holidays(db, on), ""),
         ("cutover_import", "cutover", "Open documents loaded and matching the control totals", "blocker",
          lambda: _cutover_import(db), "/admin/setup?tab=golive"),

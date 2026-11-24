@@ -14,6 +14,7 @@ and one set of logins.
 import importlib.util
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -250,6 +251,9 @@ def reset_company(
         configure(db, demo, slug)
         configure_autonomy(db, demo)
         request_jobs.queue_daily_check(db, slug)
+        from p2p.invoices import payment_jobs  # noqa: PLC0415 - block 12 schedules the daily run lapse
+
+        payment_jobs.schedule(slug, payment_jobs.next_run(datetime.now(UTC)))
         people = db.execute(text("select code, name, designation, email from org_user order by code")).all()
         held: dict[str, set[str]] = {}
         for code, role in db.execute(text("select user_code, role from org_user_role")):

@@ -40,6 +40,7 @@ from quote_scenarios import check as check_quotes  # noqa: E402
 from quote_scenarios import write_quotes  # noqa: E402
 from confirmation_scenarios import check as check_confirmation  # noqa: E402
 from confirmation_scenarios import write_confirmation  # noqa: E402
+from payment_scenarios import write as write_payment  # noqa: E402
 from version_scenarios import check as check_versions  # noqa: E402
 from version_scenarios import write_versions  # noqa: E402
 from demand_scenarios import write_scenarios  # noqa: E402
@@ -638,6 +639,7 @@ def build(profile: CompanyProfile, out: Path) -> dict[str, dict[str, int]]:
     write_quotes(profile.data, out)  # block 6: last prices paid, negotiation briefs, the A/B case, order totals
     write_versions(profile.data, out)  # block 7: every version of each order, its tax, approver and materiality
     write_confirmation(profile.data, out)  # block 8: the supplier confirmation figures and dates
+    write_payment(profile.data, out)  # block 12: the payment figures (Y1-Y10) from the spec's own arithmetic
     manifest = {
         "dataset": profile.dataset,
         "profile": profile.name,

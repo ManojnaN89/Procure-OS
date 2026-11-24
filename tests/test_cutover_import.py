@@ -16,7 +16,7 @@ from fastapi.testclient import TestClient
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
-from p2p.invoices import payment, reconciliation, service
+from p2p.invoices import payment, reconciliation, runs, service, tds as tds_rules
 from p2p.main import app
 from p2p.platform import cutover, cutover_import, demo, numbering, ratelimit, routing, tenants, users
 from p2p.platform.company_state import StateError
@@ -128,7 +128,7 @@ def test_the_good_files_load_the_rest_and_a_second_load_loads_nothing(apex: Apex
                 "union all select no from po where acknowledged_at is null and acknowledged_version is not null"
             )
         ).all()
-        assert not [a for a in payment.due_advances(db) if a["no"] == "PO-CKN-2627-00202"]
+        assert not [a for a in runs.due_advances(db) if a["no"] == "PO-CKN-2627-00202"]
         assert db.execute(text("select count(*) from audit_event where action = 'cutover.invoice'")).scalar() == 44
 
 
@@ -159,7 +159,7 @@ def test_numbers_continue_above_the_loaded_ones(apex: Apex) -> None:
 def test_the_next_invoice_takes_the_advance_off_and_tax_counts_the_year_so_far(apex: Apex) -> None:
     with apex.db() as db:
         ytd = db.execute(text("select taxable from cutover_supplier_ytd where supplier_code = 'SUP-005'")).scalar_one()
-        on_file = payment._cumulative(db, "SUP-005", date(2026, 11, 6))
+        on_file = tds_rules.cumulative(db, "SUP-005", "194Q", date(2026, 11, 6))
         assert on_file >= ytd > 0
         sup = db.execute(text("select gstin from supplier where code = 'SUP-006'")).scalar_one()
         data = service.InvoiceIn(

@@ -36,8 +36,9 @@ from sqlalchemy.orm import Session
 import p2p.platform.demo as demo
 from p2p.agents import autonomy
 from p2p.formulas.calendar import business_today, pin_today, today_is_pinned
+from p2p.invoices import bank_statement, settlement
 from p2p.main import app
-from p2p.platform import audit, routing, tenants, worker
+from p2p.platform import audit, routing, tenants, users, worker
 from p2p.requests import replenishment
 from p2p.sourcing import closing
 
@@ -308,13 +309,46 @@ class _Run:
         return dict(self.call(AP, "POST", "/api/invoices", body))
 
     def payment_run(self) -> str:
-        """Finance plans a run of what is due, in the window that takes the one invoice waiting."""
-        made = self.call(FINANCE, "POST", "/api/payment-runs", {"run_date": self.day(), "window_days": 120})
+        """Finance plans a run of what is due, on the next working day of the payment calendar."""
+        from p2p.platform import reference  # noqa: PLC0415 - only the demo seed needs the calendar here
+
+        calendar = reference.calendar_for(self.db)
+        day = self.today if calendar.is_working_day(self.today) else calendar.next_working_day(self.today)
+        made = self.call(FINANCE, "POST", "/api/payment-runs", {"run_date": day.isoformat(), "window_days": 120})
         return str(made.get("run") or made.get("id") or made.get("no"))
 
     def approve_run(self, run: str) -> None:
-        proposal = self.q("select proposal_id from payment_run where no = :r", r=run)[0][0]
-        self.call(DIRECTOR, "POST", f"/api/admin/proposals/{proposal}/approve", {})
+        """The director approves on the run's page. The demo seed has no mailbox to read a code from, so the setting is
+        raised for this one approval and put back (the walk-through shows the real code from Mailpit)."""
+        self.db.execute(text("update org_setting set value = '999999999.00' where key = 'payment_run_otp_above'"))
+        self.db.commit()
+        try:
+            self.call(DIRECTOR, "POST", f"/api/payment-runs/{run}/approve", {"code": None})
+        finally:
+            self.db.rollback()
+            self.db.execute(text("update org_setting set value = '0.00' where key = 'payment_run_otp_above'"))
+            self.db.commit()
+
+    def settle_run(self, run_no: str) -> None:
+        """Finance records each payment with its bank reference, then the bank's statement settles them."""
+        finance = users.user_id_by_email(self.slug, self._email.get(FINANCE, ""))
+        if finance is None:
+            raise demo.DemoError("the company has no Finance login")
+        run_date = self.q("select run_date from payment_run where no = :r", r=run_no)[0][0]
+        earlier = self.today
+        pin_today(run_date)
+        try:
+            pays = self.q("select no, amount from payment where run_no = :r order by no", r=run_no)
+            rows = ["date,utr,narration,debit,credit"]
+            for n, (pay_no, amount) in enumerate(pays, start=1):
+                utr = f"HDFC{run_date:%y%m%d}{n:08d}"
+                settlement.record(
+                    self.db, str(pay_no), finance, utr=utr, value_date=run_date, evidence=None, tenant=self.slug
+                )
+                rows.append(f"{run_date.isoformat()},{utr},NEFT {pay_no} DEMO,{amount},0.00")
+            bank_statement.import_statement(self.db, "\n".join(rows) + "\n", finance, today=run_date, tenant=self.slug)
+        finally:
+            pin_today(earlier)
 
 
 def _stage(run: _Run, label: str, number: str) -> None:
@@ -437,7 +471,7 @@ def _later(run: _Run) -> None:
     paid_run = run.payment_run()
     run.approve_run(paid_run)
     run.call(FINANCE, "POST", f"/api/payment-runs/{paid_run}/file")
-    run.call(FINANCE, "POST", f"/api/payment-runs/{paid_run}/paid", {"paid_on": run.day()})
+    run.settle_run(paid_run)
     run.work()
     _stage(run, LATER[9], first["invoice"])
 

@@ -188,3 +188,48 @@ def post_payment(db: Session, invoice_no: str, actor: Actor, paid_on: date) -> l
     if rows:
         audit.record(db, actor, "budget.actual", "invoice", invoice_no, after={"rows": rows})
     return rows
+
+
+def reverse_payment(db: Session, invoice_no: str, actor: Actor, on: date) -> list[dict[str, Any]]:
+    """A settled payment was reversed: its actuals are taken back with a negative row each, in the month of the
+    reversal. The caller commits."""
+    rows = [
+        dict(r)
+        for r in db.execute(
+            text(
+                "select cost_centre_code, gl_code, period, event_period, po_no, po_line_no, request_no, "
+                "request_line_no, location_code, amount from budget_actual "
+                "where invoice_no = :n and source = 'payment' and amount > 0 order by id"
+            ),
+            {"n": invoice_no},
+        ).mappings()
+    ]
+    made: list[dict[str, Any]] = []
+    for row in rows:
+        made.append(
+            {
+                "invoice_no": invoice_no,
+                "source": "payment",
+                "po_no": row["po_no"],
+                "po_line_no": row["po_line_no"],
+                "request_no": row["request_no"],
+                "request_line_no": row["request_line_no"],
+                "cost_centre_code": row["cost_centre_code"],
+                "gl_code": row["gl_code"],
+                "location_code": row["location_code"],
+                "event_period": row["event_period"],
+                "amount": -D(row["amount"]),
+            }
+        )
+    if made:
+        db.execute(
+            text(
+                "insert into budget_actual (invoice_no, source, cost_centre_code, gl_code, period, event_period, "
+                "po_no, po_line_no, request_no, request_line_no, location_code, amount) values "
+                "(:invoice_no, :source, :cost_centre_code, :gl_code, :period, :event_period, :po_no, :po_line_no, "
+                ":request_no, :request_line_no, :location_code, :amount)"
+            ),
+            [dict(r, period=_month(on)) for r in made],
+        )
+        audit.record(db, actor, "budget.actual", "invoice", invoice_no, after={"reversed": made})
+    return made

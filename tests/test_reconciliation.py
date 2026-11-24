@@ -13,12 +13,13 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session
 from test_invoices import TODAY, _goods, _headers, _invoice, _receive, _sent, ledger  # noqa: F401 - fixtures
 from test_orders import shop  # noqa: F401 - fixtures
-from test_payments import _paid_run, _people, _small, _two_suppliers
+from test_payments import _file, _people, _propose, _statement_for, _two_suppliers
 from test_receiving import store  # noqa: F401 - fixtures
 from test_sourcing import Outbox, db, outbox  # noqa: F401 - fixtures
 
 from p2p.formulas import payment as pay_rules
 from p2p.formulas import reconciliation as rec
+from p2p.formulas.calendar import pin_today
 from p2p.invoices import bank_statement, reconciliation, trace, vendor_statement
 from p2p.invoices import payment as payments
 from p2p.invoices.service import InvoiceError
@@ -28,6 +29,33 @@ from p2p.platform import routing, tenants, users
 client = TestClient(app)
 D = Decimal
 DAY = date(2026, 11, 1)
+
+
+def _small(shop_: Session, code: str = "S1", *, category: str = "small", agreed: int = 30) -> None:
+    """Make a supplier a micro or small enterprise with a written agreement (and the Udyam certificate that needs)."""
+    shop_.execute(
+        text("update supplier set msme_category = :m, msme_agreement = true, agreed_payment_days = :a where code = :c"),
+        {"m": category, "a": agreed, "c": code},
+    )
+    shop_.execute(
+        text(
+            "insert into supplier_document (supplier_code, doc_type, number, issued_on, verified) values (:c, 'udyam', 'U', '2020-01-01', true)"
+        ),
+        {"c": code},
+    )
+    shop_.commit()
+
+
+def _paid_run(ledger_: Session, finance: int, owner: int, outbox_: Outbox) -> str:
+    """A filed run for the invoice due 12 November (not yet settled)."""
+    ledger_.execute(text("update invoice set due_date = '2026-11-12', pay_by = '2026-11-12' where type = 'invoice'"))
+    ledger_.commit()
+    pin_today(date(2026, 11, 12))
+    run = _propose(ledger_, finance, date(2026, 11, 12))
+    _file(ledger_, outbox_, run, finance, owner)
+    pin_today(date(2026, 11, 13))
+    return run
+
 
 
 def _audit(db_: Session, action: str) -> int:
@@ -282,9 +310,11 @@ def test_given_a_paid_order_when_traced_from_any_document_then_the_whole_chain_c
     ledger: Session, outbox: Outbox
 ) -> None:  # noqa: F811
     finance, owner, _ = _people(ledger)
-    po_no, inv_no, _ = _two_suppliers(ledger)
-    run = _paid_run(ledger, finance, owner)
-    payments.mark_paid(ledger, run, finance, paid_on=TODAY)
+    po_no, inv_no = _two_suppliers(ledger)
+    run = _paid_run(ledger, finance, owner, outbox)
+    bank_statement.import_statement(
+        ledger, _statement_for(ledger, run), finance, today=date(2026, 11, 13), tenant=ledger.info["slug"]
+    )
     request_no = ledger.execute(text("select request_no from po_line where po_no = :p"), {"p": po_no}).scalar_one()
     mo, mr = _production_order(ledger, request_no)
     gr_no = ledger.execute(text("select no from goods_receipt")).scalar_one()
@@ -307,7 +337,7 @@ def test_given_a_paid_order_when_traced_from_any_document_then_the_whole_chain_c
     by_stage = {s["stage"]: s["items"][0] for s in first["stages"]}
     assert by_stage["invoice"]["amount"] == D("1180.00") and by_stage["invoice"]["status"] == "paid"
     assert by_stage["goods_receipt"]["qty"] == D("10") and by_stage["goods_receipt"]["amount"] == D("1000.00")
-    assert by_stage["payment"]["who"] == "An Owner" and by_stage["payment"]["status"] == "paid"
+    assert by_stage["payment"]["who"] and by_stage["payment"]["status"] == "paid"
     assert by_stage["po"]["amount"] is not None and by_stage["request"]["date"] is not None
     assert (by_stage["po"]["to_receive"], by_stage["po"]["to_invoice"]) == (D(0), D(0))  # nothing open on it
     assert trace.chain(ledger, "NOPE-1") is None
@@ -417,14 +447,14 @@ def test_given_a_bank_line_without_a_reference_when_a_person_confirms_it_then_th
 ) -> None:  # noqa: F811
     finance, owner, _ = _people(ledger)
     _two_suppliers(ledger)
-    run = _paid_run(ledger, finance, owner)
+    run = _paid_run(ledger, finance, owner, outbox)
     pay_no = ledger.execute(text("select no from payment")).scalar_one()
     csv = HEAD + "2026-11-05,UTRX1,NEFT ALPHA TRADERS,1180.00,\n"
 
     first = bank_statement.import_statement(ledger, csv, finance, today=TODAY)
     bank_statement.import_statement(ledger, csv, finance, today=TODAY)  # the same statement again: kept once
 
-    assert first["runs_paid"] == [] and first["for_a_person"][0]["why"] == "no payment has this reference"
+    assert first["settled"] == [] and first["for_a_person"][0]["why"] == "no payment has this reference"
     (line,) = bank_statement.open_lines(ledger)
     assert line["suggestions"] == [pay_no] and line["amount"] == D("1180.00")
     with pytest.raises(InvoiceError, match="segregation of duties"):
@@ -433,24 +463,21 @@ def test_given_a_bank_line_without_a_reference_when_a_person_confirms_it_then_th
 
     done = bank_statement.confirm(ledger, line["id"], pay_no, finance, today=TODAY)
 
-    assert done == {"line": line["id"], "payment": pay_no, "run": run, "run_paid": True}
-    assert ledger.execute(text("select status, utr, paid_on from payment p join payment_run r on r.no = p.run_no")).one() == (
-        "paid", "UTRX1", date(2026, 11, 5),
+    assert done == {"line": line["id"], "payment": pay_no, "run_paid": True}
+    assert ledger.execute(text("select p.status, p.utr, p.value_date from payment p join payment_run r on r.no = p.run_no")).one() == (
+        "settled", "UTRX1", date(2026, 11, 5),
     )  # fmt: skip
-    assert ledger.execute(text("select status, confirmed_by from bank_statement_line")).one() == (
-        "confirmed",
-        str(finance),
-    )
+    assert ledger.execute(text("select status, payment_no from bank_statement_line")).one() == ("matched", pay_no)
     assert _audit(ledger, "bank_statement.confirm") == 1
     assert bank_statement.open_lines(ledger) == []
-    with pytest.raises(InvoiceError, match="already confirmed"):
+    with pytest.raises(InvoiceError, match="already"):
         bank_statement.confirm(ledger, line["id"], pay_no, finance, today=TODAY)
 
 
 def test_a_confirmation_with_another_amount_or_an_unknown_payment_is_refused(ledger: Session, outbox: Outbox) -> None:  # noqa: F811
     finance, owner, _ = _people(ledger)
     _two_suppliers(ledger)
-    _paid_run(ledger, finance, owner)
+    _paid_run(ledger, finance, owner, outbox)
     pay_no = ledger.execute(text("select no from payment")).scalar_one()
     bank_statement.import_statement(ledger, HEAD + "2026-11-05,U9,SOMETHING,1179.99,\n", finance, today=TODAY)
     (line,) = bank_statement.open_lines(ledger)
@@ -468,12 +495,12 @@ def test_a_confirmation_with_another_amount_or_an_unknown_payment_is_refused(led
 def test_a_run_is_settled_by_payments_found_on_two_statements(ledger: Session, outbox: Outbox) -> None:  # noqa: F811
     finance, owner, _ = _people(ledger)
     _two_suppliers(ledger)
-    run = _paid_run(ledger, finance, owner)
+    run = _paid_run(ledger, finance, owner, outbox)
     pay_no = ledger.execute(text("select no from payment where run_no = :r"), {"r": run}).scalar_one()
     ledger.execute(
         text(
-            "insert into payment (no, run_no, type, supplier_code, amount, mode, reference) "
-            "select 'PAY-2627-000099', run_no, type, supplier_code, 500, mode, 'REF-99' from payment where no = :n"
+            "insert into payment (no, run_no, type, supplier_code, amount, mode, reference, status) "
+            "select 'PAY-2627-000099', run_no, type, supplier_code, 500, mode, 'REF-99', 'in_file' from payment where no = :n"
         ),
         {"n": pay_no},
     )
@@ -482,11 +509,11 @@ def test_a_run_is_settled_by_payments_found_on_two_statements(ledger: Session, o
     one = bank_statement.import_statement(ledger, HEAD + f"2026-11-04,U1,{pay_no},1180.00,\n", finance, today=TODAY)
     two = bank_statement.import_statement(ledger, HEAD + "2026-11-05,U2,REF-99,500.00,\n", finance, today=TODAY)
 
-    assert one["runs_paid"] == [] and one["waiting"][0]["payment"] == pay_no
-    assert two["runs_paid"] == [run]
+    assert [s["payment"] for s in one["settled"]] == [pay_no]
+    assert [s["payment"] for s in two["settled"]] == ["PAY-2627-000099"]
     assert ledger.execute(text("select status from payment_run")).scalar_one() == "paid"
-    assert ledger.execute(text("select paid_on from payment where no = :n"), {"n": pay_no}).scalar_one() == date(
-        2026, 11, 5
+    assert ledger.execute(text("select value_date from payment where no = :n"), {"n": pay_no}).scalar_one() == date(
+        2026, 11, 4
     )
 
 

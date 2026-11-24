@@ -31,11 +31,13 @@ Reading a line: `name*` is part of the primary key, `name?` may be empty, then t
 
 ## Tenant database (one per company)
 
-162 tables.
+164 tables.
 
-**advance** · payment_no* text, po_no text, gross num, taxable num, used_gross num, used_taxable num, paid_on? date
+**advance** · payment_no* text, po_no text, gross num, taxable num, used_gross num, used_taxable num, paid_on? date, request_id? bigint, settled_on? date
 
 **advance_adjustment** · id* bigint, advance_payment_no text, invoice_no text, amount num, taxable num
+
+**advance_request** · id* bigint, po_no text, po_version int, pct num, gross num, taxable num, status text, reason? text, requested_by text, requested_at timestamptz, proposal_id? bigint, approver? text, approved_by? text, approved_at? timestamptz, payment_no? text, recovery_note? text, cancel_reason? text
 
 **agent_run** · id* int, thread_id text, agent text, status text, input? text, result? text, waiting_for? text, started_at timestamptz, finished_at? timestamptz, capability? text, started_by? text, user_id? int, via? text, workflow_id? int, event_id? bigint, job_id? bigint
 
@@ -69,7 +71,7 @@ Reading a line: `name*` is part of the primary key, `name?` may be empty, then t
 
 **bank** · code* text, name? text, ifsc_prefix? text
 
-**bank_statement_line** · id* bigint, line_key text, row_no int, value_date? date, utr? text, narration? text, amount num, status text, payment_no? text, why? text, imported_by text, imported_at timestamptz, confirmed_by? text, confirmed_at? timestamptz
+**bank_statement_line** · id* bigint, line_key text, row_no int, value_date? date, utr? text, narration? text, amount num, status text, payment_no? text, why? text, imported_by text, imported_at timestamptz, confirmed_by? text, confirmed_at? timestamptz, direction text
 
 **budget** · id* bigint, cost_centre_code? text, gl_code? text, project_code? text, period? text, amount? num, version? int, policy? text, location_code? text, kind text, reason? text, proposal_id? bigint
 
@@ -103,7 +105,7 @@ Reading a line: `name*` is part of the primary key, `name?` may be empty, then t
 
 **cutover_import** · id* int, at timestamptz, imported_by int, files jsonb, dry_run bool, loaded jsonb, already jsonb, rejected int, control jsonb, control_ok bool
 
-**cutover_supplier_ytd** · supplier_code* text, fy* text, taxable num
+**cutover_supplier_ytd** · supplier_code* text, fy* text, taxable num, section* text
 
 **delegation** · id* bigint, from_user? text, to_user? text, start_date? date, end_date? date, reason? text
 
@@ -143,7 +145,7 @@ Reading a line: `name*` is part of the primary key, `name?` may be empty, then t
 
 **intake_pending** · id* bigint, user_id int, channel text, source_text text, question text, asked text, attempts int, status text, created_at timestamptz, updated_at timestamptz
 
-**invoice** · no* text, type text, supplier_code text, supplier_gstin? text, buyer_gstin? text, place_of_supply? text, supplier_invoice_no text, dedupe_key text, invoice_date date, fy text, irn? text, ack_no? text, ack_date? date, eway_bill_no? text, reverse_charge bool, received_at timestamptz, received_on date, channel text, taxable num, cgst num, sgst num, igst num, cess num, round_off num, total num, ref_invoice_no? text, due_date? date, payment_block text, status text, duplicate_of? text, block_reason? text, cancel_reason? text, document_ref? text, entered_by? text, created_at timestamptz, tds_amount num, paid_on? date, booked_at? timestamptz, advance_used num, advance_taxable_used num, discount_taken num, tolerance_version? int
+**invoice** · no* text, type text, supplier_code text, supplier_gstin? text, buyer_gstin? text, place_of_supply? text, supplier_invoice_no text, dedupe_key text, invoice_date date, fy text, irn? text, ack_no? text, ack_date? date, eway_bill_no? text, reverse_charge bool, received_at timestamptz, received_on date, channel text, taxable num, cgst num, sgst num, igst num, cess num, round_off num, total num, ref_invoice_no? text, due_date? date, payment_block text, status text, duplicate_of? text, block_reason? text, cancel_reason? text, document_ref? text, entered_by? text, created_at timestamptz, tds_amount num, paid_on? date, booked_at? timestamptz, advance_used num, advance_taxable_used num, discount_taken num, tolerance_version? int, in_run? text, pay_by? date, offset_used num, reason? text, source_ref? text
 
 **invoice_charge** · id* bigint, invoice_no text, type text, amount num, gst_rate num, sac? text
 
@@ -199,11 +201,13 @@ Reading a line: `name*` is part of the primary key, `name?` may be empty, then t
 
 **org_user_role** · id* bigint, user_code? text, role? text, scope_location? text, scope_department? text
 
-**payment** · no* text, run_no text, type text, supplier_code text, po_no? text, amount num, tds_amount num, msme_interest num, mode text, reference? text, utr? text, paid_on? date, remittance_sent_at? timestamptz, created_at timestamptz
+**payment** · no* text, run_no text, type text, supplier_code text, po_no? text, amount num, tds_amount num, msme_interest num, mode text, reference? text, utr? text, paid_on? date, remittance_sent_at? timestamptz, created_at timestamptz, status text, value_date? date, bank_account_id? bigint, recorded_by? text, recorded_at? timestamptz, evidence_document_id? bigint, settled_at? timestamptz, settled_line_id? bigint, failed_by? text, failed_at? timestamptz, fail_reason? text, fail_line_id? bigint, cancel_reason? text
 
 **payment_allocation** · payment_no* text, invoice_no* text, amount num, discount num
 
-**payment_run** · no* text, run_date date, company_bank_account? text, proposed_by text, approved_by? text, approved_at? timestamptz, status text, total num, proposal_id? bigint, file_text? text, created_at timestamptz
+**payment_run** · no* text, run_date date, company_bank_account? text, proposed_by text, approved_by? text, approved_at? timestamptz, status text, total num, proposal_id? bigint, file_text? text, created_at timestamptz, rule_code? text, rule_version? int, file_hash? text, cancelled_at? timestamptz, cancel_reason? text
+
+**payment_run_approval** · run_no* text, step* int, role text, approver text, delegate? text, approved_by? text, approved_at? timestamptz, code_id? bigint
 
 **payment_terms** · code* text, name? text, days? int, baseline? text, advance_pct? int, discount_pct? num, discount_days? int
 
@@ -333,7 +337,7 @@ Reading a line: `name*` is part of the primary key, `name?` may be empty, then t
 
 **task** · id* int, case_id? int, kind text, title text, assignee int, status text, sla_hours num, due_at timestamptz, escalation_chain jsonb, escalation_level int, payload? jsonb, created_at timestamptz, completed_at? timestamptz, completed_by? int
 
-**tds_entry** · id* bigint, invoice_no? text, payment_no? text, section text, base num, rate num, amount num, booked_on date, quarter text
+**tds_entry** · id* bigint, invoice_no? text, payment_no? text, section text, base num, rate num, amount num, booked_on date, quarter text, section_code? text, ref_tds_section_id? int, status text, proposed? jsonb, confirmed_by? text, confirmed_at? timestamptz, change_reason? text
 
 **tolerance** · id* bigint, key? text, value? text, category_code? text, note? text, version int
 

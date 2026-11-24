@@ -17,7 +17,7 @@ from p2p.formulas.calendar import business_today
 from p2p.formulas.kpis import BUCKETS, working_days_between
 from p2p.formulas.money import format_inr
 from p2p.formulas.words import count
-from p2p.invoices import payment
+from p2p.invoices import runs
 from p2p.platform import alerts, control_tower, exceptions, reference, routing
 from p2p.platform.permissions import can_anywhere
 from p2p.platform.rows import rows as _rows
@@ -71,6 +71,22 @@ def _requester(db: Session, org: str | None) -> list[dict[str, Any]]:
     return out
 
 
+def _run_waits_for(db: Session, proposal: dict[str, Any], org: str | None) -> bool:
+    """A payment run's card is shown only to the person its current step names (or their deputy)."""
+    if org is None:
+        return False
+    run_no = str((proposal.get("payload") or {}).get("run_no") or "")
+    return bool(
+        db.execute(
+            text(
+                "select 1 from payment_run_approval where run_no = :r and approved_by is null "
+                "and (approver = :o or delegate = :o) limit 1"
+            ),
+            {"r": run_no, "o": org},
+        ).first()
+    )
+
+
 def _approver(db: Session, user_id: int, org: str | None) -> list[dict[str, Any]]:
     out = []
     if org is not None:
@@ -105,7 +121,7 @@ def _approver(db: Session, user_id: int, org: str | None) -> list[dict[str, Any]
     # decisions that need a person with the right permission, but never the person who asked
     waiting = _rows(
         db,
-        "select p.id, p.action, p.summary, p.proposed_by_id, p.proposed_by_type from proposal p where p.status = 'pending' and exists "
+        "select p.id, p.action, p.summary, p.proposed_by_id, p.proposed_by_type, p.payload from proposal p where p.status = 'pending' and exists "
         "(select 1 from user_role ur join role_permission rp on rp.role = ur.role where ur.user_id = :u and rp.action = p.required_permission) "
         "order by p.id",
         u=user_id,
@@ -121,6 +137,8 @@ def _approver(db: Session, user_id: int, org: str | None) -> list[dict[str, Any]
     for p in waiting:
         if p["proposed_by_type"] == "user" and p["proposed_by_id"] == str(user_id):
             continue
+        if p["action"] == "payment_run.approve" and not _run_waits_for(db, p, org):
+            continue
         if p["action"] == "invoice.release_block":
             entered = db.execute(
                 text(
@@ -134,6 +152,8 @@ def _approver(db: Session, user_id: int, org: str | None) -> list[dict[str, Any]
     for action, (key, title) in titles.items():
         if action in grouped:
             where = "#/rfqs" if action == "rfq.send" else "/admin/approvals"  # RFQs are confirmed from their list (D42)
+            if action == "payment_run.approve":
+                where = f"#/payments/{(grouped[action][0]['payload'] or {}).get('run_no', '')}"
             rows = [_row(str(p["id"]), p["summary"][:90], where) for p in grouped[action]]
             out.append(_section(key, title, where, rows))
     return out + _awards_and_contracts(db, user_id, org)
@@ -325,7 +345,7 @@ def _ap(db: Session) -> list[dict[str, Any]]:
 
 
 def _finance(db: Session, today: date) -> list[dict[str, Any]]:
-    due = payment.due_invoices(db, today)
+    due = runs.due_invoices(db, today)
     out = [
         _section(
             "due",
@@ -421,7 +441,8 @@ def _admin(db: Session, today: date) -> list[dict[str, Any]]:
     }
     grouped: dict[str, list[dict[str, Any]]] = {}
     for p in _rows(
-        db, "select id, action, summary, required_permission from proposal where status = 'pending' order by id"
+        db,
+        "select id, action, summary, required_permission, payload from proposal where status = 'pending' order by id",
     ):
         grouped.setdefault(p["action"], []).append(p)
     for action, (key, title) in titles.items():
@@ -435,7 +456,9 @@ def _admin(db: Session, today: date) -> list[dict[str, Any]]:
                     _row(
                         str(p["id"]),
                         p["summary"][:90],
-                        "/admin/approvals",
+                        f"#/payments/{p['payload'].get('run_no')}"
+                        if action == "payment_run.approve"
+                        else "/admin/approvals",
                         f"for a person who may: {autonomy.label(p['required_permission']).lower()}",
                     )
                     for p in found
